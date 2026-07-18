@@ -1,6 +1,7 @@
 <template>
 	<div class="glass-card rounded-2xl flex flex-col overflow-hidden relative">
 		<TimelineToolbar />
+		<TimelineMinimap />
 
 		<div class="flex-1 min-h-0 grid grid-cols-[112px_1fr]">
 			<!-- Left: track headers (outside the scroll container) -->
@@ -40,6 +41,7 @@ import {
 import { useTimelineInteractions } from '../composables/useTimelineInteractions'
 import { useEditorShortcuts } from '../composables/useEditorShortcuts'
 import TimelineToolbar from './timeline/TimelineToolbar.vue'
+import TimelineMinimap from './timeline/TimelineMinimap.vue'
 import TimelineRuler from './timeline/TimelineRuler.vue'
 import TrackHeader from './timeline/TrackHeader.vue'
 import TrackLane from './timeline/TrackLane.vue'
