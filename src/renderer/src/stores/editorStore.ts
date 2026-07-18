@@ -6,7 +6,7 @@ import type {
 } from '@shared/types'
 import {
 	applyTimelineDiff, clampSpeed, clipToItem, computeContentEnd,
-	diffTimelines, itemDuration, itemEnd,
+	diffTimelines, itemDuration, itemEnd, repairOverlaps,
 	type TimelineState
 } from '@shared/timeline'
 import { computeScope } from '@shared/ai-scope'
@@ -77,6 +77,15 @@ export const useEditorStore = defineStore('editor', () => {
 	const lastAnswer = ref<{ turnId: string; text: string } | null>(null)
 	const promptError = ref<string | null>(null)
 	const scopeWiden = ref<'auto' | 'chapter' | 'full'>('auto')
+
+	// ===== Export / render (M4) =====
+	const renderState = ref<{
+		renderId: string
+		percent: number
+		phase: 'rendering' | 'stitching' | 'done' | 'error'
+		outputPath?: string
+		error?: string
+	} | null>(null)
 
 	let autosaveTimer: ReturnType<typeof setTimeout> | null = null
 
@@ -234,6 +243,27 @@ export const useEditorStore = defineStore('editor', () => {
 		return map
 	})
 
+	// ===== Export computeds (M4) =====
+	const isRendering = computed(() =>
+		renderState.value?.phase === 'rendering' || renderState.value?.phase === 'stitching'
+	)
+
+	const canExport = computed(() => {
+		if (!doc.value || isRendering.value) return false
+		const videoTrack = sortedTracks.value.find((t) => t.kind === 'video')
+		if (!videoTrack || videoTrack.hidden) return false
+		return doc.value.timeline.some((i) => i.trackId === videoTrack.id)
+	})
+
+	const exportNotice = computed(() => {
+		if (!doc.value) return null
+		const hasOverlayItems = doc.value.timeline.some((item) => {
+			const track = doc.value!.tracks.find((t) => t.id === item.trackId)
+			return track && (track.kind === 'overlay' || track.kind === 'text')
+		})
+		return hasOverlayItems ? "Overlay/text tracks won't appear in this export." : null
+	})
+
 	/** Ghost items per track: proposed adds + updated items at their NEW position. */
 	const ghostItemsByTrack = computed<Record<string, TimelineItem[]>>(() => {
 		const map: Record<string, TimelineItem[]> = {}
@@ -312,6 +342,13 @@ export const useEditorStore = defineStore('editor', () => {
 			selectedItemIds.value = doc.value?.selection?.itemIds || []
 			playheadSec.value = 0
 			isPlaying.value = false
+
+			// Heal any pre-existing same-track overlaps (e.g. from AI accepts
+			// made before overlap repair existed) — persists via autosave.
+			if (doc.value && repairOverlaps({ tracks: doc.value.tracks, timeline: doc.value.timeline })) {
+				console.warn('[editorStore] Repaired overlapping timeline items on load')
+				markDirty()
+			}
 
 			backgroundTasks.value = (await api.getBackgroundTasks(id)) || {}
 
@@ -918,6 +955,9 @@ export const useEditorStore = defineStore('editor', () => {
 			timeline: JSON.parse(JSON.stringify(doc.value!.timeline))
 		}
 		const result = applyTimelineDiff(applied, diff, doc.value!.media)
+		// AI placements aren't gesture-clamped — push any same-track overlaps
+		// right so the applied state always satisfies the M2 no-overlap invariant.
+		repairOverlaps(applied)
 		return { applied, pruned: result.errors }
 	}
 
@@ -970,6 +1010,38 @@ export const useEditorStore = defineStore('editor', () => {
 
 	const dismissAnswer = () => {
 		lastAnswer.value = null
+	}
+
+	// ===== Export actions (M4) =====
+	const startExport = async (quality: 'original' | 'preview') => {
+		if (!threadId.value || !canExport.value) return
+		// Flush the debounced autosave — main renders from the persisted doc
+		dirty.value = true
+		await persistDoc()
+		renderState.value = { renderId: '', percent: 0, phase: 'rendering' }
+		try {
+			const result = await api.exportEditorTimeline({ threadId: threadId.value, quality })
+			if (result?.renderId && renderState.value) {
+				renderState.value = { ...renderState.value, renderId: result.renderId }
+			}
+		} catch (error: any) {
+			// Pre-flight rejection (missing files, empty timeline, …)
+			renderState.value = {
+				renderId: '',
+				percent: 0,
+				phase: 'error',
+				error: error?.message || 'Export failed to start'
+			}
+		}
+	}
+
+	const abortExport = async () => {
+		if (!renderState.value?.renderId) return
+		await api.abortEditorRender({ renderId: renderState.value.renderId })
+	}
+
+	const clearRenderState = () => {
+		renderState.value = null
 	}
 
 	/** Handles a completed/errored turn arriving from main. */
@@ -1120,6 +1192,25 @@ export const useEditorStore = defineStore('editor', () => {
 				}
 			})
 		}
+
+		if (api.onEditorRenderProgress) {
+			api.onEditorRenderProgress((data: {
+				threadId: string; renderId: string; percent: number
+				phase: 'rendering' | 'stitching' | 'done' | 'error'
+				outputPath?: string; error?: string
+			}) => {
+				if (data.threadId !== threadId.value) return
+				// Ignore stale renders (a fresh export may have started)
+				if (renderState.value?.renderId && data.renderId !== renderState.value.renderId) return
+				renderState.value = {
+					renderId: data.renderId,
+					percent: data.percent,
+					phase: data.phase,
+					outputPath: data.outputPath,
+					error: data.error
+				}
+			})
+		}
 	}
 
 	return {
@@ -1219,6 +1310,14 @@ export const useEditorStore = defineStore('editor', () => {
 		abortPrompt,
 		acceptProposal,
 		rejectProposal,
-		dismissAnswer
+		dismissAnswer,
+		// export
+		renderState,
+		isRendering,
+		canExport,
+		exportNotice,
+		startExport,
+		abortExport,
+		clearRenderState
 	}
 })

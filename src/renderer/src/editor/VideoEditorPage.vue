@@ -9,7 +9,23 @@
 		</div>
 
 		<GraphHeader :title="editorStore.thread?.title || 'Video Editor'" :total-cost="totalCost"
-			@back="router.push('/home')" />
+			@back="router.push('/home')">
+			<template #actions>
+				<button
+					class="px-3 py-1.5 rounded-xl text-xs font-bold transition active:scale-95 flex items-center gap-1.5"
+					:class="editorStore.isRendering
+						? 'bg-primary/10 text-primary ring-1 ring-primary/30'
+						: editorStore.canExport
+							? 'bg-primary text-white shadow-md shadow-primary/20 hover:bg-primary-dark'
+							: 'bg-zinc-100 dark:bg-zinc-800 text-zinc-400 cursor-not-allowed'"
+					:disabled="!editorStore.canExport && !editorStore.isRendering"
+					:title="editorStore.canExport || editorStore.isRendering ? 'Export the timeline' : 'Add clips to the timeline first'"
+					@click="showExport = true">
+					<span class="iconify tabler--file-export w-3.5 h-3.5"></span>
+					{{ editorStore.isRendering ? `Exporting ${editorStore.renderState?.percent ?? 0}%` : 'Export' }}
+				</button>
+			</template>
+		</GraphHeader>
 
 		<!-- Loading -->
 		<div v-if="editorStore.loading" class="flex-1 flex items-center justify-center z-10">
@@ -57,6 +73,8 @@
 				<!-- Bottom zone: timeline -->
 				<TimelinePanel class="h-52 shrink-0" />
 			</main>
+
+			<ExportDialog v-model="showExport" />
 		</template>
 	</div>
 </template>
@@ -72,12 +90,14 @@ import InspectorPanel from './components/InspectorPanel.vue'
 import TimelinePanel from './components/TimelinePanel.vue'
 import PromptBar from './components/PromptBar.vue'
 import ProposalCard from './components/ProposalCard.vue'
+import ExportDialog from './components/ExportDialog.vue'
 
 const route = useRoute()
 const router = useRouter()
 const editorStore = useEditorStore()
 
 const notFound = ref(false)
+const showExport = ref(false)
 
 const totalCost = computed(() =>
 	(editorStore.thread?.usageHistory || []).reduce((sum, record) => sum + (record.cost || 0), 0)

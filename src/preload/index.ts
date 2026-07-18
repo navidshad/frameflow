@@ -67,6 +67,15 @@ const api = {
 	},
 	getPersonas: () => ipcRenderer.invoke('get-personas'),
 	setPersonas: (personas: any[]) => ipcRenderer.invoke('set-personas', personas),
+	exportEditorTimeline: (data: { threadId: string, quality: 'original' | 'preview' }) =>
+		ipcRenderer.invoke('export-editor-timeline', data),
+	abortEditorRender: (data: { renderId: string }) =>
+		ipcRenderer.invoke('abort-editor-render', data),
+	onEditorRenderProgress: (callback: (data: any) => void) => {
+		const listener = (_event: any, data: any) => callback(data)
+		ipcRenderer.on('editor-render-progress', listener)
+		return () => ipcRenderer.removeListener('editor-render-progress', listener)
+	},
 	runEditorPrompt: (data: { threadId: string, personaId: string, prompt: string, baseStepId: string, selectedItemIds: string[], playheadSec: number, widen?: string }) =>
 		ipcRenderer.invoke('run-editor-prompt', data),
 	abortEditorPrompt: (data: { threadId: string, turnId: string }) =>

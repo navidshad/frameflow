@@ -218,13 +218,12 @@ export function useTimelineInteractions(viewport: TimelineViewport) {
 			// Moving the left edge changes timelineStart AND in together
 			const maxStart = target.timelineStart + itemDuration(target) - MIN_ITEM_DURATION
 			let newStart = Math.min(Math.max(0, t), maxStart)
-			// Clamp against left neighbor (non-ripple)
-			if (!trimRipple) {
-				const leftNeighborEnd = doc().timeline
-					.filter((o) => o.id !== target.id && o.trackId === target.trackId && itemEnd(o) <= before.timelineStart + 1e-6)
-					.reduce((max, o) => Math.max(max, itemEnd(o)), 0)
-				newStart = Math.max(newStart, leftNeighborEnd)
-			}
+			// Clamp against the left neighbor ALWAYS (ripple shifts downstream
+			// items, but the item's own start must never overlap its predecessor)
+			const leftNeighborEnd = doc().timeline
+				.filter((o) => o.id !== target.id && o.trackId === target.trackId && itemEnd(o) <= before.timelineStart + 1e-6)
+				.reduce((max, o) => Math.max(max, itemEnd(o)), 0)
+			newStart = Math.max(newStart, leftNeighborEnd)
 			const newIn = target.in + (newStart - target.timelineStart) * speed
 			if (newIn < 0) return
 			target.in = newIn

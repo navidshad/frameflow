@@ -159,6 +159,33 @@ export interface ApplyResult {
 }
 
 /**
+ * Repairs same-track overlaps by pushing later items right until sequential
+ * (magnetic, content-preserving). Returns true when anything moved.
+ * Needed because AI-diff placements aren't gesture-clamped like manual moves.
+ */
+export function repairOverlaps(state: TimelineState, eps = MIN_ITEM_DURATION): boolean {
+	let changed = false
+	const byTrack = new Map<string, TimelineItem[]>()
+	for (const item of state.timeline) {
+		const list = byTrack.get(item.trackId) || []
+		list.push(item)
+		byTrack.set(item.trackId, list)
+	}
+	for (const items of byTrack.values()) {
+		items.sort((a, b) => a.timelineStart - b.timelineStart)
+		let cursor = 0
+		for (const item of items) {
+			if (item.timelineStart < cursor - eps) {
+				item.timelineStart = cursor
+				changed = true
+			}
+			cursor = Math.max(cursor, itemEnd(item))
+		}
+	}
+	return changed
+}
+
+/**
  * Applies a TimelineDiff to a state IN PLACE, with validation (PRD §5.7):
  * unknown schemaVersion rejected wholesale; unknown ids skipped (reported);
  * `0 <= in < out <= asset.duration` when assets provided; speed clamped;

@@ -383,6 +383,21 @@ export type TimelineDiff = {
 	removeTrackIds?: string[]
 }
 
+// ===== Export / render (M4) =====
+
+export type ExportQuality = 'original' | 'preview'
+
+export type RenderPhase = 'rendering' | 'stitching' | 'done' | 'error'
+
+export interface EditorRenderProgress {
+	threadId: string
+	renderId: string
+	percent: number
+	phase: RenderPhase
+	outputPath?: string
+	error?: string
+}
+
 export interface TimelineSegment {
 	index: number
 	start: string

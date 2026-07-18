@@ -26,6 +26,7 @@ import * as editorAssets from './editor/assets'
 import * as editorPreprocess from './editor/preprocess'
 import * as editorHistory from './editor/history'
 import * as editorPrompt from './editor/prompt'
+import * as editorRender from './editor/render'
 import { BUILTIN_PERSONAS } from './constants/personas'
 import { v4 as uuidv4 } from 'uuid'
 import { THREAD_DIRS } from './constants/paths'
@@ -517,6 +518,19 @@ app.whenReady().then(() => {
 		})
 	})
 
+	// Export / render (M4): fast path via assembleVideo, region path via
+	// segment-then-concat; progress streams over editor-render-progress.
+	ipcMain.handle('export-editor-timeline', (_event, { threadId, quality }: {
+		threadId: string, quality: 'original' | 'preview'
+	}) => {
+		return editorRender.startEditorRender({ threadId, quality })
+	})
+
+	ipcMain.handle('abort-editor-render', (_event, { renderId }: { renderId: string }) => {
+		editorRender.abortEditorRender(renderId)
+		return true
+	})
+
 	// Undo/redo history sidecar (renderer-authoritative; main persists)
 	ipcMain.handle('get-editor-history', (_event, threadId: string) => {
 		return editorHistory.loadHistory(threadId)
@@ -543,13 +557,14 @@ app.whenReady().then(() => {
 	})
 
 	ipcMain.handle('delete-thread', (_event, id) => {
-		// Editor threads: abort any live per-asset preprocessing and remove the
-		// history sidecar before deletion
+		// Editor threads: abort any live per-asset preprocessing and renders,
+		// and remove the history sidecar before deletion
 		const thread = threadManager.getThread(id)
 		if (thread?.type === 'editor' && thread.editor) {
 			for (const asset of thread.editor.media) {
 				editorPreprocess.abortAssetPreprocessing(id, asset.id)
 			}
+			editorRender.abortRendersForThread(id)
 			editorHistory.deleteHistory(id)
 		}
 		return threadManager.deleteThread(id)
