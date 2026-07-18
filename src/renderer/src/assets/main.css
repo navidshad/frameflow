@@ -64,3 +64,37 @@
     @apply h-full min-h-[50vh] !resize-none;
   }
 }
+
+/* Reduced motion (PRD §5.11): suppress decorative animation — fades, pulses,
+   spinners' easing flair, hover lifts, press-scales, and smooth scrolling.
+   Functional motion (video playback, the moving playhead, progress bars'
+   width changes) is untouched: none of it is driven by CSS animation. */
+@media (prefers-reduced-motion: reduce) {
+  html {
+    /* !important: a bundled third-party sheet re-declares this after us */
+    scroll-behavior: auto !important;
+  }
+
+  .animate-fade-in-up,
+  .animate-pulse-soft,
+  .animate-indeterminate {
+    animation: none !important;
+  }
+
+  /* Keep spinners visible (they convey "busy") but slow their spin. */
+  .animate-spin {
+    animation-duration: 2.5s !important;
+  }
+
+  /* Neutralize transition-driven decoration: hover lifts and press scales. */
+  *,
+  ::before,
+  ::after {
+    transition-duration: 0.01ms !important;
+  }
+  .active\:scale-95:active,
+  .hover\:scale-125:hover,
+  [class*="hover:-translate-y"]:hover {
+    transform: none !important;
+  }
+}
