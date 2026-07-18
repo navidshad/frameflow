@@ -65,6 +65,19 @@ const api = {
 		ipcRenderer.on('editor-import-progress', listener)
 		return () => ipcRenderer.removeListener('editor-import-progress', listener)
 	},
+	getPersonas: () => ipcRenderer.invoke('get-personas'),
+	setPersonas: (personas: any[]) => ipcRenderer.invoke('set-personas', personas),
+	runEditorPrompt: (data: { threadId: string, personaId: string, prompt: string, baseStepId: string, selectedItemIds: string[], playheadSec: number, widen?: string }) =>
+		ipcRenderer.invoke('run-editor-prompt', data),
+	abortEditorPrompt: (data: { threadId: string, turnId: string }) =>
+		ipcRenderer.invoke('abort-editor-prompt', data),
+	updateEditorTurn: (data: { threadId: string, turnId: string, patch: { resultStepId?: string } }) =>
+		ipcRenderer.invoke('update-editor-turn', data),
+	onEditorTurnUpdate: (callback: (data: any) => void) => {
+		const listener = (_event: any, data: any) => callback(data)
+		ipcRenderer.on('editor-turn-update', listener)
+		return () => ipcRenderer.removeListener('editor-turn-update', listener)
+	},
 	getEditorHistory: (threadId: string) => ipcRenderer.invoke('get-editor-history', threadId),
 	pushEditorStep: (data: { threadId: string, step: any, keyframe?: any }) =>
 		ipcRenderer.invoke('push-editor-step', data),

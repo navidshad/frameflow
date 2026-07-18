@@ -34,6 +34,21 @@
 					<MediaPanel />
 					<div class="flex flex-col min-h-0 gap-3">
 						<PreviewMonitor class="flex-1 min-h-0" />
+
+						<!-- AI answer card (question turns) -->
+						<div v-if="editorStore.lastAnswer"
+							class="rounded-2xl border border-zinc-200 dark:border-zinc-800 bg-white/70 dark:bg-zinc-900/70 backdrop-blur-xl p-3 flex items-start gap-2 animate-fade-in-up shrink-0">
+							<span class="text-base leading-none mt-0.5">{{ editorStore.activePersona?.icon || '💬' }}</span>
+							<p class="flex-1 text-xs text-zinc-700 dark:text-zinc-300 leading-relaxed">{{ editorStore.lastAnswer.text }}</p>
+							<button class="w-5 h-5 flex items-center justify-center rounded text-zinc-400 hover:text-zinc-600 dark:hover:text-zinc-300 shrink-0"
+								@click="editorStore.dismissAnswer()">
+								<span class="iconify tabler--x w-3 h-3"></span>
+							</button>
+						</div>
+
+						<!-- AI proposal review card -->
+						<ProposalCard v-if="editorStore.pendingProposal" class="shrink-0" />
+
 						<PromptBar />
 					</div>
 					<InspectorPanel />
@@ -56,6 +71,7 @@ import PreviewMonitor from './components/PreviewMonitor.vue'
 import InspectorPanel from './components/InspectorPanel.vue'
 import TimelinePanel from './components/TimelinePanel.vue'
 import PromptBar from './components/PromptBar.vue'
+import ProposalCard from './components/ProposalCard.vue'
 
 const route = useRoute()
 const router = useRouter()

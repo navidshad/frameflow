@@ -96,6 +96,7 @@ export const DEFAULT_MODEL_SETTINGS: ModelSettings = {
 		'image-extraction': GEMINI_MODEL_2_5_FLASH_LITE,
 		'image-intent': GEMINI_MODEL_2_5_FLASH,
 		'image-generation': GEMINI_MODEL_3_1_FLASH_IMAGE_PREVIEW,
-		'image-upscale': GEMINI_MODEL_3_1_FLASH_IMAGE_PREVIEW
+		'image-upscale': GEMINI_MODEL_3_1_FLASH_IMAGE_PREVIEW,
+		'editor-edit': GEMINI_MODEL_3_FLASH_PREVIEW
 	}
 }

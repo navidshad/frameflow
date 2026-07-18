@@ -334,9 +334,44 @@ export interface PromptTurn {
 	status: 'pending' | 'running' | 'completed' | 'error'
 	error?: string
 	diff?: TimelineDiff
+	rationale?: string
+	answer?: string             // set when the request was a question, not an edit
+	droppedOps?: string[]       // ops pruned during validation (surfaced on the card)
+	scopeLabel?: string         // e.g. "Chapter 3 · 12 items"
 	usage?: Usage
 	cost?: number
 	createdAt: number
+}
+
+/**
+ * Constrained edit-operation schema the AI model returns (M3).
+ * Deliberately NOT a raw TimelineDiff: item ids for adds are generated
+ * server-side, durations are never model-set, and adds reference assets +
+ * scene numbers from the provided context. Mapped to TimelineDiff by
+ * opsToDiff() in src/main/editor/prompt.ts.
+ */
+export interface EditorOps {
+	answer?: string
+	rationale?: string
+	removeItemIds?: string[]
+	updateItems?: Array<{
+		id: string
+		timelineStart?: number
+		in?: number
+		out?: number
+		speed?: number
+		label?: string
+	}>
+	addClips?: Array<{
+		assetId: string
+		sceneIndex?: number       // preferred: a scene # from AVAILABLE SCENES
+		in?: number               // alternative: explicit source range
+		out?: number
+		atSec?: number            // placement (optional)
+		afterItemId?: string
+		label?: string
+	}>
+	addMarkers?: Array<{ atSec: number; label: string }>
 }
 
 export type TimelineDiff = {
@@ -384,7 +419,7 @@ export interface ModelPricing {
 	}
 }
 
-export type OperationType = 'raw-transcript' | 'corrected-transcript' | 'intent' | 'timeline-new' | 'timeline-edit' | 'thumbnail' | 'scene-description' | 'image-extraction' | 'image-intent' | 'image-generation' | 'image-upscale'
+export type OperationType = 'raw-transcript' | 'corrected-transcript' | 'intent' | 'timeline-new' | 'timeline-edit' | 'thumbnail' | 'scene-description' | 'image-extraction' | 'image-intent' | 'image-generation' | 'image-upscale' | 'editor-edit'
 
 export type UpscaleFactor = 'x2' | 'x4'
 

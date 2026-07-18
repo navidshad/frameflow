@@ -2,13 +2,14 @@ import { defineStore } from 'pinia'
 import { ref, computed } from 'vue'
 import type {
 	BackgroundTask, Clip, EditorDocument, EditorHistoryStep, EditorMarker,
-	MediaAsset, Thread, TimelineDiff, TimelineItem, TimelineSnapshot, Track
+	EditorPersona, MediaAsset, PromptTurn, Thread, TimelineDiff, TimelineItem, TimelineSnapshot, Track
 } from '@shared/types'
 import {
 	applyTimelineDiff, clampSpeed, clipToItem, computeContentEnd,
 	diffTimelines, itemDuration, itemEnd,
 	type TimelineState
 } from '@shared/timeline'
+import { computeScope } from '@shared/ai-scope'
 
 /**
  * Store for the timeline video editor (/editor/:id).
@@ -55,6 +56,27 @@ export const useEditorStore = defineStore('editor', () => {
 	// ===== History state (M2) =====
 	const historySteps = ref<EditorHistoryStep[]>([])
 	let pushCounter = 0
+
+	// ===== Personas (M3) =====
+	const personas = ref<EditorPersona[]>([]) // built-ins + global user library (from main)
+	const DEFAULT_PERSONA_ID = 'podcast-editor'
+
+	// ===== AI prompt turns / proposals (M3) =====
+	interface PendingProposal {
+		turnId: string
+		diff: TimelineDiff
+		rationale?: string
+		droppedOps: string[]
+		addMarkers: { time: number; label: string }[]
+		scopeLabel?: string
+		thinContext: boolean
+		truncated: boolean
+	}
+	const pendingProposal = ref<PendingProposal | null>(null)
+	const activeTurnId = ref<string | null>(null)
+	const lastAnswer = ref<{ turnId: string; text: string } | null>(null)
+	const promptError = ref<string | null>(null)
+	const scopeWiden = ref<'auto' | 'chapter' | 'full'>('auto')
 
 	let autosaveTimer: ReturnType<typeof setTimeout> | null = null
 
@@ -157,6 +179,82 @@ export const useEditorStore = defineStore('editor', () => {
 	const canUndo = computed(() => pointerIndex.value >= 0)
 	const canRedo = computed(() => pointerIndex.value < historySteps.value.length - 1)
 
+	// ===== Persona computeds (M3) =====
+	// Resolution: project-local customPersonas -> global library (incl. builtins) -> default
+	const findPersona = (id: string | undefined | null): EditorPersona | null => {
+		if (!id) return null
+		return (
+			doc.value?.customPersonas?.find((p) => p.id === id) ||
+			personas.value.find((p) => p.id === id) ||
+			null
+		)
+	}
+
+	const activePersona = computed<EditorPersona | null>(() =>
+		findPersona(doc.value?.activePersonaId) ||
+		personas.value.find((p) => p.id === DEFAULT_PERSONA_ID) ||
+		personas.value[0] ||
+		null
+	)
+
+	const personasByMode = computed(() => ({
+		longform: personas.value.filter((p) => p.builtin && p.mode === 'longform'),
+		summarize: personas.value.filter((p) => p.builtin && p.mode === 'summarize'),
+		custom: [
+			...personas.value.filter((p) => !p.builtin),
+			...(doc.value?.customPersonas || [])
+		]
+	}))
+
+	// ===== Proposal computeds (M3) =====
+	const promptRunning = computed(() => activeTurnId.value !== null)
+
+	/** Live preview of what scope the NEXT prompt would use (drives the chip). */
+	const scopePreview = computed(() => {
+		if (!doc.value) return null
+		return computeScope({
+			timeline: doc.value.timeline,
+			markers: doc.value.markers || [],
+			selectedItemIds: selectedItemIds.value,
+			playheadSec: playheadSec.value,
+			mediaIds: doc.value.media.map((a) => a.id),
+			widen: scopeWiden.value === 'auto' ? undefined : scopeWiden.value
+		})
+	})
+
+	const proposalRemovedIds = computed<Set<string>>(() =>
+		new Set(pendingProposal.value?.diff.removeItemIds || [])
+	)
+
+	const proposalUpdatedById = computed<Map<string, Partial<TimelineItem>>>(() => {
+		const map = new Map<string, Partial<TimelineItem>>()
+		for (const update of pendingProposal.value?.diff.updateItems || []) {
+			map.set(update.id, update)
+		}
+		return map
+	})
+
+	/** Ghost items per track: proposed adds + updated items at their NEW position. */
+	const ghostItemsByTrack = computed<Record<string, TimelineItem[]>>(() => {
+		const map: Record<string, TimelineItem[]> = {}
+		if (!pendingProposal.value || !doc.value) return map
+		const push = (item: TimelineItem) => {
+			(map[item.trackId] ||= []).push(item)
+		}
+		for (const added of pendingProposal.value.diff.addItems || []) {
+			push({ ...added })
+		}
+		for (const update of pendingProposal.value.diff.updateItems || []) {
+			const original = doc.value.timeline.find((i) => i.id === update.id)
+			if (!original) continue
+			const merged = { ...original, ...update }
+			merged.speed = clampSpeed(merged.speed || 1)
+			merged.duration = (merged.out - merged.in) / merged.speed
+			push(merged)
+		}
+		return map
+	})
+
 	// ===== Persistence =====
 	const markDirty = () => {
 		dirty.value = true
@@ -216,6 +314,13 @@ export const useEditorStore = defineStore('editor', () => {
 			isPlaying.value = false
 
 			backgroundTasks.value = (await api.getBackgroundTasks(id)) || {}
+
+			// ---- Personas (global library incl. builtins) ----
+			try {
+				personas.value = (await api.getPersonas()) || []
+			} catch (error) {
+				console.error('[editorStore] Failed to load personas:', error)
+			}
 
 			// ---- History rehydration + pointer recovery (crash windows) ----
 			try {
@@ -734,6 +839,191 @@ export const useEditorStore = defineStore('editor', () => {
 		commitStep({ before, label: 'Add overlay track' })
 	}
 
+	// ===== Persona actions (M3) =====
+	const setActivePersona = (id: string) => {
+		if (!doc.value) return
+		doc.value.activePersonaId = id
+		markDirty()
+	}
+
+	/** Create or update a persona in the GLOBAL library (main filters builtins). */
+	const savePersona = async (persona: EditorPersona) => {
+		const userPersonas = personas.value.filter((p) => !p.builtin && p.id !== persona.id)
+		const merged = await api.setPersonas(
+			JSON.parse(JSON.stringify([...userPersonas, { ...persona, builtin: false, featureSets: [] }]))
+		)
+		if (merged) personas.value = merged
+	}
+
+	const clonePersona = (sourceId: string): EditorPersona | null => {
+		const source = findPersona(sourceId) || personas.value.find((p) => p.id === sourceId)
+		if (!source) return null
+		return {
+			...JSON.parse(JSON.stringify(source)),
+			id: (crypto as any).randomUUID ? crypto.randomUUID() : `persona-${Date.now()}`,
+			name: `Copy of ${source.name}`,
+			builtin: false,
+			featureSets: []
+		}
+	}
+
+	const deletePersona = async (id: string) => {
+		const target = personas.value.find((p) => p.id === id)
+		if (!target || target.builtin) return // built-ins can't be deleted
+		const merged = await api.setPersonas(
+			JSON.parse(JSON.stringify(personas.value.filter((p) => !p.builtin && p.id !== id)))
+		)
+		if (merged) personas.value = merged
+		if (doc.value?.activePersonaId === id) {
+			setActivePersona(DEFAULT_PERSONA_ID)
+		}
+	}
+
+	// ===== AI prompt actions (M3) =====
+	const runPrompt = async (prompt: string) => {
+		if (!threadId.value || !doc.value || promptRunning.value || pendingProposal.value) return
+		promptError.value = null
+		lastAnswer.value = null
+		// Flush the debounced autosave so main's doc (the context source) is current
+		dirty.value = true
+		await persistDoc()
+		try {
+			const result = await api.runEditorPrompt({
+				threadId: threadId.value,
+				personaId: activePersona.value?.id || DEFAULT_PERSONA_ID,
+				prompt,
+				baseStepId: doc.value.historyRef.currentStepId,
+				selectedItemIds: JSON.parse(JSON.stringify(selectedItemIds.value)),
+				playheadSec: playheadSec.value,
+				widen: scopeWiden.value === 'auto' ? undefined : scopeWiden.value
+			})
+			if (result?.turnId) activeTurnId.value = result.turnId
+		} catch (error: any) {
+			promptError.value = error?.message || 'Failed to start the prompt'
+		}
+	}
+
+	const abortPrompt = async () => {
+		if (!threadId.value || !activeTurnId.value) return
+		await api.abortEditorPrompt({ threadId: threadId.value, turnId: activeTurnId.value })
+	}
+
+	/**
+	 * Validates a proposal diff against the CURRENT doc by dry-running it on a
+	 * copy; returns the applied copy + human-readable pruned-op notes.
+	 */
+	const dryRunProposal = (diff: TimelineDiff): { applied: TimelineState; pruned: string[] } => {
+		const applied: TimelineState = {
+			tracks: JSON.parse(JSON.stringify(doc.value!.tracks)),
+			timeline: JSON.parse(JSON.stringify(doc.value!.timeline))
+		}
+		const result = applyTimelineDiff(applied, diff, doc.value!.media)
+		return { applied, pruned: result.errors }
+	}
+
+	const acceptProposal = async () => {
+		const proposal = pendingProposal.value
+		if (!proposal || !doc.value || !threadId.value) return
+
+		// Re-validate at accept time — the user may have kept editing during review
+		const { applied, pruned } = dryRunProposal(proposal.diff)
+		const before = currentState()
+		const diffed = diffTimelines(before, applied)
+		if (!diffed) {
+			// Everything pruned or a no-op — nothing to commit
+			pendingProposal.value = {
+				...proposal,
+				droppedOps: [...proposal.droppedOps, ...pruned, 'nothing left to apply — the timeline changed'],
+				diff: { schemaVersion: proposal.diff.schemaVersion }
+			}
+			return
+		}
+
+		doc.value.tracks = applied.tracks
+		doc.value.timeline = applied.timeline
+		const turn = doc.value.turns.find((t) => t.id === proposal.turnId)
+		const persona = findPersona(turn?.personaId) || activePersona.value
+		commitStep({
+			prebuilt: diffed,
+			origin: 'ai',
+			turnId: proposal.turnId,
+			label: persona?.name || 'AI edit'
+		})
+
+		// Markers ride outside the diff (non-undoable by design)
+		for (const marker of proposal.addMarkers) {
+			addMarker(marker.time, marker.label)
+		}
+
+		api.updateEditorTurn({
+			threadId: threadId.value,
+			turnId: proposal.turnId,
+			patch: { resultStepId: doc.value.historyRef.currentStepId }
+		}).catch(() => { /* non-critical */ })
+
+		pendingProposal.value = null
+	}
+
+	const rejectProposal = () => {
+		pendingProposal.value = null
+	}
+
+	const dismissAnswer = () => {
+		lastAnswer.value = null
+	}
+
+	/** Handles a completed/errored turn arriving from main. */
+	const onTurnUpdate = (payload: {
+		threadId: string
+		turn: PromptTurn
+		addMarkers?: { time: number; label: string }[]
+		thinContext?: boolean
+		truncated?: boolean
+	}) => {
+		if (payload.threadId !== threadId.value || !doc.value) return
+		const turn = payload.turn
+
+		// Upsert into doc.turns (main-owned; echo also arrives via thread-updated)
+		const index = doc.value.turns.findIndex((t) => t.id === turn.id)
+		if (index === -1) doc.value.turns.push(turn)
+		else doc.value.turns[index] = turn
+
+		if (turn.id !== activeTurnId.value && turn.status === 'running') return
+
+		if (turn.status === 'completed') {
+			activeTurnId.value = null
+			if (turn.answer && !hasOps(turn.diff)) {
+				lastAnswer.value = { turnId: turn.id, text: turn.answer }
+				return
+			}
+			if (!hasOps(turn.diff)) {
+				promptError.value = 'The AI proposed no changes. Try a more specific request.'
+				return
+			}
+			// Dry-run against the live doc; prune stale ops
+			const { pruned } = dryRunProposal(turn.diff!)
+			pendingProposal.value = {
+				turnId: turn.id,
+				diff: turn.diff!,
+				rationale: turn.rationale,
+				droppedOps: [...(turn.droppedOps || []), ...pruned],
+				addMarkers: payload.addMarkers || [],
+				scopeLabel: turn.scopeLabel,
+				thinContext: !!payload.thinContext,
+				truncated: !!payload.truncated
+			}
+		} else if (turn.status === 'error') {
+			activeTurnId.value = null
+			promptError.value = turn.error || 'Prompt failed'
+		}
+	}
+
+	const hasOps = (diff?: TimelineDiff): boolean =>
+		!!diff && !!(
+			diff.addItems?.length || diff.removeItemIds?.length ||
+			diff.updateItems?.length || diff.addTracks?.length || diff.removeTrackIds?.length
+		)
+
 	// ===== Ownership-split merge for thread-updated echoes =====
 	const mergeMainOwnedAsset = (local: MediaAsset, remote: MediaAsset): MediaAsset => {
 		// Take main-owned fields from remote; preserve renderer-owned clip.selected
@@ -755,6 +1045,9 @@ export const useEditorStore = defineStore('editor', () => {
 		if (!threadId.value || updated.id !== threadId.value) return
 		thread.value = updated
 		if (!updated.editor || !doc.value) return
+
+		// Turns are main-owned — merge unconditionally (like media)
+		doc.value.turns = updated.editor.turns || doc.value.turns
 
 		const remoteMedia = updated.editor.media || []
 		const remoteIds = new Set(remoteMedia.map((a) => a.id))
@@ -814,6 +1107,16 @@ export const useEditorStore = defineStore('editor', () => {
 				urlImports.value = {
 					...urlImports.value,
 					[data.assetId]: { url: data.url || '', percent: data.percent }
+				}
+			})
+		}
+
+		if (api.onEditorTurnUpdate) {
+			api.onEditorTurnUpdate((data: any) => {
+				try {
+					onTurnUpdate(data)
+				} catch (error) {
+					console.error('[editorStore] turn update failed:', error)
 				}
 			})
 		}
@@ -892,6 +1195,30 @@ export const useEditorStore = defineStore('editor', () => {
 		addMarker,
 		removeMarker,
 		toggleTrackFlag,
-		addOverlayTrack
+		addOverlayTrack,
+		// personas
+		personas,
+		activePersona,
+		personasByMode,
+		setActivePersona,
+		savePersona,
+		clonePersona,
+		deletePersona,
+		// AI prompt / proposals
+		pendingProposal,
+		activeTurnId,
+		lastAnswer,
+		promptError,
+		scopeWiden,
+		promptRunning,
+		scopePreview,
+		proposalRemovedIds,
+		proposalUpdatedById,
+		ghostItemsByTrack,
+		runPrompt,
+		abortPrompt,
+		acceptProposal,
+		rejectProposal,
+		dismissAnswer
 	}
 })

@@ -2,13 +2,16 @@ import { app } from 'electron'
 import { join } from 'path'
 import { existsSync, mkdirSync, readFileSync, writeFileSync, realpathSync } from 'fs'
 import os from 'os'
-import { ModelSettings } from '../shared/types'
+import { EditorPersona, ModelSettings } from '../shared/types'
 import { DEFAULT_MODEL_SETTINGS } from './constants/gemini'
+import { BUILTIN_PERSONAS } from './constants/personas'
 
 interface Settings {
 	tempDir: string
 	geminiApiKey?: string
 	modelSettings?: ModelSettings
+	/** User-defined editor personas ONLY — built-ins are merged at read time. */
+	personas?: EditorPersona[]
 }
 
 class SettingsManager {
@@ -52,7 +55,8 @@ class SettingsManager {
 				return {
 					tempDir: parsed.tempDir || this.defaultTempDir,
 					geminiApiKey: parsed.geminiApiKey,
-					modelSettings: this.mergeModelSettings(parsed.modelSettings || DEFAULT_MODEL_SETTINGS)
+					modelSettings: this.mergeModelSettings(parsed.modelSettings || DEFAULT_MODEL_SETTINGS),
+					personas: Array.isArray(parsed.personas) ? parsed.personas : []
 				}
 			}
 		} catch (error) {
@@ -150,6 +154,24 @@ class SettingsManager {
 		this.settings.modelSettings = DEFAULT_MODEL_SETTINGS
 		this.saveSettings()
 		return DEFAULT_MODEL_SETTINGS
+	}
+
+	/** User-defined personas only (built-ins live in constants/personas.ts). */
+	getPersonas(): EditorPersona[] {
+		return this.settings.personas || []
+	}
+
+	/**
+	 * Persists user personas. Built-in entries and any entry whose id collides
+	 * with a built-in are filtered out — built-ins are code, not data.
+	 */
+	setPersonas(personas: EditorPersona[]): EditorPersona[] {
+		const builtinIds = new Set(BUILTIN_PERSONAS.map((p) => p.id))
+		this.settings.personas = (personas || []).filter(
+			(p) => !p.builtin && !builtinIds.has(p.id)
+		)
+		this.saveSettings()
+		return this.settings.personas
 	}
 }
 

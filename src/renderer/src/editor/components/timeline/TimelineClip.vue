@@ -1,14 +1,19 @@
 <template>
 	<div class="absolute top-1 bottom-1 rounded-lg overflow-hidden select-none group border transition-shadow"
 		:class="[
-			selected
-				? 'border-primary ring-2 ring-primary/40 shadow-md shadow-primary/20 z-10'
-				: 'border-zinc-300/60 dark:border-zinc-700/80 hover:border-primary/40',
-			track?.locked ? 'pointer-events-none opacity-60' : 'cursor-grab active:cursor-grabbing'
+			ghost
+				? 'border-dashed border-primary opacity-50 pointer-events-none z-20'
+				: selected
+					? 'border-primary ring-2 ring-primary/40 shadow-md shadow-primary/20 z-10'
+					: 'border-zinc-300/60 dark:border-zinc-700/80 hover:border-primary/40',
+			struck ? 'opacity-35 saturate-0 !border-red-400/60' : '',
+			outdated && !ghost ? 'opacity-60' : '',
+			!ghost && track?.locked ? 'pointer-events-none opacity-60' : '',
+			!ghost && !track?.locked ? 'cursor-grab active:cursor-grabbing' : ''
 		]"
 		:style="{ transform: `translateX(${viewport.secToPx(item.timelineStart)}px)`, width: `${Math.max(viewport.secToPx(item.duration), 6)}px` }"
-		role="option" :aria-selected="selected" tabindex="0"
-		:aria-label="`${item.label || 'Clip'}, ${format(item.timelineStart)} to ${format(end)}, ${item.duration.toFixed(1)} seconds`"
+		role="option" :aria-selected="selected" :tabindex="ghost ? -1 : 0"
+		:aria-label="`${ghost ? 'Proposed: ' : ''}${item.label || 'Clip'}, ${format(item.timelineStart)} to ${format(end)}, ${item.duration.toFixed(1)} seconds`"
 		@pointerdown.stop="onPointerDown"
 		@click.stop="onClick">
 
@@ -35,6 +40,14 @@
 				</div>
 			</template>
 
+			<!-- Ghost (AI proposal) badge -->
+			<span v-if="ghost"
+				class="absolute top-0.5 left-0.5 w-3.5 h-3.5 rounded bg-primary/80 flex items-center justify-center pointer-events-none">
+				<span class="iconify tabler--sparkles w-2.5 h-2.5 text-white"></span>
+			</span>
+			<!-- Struck (proposed removal) slash -->
+			<div v-if="struck" class="absolute inset-0 pointer-events-none struck-slash"></div>
+
 			<!-- Retime hatch + badge -->
 			<div v-if="item.speed !== 1" class="absolute inset-0 pointer-events-none retime-hatch"></div>
 			<span v-if="item.speed !== 1"
@@ -49,9 +62,9 @@
 		</div>
 
 		<!-- Trim handles -->
-		<div v-if="selected || hovering" class="absolute inset-y-0 left-0 w-1.5 bg-primary/80 cursor-ew-resize z-20"
+		<div v-if="!ghost && (selected || hovering)" class="absolute inset-y-0 left-0 w-1.5 bg-primary/80 cursor-ew-resize z-20"
 			@pointerdown.stop="interactions.beginTrim(item.id, 'left', $event)"></div>
-		<div v-if="selected || hovering" class="absolute inset-y-0 right-0 w-1.5 bg-primary/80 cursor-ew-resize z-20"
+		<div v-if="!ghost && (selected || hovering)" class="absolute inset-y-0 right-0 w-1.5 bg-primary/80 cursor-ew-resize z-20"
 			@pointerdown.stop="interactions.beginTrim(item.id, 'right', $event)"></div>
 	</div>
 </template>
@@ -63,7 +76,13 @@ import { itemEnd } from '@shared/timeline'
 import { useEditorStore } from '../../../stores/editorStore'
 import { TimelineViewportKey, TimelineInteractionsKey } from '../../composables/useTimelineViewport'
 
-const props = defineProps<{ item: TimelineItem }>()
+const props = defineProps<{
+	item: TimelineItem
+	/** AI-proposal rendering states (M3) */
+	ghost?: boolean
+	struck?: boolean
+	outdated?: boolean
+}>()
 
 const store = useEditorStore()
 const viewport = inject(TimelineViewportKey)!
@@ -93,6 +112,7 @@ const format = (seconds: number) => {
 }
 
 const onPointerDown = (e: PointerEvent) => {
+	if (props.ghost) return
 	hovering.value = true
 	if (!selected.value) {
 		if (e.shiftKey || e.metaKey || e.ctrlKey) store.toggleItemSelected(props.item.id)
@@ -115,6 +135,17 @@ const onClick = (e: MouseEvent) => {
 		transparent 6px,
 		rgba(139, 92, 246, 0.15) 6px,
 		rgba(139, 92, 246, 0.15) 8px
+	);
+}
+
+/* Diagonal slash across a clip proposed for removal */
+.struck-slash {
+	background-image: linear-gradient(
+		to top right,
+		transparent calc(50% - 1px),
+		rgba(239, 68, 68, 0.8) calc(50% - 1px),
+		rgba(239, 68, 68, 0.8) calc(50% + 1px),
+		transparent calc(50% + 1px)
 	);
 }
 </style>

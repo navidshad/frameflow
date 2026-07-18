@@ -25,6 +25,8 @@ import { dependencyManager } from './dependencies/manager'
 import * as editorAssets from './editor/assets'
 import * as editorPreprocess from './editor/preprocess'
 import * as editorHistory from './editor/history'
+import * as editorPrompt from './editor/prompt'
+import { BUILTIN_PERSONAS } from './constants/personas'
 import { v4 as uuidv4 } from 'uuid'
 import { THREAD_DIRS } from './constants/paths'
 import { GEMINI_MODEL_2_5_FLASH, MODEL_METADATA } from './constants/gemini'
@@ -333,6 +335,16 @@ app.whenReady().then(() => {
 		return MODEL_METADATA
 	})
 
+	// Editor personas: built-ins (code) merged with the user's global library
+	ipcMain.handle('get-personas', () => {
+		return [...BUILTIN_PERSONAS, ...settingsManager.getPersonas()]
+	})
+
+	ipcMain.handle('set-personas', (_event, personas: any[]) => {
+		const saved = settingsManager.setPersonas(personas)
+		return [...BUILTIN_PERSONAS, ...saved]
+	})
+
 	// Thread Management
 	ipcMain.handle('create-thread', async (_event, { videoPath, videoName, imagePaths }) => {
 		const newThread = await threadManager.createThread(videoPath, videoName, imagePaths)
@@ -476,6 +488,33 @@ app.whenReady().then(() => {
 			console.error(`[editor] preprocess retry failed for ${assetId}:`, error)
 		})
 		return true
+	})
+
+	// AI prompt turns (M3): one structured call per turn, streamed via
+	// editor-turn-update; the base doc is never mutated until user accept.
+	ipcMain.handle('run-editor-prompt', (_event, options: {
+		threadId: string, personaId: string, prompt: string, baseStepId: string,
+		selectedItemIds: string[], playheadSec: number, widen?: 'chapter' | 'full'
+	}) => {
+		return editorPrompt.runEditorPrompt(options)
+	})
+
+	ipcMain.handle('abort-editor-prompt', (_event, { turnId }: { threadId: string, turnId: string }) => {
+		editorPrompt.abortEditorPrompt(turnId)
+		return true
+	})
+
+	// Renderer stamps the accepted history step back onto the turn record.
+	ipcMain.handle('update-editor-turn', async (_event, { threadId, turnId, patch }: {
+		threadId: string, turnId: string, patch: { resultStepId?: string }
+	}) => {
+		return await threadManager.updateThreadWith(threadId, (thread) => {
+			if (!thread.editor) return null
+			const turns = thread.editor.turns.map((t) =>
+				t.id === turnId ? { ...t, resultStepId: patch.resultStepId ?? t.resultStepId } : t
+			)
+			return { editor: { ...thread.editor, turns } }
+		})
 	})
 
 	// Undo/redo history sidecar (renderer-authoritative; main persists)

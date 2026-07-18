@@ -7,8 +7,14 @@
 		@dragover="onDragOver" @dragleave="dragOver = false" @drop="onDrop"
 		@pointerdown="onLanePointerDown">
 
-		<!-- Windowed clip rendering -->
-		<TimelineClip v-for="item in visibleItems" :key="item.id" :item="item" />
+		<!-- Windowed clip rendering (with AI-proposal states) -->
+		<TimelineClip v-for="item in visibleItems" :key="item.id" :item="item"
+			:struck="store.proposalRemovedIds.has(item.id)"
+			:outdated="store.proposalUpdatedById.has(item.id)" />
+
+		<!-- Ghost clips: AI-proposed adds + updated items at their new position -->
+		<TimelineClip v-for="ghostItem in visibleGhosts" :key="`ghost-${ghostItem.id}`"
+			:item="ghostItem" ghost />
 
 		<!-- Hints -->
 		<div v-if="items.length === 0" class="absolute inset-0 flex items-center px-3 pointer-events-none">
@@ -36,6 +42,11 @@ const items = computed(() => store.itemsByTrack[props.track.id] || [])
 
 const visibleItems = computed(() =>
 	items.value.filter((i) => viewport.intersectsVisible(i.timelineStart, itemEnd(i)))
+)
+
+const visibleGhosts = computed(() =>
+	(store.ghostItemsByTrack[props.track.id] || [])
+		.filter((i) => viewport.intersectsVisible(i.timelineStart, itemEnd(i)))
 )
 
 const laneTint = computed(() => {

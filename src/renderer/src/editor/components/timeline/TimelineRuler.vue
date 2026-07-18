@@ -18,6 +18,12 @@
 			:title="`${marker.label || 'Marker'} — click to seek, Alt-click to remove`"
 			@pointerdown.stop
 			@click.stop="onMarkerClick(marker.id, marker.time, $event)"></button>
+
+		<!-- Ghost markers (AI-proposed, applied on accept) -->
+		<div v-for="(ghostMarker, i) in ghostMarkers" :key="`gm-${i}`"
+			class="absolute -bottom-px w-2.5 h-2.5 -ml-[5px] rotate-45 bg-secondary/40 border border-dashed border-secondary pointer-events-none z-10"
+			:style="{ left: `${viewport.secToPx(ghostMarker.time)}px` }"
+			:title="`Proposed: ${ghostMarker.label}`"></div>
 	</div>
 </template>
 
@@ -64,4 +70,6 @@ const onMarkerClick = (id: string, time: number, e: MouseEvent) => {
 	if (e.altKey) store.removeMarker(id)
 	else store.seekTo(time)
 }
+
+const ghostMarkers = computed(() => store.pendingProposal?.addMarkers || [])
 </script>
