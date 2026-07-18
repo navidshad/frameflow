@@ -39,6 +39,7 @@ export default {
         'fade-in-up': 'fadeInUp 0.5s ease-out',
         'fade-in': 'fadeIn 0.5s ease-out',
         'pulse-soft': 'pulseSoft 2s infinite ease-in-out',
+        'indeterminate': 'indeterminate 1.2s infinite ease-in-out',
       },
       keyframes: {
         fadeInUp: {
@@ -52,6 +53,10 @@ export default {
         pulseSoft: {
           '0%, 100%': { opacity: '1' },
           '50%': { opacity: '0.8' },
+        },
+        indeterminate: {
+          '0%': { transform: 'translateX(-100%)' },
+          '100%': { transform: 'translateX(100%)' },
         },
       },
     },

@@ -173,11 +173,11 @@ export class SceneDetector {
      * @returns Array of detected scenes sorted by start time.
      * @throws If the CLI exits non-zero, the CSV is missing, or values cannot be parsed.
      */
-    async detectScenes(videoPath: string, signal?: AbortSignal): Promise<Scene[]> {
+    async detectScenes(videoPath: string, signal?: AbortSignal, threshold: number = CONTENT_THRESHOLD): Promise<Scene[]> {
         const tempDir = await fs.mkdtemp(join(tmpdir(), 'scenedetect-'))
 
         try {
-            await this.runScenedetect(videoPath, tempDir, signal)
+            await this.runScenedetect(videoPath, tempDir, signal, threshold)
             const csvPath = await this.locateCsvFile(tempDir, videoPath)
             const csvContent = await fs.readFile(csvPath, 'utf-8')
             return this.parseCsv(csvContent)
@@ -194,14 +194,14 @@ export class SceneDetector {
     /**
      * Execute the scenedetect CLI process.
      */
-    private async runScenedetect(videoPath: string, outputDir: string, signal?: AbortSignal): Promise<void> {
+    private async runScenedetect(videoPath: string, outputDir: string, signal?: AbortSignal, threshold: number = CONTENT_THRESHOLD): Promise<void> {
         const pathOrRef = await resolveScenedetectPath()
-        
+
         return new Promise((resolve, reject) => {
             const scenedetectArgs = [
                 '-i', videoPath,
                 'detect-content',
-                '-t', String(CONTENT_THRESHOLD),
+                '-t', String(threshold),
                 'list-scenes',
                 '-o', outputDir,
                 '-f', CSV_FILENAME,

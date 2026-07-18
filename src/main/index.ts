@@ -22,6 +22,9 @@ import { checkFFmpegAvailability, getVideoMetadata } from './ffmpeg'
 import { checkScenedetectAvailability } from './scenedetect'
 import { checkYtDlpAvailability, downloadVideo, getVideoFormats } from './ytdlp'
 import { dependencyManager } from './dependencies/manager'
+import * as editorAssets from './editor/assets'
+import * as editorPreprocess from './editor/preprocess'
+import { v4 as uuidv4 } from 'uuid'
 import { THREAD_DIRS } from './constants/paths'
 import { GEMINI_MODEL_2_5_FLASH, MODEL_METADATA } from './constants/gemini'
 import { electronApp, optimizer, is } from '@electron-toolkit/utils'
@@ -345,6 +348,129 @@ app.whenReady().then(() => {
 		return true
 	})
 
+	// ===== Timeline Video Editor =====
+
+	// Creates an editor project thread. Deliberately does NOT auto-start
+	// preprocessing (media is imported per-asset inside the editor).
+	ipcMain.handle('create-editor-project', async (_event, { title }: { title?: string }) => {
+		return await threadManager.createEditorThread(title || 'Untitled Project')
+	})
+
+	// Autosave of RENDERER-OWNED editor fields only. Main owns preprocessing-derived
+	// asset state (preprocessing/proxyPath/metadata/preprocessState/clips content);
+	// the renderer owns selection, clip-selected flags, tracks, timeline, meta, personas.
+	// This ownership split is what prevents autosave/thread-updated echo clobbering.
+	ipcMain.handle('save-editor-doc', async (_event, { threadId, patch }: {
+		threadId: string
+		patch: {
+			tracks?: any[]
+			timeline?: any[]
+			timelineMeta?: any
+			selection?: any
+			activePersonaId?: string
+			customPersonas?: any[]
+			clipSelections?: Record<string, boolean>
+		}
+	}) => {
+		return await threadManager.updateThreadWith(threadId, (thread) => {
+			if (thread.type !== 'editor' || !thread.editor) return null
+
+			const editor = { ...thread.editor }
+			if (patch.tracks) editor.tracks = patch.tracks
+			if (patch.timeline) editor.timeline = patch.timeline
+			if (patch.timelineMeta) editor.timelineMeta = patch.timelineMeta
+			if (patch.selection) editor.selection = patch.selection
+			if (patch.activePersonaId !== undefined) editor.activePersonaId = patch.activePersonaId
+			if (patch.customPersonas) editor.customPersonas = patch.customPersonas
+
+			// Fold clip-selected flags into the matching clips (the one renderer-owned
+			// field living inside main-owned MediaAsset records).
+			if (patch.clipSelections) {
+				editor.media = editor.media.map(asset => ({
+					...asset,
+					clips: asset.clips.map(clip =>
+						patch.clipSelections![clip.id] !== undefined
+							? { ...clip, selected: patch.clipSelections![clip.id] }
+							: clip
+					)
+				}))
+			}
+
+			return { editor }
+		})
+	})
+
+	// Import a local file as a MediaAsset and start per-asset preprocessing.
+	ipcMain.handle('add-media-asset', async (_event, { threadId, filePath, name }: {
+		threadId: string, filePath: string, name?: string
+	}) => {
+		const asset = await editorAssets.createMediaAsset(threadId, { sourcePath: filePath, name })
+		if (asset && asset.preprocessState !== 'error') {
+			// Fire-and-forget: progress streams via background-task-update
+			editorPreprocess.preprocessMediaAsset(threadId, asset.id).catch((error) => {
+				console.error(`[editor] preprocess failed for ${asset.id}:`, error)
+			})
+		}
+		return asset
+	})
+
+	// Import from URL/YouTube: download straight into the asset's source dir,
+	// with per-asset progress (the legacy 'download-progress' event is keyless
+	// and breaks under concurrent imports).
+	ipcMain.handle('import-media-url', async (event, { threadId, url, resolution }: {
+		threadId: string, url: string, resolution?: string
+	}) => {
+		const thread = threadManager.getThread(threadId)
+		if (!thread || thread.type !== 'editor') throw new Error('Not an editor project')
+
+		const assetId = uuidv4()
+		const sourceDir = join(thread.tempDir, 'media', assetId, 'source')
+		fs.mkdirSync(sourceDir, { recursive: true })
+
+		try {
+			const result = await downloadVideo(url, sourceDir, resolution, (percent) => {
+				event.sender.send('editor-import-progress', { threadId, assetId, url, percent })
+			})
+
+			const asset = await editorAssets.createMediaAsset(threadId, {
+				sourcePath: result.path,
+				name: result.name,
+				assetId
+			})
+			if (asset && asset.preprocessState !== 'error') {
+				editorPreprocess.preprocessMediaAsset(threadId, asset.id).catch((error) => {
+					console.error(`[editor] preprocess failed for ${asset.id}:`, error)
+				})
+			}
+			return asset
+		} catch (error) {
+			// Failed import: remove the partial asset dir so nothing dangles
+			try {
+				fs.rmSync(join(thread.tempDir, 'media', assetId), { recursive: true, force: true })
+			} catch { /* best effort */ }
+			throw error
+		}
+	})
+
+	ipcMain.handle('remove-media-asset', async (_event, { threadId, assetId }: {
+		threadId: string, assetId: string
+	}) => {
+		return await editorAssets.removeAsset(threadId, assetId)
+	})
+
+	// Retry / re-run / opt-in steps (e.g. ['descriptions']) for one asset.
+	ipcMain.handle('preprocess-media', async (_event, { threadId, assetId, steps, threshold }: {
+		threadId: string, assetId: string, steps?: string[], threshold?: number
+	}) => {
+		editorPreprocess.preprocessMediaAsset(threadId, assetId, {
+			steps: steps as any,
+			threshold
+		}).catch((error) => {
+			console.error(`[editor] preprocess retry failed for ${assetId}:`, error)
+		})
+		return true
+	})
+
 	ipcMain.handle('get-all-threads', () => {
 		return threadManager.getAllThreads()
 	})
@@ -354,6 +480,13 @@ app.whenReady().then(() => {
 	})
 
 	ipcMain.handle('delete-thread', (_event, id) => {
+		// Editor threads: abort any live per-asset preprocessing before deletion
+		const thread = threadManager.getThread(id)
+		if (thread?.type === 'editor' && thread.editor) {
+			for (const asset of thread.editor.media) {
+				editorPreprocess.abortAssetPreprocessing(id, asset.id)
+			}
+		}
 		return threadManager.deleteThread(id)
 	})
 

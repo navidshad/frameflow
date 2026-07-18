@@ -21,14 +21,27 @@
 					/>
 
 					<!-- New Image Edit Card -->
-					<NewThreadCard 
-						title="New Image Edit" 
+					<NewThreadCard
+						title="New Image Edit"
 						description="Create stunning visuals from your image collection"
 						@click="handleCreateImageEdit"
 					>
 						<template #icon>
 							<svg xmlns="http://www.w3.org/2000/svg" class="w-6 h-6" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
 								<rect x="3" y="3" width="18" height="18" rx="2" ry="2"/><circle cx="8.5" cy="8.5" r="1.5"/><polyline points="21 15 16 10 5 21"/>
+							</svg>
+						</template>
+					</NewThreadCard>
+
+					<!-- Video Editor Card -->
+					<NewThreadCard
+						title="Video Editor"
+						description="Cut and arrange clips on a multi-track timeline"
+						@click="handleCreateEditorProject"
+					>
+						<template #icon>
+							<svg xmlns="http://www.w3.org/2000/svg" class="w-6 h-6" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+								<rect x="3" y="5" width="18" height="4" rx="1"/><rect x="3" y="12" width="12" height="4" rx="1"/><line x1="8" y1="3" x2="8" y2="21"/>
 							</svg>
 						</template>
 					</NewThreadCard>
@@ -55,7 +68,16 @@ const videoStore = useVideoStore()
 const loading = ref(true)
 
 const openThread = (id: string) => {
-	router.push(`/chat/${id}`)
+	const thread = videoStore.threads.find((t) => t.id === id)
+	router.push(thread?.type === 'editor' ? `/editor/${id}` : `/chat/${id}`)
+}
+
+const handleCreateEditorProject = async () => {
+	const thread = await (window as any).api.createEditorProject('Untitled Project')
+	if (thread) {
+		videoStore.threads.unshift(thread)
+		router.push(`/editor/${thread.id}`)
+	}
 }
 
 const handleCreateImageEdit = async () => {

@@ -48,6 +48,23 @@ const api = {
 	getModelSettings: () => ipcRenderer.invoke('get-model-settings'),
 	setModelSettings: (settings: any) => ipcRenderer.invoke('set-model-settings', settings),
 	resetModelSettings: () => ipcRenderer.invoke('reset-model-settings'),
+	// Timeline Video Editor
+	createEditorProject: (title?: string) => ipcRenderer.invoke('create-editor-project', { title }),
+	saveEditorDoc: (data: { threadId: string, patch: any }) =>
+		ipcRenderer.invoke('save-editor-doc', data),
+	addMediaAsset: (data: { threadId: string, filePath: string, name?: string }) =>
+		ipcRenderer.invoke('add-media-asset', data),
+	importMediaUrl: (data: { threadId: string, url: string, resolution?: string }) =>
+		ipcRenderer.invoke('import-media-url', data),
+	removeMediaAsset: (data: { threadId: string, assetId: string }) =>
+		ipcRenderer.invoke('remove-media-asset', data),
+	preprocessMedia: (data: { threadId: string, assetId: string, steps?: string[], threshold?: number }) =>
+		ipcRenderer.invoke('preprocess-media', data),
+	onEditorImportProgress: (callback: (data: { threadId: string, assetId: string, url?: string, percent: number }) => void) => {
+		const listener = (_event: any, data: any) => callback(data)
+		ipcRenderer.on('editor-import-progress', listener)
+		return () => ipcRenderer.removeListener('editor-import-progress', listener)
+	},
 	// Thread Management
 	createThread: (data: { videoPath?: string, videoName: string, imagePaths?: string[] }) =>
 		ipcRenderer.invoke('create-thread', data),
