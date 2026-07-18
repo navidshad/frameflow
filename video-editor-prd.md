@@ -4,11 +4,38 @@ FrameFlow today edits video through a single surface: an AI-driven node-graph "c
 
 | | |
 |---|---|
-| **Status** | Draft |
+| **Status** | v1 shipped & verified (M0–M4) + revisions rework — on branch `feat/video-editor-m0-m1` |
 | **Owner** | navidshad72@gmail.com |
-| **Date** | 2026-07-18 |
+| **Date** | 2026-07-18 (status updated as of implementation) |
 | **App** | FrameFlow (Electron + Vue 3 + Vite, TypeScript) |
 | **Feature** | Traditional timeline video editor (new surface, alongside the AI graph editor) |
+
+---
+
+## 0. Implementation Status
+
+v1 was delivered in five milestones and all 8 requested features are live and user-verified. One post-v1 rework replaced the AI review flow (§5.7) with a branchable **revision tree**.
+
+**Shipped (commits on `feat/video-editor-m0-m1`):**
+
+| Milestone | Commit | What landed |
+|---|---|---|
+| M0+M1 | `b9fa93f` | Editor route/shell, media import (local + URL), per-asset preprocessing, scene-split into selectable pieces |
+| M2 | `4a499e6` | Multi-track timeline (drag/trim/split/ripple/retime/snap/zoom/markers), EDL preview, filmstrip⇄context toggle, sidecar undo/redo, keyboard map |
+| M3 | `f11e400` | AI prompt bar, 9 personas (long-form + summarize) + user personas, `EditorOps`→`TimelineDiff`, full context windowing |
+| M4 | `5dfca7b` | Export: `assembleVideo` fast path + `assembleTimeline` segment-then-concat (retime, gaps, mutes, source-derived normalization) |
+| Revisions | `68225ae` | **Replaces §5.7's accept/reject flow** — AI results apply immediately as branchable revisions (list + Vue Flow graph), manual checkpoints, full-snapshot sidecar |
+
+**Not yet built — was in v1 scope, deferred during implementation:**
+- **Silence/dead-air finder** (§5.6) — the assistive `silencedetect` review pass.
+- **Dense filmstrip** (§5.5) — frames-preview currently shows one scene thumbnail per clip, not a batched multi-frame strip.
+- **Detector sensitivity slider + merge/split pieces** (§5.2) — the `threshold` backend param exists; the UI does not.
+- **Long-timeline navigation** (§5.3) — markers/chapter jumps exist; the always-visible **minimap/overview strip** and chapter **jump list** do not.
+- **Per-asset transcript** (§5.2) — only scene *descriptions* are wired per-asset, so `clip.text` is never populated (AI context is visual-only).
+- **Audio-kind assets** (§5.1/§5.4) — `MediaAsset.kind` is always `'video'`; the A1 lane can't yet receive imported audio, so audio-track preview/export mixing stays moot.
+- **`prefers-reduced-motion`** gating (§5.11).
+
+**Deferred by design (v2 / M5 non-goals, never promised for v1):** overlay/text authoring, effects & transitions engine, persona feature-sets (feature 8's full form — `featureSets` stub + registries in place), true multi-track compositing / PiP / simultaneous `amix` (region model is amix-ready), pro trims (roll/slip/slide/JKL, 3-point, nested sequences), keyframed speed ramps, word-level filler removal, a first-class `Chapter[]` model (Open Q12, recommended for v1.1).
 
 ---
 
@@ -322,21 +349,29 @@ Each committed manual change (on interaction-end / coalesced) appends a `manual`
    - **Context windowing (long-form, required).** A multi-hour project's `items[]` + full enriched master timelines will **exceed the model's context window**, so context is bounded, never dumped wholesale: (a) if the user has a **selection**, send only the selected items plus a small neighborhood; (b) else if the timeline exceeds a threshold (default **~40 min / ~400 items**), send the **current chapter/marker window** around the playhead plus a compact whole-timeline outline (per-chapter summaries, not every scene); (c) enriched master-timeline scenes are included **only** for assets referenced in-window, and summarized past a per-asset cap. The prompt bar shows the active scope ("Editing: Chapter 3 · 12 items") so the user knows what the AI can see, and can widen it explicitly. This keeps token cost and latency bounded regardless of total runtime (§8).
 2. **Diff returned by the model** = a `TimelineDiff` keyed to those live ids: `removeItemIds: string[]` and `updateItems: [{ id, ...partial }]` address existing items **by id**; `addItems` introduces new placements referencing a `sourceClipId` or `sourceAssetId + in/out` (optionally `masterSegmentIndex` when pulling a whole master scene).
 3. **Validation before apply:** the diff's `schemaVersion` must be known (unknown ops/versions are rejected, not partially applied); every `removeItemIds`/`updateItems.id` must exist in the base version; every add/update `in/out` must satisfy `0 ≤ in < out ≤ asset.duration` and yield `duration > 0`. When a diff sets `speed`, it is **clamped to the retime range (0.25×–4×)** and the item's on-timeline `duration` is **recomputed** as `(out−in)/speed` — the model never sets `duration` directly. Unknown ids, out-of-bounds ranges, or out-of-range speeds are rejected and surfaced, never silently applied.
-4. **AI proposes, never silently commits.** The diff renders **on the timeline** — ghosted/struck clips in place — plus a plain-language rationale that leans on each item's `visual` ("dropped scene 7: low information").
-5. **Granular accept/reject.** Accept all / Reject all / toggle individual decisions (Cursor-style partial apply). Accepting commits a new `ai`-origin version; rejecting discards.
-6. **Manual edits feed back in.** After accepting, hand-edits mutate the same items; the **next** prompt re-serializes the current `items[]` as context, so "now make it 30 seconds" operates on the tweaked ids.
-7. **Prompt scope follows selection.** With items selected, the context/diff is restricted to the selection; with nothing selected, to the whole timeline.
+4. **AI results apply immediately as a revision** *(revised — supersedes the original ghost/accept-reject design)*. The validated diff is applied to the working timeline (with overlap repair) and lands as a **new revision** branching from the current one; the timeline switches to it so the user sees the real result — no ghost preview, no Accept/Reject step. A compact `AiResultCard` shows the persona, the assigned `V{n}`, op counts, rationale (leaning on each item's `visual`), cost, any dropped-op / thin-context / truncation notices, and a **"Back to V{parent}"** jump. "Rejecting" = switching back to the parent revision; the result stays in the tree. See §5.7a.
+5. **Manual edits feed back in.** Hand-edits mutate the working items; the **next** prompt re-serializes the current `items[]` as context, so "now make it 30 seconds" operates on the tweaked ids. Unsaved manual work is silently **auto-checkpointed** into its own revision before an AI result lands, so nothing is stranded.
+6. **Prompt scope follows selection.** With items selected, the context/diff is restricted to the selection; with nothing selected, to the whole timeline (widenable via the scope chip).
 
-**Mid-flight base change.** If the user hand-edits while a prompt runs, the returned diff is validated against `baseVersionId`; ids that no longer exist are dropped and the user sees a "based on an older version — re-run to include recent edits" notice (Open Q4).
+**Mid-flight base change.** If the user hand-edits while a prompt runs, the returned diff is dry-run-validated against the **live** doc at completion; ids that no longer exist are dropped and surfaced on the result card. The base timeline is never corrupted.
 
-**States.** Idle, running (streamed status), proposal-pending (diff shown), applying, error. Abortable via `window.api.abortPipeline()` (channel `abort-pipeline`).
+**States.** Idle, running (streamed status), applying (revision created), error. Abortable via `window.api.abortEditorPrompt()`.
 
 **Acceptance criteria.**
-- A prompt with an active persona produces a reviewable diff keyed to current item ids, not a silent overwrite.
+- A prompt with an active persona applies immediately and creates an `ai`-origin revision keyed to current item ids.
 - The diff correctly targets a hand-split item (addressed by id, not by master index).
-- Individual keep/drop toggles work before commit.
+- "Back to V{parent}" restores the pre-prompt state; the AI revision remains in the tree.
 - After a manual tweak, a follow-up prompt's context reflects the tweak.
-- An out-of-bounds or unknown-id diff entry is rejected with a visible message; the base version stays untouched.
+- An out-of-bounds or unknown-id diff entry is dropped (repaired), surfaced on the card; the working timeline stays valid.
+
+### 5.7a Revisions — branchable AI/manual checkpoints  *(post-v1 rework; commit `68225ae`)*
+
+Replaces the original per-diff Accept/Reject review with a **revision tree**, mirroring the chat editor's every-generation-is-a-version paradigm.
+
+- **Revision creators:** every AI result (auto) + an explicit **"Save revision"** manual checkpoint (bookmark button in the Revisions panel and timeline toolbar, optional label). Manual edits between checkpoints mutate the working state; the fine-grained undo ring still handles them (⌘Z undoes an AI diff in place right after it lands).
+- **Model:** `EditorRevision { id, parentId, seq, origin: 'init'|'ai'|'manual', label, turnId?, personaId?, snapshot: {tracks, timeline, timelineMeta, markers}, createdAt }`. Snapshots are **full and self-contained** — never diff-chained into the capped undo ring (which evicts). Persisted in a sidecar `userData/editor-revisions/{threadId}.json` (own monotonic `revisionCounter`, cap 100 with oldest-leaf-only pruning, root protected); the thread doc carries only `currentRevisionId` (autosave stays O(1)).
+- **Switching** a revision restores its snapshot (incl. markers), resets the fine-grained ring (stale redo diffs would corrupt a switched snapshot), and guards unsaved changes with a Save & switch / Discard / Cancel dialog. Blocked while a prompt runs (parentage correctness). Root ("Original") is lazily bootstrapped on first use — zero migration; losing the sidecar never mutates the working doc.
+- **Views:** a **list** (DFS tree with depth indent, `V{n}` pills, origin icons, first-clip thumbnails, current ring + dirty asterisk, hover subtree-delete) and a **graph** (standalone Vue Flow modal — main line down, branches fan right, click-to-switch with the modal staying open for branch-hopping). The right rail is tabbed **Inspect | Revisions**.
 
 ### 5.8 Editor Personas  *(features 7 & 8)*
 
@@ -780,22 +815,26 @@ Recommendation: **C**, with the existing `assembleVideo` as the degenerate fast 
 
 ## 9. Phased Delivery / Milestones
 
-**M0 — Scaffolding.** New route `/editor/:id`, `VideoEditorPage.vue` full-bleed shell, Home "Video Editor" card, `create-editor-project` IPC, `Thread.type:'editor'` + `EditorDocument` types (with `preprocessing:{}`/`messages:[]` init), `editorStore` skeleton, empty-state UI. **Checklist:** audit chat-only `ThreadManager` consumers (`getBranchContext`, recovery, path-repair, `thread-updated`) and gate editor threads out of them.
+*Status legend: ✅ shipped · ⚠️ shipped with noted deltas · ⏳ deferred. See §0 for the full ledger.*
+
+**M0 — Scaffolding.** ✅ New route `/editor/:id`, `VideoEditorPage.vue` full-bleed shell, Home "Video Editor" card, `create-editor-project` IPC, `Thread.type:'editor'` + `EditorDocument` types (with `preprocessing:{}`/`messages:[]` init), `editorStore` skeleton, empty-state UI. **Checklist:** audit chat-only `ThreadManager` consumers (`getBranchContext`, recovery, path-repair, `thread-updated`) and gate editor threads out of them.
 *Exit:* creating an editor project from Home opens a persistent, autosaving empty editor that appears on the Home grid, routes correctly, and trips no chat-only code path.
 
-**M1 — Media + preprocessing + selectable pieces (feature 2).** Media panel import (local + URL), **per-asset preprocessing scope spike (exit gate)**, background-task concurrency cap, scene→`Clip` derivation, clip tray with thumbnails, per-step live progress, detector sensitivity + merge/split, dependency-missing + per-asset error states (§5.10).
+**M1 — Media + preprocessing + selectable pieces (feature 2).** ⚠️ Media panel import (local + URL), **per-asset preprocessing scope spike (exit gate)**, background-task concurrency cap, scene→`Clip` derivation, clip tray with thumbnails, per-step live progress, detector sensitivity + merge/split, dependency-missing + per-asset error states (§5.10). *Delta: shipped except the **detector-sensitivity slider + merge/split** UI (backend `threshold` param exists) and per-asset **transcript** (only scene descriptions are wired, so `clip.text` is unused).*
 *Exit:* two videos (one local, one URL) import into one project; each auto-splits into selectable scene pieces with thumbnails and (opt-in) descriptions, with live per-asset progress, isolated failures, and no artifact collisions.
 
-**M2 — Timeline + manual edit + preview (features 3, 4, 5, 6-manual).** Purpose-built timeline (`pxPerSecond`, tracks video/audio/overlay), drag pieces onto tracks, program monitor EDL playback (with `playbackRate` honoring item `speed`), view toggle Filmstrip⇄Context (batched filmstrip generator), manual tools (trim/**retime-speed + numeric duration**/split/**cut/ripple**/move/snap/zoom/markers-chapters/**silence finder**), long-timeline navigation (chapters + fit/overview), **delta-based sidecar undo/redo**, keyboard shortcuts + a11y (§5.11).
+**M2 — Timeline + manual edit + preview (features 3, 4, 5, 6-manual).** ⚠️ Purpose-built timeline (`pxPerSecond`, tracks video/audio/overlay), drag pieces onto tracks, program monitor EDL playback (with `playbackRate` honoring item `speed`), view toggle Filmstrip⇄Context, manual tools (trim/**retime-speed + numeric duration**/split/**cut/ripple**/move/snap/zoom/markers-chapters), **delta-based sidecar undo/redo**, keyboard shortcuts + a11y (§5.11). *Deltas deferred by choice: the **silence finder**, the **batched dense-filmstrip generator** (filmstrip mode shows one scene thumbnail per clip), long-timeline **minimap/overview + chapter jump list** (fit-to-window/selection did ship), and `prefers-reduced-motion` gating.*
 *Exit:* a user builds a multi-clip cut by hand across video+audio tracks by mouse **or keyboard**, toggles frames/context views, scrubs the monitor (< 100 ms), and undoes/redoes edits that survive restart.
 
-**M3 — Prompt + personas (features 6, 7).** Prompt bar (embed `BaseMessageInput`), `run-editor-prompt` via intent/generation with persona system prompt, **item-id-keyed `TimelineDiff`** proposal with in-timeline ghosting + accept/reject/partial + id/bounds validation, persona library (predefined long-form + summarize personas + user CRUD, global `settingsManager` storage), persona picker/editor Modal grouped by mode (long-form/summarize), **AI context windowing for long projects** (§5.7 — selection/chapter scope + outline, scope shown in the prompt bar), Gemini-error recovery (§5.10).
-*Exit:* a persona-driven prompt produces a reviewable diff (keyed to live ids, incl. a hand-split item) the user partially accepts; a follow-up prompt respects prior manual tweaks; a user-defined persona persists across projects.
+**M3 — Prompt + personas (features 6, 7).** ✅ Prompt bar, `run-editor-prompt` with persona system prompt, **item-id-keyed `TimelineDiff`** + id/bounds validation, persona library (predefined long-form + summarize + user CRUD, global `settingsManager` storage), persona picker/editor Modal grouped by mode, **AI context windowing for long projects** (§5.7), Gemini-error recovery (§5.10). *Note: the in-timeline **ghosting + accept/reject/partial** review was **superseded** by the revision rework (§5.7a) — results now apply immediately as a branchable revision.*
+*Exit:* a persona-driven prompt applies to the timeline as an `ai` revision (keyed to live ids, incl. a hand-split item); a follow-up prompt respects prior manual tweaks; a user-defined persona persists across projects.
 
-**M4 — Export.** Fast-path export via `assembleVideo` for single-source; `assembleTimeline` (segment-then-concat) for multi-clip/multi-source + **per-region mixed audio** (§5.9); overlay/text export notice; `render-progress` + abort; `save-video`.
+**M4 — Export.** ✅ Fast-path export via `assembleVideo` for single-source; `assembleTimeline` (segment-then-concat) for multi-clip/multi-source with per-item retime (`setpts`/`atempo`) + gaps + track/item mutes (§5.9); overlay/text export notice; `editor-render-progress` + abort; Save As / Open folder. *Note: v1 audio is single-active-source per region (no imported audio-kind assets yet), so the multi-source **`amix`** graph is structurally ready but not exercised.*
 *Exit:* a single-source highlight reel and a two-source multi-clip timeline both export to correct files matching the preview with synced audio; muting excludes a track; export is abortable.
 
-**M5 — Deferred (feature 8 & beyond).** Overlay/text track authoring, effects/transitions engine, persona feature-sets, PiP/transform compositing in `assembleTimeline`, pro trim modes.
+**Revisions rework (post-v1, `68225ae`).** ✅ Branchable revision tree (list + Vue Flow graph) replacing the M3 accept/reject flow — see §5.7a.
+
+**M5 — Deferred (feature 8 & beyond).** ⏳ Overlay/text track authoring, effects/transitions engine, persona feature-sets, PiP/transform compositing in `assembleTimeline`, pro trim modes — plus the M1/M2 deltas listed in §0 (silence finder, dense filmstrip, sensitivity/merge-split UI, minimap/jump-list, per-asset transcript, audio-kind assets, reduced-motion).
 *Exit (future):* n/a for v1 — schema stubs (`featureSets`, `effects`, `transform`, `transition`) already in place so this is additive.
 
 ---
