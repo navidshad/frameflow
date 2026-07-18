@@ -82,10 +82,9 @@ const scopeMenuOpen = ref(false)
 const inputRef = ref<HTMLTextAreaElement | null>(null)
 const scopeRef = ref<HTMLElement | null>(null)
 
-const inputDisabled = computed(() => store.promptRunning || !!store.pendingProposal)
+const inputDisabled = computed(() => store.promptRunning)
 
 const placeholder = computed(() => {
-	if (store.pendingProposal) return 'Review the proposal above before prompting again'
 	if (store.isEmpty) return 'Import media first, then ask your editor persona for a cut'
 	return `Ask ${store.activePersona?.name || 'your editor'} to build or refine the cut…`
 })

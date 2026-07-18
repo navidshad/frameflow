@@ -80,7 +80,7 @@ const api = {
 		ipcRenderer.invoke('run-editor-prompt', data),
 	abortEditorPrompt: (data: { threadId: string, turnId: string }) =>
 		ipcRenderer.invoke('abort-editor-prompt', data),
-	updateEditorTurn: (data: { threadId: string, turnId: string, patch: { resultStepId?: string } }) =>
+	updateEditorTurn: (data: { threadId: string, turnId: string, patch: { resultStepId?: string, revisionId?: string } }) =>
 		ipcRenderer.invoke('update-editor-turn', data),
 	onEditorTurnUpdate: (callback: (data: any) => void) => {
 		const listener = (_event: any, data: any) => callback(data)
@@ -92,6 +92,13 @@ const api = {
 		ipcRenderer.invoke('push-editor-step', data),
 	setEditorHistoryPointer: (data: { threadId: string, currentStepId: string }) =>
 		ipcRenderer.invoke('set-editor-history-pointer', data),
+	clearEditorHistory: (data: { threadId: string }) =>
+		ipcRenderer.invoke('clear-editor-history', data),
+	getEditorRevisions: (threadId: string) => ipcRenderer.invoke('get-editor-revisions', threadId),
+	pushEditorRevision: (data: { threadId: string, revision: any }) =>
+		ipcRenderer.invoke('push-editor-revision', data),
+	deleteEditorRevisions: (data: { threadId: string, ids: string[] }) =>
+		ipcRenderer.invoke('delete-editor-revisions', data),
 	// Thread Management
 	createThread: (data: { videoPath?: string, videoName: string, imagePaths?: string[] }) =>
 		ipcRenderer.invoke('create-thread', data),

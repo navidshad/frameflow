@@ -110,6 +110,15 @@ export function setPointer(threadId: string, currentStepId: string): boolean {
 	return true
 }
 
+/**
+ * Wipes the fine-grained ring (used on revision switches: old steps' diffs
+ * were computed against pre-switch states — redoing them onto a switched
+ * snapshot would corrupt it, and a pointer-only reset would rehydrate them).
+ */
+export function clearHistory(threadId: string): void {
+	writeHistory(emptyHistory(threadId))
+}
+
 export function deleteHistory(threadId: string): void {
 	const filePath = historyPath(threadId)
 	try {

@@ -62,12 +62,28 @@
 							</button>
 						</div>
 
-						<!-- AI proposal review card -->
-						<ProposalCard v-if="editorStore.pendingProposal" class="shrink-0" />
+						<!-- AI applied-result card (revision landed) -->
+						<AiResultCard v-if="editorStore.lastResult" class="shrink-0" />
 
 						<PromptBar />
 					</div>
-					<InspectorPanel />
+					<!-- Right rail: Inspect | Revisions tabs -->
+					<div class="flex flex-col min-h-0 gap-2">
+						<div class="flex items-center bg-zinc-100/80 dark:bg-zinc-900/80 rounded-xl p-0.5 border border-zinc-200 dark:border-zinc-800 shrink-0">
+							<button v-for="tab in (['inspect', 'revisions'] as const)" :key="tab"
+								class="flex-1 px-2 py-1 rounded-lg text-[9px] font-bold uppercase tracking-widest transition relative"
+								:class="rightTab === tab
+									? 'bg-primary text-white shadow-md shadow-primary/20'
+									: 'text-zinc-500 hover:text-zinc-700 dark:hover:text-zinc-300'"
+								@click="selectRightTab(tab)">
+								{{ tab }}
+								<span v-if="tab === 'revisions' && revisionsBadge"
+									class="absolute top-0.5 right-1.5 w-1.5 h-1.5 rounded-full bg-secondary animate-pulse-soft"></span>
+							</button>
+						</div>
+						<InspectorPanel v-if="rightTab === 'inspect'" class="flex-1 min-h-0" />
+						<RevisionsPanel v-else class="flex-1 min-h-0" />
+					</div>
 				</div>
 
 				<!-- Bottom zone: timeline -->
@@ -80,16 +96,17 @@
 </template>
 
 <script setup lang="ts">
-import { computed, onMounted, ref } from 'vue'
+import { computed, onMounted, ref, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import GraphHeader from '../components/graph/GraphHeader.vue'
 import { useEditorStore } from '../stores/editorStore'
+import RevisionsPanel from './components/RevisionsPanel.vue'
 import MediaPanel from './components/MediaPanel.vue'
 import PreviewMonitor from './components/PreviewMonitor.vue'
 import InspectorPanel from './components/InspectorPanel.vue'
 import TimelinePanel from './components/TimelinePanel.vue'
 import PromptBar from './components/PromptBar.vue'
-import ProposalCard from './components/ProposalCard.vue'
+import AiResultCard from './components/AiResultCard.vue'
 import ExportDialog from './components/ExportDialog.vue'
 
 const route = useRoute()
@@ -98,6 +115,19 @@ const editorStore = useEditorStore()
 
 const notFound = ref(false)
 const showExport = ref(false)
+
+// Right-rail tabs: badge dot when an AI revision lands while on Inspect
+const rightTab = ref<'inspect' | 'revisions'>('inspect')
+const revisionsBadge = ref(false)
+
+const selectRightTab = (tab: 'inspect' | 'revisions') => {
+	rightTab.value = tab
+	if (tab === 'revisions') revisionsBadge.value = false
+}
+
+watch(() => editorStore.lastResult, (result) => {
+	if (result && rightTab.value !== 'revisions') revisionsBadge.value = true
+})
 
 const totalCost = computed(() =>
 	(editorStore.thread?.usageHistory || []).reduce((sum, record) => sum + (record.cost || 0), 0)

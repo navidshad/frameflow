@@ -2,7 +2,8 @@ import { defineStore } from 'pinia'
 import { ref, computed } from 'vue'
 import type {
 	BackgroundTask, Clip, EditorDocument, EditorHistoryStep, EditorMarker,
-	EditorPersona, MediaAsset, PromptTurn, Thread, TimelineDiff, TimelineItem, TimelineSnapshot, Track
+	EditorPersona, EditorRevision, MediaAsset, PromptTurn, Thread, TimelineDiff,
+	TimelineItem, TimelineSnapshot, Track
 } from '@shared/types'
 import {
 	applyTimelineDiff, clampSpeed, clipToItem, computeContentEnd,
@@ -61,22 +62,29 @@ export const useEditorStore = defineStore('editor', () => {
 	const personas = ref<EditorPersona[]>([]) // built-ins + global user library (from main)
 	const DEFAULT_PERSONA_ID = 'podcast-editor'
 
-	// ===== AI prompt turns / proposals (M3) =====
-	interface PendingProposal {
-		turnId: string
-		diff: TimelineDiff
-		rationale?: string
-		droppedOps: string[]
-		addMarkers: { time: number; label: string }[]
-		scopeLabel?: string
-		thinContext: boolean
-		truncated: boolean
-	}
-	const pendingProposal = ref<PendingProposal | null>(null)
+	// ===== AI prompt turns (M3, reworked for revisions) =====
 	const activeTurnId = ref<string | null>(null)
 	const lastAnswer = ref<{ turnId: string; text: string } | null>(null)
 	const promptError = ref<string | null>(null)
 	const scopeWiden = ref<'auto' | 'chapter' | 'full'>('auto')
+
+	// ===== Revision tree =====
+	const revisions = ref<EditorRevision[]>([])
+
+	/** Result card data for the most recent APPLIED AI edit (already a revision). */
+	interface AiResult {
+		turnId: string
+		revisionId: string
+		revisionSeq: number
+		parentRevisionId: string | null
+		counts: { added: number; removed: number; updated: number; markers: number }
+		rationale?: string
+		droppedOps: string[]
+		scopeLabel?: string
+		thinContext: boolean
+		truncated: boolean
+	}
+	const lastResult = ref<AiResult | null>(null)
 
 	// ===== Export / render (M4) =====
 	const renderState = ref<{
@@ -231,15 +239,30 @@ export const useEditorStore = defineStore('editor', () => {
 		})
 	})
 
-	const proposalRemovedIds = computed<Set<string>>(() =>
-		new Set(pendingProposal.value?.diff.removeItemIds || [])
+	// ===== Revision computeds =====
+	const currentRevision = computed<EditorRevision | null>(() =>
+		revisions.value.find((r) => r.id === doc.value?.currentRevisionId) || null
 	)
 
-	const proposalUpdatedById = computed<Map<string, Partial<TimelineItem>>>(() => {
-		const map = new Map<string, Partial<TimelineItem>>()
-		for (const update of pendingProposal.value?.diff.updateItems || []) {
-			map.set(update.id, update)
+	/** Working state differs from the current revision's snapshot. */
+	const revisionDirty = computed(() => {
+		const rev = currentRevision.value
+		if (!rev || !doc.value) return false
+		return diffTimelines(
+			{ tracks: rev.snapshot.tracks, timeline: rev.snapshot.timeline },
+			{ tracks: doc.value.tracks, timeline: doc.value.timeline }
+		) !== null
+	})
+
+	/** Children grouped by parentId (null key = root), createdAt-sorted. */
+	const revisionChildren = computed<Map<string | null, EditorRevision[]>>(() => {
+		const map = new Map<string | null, EditorRevision[]>()
+		for (const rev of revisions.value) {
+			const list = map.get(rev.parentId) || []
+			list.push(rev)
+			map.set(rev.parentId, list)
 		}
+		for (const list of map.values()) list.sort((a, b) => a.createdAt - b.createdAt)
 		return map
 	})
 
@@ -262,27 +285,6 @@ export const useEditorStore = defineStore('editor', () => {
 			return track && (track.kind === 'overlay' || track.kind === 'text')
 		})
 		return hasOverlayItems ? "Overlay/text tracks won't appear in this export." : null
-	})
-
-	/** Ghost items per track: proposed adds + updated items at their NEW position. */
-	const ghostItemsByTrack = computed<Record<string, TimelineItem[]>>(() => {
-		const map: Record<string, TimelineItem[]> = {}
-		if (!pendingProposal.value || !doc.value) return map
-		const push = (item: TimelineItem) => {
-			(map[item.trackId] ||= []).push(item)
-		}
-		for (const added of pendingProposal.value.diff.addItems || []) {
-			push({ ...added })
-		}
-		for (const update of pendingProposal.value.diff.updateItems || []) {
-			const original = doc.value.timeline.find((i) => i.id === update.id)
-			if (!original) continue
-			const merged = { ...original, ...update }
-			merged.speed = clampSpeed(merged.speed || 1)
-			merged.duration = (merged.out - merged.in) / merged.speed
-			push(merged)
-		}
-		return map
 	})
 
 	// ===== Persistence =====
@@ -316,7 +318,8 @@ export const useEditorStore = defineStore('editor', () => {
 				clipSelections,
 				// Undo pointer rides with the doc: state + pointer land atomically
 				historyRef: doc.value.historyRef,
-				markers: doc.value.markers
+				markers: doc.value.markers,
+				currentRevisionId: doc.value.currentRevisionId
 			}))
 			await api.saveEditorDoc({ threadId: threadId.value, patch })
 			dirty.value = false
@@ -357,6 +360,22 @@ export const useEditorStore = defineStore('editor', () => {
 				personas.value = (await api.getPersonas()) || []
 			} catch (error) {
 				console.error('[editorStore] Failed to load personas:', error)
+			}
+
+			// ---- Revisions sidecar + pointer reconciliation ----
+			// Invariant: losing/corrupting the sidecar NEVER mutates the working doc.
+			lastResult.value = null
+			try {
+				revisions.value = (await api.getEditorRevisions(id))?.revisions || []
+			} catch (error) {
+				console.error('[editorStore] Failed to load revisions:', error)
+				revisions.value = []
+			}
+			if (doc.value?.currentRevisionId &&
+				!revisions.value.some((r) => r.id === doc.value!.currentRevisionId)) {
+				// Sidecar lost or pointer dangling — clear and lazily re-bootstrap
+				delete doc.value.currentRevisionId
+				markDirty()
 			}
 
 			// ---- History rehydration + pointer recovery (crash windows) ----
@@ -916,9 +935,180 @@ export const useEditorStore = defineStore('editor', () => {
 		}
 	}
 
+	// ===== Revision actions =====
+	const deepClone = <T>(v: T): T => JSON.parse(JSON.stringify(v))
+
+	const snapshotOfWorkingState = () => deepClone({
+		tracks: doc.value!.tracks,
+		timeline: doc.value!.timeline,
+		timelineMeta: doc.value!.timelineMeta,
+		markers: doc.value!.markers || []
+	})
+
+	/** Push to the sidecar and mirror the assigned seq back (awaited — cards need real V numbers). */
+	const pushRevisionInternal = async (rev: EditorRevision): Promise<EditorRevision> => {
+		revisions.value = [...revisions.value, rev]
+		try {
+			const res = await api.pushEditorRevision({ threadId: threadId.value, revision: deepClone(rev) })
+			if (res?.seq) rev.seq = res.seq
+		} catch (error) {
+			console.error('[editorStore] pushEditorRevision failed:', error)
+		}
+		return rev
+	}
+
+	/** Lazy root bootstrap: the parent chain is never empty; zero migration. */
+	const ensureRootRevision = async (): Promise<EditorRevision | null> => {
+		if (!doc.value || !threadId.value) return null
+		if (revisions.value.length === 0) {
+			const root: EditorRevision = {
+				id: (crypto as any).randomUUID ? crypto.randomUUID() : `rev-${Date.now()}`,
+				parentId: null,
+				seq: 0,
+				origin: 'init',
+				label: 'Original',
+				snapshot: snapshotOfWorkingState(),
+				createdAt: Date.now()
+			}
+			await pushRevisionInternal(root)
+			doc.value.currentRevisionId = root.id
+			markDirty()
+			return root
+		}
+		// Revisions exist but the pointer dangles (crash window): re-point at the
+		// newest WITHOUT touching the working doc.
+		if (!currentRevision.value) {
+			const newest = [...revisions.value].sort((a, b) => b.createdAt - a.createdAt)[0]
+			doc.value.currentRevisionId = newest.id
+			markDirty()
+		}
+		return currentRevision.value
+	}
+
+	const createRevision = async (options: {
+		origin: 'ai' | 'manual'
+		label?: string
+		turnId?: string
+		personaId?: string
+	}): Promise<EditorRevision | null> => {
+		if (!doc.value || !threadId.value) return null
+		await ensureRootRevision()
+		// Manual checkpoint with nothing changed = no-op (return the current node)
+		if (options.origin === 'manual' && !revisionDirty.value) return currentRevision.value
+		const rev: EditorRevision = {
+			id: (crypto as any).randomUUID ? crypto.randomUUID() : `rev-${Date.now()}-${Math.random().toString(36).slice(2)}`,
+			parentId: doc.value.currentRevisionId || null,
+			seq: 0,
+			origin: options.origin,
+			label: options.label?.trim() || (options.origin === 'ai' ? 'AI edit' : 'Checkpoint'),
+			turnId: options.turnId,
+			personaId: options.personaId,
+			snapshot: snapshotOfWorkingState(),
+			createdAt: Date.now()
+		}
+		await pushRevisionInternal(rev)
+		doc.value.currentRevisionId = rev.id
+		markDirty()
+		return rev
+	}
+
+	/**
+	 * Switches the working state to a revision's snapshot.
+	 * Resets the fine-grained undo ring (its diffs were computed against
+	 * pre-switch states — redo onto the switched snapshot would corrupt it).
+	 */
+	const switchRevision = async (id: string, options: { force?: boolean } = {}): Promise<boolean> => {
+		if (!doc.value || !threadId.value) return false
+		if (id === doc.value.currentRevisionId) return true
+		const target = revisions.value.find((r) => r.id === id)
+		if (!target) return false
+		if (promptRunning.value) return false // blocked: completing turn would land on the wrong parent
+
+		if (!options.force && revisionDirty.value) {
+			const confirmed = await api.showConfirmation({
+				title: 'Unsaved changes',
+				message: 'Your timeline has changes not saved to a revision.',
+				detail: 'Save them as a revision before switching, or discard them?',
+				buttons: ['Cancel', 'Discard changes', 'Save & switch'],
+				defaultId: 2,
+				cancelId: 0
+			})
+			if (!confirmed || confirmed.response === 0) return false
+			if (confirmed.response === 2) {
+				await createRevision({ origin: 'manual', label: 'Manual save' })
+			}
+		}
+
+		// Apply the snapshot
+		const snap = deepClone(target.snapshot)
+		doc.value.tracks = snap.tracks
+		doc.value.timeline = snap.timeline
+		doc.value.timelineMeta = snap.timelineMeta
+		doc.value.markers = snap.markers || []
+		doc.value.currentRevisionId = id
+
+		// Ring reset (local + sidecar; pointer-only reset would rehydrate stale steps)
+		historySteps.value = []
+		doc.value.historyRef = { currentStepId: '', stepCount: 0 }
+		api.clearEditorHistory({ threadId: threadId.value })
+			.catch((error: unknown) => console.error('[editorStore] clearEditorHistory failed:', error))
+
+		// Hygiene
+		clearItemSelection()
+		refreshMetaDuration()
+		seekTo(Math.min(playheadSec.value, contentEnd.value))
+		lastResult.value = null
+		markDirty()
+		return true
+	}
+
+	const saveCheckpoint = async (label?: string): Promise<'saved' | 'clean' | null> => {
+		if (!doc.value) return null
+		await ensureRootRevision()
+		if (!revisionDirty.value) return 'clean'
+		const rev = await createRevision({ origin: 'manual', label: label || 'Checkpoint' })
+		return rev ? 'saved' : null
+	}
+
+	const deleteRevisionSubtree = async (id: string): Promise<boolean> => {
+		if (!doc.value || !threadId.value || promptRunning.value) return false
+		const target = revisions.value.find((r) => r.id === id)
+		if (!target || target.parentId === null) return false // root undeletable
+
+		// Collect the subtree (chat's removeMessageBranch pattern)
+		const ids = new Set<string>()
+		const collect = (revId: string) => {
+			ids.add(revId)
+			for (const child of revisionChildren.value.get(revId) || []) collect(child.id)
+		}
+		collect(id)
+
+		// If current is inside, land on the subtree root's parent first
+		if (ids.has(doc.value.currentRevisionId || '')) {
+			const ok = await switchRevision(target.parentId)
+			if (!ok) return false
+		}
+
+		const confirmed = await api.showConfirmation({
+			title: 'Delete revisions',
+			message: `Delete V${target.seq}${ids.size > 1 ? ` and ${ids.size - 1} descendant revision(s)` : ''}?`,
+			detail: 'The timeline states saved in them will be lost. The current timeline is not affected.',
+			buttons: ['Cancel', 'Delete']
+		})
+		if (!confirmed || confirmed.response !== 1) return false
+
+		await api.deleteEditorRevisions({ threadId: threadId.value, ids: [...ids] })
+		revisions.value = revisions.value.filter((r) => !ids.has(r.id))
+		return true
+	}
+
+	const dismissResult = () => {
+		lastResult.value = null
+	}
+
 	// ===== AI prompt actions (M3) =====
 	const runPrompt = async (prompt: string) => {
-		if (!threadId.value || !doc.value || promptRunning.value || pendingProposal.value) return
+		if (!threadId.value || !doc.value || promptRunning.value) return
 		promptError.value = null
 		lastAnswer.value = null
 		// Flush the debounced autosave so main's doc (the context source) is current
@@ -961,53 +1151,6 @@ export const useEditorStore = defineStore('editor', () => {
 		return { applied, pruned: result.errors }
 	}
 
-	const acceptProposal = async () => {
-		const proposal = pendingProposal.value
-		if (!proposal || !doc.value || !threadId.value) return
-
-		// Re-validate at accept time — the user may have kept editing during review
-		const { applied, pruned } = dryRunProposal(proposal.diff)
-		const before = currentState()
-		const diffed = diffTimelines(before, applied)
-		if (!diffed) {
-			// Everything pruned or a no-op — nothing to commit
-			pendingProposal.value = {
-				...proposal,
-				droppedOps: [...proposal.droppedOps, ...pruned, 'nothing left to apply — the timeline changed'],
-				diff: { schemaVersion: proposal.diff.schemaVersion }
-			}
-			return
-		}
-
-		doc.value.tracks = applied.tracks
-		doc.value.timeline = applied.timeline
-		const turn = doc.value.turns.find((t) => t.id === proposal.turnId)
-		const persona = findPersona(turn?.personaId) || activePersona.value
-		commitStep({
-			prebuilt: diffed,
-			origin: 'ai',
-			turnId: proposal.turnId,
-			label: persona?.name || 'AI edit'
-		})
-
-		// Markers ride outside the diff (non-undoable by design)
-		for (const marker of proposal.addMarkers) {
-			addMarker(marker.time, marker.label)
-		}
-
-		api.updateEditorTurn({
-			threadId: threadId.value,
-			turnId: proposal.turnId,
-			patch: { resultStepId: doc.value.historyRef.currentStepId }
-		}).catch(() => { /* non-critical */ })
-
-		pendingProposal.value = null
-	}
-
-	const rejectProposal = () => {
-		pendingProposal.value = null
-	}
-
 	const dismissAnswer = () => {
 		lastAnswer.value = null
 	}
@@ -1044,8 +1187,12 @@ export const useEditorStore = defineStore('editor', () => {
 		renderState.value = null
 	}
 
-	/** Handles a completed/errored turn arriving from main. */
-	const onTurnUpdate = (payload: {
+	/**
+	 * Handles a completed/errored turn: the diff is APPLIED IMMEDIATELY and
+	 * lands as a new revision (branching from the current one). No accept/
+	 * reject — jumping back = switching to the parent revision.
+	 */
+	const onTurnUpdate = async (payload: {
 		threadId: string
 		turn: PromptTurn
 		addMarkers?: { time: number; label: string }[]
@@ -1068,21 +1215,68 @@ export const useEditorStore = defineStore('editor', () => {
 				lastAnswer.value = { turnId: turn.id, text: turn.answer }
 				return
 			}
-			if (!hasOps(turn.diff)) {
+			const markers = payload.addMarkers || []
+			if (!hasOps(turn.diff) && !markers.length) {
 				promptError.value = 'The AI proposed no changes. Try a more specific request.'
 				return
 			}
-			// Dry-run against the live doc; prune stale ops
-			const { pruned } = dryRunProposal(turn.diff!)
-			pendingProposal.value = {
+
+			// Validate against the live doc (prune stale ops + repair overlaps)
+			const { applied, pruned } = dryRunProposal(turn.diff!)
+			const before = currentState()
+			const diffed = diffTimelines(before, applied)
+			if (!diffed && !markers.length) {
+				promptError.value = 'Nothing applicable — the timeline changed while the AI was working.'
+				return
+			}
+
+			await ensureRootRevision()
+			// Unsaved manual work is auto-checkpointed FIRST, so the AI revision's
+			// parent snapshot is exactly the state the diff applied to and nothing
+			// is ever stranded inside a child snapshot.
+			if (revisionDirty.value) {
+				await createRevision({ origin: 'manual', label: 'Auto checkpoint' })
+			}
+
+			const persona = findPersona(turn.personaId)
+			if (diffed) {
+				doc.value.tracks = applied.tracks
+				doc.value.timeline = applied.timeline
+				// Ring step preserved: Cmd+Z undoes the AI diff in place
+				commitStep({ prebuilt: diffed, origin: 'ai', turnId: turn.id, label: persona?.name || 'AI edit' })
+			}
+			for (const m of markers) addMarker(m.time, m.label)
+
+			const rev = await createRevision({
+				origin: 'ai',
 				turnId: turn.id,
-				diff: turn.diff!,
-				rationale: turn.rationale,
-				droppedOps: [...(turn.droppedOps || []), ...pruned],
-				addMarkers: payload.addMarkers || [],
-				scopeLabel: turn.scopeLabel,
-				thinContext: !!payload.thinContext,
-				truncated: !!payload.truncated
+				personaId: turn.personaId,
+				label: persona?.name || 'AI edit'
+			})
+			if (rev && threadId.value) {
+				api.updateEditorTurn({
+					threadId: threadId.value,
+					turnId: turn.id,
+					patch: { resultStepId: doc.value.historyRef.currentStepId, revisionId: rev.id }
+				}).catch(() => { /* non-critical */ })
+
+				lastResult.value = {
+					turnId: turn.id,
+					revisionId: rev.id,
+					revisionSeq: rev.seq,
+					parentRevisionId: rev.parentId,
+					counts: {
+						added: diffed?.forward.addItems?.length || 0,
+						removed: diffed?.forward.removeItemIds?.length || 0,
+						updated: diffed?.forward.updateItems?.length || 0,
+						markers: markers.length
+					},
+					rationale: turn.rationale,
+					droppedOps: [...(turn.droppedOps || []), ...pruned],
+					scopeLabel: turn.scopeLabel,
+					thinContext: !!payload.thinContext,
+					truncated: !!payload.truncated
+				}
 			}
 		} else if (turn.status === 'error') {
 			activeTurnId.value = null
@@ -1149,6 +1343,7 @@ export const useEditorStore = defineStore('editor', () => {
 			doc.value.customPersonas = updated.editor.customPersonas
 			doc.value.historyRef = updated.editor.historyRef
 			doc.value.markers = updated.editor.markers
+			doc.value.currentRevisionId = updated.editor.currentRevisionId
 		}
 
 		if (selectedAssetId.value && !doc.value.media.some((a) => a.id === selectedAssetId.value)) {
@@ -1185,11 +1380,9 @@ export const useEditorStore = defineStore('editor', () => {
 
 		if (api.onEditorTurnUpdate) {
 			api.onEditorTurnUpdate((data: any) => {
-				try {
-					onTurnUpdate(data)
-				} catch (error) {
+				onTurnUpdate(data).catch((error: unknown) => {
 					console.error('[editorStore] turn update failed:', error)
-				}
+				})
 			})
 		}
 
@@ -1295,22 +1488,28 @@ export const useEditorStore = defineStore('editor', () => {
 		savePersona,
 		clonePersona,
 		deletePersona,
-		// AI prompt / proposals
-		pendingProposal,
+		// AI prompt
 		activeTurnId,
 		lastAnswer,
 		promptError,
 		scopeWiden,
 		promptRunning,
 		scopePreview,
-		proposalRemovedIds,
-		proposalUpdatedById,
-		ghostItemsByTrack,
 		runPrompt,
 		abortPrompt,
-		acceptProposal,
-		rejectProposal,
 		dismissAnswer,
+		// revisions
+		revisions,
+		currentRevision,
+		revisionDirty,
+		revisionChildren,
+		lastResult,
+		ensureRootRevision,
+		createRevision,
+		switchRevision,
+		saveCheckpoint,
+		deleteRevisionSubtree,
+		dismissResult,
 		// export
 		renderState,
 		isRendering,

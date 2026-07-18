@@ -27,6 +27,7 @@ import * as editorPreprocess from './editor/preprocess'
 import * as editorHistory from './editor/history'
 import * as editorPrompt from './editor/prompt'
 import * as editorRender from './editor/render'
+import * as editorRevisions from './editor/revisions'
 import { BUILTIN_PERSONAS } from './constants/personas'
 import { v4 as uuidv4 } from 'uuid'
 import { THREAD_DIRS } from './constants/paths'
@@ -386,6 +387,7 @@ app.whenReady().then(() => {
 			clipSelections?: Record<string, boolean>
 			historyRef?: any
 			markers?: any[]
+			currentRevisionId?: string
 		}
 	}) => {
 		return await threadManager.updateThreadWith(threadId, (thread) => {
@@ -402,6 +404,7 @@ app.whenReady().then(() => {
 			// state land in one atomic write (crash-consistent by construction).
 			if (patch.historyRef) editor.historyRef = patch.historyRef
 			if (patch.markers) editor.markers = patch.markers
+			if (patch.currentRevisionId !== undefined) editor.currentRevisionId = patch.currentRevisionId
 
 			// Fold clip-selected flags into the matching clips (the one renderer-owned
 			// field living inside main-owned MediaAsset records).
@@ -505,14 +508,20 @@ app.whenReady().then(() => {
 		return true
 	})
 
-	// Renderer stamps the accepted history step back onto the turn record.
+	// Renderer stamps the applied history step / revision back onto the turn.
 	ipcMain.handle('update-editor-turn', async (_event, { threadId, turnId, patch }: {
-		threadId: string, turnId: string, patch: { resultStepId?: string }
+		threadId: string, turnId: string, patch: { resultStepId?: string, revisionId?: string }
 	}) => {
 		return await threadManager.updateThreadWith(threadId, (thread) => {
 			if (!thread.editor) return null
 			const turns = thread.editor.turns.map((t) =>
-				t.id === turnId ? { ...t, resultStepId: patch.resultStepId ?? t.resultStepId } : t
+				t.id === turnId
+					? {
+						...t,
+						resultStepId: patch.resultStepId ?? t.resultStepId,
+						revisionId: patch.revisionId ?? t.revisionId
+					}
+					: t
 			)
 			return { editor: { ...thread.editor, turns } }
 		})
@@ -548,6 +557,28 @@ app.whenReady().then(() => {
 		return editorHistory.setPointer(threadId, currentStepId)
 	})
 
+	ipcMain.handle('clear-editor-history', (_event, { threadId }: { threadId: string }) => {
+		editorHistory.clearHistory(threadId)
+		return true
+	})
+
+	// Revision tree sidecar (renderer owns tree logic; main persists)
+	ipcMain.handle('get-editor-revisions', (_event, threadId: string) => {
+		return editorRevisions.loadRevisions(threadId)
+	})
+
+	ipcMain.handle('push-editor-revision', (_event, { threadId, revision }: {
+		threadId: string, revision: any
+	}) => {
+		return editorRevisions.pushRevision(threadId, revision)
+	})
+
+	ipcMain.handle('delete-editor-revisions', (_event, { threadId, ids }: {
+		threadId: string, ids: string[]
+	}) => {
+		return editorRevisions.deleteRevisions(threadId, ids)
+	})
+
 	ipcMain.handle('get-all-threads', () => {
 		return threadManager.getAllThreads()
 	})
@@ -566,6 +597,7 @@ app.whenReady().then(() => {
 			}
 			editorRender.abortRendersForThread(id)
 			editorHistory.deleteHistory(id)
+			editorRevisions.deleteRevisionsFile(id)
 		}
 		return threadManager.deleteThread(id)
 	})

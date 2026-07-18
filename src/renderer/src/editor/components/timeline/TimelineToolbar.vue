@@ -41,6 +41,8 @@
 			<div class="w-px h-4 bg-zinc-200 dark:bg-zinc-800 mx-1"></div>
 
 			<ToolButton icon="tabler--plus" title="Add overlay track" @click="store.addOverlayTrack()" />
+			<ToolButton icon="tabler--bookmark-plus" title="Save revision checkpoint"
+				@click="store.saveCheckpoint()" />
 		</div>
 	</div>
 </template>

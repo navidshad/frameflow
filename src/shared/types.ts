@@ -184,6 +184,8 @@ export interface EditorDocument {
 	historyRef: EditorHistoryRef      // pointer into the sidecar history file
 	selection?: { clipIds?: string[]; itemIds?: string[] }
 	markers?: EditorMarker[]    // renderer-owned; NOT undoable (outside TimelineDiff)
+	/** Pointer into the revisions sidecar (userData/editor-revisions/{id}.json). */
+	currentRevisionId?: string
 }
 
 export interface TimelineMeta {
@@ -325,6 +327,40 @@ export interface TimelineSnapshot {
 	timelineMeta: TimelineMeta
 }
 
+// ===== Revision tree (coarse, permanent checkpoints above the undo ring) =====
+
+export type RevisionOrigin = 'init' | 'ai' | 'manual'
+
+/**
+ * One node of the revision tree. Snapshots are FULL and self-contained —
+ * never diff-chained into the undo ring (the ring evicts steps: MAX 50 +
+ * redo-branch truncation), so a revision must always restore standalone.
+ */
+export interface EditorRevision {
+	id: string
+	parentId: string | null     // null only for the root 'init' revision
+	seq: number                 // sidecar revisionCounter; displayed "V{seq}"
+	origin: RevisionOrigin
+	label: string               // persona name / user label / 'Original' / 'Auto checkpoint'
+	turnId?: string             // origin === 'ai'
+	personaId?: string          // origin === 'ai' — drives the list-item icon
+	snapshot: {
+		tracks: Track[]
+		timeline: TimelineItem[]
+		timelineMeta: TimelineMeta
+		markers?: EditorMarker[]  // markers ride in the snapshot so switches restore them
+	}
+	createdAt: number
+}
+
+// ---- Revisions sidecar: userData/editor-revisions/{threadId}.json ----
+export interface EditorRevisionsFile {
+	threadId: string
+	schemaVersion: 1
+	revisionCounter: number     // max-ever; V numbers never reused after deletes
+	revisions: EditorRevision[]
+}
+
 export interface PromptTurn {
 	id: string
 	personaId: string
@@ -338,6 +374,7 @@ export interface PromptTurn {
 	answer?: string             // set when the request was a question, not an edit
 	droppedOps?: string[]       // ops pruned during validation (surfaced on the card)
 	scopeLabel?: string         // e.g. "Chapter 3 · 12 items"
+	revisionId?: string         // revision created from this turn's applied diff
 	usage?: Usage
 	cost?: number
 	createdAt: number
