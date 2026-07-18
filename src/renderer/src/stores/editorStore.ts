@@ -512,6 +512,58 @@ export const useEditorStore = defineStore('editor', () => {
 		await api.preprocessMedia({ threadId: threadId.value, assetId, steps: ['audio', 'transcript'] })
 	}
 
+	// ===== Scene-piece corrections (§5.2) =====
+
+	/** Re-run scene detection with a custom threshold (lower = more pieces). */
+	const redetectScenes = async (assetId: string, threshold: number) => {
+		if (!threadId.value) return
+		await api.preprocessMedia({
+			threadId: threadId.value,
+			assetId,
+			steps: ['scenes', 'thumbnails'],
+			threshold
+		})
+	}
+
+	/** Replace one asset's clips from a main-process response. */
+	const patchAssetClips = (updated: MediaAsset | null) => {
+		if (!updated || !doc.value) return
+		const index = doc.value.media.findIndex((a) => a.id === updated.id)
+		if (index !== -1) doc.value.media[index] = { ...doc.value.media[index], clips: updated.clips }
+	}
+
+	/** Merge the selected (adjacent) pieces of an asset. Returns an error message or null. */
+	const mergeSelectedClips = async (assetId: string): Promise<string | null> => {
+		if (!threadId.value || !doc.value) return null
+		const asset = doc.value.media.find((a) => a.id === assetId)
+		const clipIds = (asset?.clips || []).filter((c) => c.selected).map((c) => c.id)
+		if (clipIds.length < 2) return 'Select at least two pieces to merge.'
+		try {
+			patchAssetClips(await api.mergeClips({ threadId: threadId.value, assetId, clipIds }))
+			return null
+		} catch (error: any) {
+			return error?.message?.split('Error: ').pop() || 'Merge failed.'
+		}
+	}
+
+	/** Split each selected piece at its midpoint. Returns an error message or null. */
+	const splitSelectedClips = async (assetId: string): Promise<string | null> => {
+		if (!threadId.value || !doc.value) return null
+		const asset = doc.value.media.find((a) => a.id === assetId)
+		const clipIds = (asset?.clips || []).filter((c) => c.selected).map((c) => c.id)
+		if (!clipIds.length) return 'Select a piece to split.'
+		try {
+			let updated: MediaAsset | null = null
+			for (const clipId of clipIds) {
+				updated = await api.splitClip({ threadId: threadId.value, assetId, clipId })
+			}
+			patchAssetClips(updated)
+			return null
+		} catch (error: any) {
+			return error?.message?.split('Error: ').pop() || 'Split failed.'
+		}
+	}
+
 	// ===== Selection =====
 	const selectAsset = (assetId: string | null) => {
 		selectedAssetId.value = assetId
@@ -1586,6 +1638,9 @@ export const useEditorStore = defineStore('editor', () => {
 		retryAsset,
 		describeAsset,
 		transcribeAsset,
+		redetectScenes,
+		mergeSelectedClips,
+		splitSelectedClips,
 		selectAsset,
 		selectClip,
 		toggleClipSelected,

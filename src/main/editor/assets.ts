@@ -1,7 +1,7 @@
 import fs from 'fs'
 import path from 'path'
 import { v4 as uuidv4 } from 'uuid'
-import type { MediaAsset, Thread } from '@shared/types'
+import type { Clip, MediaAsset, Thread } from '@shared/types'
 import { threadManager } from '../threads'
 import { getVideoMetadata, sanitizeFilename } from '../ffmpeg'
 import { ASSET_DIRS, THREAD_DIRS } from '../constants/paths'
@@ -114,6 +114,138 @@ export function patchAssetPreprocessing(
 	return patchAsset(threadId, assetId, (asset) => ({
 		preprocessing: { ...(asset.preprocessing || {}), ...patch }
 	}))
+}
+
+// ===== Scene-piece corrections (PRD §5.2 merge / split further) =====
+// Clips are main-owned; these run through patchAsset's queued mutator and
+// return the updated asset so the renderer can patch locally without waiting
+// for the thread-updated echo.
+
+const CLIP_ADJACENCY_EPSILON = 0.1 // seconds — detected scenes abut exactly
+const MIN_SPLIT_PIECE_SEC = 0.2
+
+function reindexClips(clips: Clip[]): Clip[] {
+	return clips.map((c, i) => ({ ...c, index: i + 1 }))
+}
+
+function getUpdatedAsset(threadId: string, assetId: string): MediaAsset | null {
+	return threadManager.getThread(threadId)?.editor?.media.find((a) => a.id === assetId) || null
+}
+
+/** Validate a merge selection; throws a user-facing error on rejection. */
+function validateMergeTargets(asset: MediaAsset, clipIds: string[]): Clip[] {
+	const targets = asset.clips
+		.filter((c) => clipIds.includes(c.id))
+		.sort((a, b) => a.in - b.in)
+	if (targets.length < 2) throw new Error('Selected pieces no longer exist.')
+
+	for (let i = 1; i < targets.length; i++) {
+		if (Math.abs(targets[i].in - targets[i - 1].out) > CLIP_ADJACENCY_EPSILON) {
+			throw new Error('Only adjacent pieces can be merged.')
+		}
+	}
+	return targets
+}
+
+/**
+ * Merge a run of ADJACENT clips (by source time) into one piece spanning
+ * their union. Non-adjacent selections are rejected — merging across a hole
+ * would silently swallow unselected content.
+ *
+ * Validation runs BEFORE the queued mutator (updateThreadWith swallows mutator
+ * throws), so rejections propagate to the renderer; the mutator re-validates
+ * and skips silently if the asset changed mid-flight.
+ */
+export async function mergeClips(
+	threadId: string,
+	assetId: string,
+	clipIds: string[]
+): Promise<MediaAsset | null> {
+	if (clipIds.length < 2) throw new Error('Select at least two pieces to merge.')
+	const current = getUpdatedAsset(threadId, assetId)
+	if (!current) throw new Error('Asset not found.')
+	validateMergeTargets(current, clipIds)
+
+	await patchAsset(threadId, assetId, (asset) => {
+		let targets: Clip[]
+		try {
+			targets = validateMergeTargets(asset, clipIds)
+		} catch {
+			return {} // asset changed mid-flight — skip, don't corrupt
+		}
+
+		const first = targets[0]
+		const last = targets[targets.length - 1]
+		const merged: Clip = {
+			...first,
+			out: last.out,
+			duration: last.out - first.in,
+			visual: targets.map((t) => t.visual).filter(Boolean).join(' ') || undefined,
+			text: targets.map((t) => t.text).filter(Boolean).join(' ') || undefined,
+			selected: true,
+			masterSegmentIndex: undefined // spans multiple master scenes
+		}
+
+		const remainingIds = new Set(clipIds.filter((id) => id !== first.id))
+		const clips = asset.clips
+			.map((c) => (c.id === first.id ? merged : c))
+			.filter((c) => !remainingIds.has(c.id))
+		return { clips: reindexClips(clips) }
+	})
+
+	return getUpdatedAsset(threadId, assetId)
+}
+
+/**
+ * Split one clip into two pieces at `atSec` (source seconds; defaults to the
+ * midpoint). Both halves share the source thumbnail; the left half keeps the
+ * original id so selection/inspector focus degrades gracefully.
+ */
+export async function splitClip(
+	threadId: string,
+	assetId: string,
+	clipId: string,
+	atSec?: number
+): Promise<MediaAsset | null> {
+	// Pre-validate outside the queued mutator (see mergeClips).
+	const current = getUpdatedAsset(threadId, assetId)
+	const candidate = current?.clips.find((c) => c.id === clipId)
+	if (!candidate) throw new Error('Piece no longer exists.')
+	const cutAt = atSec ?? candidate.in + candidate.duration / 2
+	if (cutAt - candidate.in < MIN_SPLIT_PIECE_SEC || candidate.out - cutAt < MIN_SPLIT_PIECE_SEC) {
+		throw new Error('Piece is too short to split.')
+	}
+
+	await patchAsset(threadId, assetId, (asset) => {
+		const target = asset.clips.find((c) => c.id === clipId)
+		if (!target) return {} // asset changed mid-flight — skip
+
+		const at = atSec ?? target.in + target.duration / 2
+		if (at - target.in < MIN_SPLIT_PIECE_SEC || target.out - at < MIN_SPLIT_PIECE_SEC) {
+			return {}
+		}
+
+		const left: Clip = {
+			...target,
+			out: at,
+			duration: at - target.in,
+			selected: true,
+			masterSegmentIndex: undefined // sub-range of a master scene
+		}
+		const right: Clip = {
+			...target,
+			id: uuidv4(),
+			in: at,
+			duration: target.out - at,
+			selected: true,
+			masterSegmentIndex: undefined
+		}
+
+		const clips = asset.clips.flatMap((c) => (c.id === clipId ? [left, right] : [c]))
+		return { clips: reindexClips(clips) }
+	})
+
+	return getUpdatedAsset(threadId, assetId)
 }
 
 /**

@@ -494,6 +494,19 @@ app.whenReady().then(() => {
 		return true
 	})
 
+	// Scene-piece corrections (§5.2): merge adjacent pieces / split further.
+	ipcMain.handle('merge-clips', (_event, { threadId, assetId, clipIds }: {
+		threadId: string, assetId: string, clipIds: string[]
+	}) => {
+		return editorAssets.mergeClips(threadId, assetId, clipIds)
+	})
+
+	ipcMain.handle('split-clip', (_event, { threadId, assetId, clipId, atSec }: {
+		threadId: string, assetId: string, clipId: string, atSec?: number
+	}) => {
+		return editorAssets.splitClip(threadId, assetId, clipId, atSec)
+	})
+
 	// Assistive silence/dead-air finder (§5.6). Read-only analysis over the
 	// asset's proxy/original — returns candidate source-time ranges the user
 	// reviews before applying as ripple-deletes. Never mutates media.
