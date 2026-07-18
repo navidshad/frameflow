@@ -15,7 +15,13 @@
 		<!-- Body: filmstrip (scene thumbnail) or context (visual text) -->
 		<div class="absolute inset-0 bg-zinc-200 dark:bg-zinc-800">
 			<template v-if="store.timelineView === 'filmstrip'">
-				<img v-if="thumbSrc" :src="thumbSrc" class="w-full h-full object-cover" loading="lazy" draggable="false" />
+				<!-- Dense strip (§5.5): frames from the batched per-asset filmstrip,
+				     one per ~64px slot; falls back to the scene thumbnail. -->
+				<div v-if="stripFrames.length" class="w-full h-full flex">
+					<img v-for="(src, i) in stripFrames" :key="i" :src="src"
+						class="flex-1 min-w-0 h-full object-cover" loading="lazy" draggable="false" />
+				</div>
+				<img v-else-if="thumbSrc" :src="thumbSrc" class="w-full h-full object-cover" loading="lazy" draggable="false" />
 				<div v-else class="w-full h-full flex items-center justify-center">
 					<span class="iconify tabler--movie w-4 h-4 text-zinc-400"></span>
 				</div>
@@ -83,6 +89,30 @@ const sourceClip = computed(() => {
 const thumbSrc = computed(() =>
 	sourceClip.value?.thumbnailPath ? `media://${sourceClip.value.thumbnailPath}` : null
 )
+
+// Dense filmstrip (§5.5): pick the nearest batched-strip frame for each
+// ~64px slot across the clip's SOURCE range. Density adapts to zoom via the
+// on-screen width; entries are asset-cached, so this is pure lookup.
+const TARGET_FRAME_PX = 64
+const stripFrames = computed<string[]>(() => {
+	const entries = store.doc?.media.find((a) => a.id === props.item.sourceAssetId)?.filmstrip
+	if (!entries?.length) return []
+	const widthPx = viewport.secToPx(props.item.duration)
+	const count = Math.min(Math.max(Math.floor(widthPx / TARGET_FRAME_PX), 1), 60)
+	const span = props.item.out - props.item.in
+	const frames: string[] = []
+	for (let i = 0; i < count; i++) {
+		const t = props.item.in + ((i + 0.5) / count) * span
+		// entries are sorted by time — nearest lookup
+		let best = entries[0]
+		for (const e of entries) {
+			if (Math.abs(e.time - t) < Math.abs(best.time - t)) best = e
+			if (e.time > t) break
+		}
+		frames.push(`media://${best.thumbnailPath}`)
+	}
+	return frames
+})
 
 const contextText = computed(() => sourceClip.value?.visual || props.item.label || '')
 

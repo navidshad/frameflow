@@ -26,7 +26,8 @@ import { getAssetDir, patchAsset, patchAssetPreprocessing } from './assets'
  * thread.backgroundTasks + background-task-update broadcast.
  */
 
-export type PreprocessStep = 'proxy' | 'scenes' | 'thumbnails' | 'descriptions' | 'audio' | 'transcript'
+export type PreprocessStep =
+	'proxy' | 'scenes' | 'thumbnails' | 'descriptions' | 'audio' | 'transcript' | 'filmstrip'
 
 const DEFAULT_STEPS: PreprocessStep[] = ['proxy', 'scenes', 'thumbnails']
 
@@ -395,6 +396,39 @@ async function runTranscriptStep(threadId: string, assetId: string, signal: Abor
 	await setTask(threadId, assetId, 'transcript', { state: 'completed', progress: 100 })
 }
 
+// Cap total strip frames per asset so a multi-hour source stays one bounded
+// pass (PRD §5.5/§8): interval = max(1s, duration/300).
+const FILMSTRIP_MAX_FRAMES = 300
+
+async function runFilmstripStep(threadId: string, assetId: string, signal: AbortSignal) {
+	const asset = getAsset(threadId, assetId)!
+	if (asset.filmstrip?.length) {
+		await setTask(threadId, assetId, 'filmstrip', { state: 'completed', progress: 100 })
+		return
+	}
+
+	await setTask(threadId, assetId, 'filmstrip', { state: 'running', status: 'Generating filmstrip…' })
+
+	const thread = threadManager.getThread(threadId)!
+	const stripDir = path.join(getAssetDir(thread, assetId), ASSET_DIRS.FRAMES, 'strip')
+	if (!fs.existsSync(stripDir)) fs.mkdirSync(stripDir, { recursive: true })
+
+	const duration = asset.metadata?.duration || 0
+	const intervalSec = Math.max(1, duration / FILMSTRIP_MAX_FRAMES)
+	const videoPath = asset.proxyPath || asset.originalPath
+
+	const filmstrip = await withHeavySlot(() =>
+		ffmpegAdapter.generateFilmstrip(videoPath, stripDir, intervalSec, signal)
+	)
+
+	await patchAsset(threadId, assetId, { filmstrip })
+	await setTask(threadId, assetId, 'filmstrip', {
+		state: 'completed',
+		progress: 100,
+		status: `${filmstrip.length} frames`
+	})
+}
+
 /** `HH:MM:SS,mmm` (or `MM:SS,mmm`) → seconds. Mirrors enrichment.ts timeToSeconds. */
 function srtToSeconds(t: string): number {
 	const clean = t.trim().replace(',', '.')
@@ -481,6 +515,7 @@ export async function preprocessMediaAsset(
 				case 'descriptions': await runDescriptionsStep(threadId, assetId, signal); break
 				case 'audio': await runAudioStep(threadId, assetId, signal); break
 				case 'transcript': await runTranscriptStep(threadId, assetId, signal); break
+				case 'filmstrip': await runFilmstripStep(threadId, assetId, signal); break
 			}
 		}
 

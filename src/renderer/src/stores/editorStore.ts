@@ -1,5 +1,5 @@
 import { defineStore } from 'pinia'
-import { ref, computed } from 'vue'
+import { ref, computed, watch } from 'vue'
 import type {
 	BackgroundTask, Clip, EditorDocument, EditorHistoryStep, EditorMarker,
 	EditorPersona, EditorRevision, MediaAsset, PromptTurn, Thread, TimelineDiff,
@@ -513,6 +513,25 @@ export const useEditorStore = defineStore('editor', () => {
 	}
 
 	// ===== Scene-piece corrections (§5.2) =====
+
+	/**
+	 * Lazily generate dense filmstrips (§5.5): fired when filmstrip view is
+	 * active, for completed assets that are used on the timeline and don't
+	 * have one yet. One batched ffmpeg pass per asset, cached on the asset.
+	 */
+	const filmstripRequested = new Set<string>()
+	const ensureFilmstrips = () => {
+		if (!threadId.value || !doc.value || timelineView.value !== 'filmstrip') return
+		const usedAssetIds = new Set(doc.value.timeline.map((i) => i.sourceAssetId))
+		for (const asset of doc.value.media) {
+			if (!usedAssetIds.has(asset.id)) continue
+			if (asset.preprocessState !== 'completed') continue
+			if (asset.filmstrip?.length || filmstripRequested.has(asset.id)) continue
+			filmstripRequested.add(asset.id)
+			api.preprocessMedia({ threadId: threadId.value, assetId: asset.id, steps: ['filmstrip'] })
+		}
+	}
+	watch([timelineView, () => doc.value?.timeline.length], () => ensureFilmstrips())
 
 	/** Re-run scene detection with a custom threshold (lower = more pieces). */
 	const redetectScenes = async (assetId: string, threshold: number) => {

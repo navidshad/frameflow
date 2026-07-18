@@ -1,6 +1,7 @@
 import ffmpeg from 'fluent-ffmpeg'
 import ffmpegPath from 'ffmpeg-static'
 import ffprobePath from 'ffprobe-static'
+import fs from 'fs'
 import { join, basename, extname } from 'path'
 import process from 'node:process'
 import { TimelineSegment, SilenceRegion } from '../../shared/types'
@@ -467,6 +468,58 @@ export async function extractFrame(
 
 		command.run()
 	})
+}
+
+/**
+ * Batched filmstrip extractor (PRD §5.5). ONE ffmpeg pass samples a frame
+ * every `intervalSec` seconds (`fps=1/interval`) at 120px height — unlike
+ * extractFrame's process-per-frame, a multi-hour source stays a single
+ * bounded run. Returns entries mapping each frame to its source time.
+ */
+export async function generateFilmstrip(
+	videoPath: string,
+	outputDir: string,
+	intervalSec: number,
+	signal?: AbortSignal
+): Promise<{ time: number; thumbnailPath: string }[]> {
+	if (signal?.aborted) {
+		throw new Error('Filmstrip generation aborted before start')
+	}
+
+	const pattern = join(outputDir, 'strip_%05d.jpg')
+
+	await new Promise<void>((resolve, reject) => {
+		const command = ffmpeg(videoPath)
+			.outputOptions([
+				'-vf', `fps=1/${intervalSec},scale=-2:120`,
+				'-q:v', '5'
+			])
+			.output(pattern)
+			.on('end', () => resolve())
+			.on('error', (err) => {
+				if (signal?.aborted) {
+					return reject(new Error('Filmstrip generation aborted by user'))
+				}
+				console.error('Error generating filmstrip:', err)
+				reject(err)
+			})
+
+		if (signal) {
+			signal.addEventListener('abort', () => command.kill('SIGKILL'))
+		}
+
+		command.run()
+	})
+
+	return fs.readdirSync(outputDir)
+		.filter((f) => /^strip_\d+\.jpg$/.test(f))
+		.sort()
+		.map((f, i) => ({
+			// fps=1/N emits the frame representing window [iN, (i+1)N) — stamp it
+			// at the window centre so nearest-entry lookup lands inside the window.
+			time: (i + 0.5) * intervalSec,
+			thumbnailPath: join(outputDir, f)
+		}))
 }
 
 /**
