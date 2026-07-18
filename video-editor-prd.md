@@ -4,7 +4,7 @@ FrameFlow today edits video through a single surface: an AI-driven node-graph "c
 
 | | |
 |---|---|
-| **Status** | v1 shipped & verified (M0–M4) + revisions rework — on branch `feat/video-editor-m0-m1` |
+| **Status** | v1 shipped & verified (M0–M4) + revisions rework + v1-completion round — on branch `feat/video-editor-m0-m1`; only audio-kind assets remain |
 | **Owner** | navidshad72@gmail.com |
 | **Date** | 2026-07-18 (status updated as of implementation) |
 | **App** | FrameFlow (Electron + Vue 3 + Vite, TypeScript) |
@@ -26,14 +26,19 @@ v1 was delivered in five milestones and all 8 requested features are live and us
 | M4 | `5dfca7b` | Export: `assembleVideo` fast path + `assembleTimeline` segment-then-concat (retime, gaps, mutes, source-derived normalization) |
 | Revisions | `68225ae` | **Replaces §5.7's accept/reject flow** — AI results apply immediately as branchable revisions (list + Vue Flow graph), manual checkpoints, full-snapshot sidecar |
 
-**Not yet built — was in v1 scope, deferred during implementation:**
-- **Silence/dead-air finder** (§5.6) — the assistive `silencedetect` review pass.
-- **Dense filmstrip** (§5.5) — frames-preview currently shows one scene thumbnail per clip, not a batched multi-frame strip.
-- **Detector sensitivity slider + merge/split pieces** (§5.2) — the `threshold` backend param exists; the UI does not.
-- **Long-timeline navigation** (§5.3) — markers/chapter jumps exist; the always-visible **minimap/overview strip** and chapter **jump list** do not.
-- **Per-asset transcript** (§5.2) — only scene *descriptions* are wired per-asset, so `clip.text` is never populated (AI context is visual-only).
-- **Audio-kind assets** (§5.1/§5.4) — `MediaAsset.kind` is always `'video'`; the A1 lane can't yet receive imported audio, so audio-track preview/export mixing stays moot.
-- **`prefers-reduced-motion`** gating (§5.11).
+**v1-completion round (2026-07-19, verified live via Playwright against a synthetic speech/silence video):**
+
+| Item | Commit | What landed |
+|---|---|---|
+| Per-asset transcript (§5.2) | `d96319f` | Opt-in `audio`+`transcript` preprocess steps reusing the chat extraction phases per-asset; excerpts merged into `Clip.text` by time overlap; "Transcribe" button in the Inspector |
+| Silence/dead-air finder (§5.6) | `d96319f` | `detectSilence` (`silencedetect`) + `find-silence` IPC; tunable noise-floor/min-duration; reviewable region list (persists across Inspector modes) applying as one undoable ripple-delete |
+| Sensitivity slider + merge/split (§5.2) | `7ab6371` | ClipTray detector panel (threshold 5–60 + re-detect) and adjacency-validated merge / midpoint split of pieces (main-owned clip mutations) |
+| Minimap + marker jump list (§5.3) | `99af7b8` | Always-visible overview strip (item blocks, marker ticks, playhead, draggable window rect) + toolbar Markers & chapters popover with jump/remove |
+| Dense filmstrip (§5.5) | `2975983` | Single-pass batched extractor (`fps=1/interval`, ≤300 frames/asset) populating `MediaAsset.filmstrip`; TimelineClip tiles one lazy frame per ~64px, zoom-adaptive |
+| `prefers-reduced-motion` (§5.11) | `0eeb023` | Global media query suppressing decorative animation; playback/playhead untouched |
+
+**Not yet built — the one v1-scope item remaining:**
+- **Audio-kind assets** (§5.1/§5.4) — `MediaAsset.kind` is always `'video'`; the A1 lane can't yet receive imported audio. Scoped for its own milestone in two halves: (a) import + drop/move UI, and (b) the export refactor — `computeRegions` (`render.ts`) slices regions only at *video*-item boundaries with 0..1 audio sources per region, so real mixing needs slicing at audio-item boundaries too and a k>1 `amix` graph per §5.9.
 
 **Deferred by design (v2 / M5 non-goals, never promised for v1):** overlay/text authoring, effects & transitions engine, persona feature-sets (feature 8's full form — `featureSets` stub + registries in place), true multi-track compositing / PiP / simultaneous `amix` (region model is amix-ready), pro trims (roll/slip/slide/JKL, 3-point, nested sequences), keyframed speed ramps, word-level filler removal, a first-class `Chapter[]` model (Open Q12, recommended for v1.1).
 
