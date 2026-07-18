@@ -13,6 +13,7 @@
     "typecheck:web": "vue-tsc -p tsconfig.web.json --noEmit",
     "typecheck": "npm run typecheck:node && npm run typecheck:web || true",
     "start": "electron-vite preview",
+    "start:debug": "electron-vite build && electron out/main/index.js --remote-debugging-port=9222",
     "dev": "electron-vite dev",
     "build": "electron-vite build",
     "postinstall": "electron-builder install-app-deps",
