@@ -60,6 +60,8 @@ const api = {
 		ipcRenderer.invoke('remove-media-asset', data),
 	preprocessMedia: (data: { threadId: string, assetId: string, steps?: string[], threshold?: number }) =>
 		ipcRenderer.invoke('preprocess-media', data),
+	findSilence: (data: { threadId: string, assetId: string, noiseDb?: number, minDurationSec?: number }) =>
+		ipcRenderer.invoke('find-silence', data),
 	onEditorImportProgress: (callback: (data: { threadId: string, assetId: string, url?: string, percent: number }) => void) => {
 		const listener = (_event: any, data: any) => callback(data)
 		ipcRenderer.on('editor-import-progress', listener)

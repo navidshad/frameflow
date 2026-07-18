@@ -18,7 +18,7 @@ import * as imageGeneration from './pipeline/phases/image-generation'
 import { backgroundTaskManager } from './tasks'
 import { GeminiAdapter } from './gemini/adapter'
 
-import { checkFFmpegAvailability, getVideoMetadata } from './ffmpeg'
+import { checkFFmpegAvailability, getVideoMetadata, detectSilence } from './ffmpeg'
 import { checkScenedetectAvailability } from './scenedetect'
 import { checkYtDlpAvailability, downloadVideo, getVideoFormats } from './ytdlp'
 import { dependencyManager } from './dependencies/manager'
@@ -492,6 +492,19 @@ app.whenReady().then(() => {
 			console.error(`[editor] preprocess retry failed for ${assetId}:`, error)
 		})
 		return true
+	})
+
+	// Assistive silence/dead-air finder (§5.6). Read-only analysis over the
+	// asset's proxy/original — returns candidate source-time ranges the user
+	// reviews before applying as ripple-deletes. Never mutates media.
+	ipcMain.handle('find-silence', async (_event, { threadId, assetId, noiseDb, minDurationSec }: {
+		threadId: string, assetId: string, noiseDb?: number, minDurationSec?: number
+	}) => {
+		const asset = threadManager.getThread(threadId)?.editor?.media.find((a) => a.id === assetId)
+		if (!asset) throw new Error('Asset not found')
+		if (asset.metadata && asset.metadata.hasAudio === false) return []
+		const source = asset.proxyPath || asset.originalPath
+		return await detectSilence(source, { noiseDb, minDurationSec })
 	})
 
 	// AI prompt turns (M3): one structured call per turn, streamed via

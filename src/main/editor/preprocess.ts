@@ -26,7 +26,7 @@ import { getAssetDir, patchAsset, patchAssetPreprocessing } from './assets'
  * thread.backgroundTasks + background-task-update broadcast.
  */
 
-export type PreprocessStep = 'proxy' | 'scenes' | 'thumbnails' | 'descriptions'
+export type PreprocessStep = 'proxy' | 'scenes' | 'thumbnails' | 'descriptions' | 'audio' | 'transcript'
 
 const DEFAULT_STEPS: PreprocessStep[] = ['proxy', 'scenes', 'thumbnails']
 
@@ -358,6 +358,85 @@ async function runDescriptionsStep(threadId: string, assetId: string, signal: Ab
 	await setTask(threadId, assetId, 'descriptions', { state: 'completed', progress: 100 })
 }
 
+async function runAudioStep(threadId: string, assetId: string, signal: AbortSignal) {
+	const asset = getAsset(threadId, assetId)!
+	if (exists(asset.preprocessing.audioPath)) {
+		await setTask(threadId, assetId, 'audio', { state: 'completed', progress: 100 })
+		return
+	}
+
+	await setTask(threadId, assetId, 'audio', { state: 'running', status: 'Extracting audio…' })
+
+	// Reuse the existing extraction phase VERBATIM through an asset-scoped context.
+	const context = createAssetContext(threadId, assetId, 'audio', signal)
+	await withHeavySlot(async () => { await extraction.convertToAudio({}, context) })
+
+	if (signal.aborted) throw new Error('Aborted')
+	await setTask(threadId, assetId, 'audio', { state: 'completed', progress: 100 })
+}
+
+async function runTranscriptStep(threadId: string, assetId: string, signal: AbortSignal) {
+	const asset = getAsset(threadId, assetId)!
+	if (!exists(asset.preprocessing.audioPath)) {
+		throw new Error('Audio must be extracted before transcription.')
+	}
+
+	await setTask(threadId, assetId, 'transcript', { state: 'running', status: 'Transcribing…' })
+
+	// Reuse the raw-transcript phase VERBATIM (single Gemini pass — the editor
+	// keeps transcription lean; the chat flow's corrected pass is not run here).
+	const context = createAssetContext(threadId, assetId, 'transcript', signal)
+	await extraction.extractRawTranscript({}, context)
+
+	if (signal.aborted) throw new Error('Aborted')
+
+	await mergeTranscriptIntoClips(threadId, assetId)
+
+	await setTask(threadId, assetId, 'transcript', { state: 'completed', progress: 100 })
+}
+
+/** `HH:MM:SS,mmm` (or `MM:SS,mmm`) → seconds. Mirrors enrichment.ts timeToSeconds. */
+function srtToSeconds(t: string): number {
+	const clean = t.trim().replace(',', '.')
+	const [timePart, milliPart = '0'] = clean.split('.')
+	const parts = timePart.split(':').map(Number)
+	let seconds = 0
+	if (parts.length === 3) seconds = parts[0] * 3600 + parts[1] * 60 + parts[2]
+	else if (parts.length === 2) seconds = parts[0] * 60 + parts[1]
+	else seconds = parts[0] || 0
+	return seconds + parseFloat(`0.${milliPart}`)
+}
+
+/**
+ * Populate each Clip.text with the transcript excerpt overlapping [in, out].
+ * Mirrors the clip.visual merge in runDescriptionsStep, but keyed by time
+ * overlap rather than scene index (transcript segments don't align to scenes).
+ */
+async function mergeTranscriptIntoClips(threadId: string, assetId: string) {
+	const transcriptPath = getAsset(threadId, assetId)?.preprocessing.transcriptPath
+	if (!exists(transcriptPath)) return
+
+	const items: { start: string; end: string; text: string }[] =
+		JSON.parse(fs.readFileSync(transcriptPath!, 'utf-8'))
+	const ranges = items.map((it) => ({
+		start: srtToSeconds(it.start),
+		end: srtToSeconds(it.end),
+		text: (it.text || '').trim()
+	}))
+
+	await patchAsset(threadId, assetId, (current) => ({
+		clips: (current.clips || []).map((clip) => {
+			// Overlap test: item[s,e] intersects clip[in,out] when s < out && e > in.
+			const text = ranges
+				.filter((r) => r.start < clip.out && r.end > clip.in && r.text && r.text !== '[Silence]')
+				.map((r) => r.text)
+				.join(' ')
+				.trim()
+			return text ? { ...clip, text } : clip
+		})
+	}))
+}
+
 // ===== Orchestrator =====
 
 export async function preprocessMediaAsset(
@@ -400,6 +479,8 @@ export async function preprocessMediaAsset(
 				case 'scenes': await runScenesStep(threadId, assetId, signal, options?.threshold); break
 				case 'thumbnails': await runThumbnailsStep(threadId, assetId, signal); break
 				case 'descriptions': await runDescriptionsStep(threadId, assetId, signal); break
+				case 'audio': await runAudioStep(threadId, assetId, signal); break
+				case 'transcript': await runTranscriptStep(threadId, assetId, signal); break
 			}
 		}
 

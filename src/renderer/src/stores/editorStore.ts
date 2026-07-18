@@ -492,6 +492,7 @@ export const useEditorStore = defineStore('editor', () => {
 			doc.value.media = doc.value.media.filter((a) => a.id !== assetId)
 			if (selectedAssetId.value === assetId) selectedAssetId.value = doc.value.media[0]?.id || null
 			if (selectedClip.value?.sourceAssetId === assetId) selectedClipId.value = null
+			if (silenceScan.value?.assetId === assetId) silenceScan.value = null
 		}
 	}
 
@@ -504,6 +505,11 @@ export const useEditorStore = defineStore('editor', () => {
 	const describeAsset = async (assetId: string) => {
 		if (!threadId.value) return
 		await api.preprocessMedia({ threadId: threadId.value, assetId, steps: ['descriptions'] })
+	}
+
+	const transcribeAsset = async (assetId: string) => {
+		if (!threadId.value) return
+		await api.preprocessMedia({ threadId: threadId.value, assetId, steps: ['audio', 'transcript'] })
 	}
 
 	// ===== Selection =====
@@ -868,6 +874,131 @@ export const useEditorStore = defineStore('editor', () => {
 		if (!doc.value?.markers) return
 		doc.value.markers = doc.value.markers.filter((m) => m.id !== id)
 		markDirty()
+	}
+
+	// ===== Silence / dead-air finder (§5.6) =====
+	// Read-only analysis; the caller reviews before applying. Scan state lives
+	// here (not in the Inspector) so results survive selection/mode changes.
+	const silenceScanning = ref(false)
+	const silenceScan = ref<{ assetId: string; regions: { start: number; end: number }[] } | null>(null)
+	const silenceNoiseDb = ref(-30)
+	const silenceMinDurationSec = ref(0.5)
+
+	const findSilence = async (
+		assetId: string,
+		opts?: { noiseDb?: number; minDurationSec?: number }
+	): Promise<{ start: number; end: number }[]> => {
+		if (!threadId.value) return []
+		return await api.findSilence({ threadId: threadId.value, assetId, ...opts })
+	}
+
+	const scanSilence = async (assetId: string) => {
+		silenceScanning.value = true
+		try {
+			const regions = await findSilence(assetId, {
+				noiseDb: silenceNoiseDb.value,
+				minDurationSec: silenceMinDurationSec.value
+			})
+			silenceScan.value = { assetId, regions }
+		} finally {
+			silenceScanning.value = false
+		}
+	}
+
+	const clearSilenceScan = () => {
+		silenceScan.value = null
+	}
+
+	/** Map a source-time position on `assetId` to the first timeline position it appears at, or null if unplaced. */
+	const sourceTimeToTimeline = (assetId: string, sourceT: number): number | null => {
+		if (!doc.value) return null
+		for (const item of doc.value.timeline) {
+			if (item.sourceAssetId === assetId && sourceT >= item.in && sourceT <= item.out) {
+				return item.timelineStart + (sourceT - item.in) / (item.speed || 1)
+			}
+		}
+		return null
+	}
+
+	/**
+	 * Apply reviewed silence regions (source seconds of `assetId`) as ripple-deletes:
+	 * carve each region out of every timeline item drawn from that asset and close
+	 * the removed on-timeline duration, preserving intentional (non-silence) gaps.
+	 * One undoable history step; never auto-invoked.
+	 */
+	const applySilenceRegions = (assetId: string, regions: { start: number; end: number }[]) => {
+		if (!doc.value || !regions.length) return
+
+		// Normalize + merge overlapping/adjacent regions.
+		const merged = [...regions]
+			.filter((r) => r.end > r.start)
+			.sort((a, b) => a.start - b.start)
+			.reduce<{ start: number; end: number }[]>((acc, r) => {
+				const last = acc[acc.length - 1]
+				if (last && r.start <= last.end) last.end = Math.max(last.end, r.end)
+				else acc.push({ ...r })
+				return acc
+			}, [])
+		if (!merged.length) return
+
+		// Keep-intervals of [in,out] after subtracting merged regions (clamped).
+		const keptIntervals = (inSec: number, outSec: number) => {
+			const kept: { start: number; end: number }[] = []
+			let cursor = inSec
+			for (const r of merged) {
+				if (r.end <= inSec) continue      // region entirely before this item
+				if (r.start >= outSec) break      // region entirely after — nothing more overlaps
+				const s = Math.max(inSec, r.start)
+				const e = Math.min(outSec, r.end)
+				if (s > cursor) kept.push({ start: cursor, end: s })
+				cursor = Math.max(cursor, e)
+			}
+			if (cursor < outSec) kept.push({ start: cursor, end: outSec })
+			return kept
+		}
+
+		const before = snapshotState()
+		const newTimeline: TimelineItem[] = []
+
+		const trackIds = Array.from(new Set(doc.value.timeline.map((i) => i.trackId)))
+		for (const trackId of trackIds) {
+			const items = doc.value.timeline
+				.filter((i) => i.trackId === trackId)
+				.sort((a, b) => a.timelineStart - b.timelineStart)
+
+			let removedSoFar = 0
+			for (const item of items) {
+				if (item.sourceAssetId !== assetId) {
+					// Untouched content: keep its own leading gap, close upstream removals.
+					newTimeline.push({ ...item, timelineStart: Math.max(0, item.timelineStart - removedSoFar) })
+					continue
+				}
+				const speed = item.speed || 1
+				const originalOnTimeline = itemDuration(item)
+				const kept = keptIntervals(item.in, item.out)
+				let pieceStart = Math.max(0, item.timelineStart - removedSoFar)
+				let keptOnTimeline = 0
+				for (const seg of kept) {
+					const dur = (seg.end - seg.start) / speed
+					newTimeline.push({
+						...JSON.parse(JSON.stringify(item)),
+						id: (crypto as any).randomUUID ? crypto.randomUUID() : `ti-${Date.now()}-${Math.random().toString(36).slice(2)}`,
+						in: seg.start,
+						out: seg.end,
+						duration: dur,
+						timelineStart: pieceStart,
+						masterSegmentIndex: undefined // sub-range no longer maps to one master scene
+					})
+					pieceStart += dur
+					keptOnTimeline += dur
+				}
+				removedSoFar += originalOnTimeline - keptOnTimeline
+			}
+		}
+
+		doc.value.timeline = newTimeline
+		commitStep({ before, label: 'Remove silence' })
+		if (silenceScan.value?.assetId === assetId) silenceScan.value = null
 	}
 
 	const toggleTrackFlag = (trackId: string, flag: 'muted' | 'locked' | 'hidden') => {
@@ -1454,6 +1585,7 @@ export const useEditorStore = defineStore('editor', () => {
 		removeAsset,
 		retryAsset,
 		describeAsset,
+		transcribeAsset,
 		selectAsset,
 		selectClip,
 		toggleClipSelected,
@@ -1478,6 +1610,15 @@ export const useEditorStore = defineStore('editor', () => {
 		nudgeItems,
 		addMarker,
 		removeMarker,
+		findSilence,
+		silenceScanning,
+		silenceScan,
+		silenceNoiseDb,
+		silenceMinDurationSec,
+		scanSilence,
+		clearSilenceScan,
+		sourceTimeToTimeline,
+		applySilenceRegions,
 		toggleTrackFlag,
 		addOverlayTrack,
 		// personas

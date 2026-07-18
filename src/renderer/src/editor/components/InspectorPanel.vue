@@ -67,6 +67,10 @@
 						Ripple delete
 					</button>
 				</div>
+
+				<!-- Keep scanned silence results in view while inspecting items -->
+				<SilenceFinder v-if="editorStore.silenceScan?.assetId === timelineItem.sourceAssetId"
+					:asset-id="timelineItem.sourceAssetId" compact />
 			</template>
 
 			<!-- Multi-select mode -->
@@ -105,6 +109,10 @@
 					<span class="text-[10px] font-bold uppercase tracking-widest text-zinc-500">Transcript</span>
 					<p class="mt-1.5 text-xs text-zinc-500 dark:text-zinc-400 leading-relaxed italic">{{ clip.text }}</p>
 				</div>
+
+				<!-- Keep scanned silence results in view while previewing pieces -->
+				<SilenceFinder v-if="editorStore.silenceScan?.assetId === clip.sourceAssetId"
+					:asset-id="clip.sourceAssetId" compact />
 			</template>
 
 			<!-- Asset mode -->
@@ -137,7 +145,27 @@
 						<span class="iconify tabler--check w-3 h-3 inline-block align-[-1px]"></span>
 						Scene descriptions ready
 					</p>
+
+					<!-- Opt-in Gemini transcript -->
+					<div class="mt-3">
+						<button v-if="!hasTranscript"
+							class="w-full px-3 py-2 rounded-xl border border-secondary/40 text-secondary text-xs font-bold hover:bg-secondary/10 transition active:scale-95 disabled:opacity-50"
+							:disabled="transcribing" @click="transcribe">
+							<span class="iconify tabler--file-text w-3.5 h-3.5 inline-block align-[-2px] mr-1"></span>
+							{{ transcribing ? 'Transcribing…' : 'Transcribe (uses Gemini)' }}
+						</button>
+						<p v-if="!hasTranscript" class="mt-1.5 text-[10px] text-zinc-400 leading-snug">
+							Adds spoken text to each piece and enriches AI editing context. Costs tokens.
+						</p>
+						<p v-else class="text-[11px] text-accent font-medium">
+							<span class="iconify tabler--check w-3 h-3 inline-block align-[-1px]"></span>
+							Transcript ready
+						</p>
+					</div>
 				</div>
+
+				<!-- Silence / dead-air finder (§5.6) — assistive, review-only -->
+				<SilenceFinder v-if="asset.metadata?.hasAudio !== false" :asset-id="asset.id" />
 			</template>
 
 			<!-- Empty -->
@@ -153,12 +181,14 @@
 import { computed, h, ref } from 'vue'
 import type { FunctionalComponent } from 'vue'
 import { useEditorStore } from '../../stores/editorStore'
+import SilenceFinder from './SilenceFinder.vue'
 
 const editorStore = useEditorStore()
 
 const clip = computed(() => editorStore.selectedClip)
 const asset = computed(() => editorStore.selectedAsset)
 const describing = ref(false)
+const transcribing = ref(false)
 
 // Timeline-item mode: single selected item takes priority over clip/asset
 const timelineItem = computed(() =>
@@ -189,6 +219,10 @@ const hasDescriptions = computed(() =>
 	(asset.value?.clips || []).some((c) => !!c.visual)
 )
 
+const hasTranscript = computed(() =>
+	(asset.value?.clips || []).some((c) => !!c.text)
+)
+
 const formatTime = (seconds: number) => {
 	const m = Math.floor(seconds / 60)
 	const s = Math.floor(seconds % 60)
@@ -208,6 +242,16 @@ const describe = async () => {
 		await editorStore.describeAsset(asset.value.id)
 	} finally {
 		describing.value = false
+	}
+}
+
+const transcribe = async () => {
+	if (!asset.value) return
+	transcribing.value = true
+	try {
+		await editorStore.transcribeAsset(asset.value.id)
+	} finally {
+		transcribing.value = false
 	}
 }
 

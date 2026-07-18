@@ -299,6 +299,12 @@ export interface EditorMarker {
 	label?: string
 }
 
+/** A low-energy region in a source asset (seconds into the source), from ffmpeg silencedetect. */
+export interface SilenceRegion {
+	start: number
+	end: number
+}
+
 // ---- Undo/redo sidecar file: userData/editor-history/{threadId}.json ----
 // Kept OUT of threads/{id}.json so the debounced doc autosave never rewrites
 // history, and history growth never bloats the doc (PRD §6).
