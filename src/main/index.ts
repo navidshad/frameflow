@@ -24,6 +24,7 @@ import { checkYtDlpAvailability, downloadVideo, getVideoFormats } from './ytdlp'
 import { dependencyManager } from './dependencies/manager'
 import * as editorAssets from './editor/assets'
 import * as editorPreprocess from './editor/preprocess'
+import * as editorHistory from './editor/history'
 import { v4 as uuidv4 } from 'uuid'
 import { THREAD_DIRS } from './constants/paths'
 import { GEMINI_MODEL_2_5_FLASH, MODEL_METADATA } from './constants/gemini'
@@ -370,6 +371,8 @@ app.whenReady().then(() => {
 			activePersonaId?: string
 			customPersonas?: any[]
 			clipSelections?: Record<string, boolean>
+			historyRef?: any
+			markers?: any[]
 		}
 	}) => {
 		return await threadManager.updateThreadWith(threadId, (thread) => {
@@ -382,6 +385,10 @@ app.whenReady().then(() => {
 			if (patch.selection) editor.selection = patch.selection
 			if (patch.activePersonaId !== undefined) editor.activePersonaId = patch.activePersonaId
 			if (patch.customPersonas) editor.customPersonas = patch.customPersonas
+			// historyRef travels WITH the doc so the undo pointer and the timeline
+			// state land in one atomic write (crash-consistent by construction).
+			if (patch.historyRef) editor.historyRef = patch.historyRef
+			if (patch.markers) editor.markers = patch.markers
 
 			// Fold clip-selected flags into the matching clips (the one renderer-owned
 			// field living inside main-owned MediaAsset records).
@@ -471,6 +478,23 @@ app.whenReady().then(() => {
 		return true
 	})
 
+	// Undo/redo history sidecar (renderer-authoritative; main persists)
+	ipcMain.handle('get-editor-history', (_event, threadId: string) => {
+		return editorHistory.loadHistory(threadId)
+	})
+
+	ipcMain.handle('push-editor-step', async (_event, { threadId, step, keyframe }: {
+		threadId: string, step: any, keyframe?: any
+	}) => {
+		return await editorHistory.pushStep(threadId, step, keyframe)
+	})
+
+	ipcMain.handle('set-editor-history-pointer', (_event, { threadId, currentStepId }: {
+		threadId: string, currentStepId: string
+	}) => {
+		return editorHistory.setPointer(threadId, currentStepId)
+	})
+
 	ipcMain.handle('get-all-threads', () => {
 		return threadManager.getAllThreads()
 	})
@@ -480,12 +504,14 @@ app.whenReady().then(() => {
 	})
 
 	ipcMain.handle('delete-thread', (_event, id) => {
-		// Editor threads: abort any live per-asset preprocessing before deletion
+		// Editor threads: abort any live per-asset preprocessing and remove the
+		// history sidecar before deletion
 		const thread = threadManager.getThread(id)
 		if (thread?.type === 'editor' && thread.editor) {
 			for (const asset of thread.editor.media) {
 				editorPreprocess.abortAssetPreprocessing(id, asset.id)
 			}
+			editorHistory.deleteHistory(id)
 		}
 		return threadManager.deleteThread(id)
 	})

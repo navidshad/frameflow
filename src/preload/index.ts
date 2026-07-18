@@ -65,6 +65,11 @@ const api = {
 		ipcRenderer.on('editor-import-progress', listener)
 		return () => ipcRenderer.removeListener('editor-import-progress', listener)
 	},
+	getEditorHistory: (threadId: string) => ipcRenderer.invoke('get-editor-history', threadId),
+	pushEditorStep: (data: { threadId: string, step: any, keyframe?: any }) =>
+		ipcRenderer.invoke('push-editor-step', data),
+	setEditorHistoryPointer: (data: { threadId: string, currentStepId: string }) =>
+		ipcRenderer.invoke('set-editor-history-pointer', data),
 	// Thread Management
 	createThread: (data: { videoPath?: string, videoName: string, imagePaths?: string[] }) =>
 		ipcRenderer.invoke('create-thread', data),

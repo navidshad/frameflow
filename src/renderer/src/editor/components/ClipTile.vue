@@ -1,5 +1,8 @@
 <template>
-	<div class="relative w-20 shrink-0 cursor-pointer group" @click="onClick">
+	<div class="relative w-20 shrink-0 cursor-pointer group" @click="onClick"
+		draggable="true" tabindex="0"
+		:title="'Drag to the timeline, or press Enter to place at the playhead'"
+		@dragstart="onDragStart" @keydown.enter.prevent="placeAtPlayhead">
 		<!-- Thumb -->
 		<div class="w-20 h-12 rounded-lg overflow-hidden border-2 transition bg-zinc-200 dark:bg-zinc-800"
 			:class="clip.selected
@@ -60,5 +63,16 @@ const onClick = (event: MouseEvent) => {
 	} else {
 		editorStore.selectClip(props.clip.id === editorStore.selectedClipId ? null : props.clip.id)
 	}
+}
+
+const onDragStart = (event: DragEvent) => {
+	if (!event.dataTransfer) return
+	event.dataTransfer.setData('application/x-frameflow-clip', props.clip.id)
+	event.dataTransfer.effectAllowed = 'copy'
+}
+
+// Keyboard-only placement path: Enter drops the piece at the playhead
+const placeAtPlayhead = () => {
+	editorStore.addItemFromClip(props.clip.id, null, editorStore.playheadSec)
 }
 </script>

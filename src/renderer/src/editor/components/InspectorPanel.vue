@@ -5,8 +5,85 @@
 		</div>
 
 		<div class="flex-1 min-h-0 overflow-y-auto custom-scrollbar px-4 pb-4">
+			<!-- Timeline-item mode (priority when items are selected) -->
+			<template v-if="timelineItem">
+				<h3 class="text-sm font-bold text-zinc-800 dark:text-zinc-200 font-heading truncate">
+					{{ timelineItem.label || 'Timeline clip' }}
+				</h3>
+
+				<dl class="mt-3 space-y-2">
+					<MetaRow label="Track" :value="trackName" />
+					<MetaRow label="Start" :value="formatTime(timelineItem.timelineStart)" mono />
+					<MetaRow label="Source in" :value="formatTime(timelineItem.in)" mono />
+					<MetaRow label="Source out" :value="formatTime(timelineItem.out)" mono />
+				</dl>
+
+				<!-- Retime: speed OR exact duration (PRD §5.6 numeric path) -->
+				<div class="mt-4 space-y-3">
+					<div>
+						<label class="text-[10px] font-bold uppercase tracking-widest text-zinc-500 block mb-1">
+							Speed <span class="normal-case tracking-normal font-mono text-secondary ml-1">{{ timelineItem.speed.toFixed(2) }}×</span>
+						</label>
+						<input type="number" min="0.25" max="4" step="0.05" :value="timelineItem.speed"
+							class="w-full px-2 py-1.5 rounded-lg border border-zinc-200 dark:border-zinc-700 bg-white dark:bg-zinc-900 text-xs font-mono text-zinc-800 dark:text-zinc-200 input-focus-ring"
+							@change="onSpeedInput" />
+					</div>
+					<div>
+						<label class="text-[10px] font-bold uppercase tracking-widest text-zinc-500 block mb-1">
+							Duration (s)
+						</label>
+						<input type="number" min="0.05" step="0.1" :value="timelineItem.duration.toFixed(2)"
+							class="w-full px-2 py-1.5 rounded-lg border border-zinc-200 dark:border-zinc-700 bg-white dark:bg-zinc-900 text-xs font-mono text-zinc-800 dark:text-zinc-200 input-focus-ring"
+							@change="onDurationInput" />
+						<p class="mt-1 text-[9px] text-zinc-400 leading-snug">
+							Changing duration retimes the clip (same content, new speed) and ripples the track.
+						</p>
+					</div>
+					<label class="flex items-center gap-2 cursor-pointer">
+						<input type="checkbox" class="accent-primary" :checked="timelineItem.preservePitch"
+							@change="editorStore.setItemPreservePitch(timelineItem!.id, ($event.target as HTMLInputElement).checked)" />
+						<span class="text-[11px] text-zinc-600 dark:text-zinc-300">Preserve audio pitch when retimed</span>
+					</label>
+				</div>
+
+				<!-- Actions -->
+				<div class="mt-4 flex flex-col gap-2">
+					<button
+						class="w-full px-3 py-2 rounded-xl border border-zinc-200 dark:border-zinc-700 text-xs font-bold text-zinc-600 dark:text-zinc-300 hover:border-primary/40 hover:text-primary transition active:scale-95"
+						@click="editorStore.toggleItemMuted(timelineItem!.id)">
+						<span :class="timelineItem.muted ? 'iconify tabler--volume' : 'iconify tabler--volume-off'" class="w-3.5 h-3.5 inline-block align-[-2px] mr-1"></span>
+						{{ timelineItem.muted ? 'Unmute clip audio' : 'Mute clip audio' }}
+					</button>
+					<button
+						class="w-full px-3 py-2 rounded-xl border border-zinc-200 dark:border-zinc-700 text-xs font-bold text-zinc-600 dark:text-zinc-300 hover:border-primary/40 hover:text-primary transition active:scale-95"
+						@click="editorStore.splitAtPlayhead()">
+						<span class="iconify tabler--blade-filled w-3.5 h-3.5 inline-block align-[-2px] mr-1"></span>
+						Split at playhead
+					</button>
+					<button
+						class="w-full px-3 py-2 rounded-xl border border-red-200 dark:border-red-900/40 text-xs font-bold text-red-500 hover:bg-red-500/10 transition active:scale-95"
+						@click="editorStore.deleteItems([timelineItem!.id])">
+						<span class="iconify tabler--trash w-3.5 h-3.5 inline-block align-[-2px] mr-1"></span>
+						Ripple delete
+					</button>
+				</div>
+			</template>
+
+			<!-- Multi-select mode -->
+			<template v-else-if="editorStore.selectedItemIds.length > 1">
+				<h3 class="text-sm font-bold text-zinc-800 dark:text-zinc-200 font-heading">
+					{{ editorStore.selectedItemIds.length }} clips selected
+				</h3>
+				<button
+					class="mt-4 w-full px-3 py-2 rounded-xl border border-red-200 dark:border-red-900/40 text-xs font-bold text-red-500 hover:bg-red-500/10 transition active:scale-95"
+					@click="editorStore.deleteItems(editorStore.selectedItemIds)">
+					<span class="iconify tabler--trash w-3.5 h-3.5 inline-block align-[-2px] mr-1"></span>
+					Ripple delete all
+				</button>
+			</template>
+
 			<!-- Clip mode -->
-			<template v-if="clip">
+			<template v-else-if="clip">
 				<div class="rounded-xl overflow-hidden mb-3 bg-zinc-200 dark:bg-zinc-800">
 					<img v-if="clip.thumbnailPath" :src="`media://${clip.thumbnailPath}`" class="w-full object-cover" />
 				</div>
@@ -82,6 +159,31 @@ const editorStore = useEditorStore()
 const clip = computed(() => editorStore.selectedClip)
 const asset = computed(() => editorStore.selectedAsset)
 const describing = ref(false)
+
+// Timeline-item mode: single selected item takes priority over clip/asset
+const timelineItem = computed(() =>
+	editorStore.selectedItemIds.length === 1
+		? editorStore.doc?.timeline.find((i) => i.id === editorStore.selectedItemIds[0]) || null
+		: null
+)
+
+const trackName = computed(() =>
+	editorStore.doc?.tracks.find((t) => t.id === timelineItem.value?.trackId)?.name || '—'
+)
+
+const onSpeedInput = (event: Event) => {
+	const value = parseFloat((event.target as HTMLInputElement).value)
+	if (timelineItem.value && Number.isFinite(value) && value > 0) {
+		editorStore.setItemSpeed(timelineItem.value.id, value)
+	}
+}
+
+const onDurationInput = (event: Event) => {
+	const value = parseFloat((event.target as HTMLInputElement).value)
+	if (timelineItem.value && Number.isFinite(value) && value > 0) {
+		editorStore.setItemTargetDuration(timelineItem.value.id, value)
+	}
+}
 
 const hasDescriptions = computed(() =>
 	(asset.value?.clips || []).some((c) => !!c.visual)

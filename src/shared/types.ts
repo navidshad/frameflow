@@ -183,6 +183,7 @@ export interface EditorDocument {
 	turns: PromptTurn[]         // prompt-request log (no snapshots)
 	historyRef: EditorHistoryRef      // pointer into the sidecar history file
 	selection?: { clipIds?: string[]; itemIds?: string[] }
+	markers?: EditorMarker[]    // renderer-owned; NOT undoable (outside TimelineDiff)
 }
 
 export interface TimelineMeta {
@@ -286,8 +287,42 @@ export interface EditorPersona {
 export interface FeatureSetRef { id: string; name: string } // stub
 
 export interface EditorHistoryRef {
-	currentStepId: string
+	currentStepId: string       // undo/redo pointer (persisted with the doc → undo survives restart)
 	stepCount: number
+}
+
+export interface EditorMarker {
+	id: string
+	time: number                // seconds on the sequence timeline
+	label?: string
+}
+
+// ---- Undo/redo sidecar file: userData/editor-history/{threadId}.json ----
+// Kept OUT of threads/{id}.json so the debounced doc autosave never rewrites
+// history, and history growth never bloats the doc (PRD §6).
+export interface EditorHistoryFile {
+	threadId: string
+	steps: EditorHistoryStep[]     // ring buffer, MAX_STEPS = 50
+	keyframes: TimelineSnapshot[]  // sparse; every K = 10 steps, bounds replay cost
+	currentStepId: string          // informational — the pointer of record is doc.historyRef
+}
+
+export interface EditorHistoryStep {
+	id: string
+	seq: number                 // monotonic (Thread.versionCounter via getNextVersion)
+	origin: 'init' | 'ai' | 'manual'
+	label?: string
+	forward: TimelineDiff       // apply to go newer
+	inverse: TimelineDiff       // apply to undo
+	turnId?: string             // set when origin === 'ai'
+	createdAt: number
+}
+
+export interface TimelineSnapshot {
+	stepId: string              // state AFTER this step was applied
+	tracks: Track[]
+	timeline: TimelineItem[]
+	timelineMeta: TimelineMeta
 }
 
 export interface PromptTurn {
