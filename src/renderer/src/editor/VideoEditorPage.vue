@@ -60,24 +60,23 @@
 					<PreviewMonitor class="min-h-0" />
 
 					<!-- Right rail: Chat | Inspect | Revisions -->
-					<div v-if="rightOpen" class="flex flex-col min-h-0 gap-2">
-						<div class="flex items-center gap-1 shrink-0">
-							<div class="flex-1 flex items-center bg-zinc-100/80 dark:bg-zinc-900/80 rounded-xl p-0.5 border border-zinc-200 dark:border-zinc-800">
-								<button v-for="tab in (['chat', 'inspect', 'revisions'] as const)" :key="tab"
-									class="flex-1 px-2 py-1 rounded-lg text-[9px] font-bold uppercase tracking-widest transition relative"
-									:class="rightTab === tab
-										? 'bg-primary text-white shadow-md shadow-primary/20'
-										: 'text-zinc-500 hover:text-zinc-700 dark:hover:text-zinc-300'"
-									@click="selectRightTab(tab)">
-									{{ tab }}
-									<span v-if="tab === 'revisions' && revisionsBadge"
-										class="absolute top-0.5 right-1.5 w-1.5 h-1.5 rounded-full bg-secondary animate-pulse-soft"></span>
-									<span v-if="tab === 'chat' && chatBadge"
-										class="absolute top-0.5 right-1.5 w-1.5 h-1.5 rounded-full bg-accent animate-pulse-soft"></span>
-								</button>
-							</div>
+					<div v-if="rightOpen" class="flex flex-col min-h-0 gap-1.5">
+						<!-- Naked segmented tabs — no container chrome -->
+						<div class="flex items-center gap-0.5 px-1 shrink-0">
+							<button v-for="tab in (['chat', 'inspect', 'revisions'] as const)" :key="tab"
+								class="px-2 py-1 rounded-lg text-[9px] font-bold uppercase tracking-widest transition relative"
+								:class="rightTab === tab
+									? 'text-primary bg-primary/10'
+									: 'text-zinc-400 hover:text-zinc-600 dark:hover:text-zinc-300'"
+								@click="selectRightTab(tab)">
+								{{ tab }}
+								<span v-if="tab === 'revisions' && revisionsBadge"
+									class="absolute top-0.5 right-0.5 w-1.5 h-1.5 rounded-full bg-secondary animate-pulse-soft"></span>
+								<span v-if="tab === 'chat' && chatBadge"
+									class="absolute top-0.5 right-0.5 w-1.5 h-1.5 rounded-full bg-accent animate-pulse-soft"></span>
+							</button>
 							<button title="Collapse panel"
-								class="w-6 h-6 flex items-center justify-center rounded-lg text-zinc-400 hover:text-primary hover:bg-primary/10 transition shrink-0"
+								class="ml-auto w-6 h-6 flex items-center justify-center rounded-lg text-zinc-400 hover:text-primary hover:bg-primary/10 transition shrink-0"
 								@click="rightOpen = false">
 								<span class="iconify tabler--layout-sidebar-right-collapse w-3.5 h-3.5"></span>
 							</button>

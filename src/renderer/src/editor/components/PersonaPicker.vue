@@ -1,14 +1,15 @@
 <template>
 	<div class="relative" ref="rootRef">
-		<!-- Trigger chip -->
+		<!-- Trigger: quiet text-level control, not a boxed button -->
 		<button
-			class="shrink-0 flex items-center gap-1.5 px-2.5 py-1.5 rounded-xl bg-zinc-100 dark:bg-zinc-900 border border-zinc-200 dark:border-zinc-800 hover:border-primary/40 transition active:scale-95"
+			class="shrink-0 flex items-center gap-1 px-1 py-0.5 rounded-md text-zinc-500 hover:text-primary transition group/persona"
+			title="Switch persona"
 			@click="open = !open">
-			<span class="text-sm leading-none">{{ store.activePersona?.icon || '🎬' }}</span>
-			<span class="text-[10px] font-bold uppercase tracking-widest text-zinc-600 dark:text-zinc-300 max-w-[110px] truncate">
+			<span class="text-[11px] leading-none">{{ store.activePersona?.icon || '🎬' }}</span>
+			<span class="text-[9px] font-bold uppercase tracking-widest max-w-[100px] truncate">
 				{{ store.activePersona?.name || 'Persona' }}
 			</span>
-			<span class="iconify tabler--chevron-up w-3 h-3 text-zinc-400 transition-transform" :class="{ 'rotate-180': open }"></span>
+			<span class="iconify tabler--chevron-up w-2.5 h-2.5 opacity-50 group-hover/persona:opacity-100 transition-transform" :class="{ 'rotate-180': open }"></span>
 		</button>
 
 		<!-- Popover -->

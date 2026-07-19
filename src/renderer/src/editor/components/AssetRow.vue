@@ -1,8 +1,8 @@
 <template>
-	<div class="mb-2 p-3 rounded-xl border transition cursor-pointer group"
+	<div class="mb-1.5 p-3 rounded-xl transition cursor-pointer group"
 		:class="active
-			? 'border-primary/50 bg-primary/5 dark:bg-primary/10 ring-1 ring-primary/20'
-			: 'border-zinc-200 dark:border-zinc-800 bg-white/50 dark:bg-zinc-900/50 hover:border-primary/30'"
+			? 'bg-primary/5 dark:bg-primary/10 ring-1 ring-primary/30'
+			: 'hover:bg-zinc-100/70 dark:hover:bg-zinc-900/50'"
 		@click="$emit('select')">
 		<div class="flex items-start gap-3">
 			<!-- Thumbnail -->

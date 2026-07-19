@@ -1,6 +1,6 @@
 <template>
 	<div v-if="result"
-		class="rounded-2xl border border-primary/30 bg-white/70 dark:bg-zinc-900/70 backdrop-blur-xl shadow-premium p-4 animate-fade-in-up">
+		class="rounded-xl bg-primary/5 dark:bg-primary/10 p-3 animate-fade-in-up">
 		<!-- Header -->
 		<div class="flex items-center justify-between gap-3 mb-2">
 			<div class="flex items-center gap-2 min-w-0">
