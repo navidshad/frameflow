@@ -2,15 +2,32 @@
 	<div class="glass-card rounded-2xl flex flex-col min-h-0 overflow-hidden">
 		<!-- Turn history -->
 		<div ref="scrollRef" class="flex-1 min-h-0 overflow-y-auto custom-scrollbar px-3 py-3 space-y-3">
-			<!-- Empty state -->
+			<!-- Empty state — reflects whether media is ready to talk about -->
 			<div v-if="turns.length === 0" class="h-full flex flex-col items-center justify-center gap-2 text-center px-4">
-				<span class="text-2xl">{{ store.activePersona?.icon || '🎬' }}</span>
-				<p class="text-xs font-bold text-zinc-600 dark:text-zinc-300">
-					{{ store.activePersona?.name || 'Your editor' }} is ready
-				</p>
-				<p class="text-[11px] text-zinc-400 leading-relaxed">
-					Ask for a cut, a cleanup, or a question about the footage. Every request and result stays here.
-				</p>
+				<span class="text-2xl" :class="{ 'opacity-40': !store.hasReadyMedia }">{{ store.activePersona?.icon || '🎬' }}</span>
+				<template v-if="store.hasReadyMedia">
+					<p class="text-xs font-bold text-zinc-600 dark:text-zinc-300">
+						{{ store.activePersona?.name || 'Your editor' }} is ready
+					</p>
+					<p class="text-[11px] text-zinc-400 leading-relaxed">
+						Ask for a cut, a cleanup, or a question about the footage. Every request and result stays here.
+					</p>
+				</template>
+				<template v-else-if="store.mediaProcessing">
+					<p class="text-xs font-bold text-zinc-600 dark:text-zinc-300 flex items-center gap-1.5">
+						<span class="w-3 h-3 rounded-full border-2 border-primary border-t-transparent animate-spin"></span>
+						Preparing your media…
+					</p>
+					<p class="text-[11px] text-zinc-400 leading-relaxed">
+						Chat unlocks once the footage is broken into pieces you can edit.
+					</p>
+				</template>
+				<template v-else>
+					<p class="text-xs font-bold text-zinc-600 dark:text-zinc-300">Import media to start</p>
+					<p class="text-[11px] text-zinc-400 leading-relaxed">
+						Add a video in the Media panel. Once it’s processed, your editor persona can build the cut.
+					</p>
+				</template>
 			</div>
 
 			<template v-for="turn in turns" :key="turn.id">

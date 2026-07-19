@@ -271,6 +271,15 @@ export const useEditorStore = defineStore('editor', () => {
 		renderState.value?.phase === 'rendering' || renderState.value?.phase === 'stitching'
 	)
 
+	// The AI has nothing to work with until at least one asset finished
+	// preprocessing (pieces/transcript exist) — the chat gates on this.
+	const hasReadyMedia = computed(() =>
+		assets.value.some((a) => a.preprocessState === 'completed' && (a.clips?.length ?? 0) > 0)
+	)
+	const mediaProcessing = computed(() =>
+		assets.value.some((a) => a.preprocessState === 'running' || a.preprocessState === 'pending')
+	)
+
 	const canExport = computed(() => {
 		if (!doc.value || isRendering.value) return false
 		const videoTrack = sortedTracks.value.find((t) => t.kind === 'video')
@@ -1642,6 +1651,8 @@ export const useEditorStore = defineStore('editor', () => {
 		// computeds
 		assets,
 		isEmpty,
+		hasReadyMedia,
+		mediaProcessing,
 		selectedAsset,
 		selectedClip,
 		sortedTracks,

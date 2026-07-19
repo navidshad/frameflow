@@ -86,10 +86,14 @@ const scopeMenuOpen = ref(false)
 const inputRef = ref<HTMLTextAreaElement | null>(null)
 const scopeRef = ref<HTMLElement | null>(null)
 
-const inputDisabled = computed(() => store.promptRunning)
+// Chat is inert until media is imported AND has finished preprocessing —
+// the AI needs pieces/transcript to reason about the footage.
+const inputDisabled = computed(() => store.promptRunning || !store.hasReadyMedia)
 
 const placeholder = computed(() => {
 	if (store.isEmpty) return 'Import media first, then ask your editor persona for a cut'
+	if (store.mediaProcessing) return 'Preparing your media… chat unlocks when it’s ready'
+	if (!store.hasReadyMedia) return 'Media isn’t ready yet — chat unlocks once pieces are available'
 	return `Ask ${store.activePersona?.name || 'your editor'} to build or refine the cut…`
 })
 
