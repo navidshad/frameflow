@@ -20,8 +20,8 @@
 					@click="onSplit">
 					<span class="iconify tabler--arrows-split-2 w-3.5 h-3.5 block"></span>
 				</button>
-				<!-- Detector sensitivity toggle -->
-				<button title="Scene detector sensitivity"
+				<!-- Detector sensitivity toggle (scene-based; N/A for audio) -->
+				<button v-if="!isAudio" title="Scene detector sensitivity"
 					class="p-1 rounded-md transition"
 					:class="showDetector ? 'text-primary bg-primary/10' : 'text-zinc-400 hover:text-primary hover:bg-primary/10'"
 					@click="showDetector = !showDetector">
@@ -31,7 +31,7 @@
 		</div>
 
 		<!-- Detector sensitivity (§5.2) — re-runs scene detection -->
-		<div v-if="showDetector" class="mb-2 p-2 rounded-lg bg-zinc-100/70 dark:bg-zinc-900/50">
+		<div v-if="showDetector && !isAudio" class="mb-2 p-2 rounded-lg bg-zinc-100/70 dark:bg-zinc-900/50">
 			<div class="flex items-center gap-2">
 				<span class="text-[9px] font-bold uppercase tracking-widest text-zinc-400 shrink-0">Threshold</span>
 				<input type="range" min="5" max="60" step="1" v-model.number="threshold"
@@ -58,10 +58,10 @@
 				class="w-20 h-12 rounded-lg bg-zinc-200 dark:bg-zinc-800 animate-pulse-soft shrink-0"></div>
 		</div>
 
-		<!-- No scenes -->
+		<!-- No pieces -->
 		<p v-else-if="clips.length === 0 && asset?.preprocessState === 'completed'"
 			class="text-[11px] text-zinc-400 py-2">
-			No scenes detected in this video.
+			{{ isAudio ? 'No pieces in this audio.' : 'No scenes detected in this video.' }}
 		</p>
 
 		<p v-else-if="clips.length === 0" class="text-[11px] text-zinc-400 py-2">
@@ -84,6 +84,7 @@ import ClipTile from './ClipTile.vue'
 const editorStore = useEditorStore()
 
 const asset = computed(() => editorStore.selectedAsset)
+const isAudio = computed(() => asset.value?.kind === 'audio')
 const clips = computed(() => asset.value?.clips ?? [])
 const selectedCount = computed(() => clips.value.filter((c) => c.selected).length)
 const isProcessing = computed(() => asset.value?.preprocessState === 'running')

@@ -9,7 +9,8 @@
 			<div
 				class="w-16 h-10 rounded-lg bg-zinc-200 dark:bg-zinc-800 overflow-hidden shrink-0 flex items-center justify-center">
 				<img v-if="thumbSrc" :src="thumbSrc" class="w-full h-full object-cover" loading="lazy" />
-				<span v-else class="iconify tabler--movie w-4 h-4 text-zinc-400"></span>
+				<span v-else class="iconify w-4 h-4 text-zinc-400"
+					:class="asset.kind === 'audio' ? 'tabler--music' : 'tabler--movie'"></span>
 			</div>
 
 			<div class="flex-1 min-w-0">

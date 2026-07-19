@@ -187,6 +187,37 @@ export const useEditorStore = defineStore('editor', () => {
 			})
 	})
 
+	// Audio-track segments for preview (PRD §5.3): items on audio-kind tracks,
+	// played through a separate <audio> element slaved to the playhead. Audio
+	// assets have no proxy, so preview reads originalPath.
+	const audioSegments = computed(() => {
+		if (!doc.value) return []
+		const audioTrackIds = new Set(
+			doc.value.tracks.filter((t) => t.kind === 'audio' && !t.hidden).map((t) => t.id)
+		)
+		const trackMuted = new Map(doc.value.tracks.map((t) => [t.id, t.muted]))
+		const assetById = new Map(doc.value.media.map((a) => [a.id, a]))
+
+		return doc.value.timeline
+			.filter((item) => audioTrackIds.has(item.trackId))
+			.sort((a, b) => a.timelineStart - b.timelineStart)
+			.flatMap((item) => {
+				const asset = assetById.get(item.sourceAssetId)
+				const src = asset?.originalPath
+				if (!src) return []
+				return [{
+					itemId: item.id,
+					tStart: item.timelineStart,
+					tEnd: itemEnd(item),
+					src: `media://${src}`,
+					sourceIn: item.in,
+					speed: item.speed || 1,
+					muted: !!item.muted || !!trackMuted.get(item.trackId),
+					gain: item.gain ?? 1
+				}]
+			})
+	})
+
 	const pointerIndex = computed(() => {
 		const id = doc.value?.historyRef?.currentStepId || ''
 		if (id === '') return -1
@@ -943,6 +974,14 @@ export const useEditorStore = defineStore('editor', () => {
 		commitStep({ before, label: item.muted ? 'Mute clip' : 'Unmute clip' })
 	}
 
+	const setItemGain = (id: string, gain: number) => {
+		const item = doc.value?.timeline.find((i) => i.id === id)
+		if (!item || !Number.isFinite(gain)) return
+		const before = snapshotState()
+		item.gain = Math.max(0, Math.min(2, gain))
+		commitStep({ before, label: `Gain ${item.gain.toFixed(2)}` })
+	}
+
 	const nudgeItems = (ids: string[], deltaSec: number) => {
 		if (!doc.value || !ids.length) return
 		const before = snapshotState()
@@ -1689,6 +1728,7 @@ export const useEditorStore = defineStore('editor', () => {
 		markers,
 		selectedItems,
 		videoSegments,
+		audioSegments,
 		canUndo,
 		canRedo,
 		firstVideoTrackId,
@@ -1730,6 +1770,7 @@ export const useEditorStore = defineStore('editor', () => {
 		setItemTargetDuration,
 		setItemPreservePitch,
 		toggleItemMuted,
+		setItemGain,
 		nudgeItems,
 		addMarker,
 		removeMarker,

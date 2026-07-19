@@ -4,7 +4,7 @@
 		<div class="px-4 pt-4 pb-2 flex items-center justify-between shrink-0">
 			<span class="text-[10px] font-bold uppercase tracking-widest text-zinc-500">Media</span>
 			<div class="flex items-center gap-1">
-				<SlimTooltip text="Add local video" placement="bottom">
+				<SlimTooltip text="Add local media" placement="bottom">
 					<button
 						class="w-7 h-7 flex items-center justify-center rounded-lg text-zinc-500 hover:text-primary hover:bg-primary/10 transition active:scale-95"
 						@click="editorStore.addLocalMedia()">
@@ -49,14 +49,14 @@
 				<div>
 					<p class="text-sm font-bold text-zinc-800 dark:text-zinc-200">No media yet</p>
 					<p class="text-xs text-zinc-500 dark:text-zinc-400 mt-1 leading-relaxed px-2">
-						Add a video and it will be broken into selectable scene pieces.
+						Add video or audio and it will be broken into selectable pieces.
 					</p>
 				</div>
 				<div class="flex flex-col gap-2 w-full px-2">
 					<button
 						class="w-full px-3 py-2 rounded-xl bg-primary text-white text-xs font-bold shadow-md shadow-primary/20 hover:bg-primary-dark transition active:scale-95"
 						@click="editorStore.addLocalMedia()">
-						Add local video
+						Add local media
 					</button>
 					<button
 						class="w-full px-3 py-2 rounded-xl border border-zinc-200 dark:border-zinc-700 text-xs font-bold text-zinc-600 dark:text-zinc-300 hover:border-primary/40 hover:text-primary transition active:scale-95"

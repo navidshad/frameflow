@@ -44,6 +44,19 @@
 							@change="editorStore.setItemPreservePitch(timelineItem!.id, ($event.target as HTMLInputElement).checked)" />
 						<span class="text-[11px] text-zinc-600 dark:text-zinc-300">Preserve audio pitch when retimed</span>
 					</label>
+
+					<!-- Audio gain (mix level applied at export) -->
+					<div>
+						<label class="text-[10px] font-bold uppercase tracking-widest text-zinc-500 block mb-1">
+							Gain <span class="normal-case tracking-normal font-mono text-accent ml-1">{{ gainValue.toFixed(2) }}×</span>
+						</label>
+						<input type="range" min="0" max="2" step="0.05" :value="gainValue"
+							class="w-full accent-accent"
+							@change="editorStore.setItemGain(timelineItem!.id, parseFloat(($event.target as HTMLInputElement).value))" />
+						<p class="mt-1 text-[9px] text-zinc-400 leading-snug">
+							Level for this clip in the exported audio mix. 1.0× is unchanged.
+						</p>
+					</div>
 				</div>
 
 				<!-- Actions -->
@@ -120,40 +133,46 @@
 				<h3 class="text-sm font-bold text-zinc-800 dark:text-zinc-200 font-heading break-words">{{ asset.name }}</h3>
 
 				<dl v-if="asset.metadata" class="mt-3 space-y-2">
+					<MetaRow label="Kind" :value="asset.kind === 'audio' ? 'Audio' : 'Video'" />
 					<MetaRow label="Duration" :value="formatTime(asset.metadata.duration)" mono />
-					<MetaRow label="Resolution" :value="`${asset.metadata.width}×${asset.metadata.height}`" mono />
-					<MetaRow label="FPS" :value="String(asset.metadata.fps)" mono />
+					<template v-if="asset.kind !== 'audio'">
+						<MetaRow label="Resolution" :value="`${asset.metadata.width}×${asset.metadata.height}`" mono />
+						<MetaRow label="FPS" :value="String(asset.metadata.fps)" mono />
+					</template>
 					<MetaRow label="Codec" :value="asset.metadata.codec" />
 					<MetaRow label="Size" :value="formatSize(asset.metadata.size)" mono />
-					<MetaRow label="Audio" :value="asset.metadata.hasAudio ? 'Yes' : 'No'" />
+					<MetaRow v-if="asset.kind !== 'audio'" label="Audio" :value="asset.metadata.hasAudio ? 'Yes' : 'No'" />
 					<MetaRow label="Pieces" :value="String(asset.clips.length)" mono />
 				</dl>
 				<p v-else class="mt-3 text-xs text-zinc-400">Metadata unavailable for this file.</p>
 
 				<!-- Opt-in Gemini descriptions -->
 				<div v-if="asset.preprocessState === 'completed' && asset.clips.length > 0" class="mt-5">
-					<button v-if="!hasDescriptions"
-						class="w-full px-3 py-2 rounded-xl border border-secondary/40 text-secondary text-xs font-bold hover:bg-secondary/10 transition active:scale-95 disabled:opacity-50"
-						:disabled="describing" @click="describe">
-						<span class="iconify tabler--sparkles w-3.5 h-3.5 inline-block align-[-2px] mr-1"></span>
-						{{ describing ? 'Describing scenes…' : 'Describe scenes (uses Gemini)' }}
-					</button>
-					<p v-if="!hasDescriptions" class="mt-1.5 text-[10px] text-zinc-400 leading-snug">
-						Generates a one-line description per piece for the context view. Costs tokens.
-					</p>
-					<div v-else class="flex items-center justify-between gap-2">
-						<p class="text-[11px] text-accent font-medium">
-							<span class="iconify tabler--check w-3 h-3 inline-block align-[-1px]"></span>
-							Scene descriptions ready
-						</p>
-						<button class="text-[10px] font-bold uppercase tracking-widest text-zinc-400 hover:text-red-500 transition"
-							@click="editorStore.clearAssetData(asset.id, 'descriptions')">
-							Remove
+					<!-- Scene descriptions are visual (thumbnail-derived) — video only -->
+					<template v-if="asset.kind !== 'audio'">
+						<button v-if="!hasDescriptions"
+							class="w-full px-3 py-2 rounded-xl border border-secondary/40 text-secondary text-xs font-bold hover:bg-secondary/10 transition active:scale-95 disabled:opacity-50"
+							:disabled="describing" @click="describe">
+							<span class="iconify tabler--sparkles w-3.5 h-3.5 inline-block align-[-2px] mr-1"></span>
+							{{ describing ? 'Describing scenes…' : 'Describe scenes (uses Gemini)' }}
 						</button>
-					</div>
+						<p v-if="!hasDescriptions" class="mt-1.5 text-[10px] text-zinc-400 leading-snug">
+							Generates a one-line description per piece for the context view. Costs tokens.
+						</p>
+						<div v-else class="flex items-center justify-between gap-2">
+							<p class="text-[11px] text-accent font-medium">
+								<span class="iconify tabler--check w-3 h-3 inline-block align-[-1px]"></span>
+								Scene descriptions ready
+							</p>
+							<button class="text-[10px] font-bold uppercase tracking-widest text-zinc-400 hover:text-red-500 transition"
+								@click="editorStore.clearAssetData(asset.id, 'descriptions')">
+								Remove
+							</button>
+						</div>
+					</template>
 
 					<!-- Opt-in Gemini transcript -->
-					<div class="mt-3">
+					<div :class="asset.kind !== 'audio' ? 'mt-3' : ''">
 						<button v-if="!hasTranscript"
 							class="w-full px-3 py-2 rounded-xl border border-secondary/40 text-secondary text-xs font-bold hover:bg-secondary/10 transition active:scale-95 disabled:opacity-50"
 							:disabled="transcribing" @click="transcribe">
@@ -212,6 +231,8 @@ const timelineItem = computed(() =>
 const trackName = computed(() =>
 	editorStore.doc?.tracks.find((t) => t.id === timelineItem.value?.trackId)?.name || '—'
 )
+
+const gainValue = computed(() => timelineItem.value?.gain ?? 1)
 
 const onSpeedInput = (event: Event) => {
 	const value = parseFloat((event.target as HTMLInputElement).value)

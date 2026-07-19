@@ -34,6 +34,11 @@ export type PreprocessStep =
 // with no usable transcript and for explicit sensitivity re-runs.
 const DEFAULT_STEPS: PreprocessStep[] = ['proxy', 'audio', 'transcript', 'scenes', 'thumbnails']
 
+// Audio-only assets have no picture: skip proxy/scenes/thumbnails/filmstrip and
+// derive pieces from the transcript (with a whole-file fallback when there is
+// no Gemini key). See the whole-file clip fallback at the end of the run.
+const AUDIO_STEPS: PreprocessStep[] = ['audio', 'transcript']
+
 // Audio/transcript failures (missing Gemini key, quota) must not brick the
 // import — the chain continues and pieces fall back to scene detection.
 const SOFT_FAIL_STEPS: PreprocessStep[] = ['audio', 'transcript']
@@ -307,6 +312,31 @@ async function deriveClips(threadId: string, assetId: string, scenes: Scene[]) {
 			}
 		})
 		return { clips }
+	})
+}
+
+/**
+ * Guarantees an audio asset has at least one placeable piece. When the
+ * transcript step produced pieces this is a no-op; otherwise it creates one
+ * clip spanning the whole file (labelled by name) so the asset can always be
+ * dropped on the audio track. Non-audio assets are left to scene detection.
+ */
+async function ensureAudioHasClip(threadId: string, assetId: string): Promise<void> {
+	const asset = getAsset(threadId, assetId)
+	if (!asset || asset.kind !== 'audio') return
+	if ((asset.clips || []).length > 0) return
+	const duration = asset.metadata?.duration || 0
+	if (duration <= 0) return
+	await patchAsset(threadId, assetId, {
+		clips: [{
+			id: uuidv4(),
+			sourceAssetId: assetId,
+			index: 1,
+			in: 0,
+			out: duration,
+			duration,
+			selected: false
+		}]
 	})
 }
 
@@ -625,7 +655,9 @@ export async function preprocessMediaAsset(
 	if (!asset) return
 	if (isAssetPreprocessing(threadId, assetId)) return // already running
 
-	const steps = options?.steps?.length ? options.steps : DEFAULT_STEPS
+	const steps = options?.steps?.length
+		? options.steps
+		: asset.kind === 'audio' ? AUDIO_STEPS : DEFAULT_STEPS
 	const controller = new AbortController()
 	// Every ffmpeg call (one per scene thumbnail) attaches an abort listener to
 	// this shared signal — lift Node's default cap of 10 to avoid leak warnings.
@@ -671,6 +703,11 @@ export async function preprocessMediaAsset(
 				await setTask(threadId, assetId, step, { state: 'error', error: message })
 			}
 		}
+
+		// An audio asset with no transcript (no Gemini key / quota) derives zero
+		// pieces from the chain above — synthesize a single whole-file clip so it
+		// is always placeable on the audio track.
+		await ensureAudioHasClip(threadId, assetId)
 
 		await patchAsset(threadId, assetId, { preprocessState: 'completed' })
 	} catch (error: any) {
