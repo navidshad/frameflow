@@ -9,6 +9,8 @@
 		:style="{ transform: `translateX(${viewport.secToPx(item.timelineStart)}px)`, width: `${Math.max(viewport.secToPx(item.duration), 6)}px` }"
 		role="option" :aria-selected="selected" tabindex="0"
 		:aria-label="`${item.label || 'Clip'}, ${format(item.timelineStart)} to ${format(end)}, ${item.duration.toFixed(1)} seconds`"
+		@pointerenter="hovering = true"
+		@pointerleave="hovering = false"
 		@pointerdown.stop="onPointerDown"
 		@click.stop="onClick">
 
@@ -123,7 +125,6 @@ const format = (seconds: number) => {
 }
 
 const onPointerDown = (e: PointerEvent) => {
-	hovering.value = true
 	if (!selected.value) {
 		if (e.shiftKey || e.metaKey || e.ctrlKey) store.toggleItemSelected(props.item.id)
 		else store.selectItems([props.item.id])
