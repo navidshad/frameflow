@@ -951,6 +951,7 @@ export const useEditorStore = defineStore('editor', () => {
 	// Read-only analysis; the caller reviews before applying. Scan state lives
 	// here (not in the Inspector) so results survive selection/mode changes.
 	const silenceScanning = ref(false)
+	const silenceScanPercent = ref<number | null>(null)
 	const silenceScan = ref<{ assetId: string; regions: { start: number; end: number }[] } | null>(null)
 	const silenceNoiseDb = ref(-30)
 	const silenceMinDurationSec = ref(0.5)
@@ -965,6 +966,7 @@ export const useEditorStore = defineStore('editor', () => {
 
 	const scanSilence = async (assetId: string) => {
 		silenceScanning.value = true
+		silenceScanPercent.value = 0
 		try {
 			const regions = await findSilence(assetId, {
 				noiseDb: silenceNoiseDb.value,
@@ -973,6 +975,7 @@ export const useEditorStore = defineStore('editor', () => {
 			silenceScan.value = { assetId, regions }
 		} finally {
 			silenceScanning.value = false
+			silenceScanPercent.value = null
 		}
 	}
 
@@ -1580,6 +1583,12 @@ export const useEditorStore = defineStore('editor', () => {
 			})
 		}
 
+		if (api.onEditorSilenceProgress) {
+			api.onEditorSilenceProgress((data: { assetId: string; percent: number }) => {
+				if (silenceScanning.value) silenceScanPercent.value = data.percent
+			})
+		}
+
 		if (api.onEditorTurnUpdate) {
 			api.onEditorTurnUpdate((data: any) => {
 				onTurnUpdate(data).catch((error: unknown) => {
@@ -1686,6 +1695,7 @@ export const useEditorStore = defineStore('editor', () => {
 		removeMarker,
 		findSilence,
 		silenceScanning,
+		silenceScanPercent,
 		silenceScan,
 		silenceNoiseDb,
 		silenceMinDurationSec,

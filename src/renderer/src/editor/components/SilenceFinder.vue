@@ -24,7 +24,7 @@
 			class="mt-2 w-full px-3 py-2 rounded-xl border border-primary/40 text-primary text-xs font-bold hover:bg-primary/10 transition active:scale-95 disabled:opacity-50"
 			:disabled="editorStore.silenceScanning" @click="editorStore.scanSilence(assetId)">
 			<span class="iconify tabler--wave-saw-tool w-3.5 h-3.5 inline-block align-[-2px] mr-1"></span>
-			{{ editorStore.silenceScanning ? 'Scanning…' : (results ? 'Rescan' : 'Find silence & dead air') }}
+			{{ scanLabel }}
 		</button>
 
 		<template v-if="results !== null">
@@ -71,6 +71,14 @@ const editorStore = useEditorStore()
 const results = computed(() =>
 	editorStore.silenceScan?.assetId === props.assetId ? editorStore.silenceScan.regions : null
 )
+
+const scanLabel = computed(() => {
+	if (editorStore.silenceScanning) {
+		const p = editorStore.silenceScanPercent
+		return p !== null && p > 0 ? `Scanning… ${p}%` : 'Scanning…'
+	}
+	return results.value ? 'Rescan' : 'Find silence & dead air'
+})
 
 const seekToRegion = (r: { start: number; end: number }) => {
 	const t = editorStore.sourceTimeToTimeline(props.assetId, r.start)

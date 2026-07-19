@@ -480,7 +480,8 @@ export async function generateFilmstrip(
 	videoPath: string,
 	outputDir: string,
 	intervalSec: number,
-	signal?: AbortSignal
+	signal?: AbortSignal,
+	onProgress?: (percent: number) => void
 ): Promise<{ time: number; thumbnailPath: string }[]> {
 	if (signal?.aborted) {
 		throw new Error('Filmstrip generation aborted before start')
@@ -495,6 +496,11 @@ export async function generateFilmstrip(
 				'-q:v', '5'
 			])
 			.output(pattern)
+			.on('progress', (progress) => {
+				if (onProgress && progress.percent) {
+					onProgress(Math.round(progress.percent))
+				}
+			})
 			.on('end', () => resolve())
 			.on('error', (err) => {
 				if (signal?.aborted) {
@@ -533,7 +539,8 @@ export async function generateFilmstrip(
 export async function detectSilence(
 	videoPath: string,
 	opts?: { noiseDb?: number; minDurationSec?: number },
-	signal?: AbortSignal
+	signal?: AbortSignal,
+	onProgress?: (percent: number) => void
 ): Promise<SilenceRegion[]> {
 	const noiseDb = opts?.noiseDb ?? -30
 	const minDurationSec = opts?.minDurationSec ?? 0.5
@@ -550,6 +557,11 @@ export async function detectSilence(
 			.audioFilters(`silencedetect=noise=${noiseDb}dB:d=${minDurationSec}`)
 			.outputOptions(['-f', 'null'])
 			.output(process.platform === 'win32' ? 'NUL' : '/dev/null')
+			.on('progress', (progress) => {
+				if (onProgress && progress.percent) {
+					onProgress(Math.round(progress.percent))
+				}
+			})
 			.on('stderr', (line: string) => {
 				const startMatch = line.match(/silence_start:\s*(-?[\d.]+)/)
 				if (startMatch) {

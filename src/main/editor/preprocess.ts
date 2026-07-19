@@ -83,6 +83,38 @@ function exists(p?: string): boolean {
 
 const taskId = (assetId: string, step: PreprocessStep) => `${assetId}:${step}`
 
+/**
+ * Throttled per-step progress reporter: every setTask persists the thread
+ * JSON and broadcasts, so noisy sources (ffmpeg/scenedetect ticks) are
+ * quantized to ≥5% jumps.
+ */
+function makeProgressReporter(threadId: string, assetId: string, step: PreprocessStep) {
+	let last = -1
+	return (percent: number, status?: string) => {
+		const p = Math.min(100, Math.max(0, Math.round(percent)))
+		if (p - last < 5 && p !== 100) return
+		last = p
+		void setTask(threadId, assetId, step, { state: 'running', progress: p, ...(status ? { status } : {}) })
+	}
+}
+
+/**
+ * Best-effort numeric progress from a phase's human status text — reused
+ * phases only report strings (e.g. "Converting to audio... 45%",
+ * "Analyzing scenes 51 to 100 / 418..."). Returns null when no number.
+ */
+function progressFromStatus(status: string): number | null {
+	const pct = status.match(/(\d{1,3})\s*%/)
+	if (pct) return Math.min(100, Number(pct[1]))
+	const count = status.match(/(\d+)\s*(?:to\s+(\d+))?\s*\/\s*(\d+)/)
+	if (count) {
+		const done = Number(count[2] ?? count[1])
+		const total = Number(count[3])
+		if (total > 0 && done <= total) return Math.round((done / total) * 100)
+	}
+	return null
+}
+
 async function setTask(
 	threadId: string,
 	assetId: string,
@@ -123,7 +155,12 @@ function createAssetContext(
 		baseTimeline: undefined,
 		intentResult: undefined,
 		updateStatus: async (status: string) => {
-			await setTask(threadId, assetId, step, { state: 'running', status })
+			const progress = progressFromStatus(status)
+			await setTask(threadId, assetId, step, {
+				state: 'running',
+				status,
+				...(progress !== null ? { progress } : {})
+			})
 		},
 		recordUsage: async (record) => {
 			await threadManager.updateThreadWith(threadId, (t) => ({
@@ -192,7 +229,8 @@ async function runScenesStep(
 		return
 	}
 
-	await setTask(threadId, assetId, 'scenes', { state: 'running', status: 'Detecting scenes…' })
+	await setTask(threadId, assetId, 'scenes', { state: 'running', status: 'Detecting scenes…', progress: 0 })
+	const reportScenes = makeProgressReporter(threadId, assetId, 'scenes')
 
 	const available = await checkScenedetectAvailability()
 	if (!available) {
@@ -206,7 +244,9 @@ async function runScenesStep(
 
 	const detector = new SceneDetector()
 	const videoPath = asset.proxyPath || asset.originalPath
-	let scenes = await withHeavySlot(() => detector.detectScenes(videoPath, signal, threshold))
+	let scenes = await withHeavySlot(() =>
+		detector.detectScenes(videoPath, signal, threshold, (p) => reportScenes(p))
+	)
 
 	// A cut-less video (talking head, screen recording) can yield zero rows —
 	// fall back to a single whole-video scene so there is always one piece.
@@ -382,7 +422,11 @@ async function runTranscriptStep(threadId: string, assetId: string, signal: Abor
 		throw new Error('Audio must be extracted before transcription.')
 	}
 
-	await setTask(threadId, assetId, 'transcript', { state: 'running', status: 'Transcribing…' })
+	// A single Gemini call has no incremental signal — report honest stage
+	// milestones so the bar still moves: upload/transcribe → merge → done.
+	await setTask(threadId, assetId, 'transcript', {
+		state: 'running', status: 'Uploading audio & transcribing…', progress: 10
+	})
 
 	// Reuse the raw-transcript phase VERBATIM (single Gemini pass — the editor
 	// keeps transcription lean; the chat flow's corrected pass is not run here).
@@ -391,6 +435,9 @@ async function runTranscriptStep(threadId: string, assetId: string, signal: Abor
 
 	if (signal.aborted) throw new Error('Aborted')
 
+	await setTask(threadId, assetId, 'transcript', {
+		state: 'running', status: 'Merging transcript into pieces…', progress: 85
+	})
 	await mergeTranscriptIntoClips(threadId, assetId)
 
 	await setTask(threadId, assetId, 'transcript', { state: 'completed', progress: 100 })
@@ -407,7 +454,8 @@ async function runFilmstripStep(threadId: string, assetId: string, signal: Abort
 		return
 	}
 
-	await setTask(threadId, assetId, 'filmstrip', { state: 'running', status: 'Generating filmstrip…' })
+	await setTask(threadId, assetId, 'filmstrip', { state: 'running', status: 'Generating filmstrip…', progress: 0 })
+	const reportFilmstrip = makeProgressReporter(threadId, assetId, 'filmstrip')
 
 	const thread = threadManager.getThread(threadId)!
 	const stripDir = path.join(getAssetDir(thread, assetId), ASSET_DIRS.FRAMES, 'strip')
@@ -418,7 +466,7 @@ async function runFilmstripStep(threadId: string, assetId: string, signal: Abort
 	const videoPath = asset.proxyPath || asset.originalPath
 
 	const filmstrip = await withHeavySlot(() =>
-		ffmpegAdapter.generateFilmstrip(videoPath, stripDir, intervalSec, signal)
+		ffmpegAdapter.generateFilmstrip(videoPath, stripDir, intervalSec, signal, (p) => reportFilmstrip(p))
 	)
 
 	await patchAsset(threadId, assetId, { filmstrip })

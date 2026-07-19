@@ -71,6 +71,11 @@ const api = {
 		ipcRenderer.on('editor-import-progress', listener)
 		return () => ipcRenderer.removeListener('editor-import-progress', listener)
 	},
+	onEditorSilenceProgress: (callback: (data: { assetId: string, percent: number }) => void) => {
+		const listener = (_event: any, data: any) => callback(data)
+		ipcRenderer.on('editor-silence-progress', listener)
+		return () => ipcRenderer.removeListener('editor-silence-progress', listener)
+	},
 	getPersonas: () => ipcRenderer.invoke('get-personas'),
 	setPersonas: (personas: any[]) => ipcRenderer.invoke('set-personas', personas),
 	exportEditorTimeline: (data: { threadId: string, quality: 'original' | 'preview' }) =>

@@ -510,14 +510,21 @@ app.whenReady().then(() => {
 	// Assistive silence/dead-air finder (§5.6). Read-only analysis over the
 	// asset's proxy/original — returns candidate source-time ranges the user
 	// reviews before applying as ripple-deletes. Never mutates media.
-	ipcMain.handle('find-silence', async (_event, { threadId, assetId, noiseDb, minDurationSec }: {
+	ipcMain.handle('find-silence', async (event, { threadId, assetId, noiseDb, minDurationSec }: {
 		threadId: string, assetId: string, noiseDb?: number, minDurationSec?: number
 	}) => {
 		const asset = threadManager.getThread(threadId)?.editor?.media.find((a) => a.id === assetId)
 		if (!asset) throw new Error('Asset not found')
 		if (asset.metadata && asset.metadata.hasAudio === false) return []
 		const source = asset.proxyPath || asset.originalPath
-		return await detectSilence(source, { noiseDb, minDurationSec })
+		let lastPercent = -1
+		return await detectSilence(source, { noiseDb, minDurationSec }, undefined, (percent) => {
+			if (percent - lastPercent < 2 && percent !== 100) return
+			lastPercent = percent
+			if (!event.sender.isDestroyed()) {
+				event.sender.send('editor-silence-progress', { assetId, percent })
+			}
+		})
 	})
 
 	// AI prompt turns (M3): one structured call per turn, streamed via
