@@ -141,10 +141,16 @@
 					<p v-if="!hasDescriptions" class="mt-1.5 text-[10px] text-zinc-400 leading-snug">
 						Generates a one-line description per piece for the context view. Costs tokens.
 					</p>
-					<p v-else class="text-[11px] text-accent font-medium">
-						<span class="iconify tabler--check w-3 h-3 inline-block align-[-1px]"></span>
-						Scene descriptions ready
-					</p>
+					<div v-else class="flex items-center justify-between gap-2">
+						<p class="text-[11px] text-accent font-medium">
+							<span class="iconify tabler--check w-3 h-3 inline-block align-[-1px]"></span>
+							Scene descriptions ready
+						</p>
+						<button class="text-[10px] font-bold uppercase tracking-widest text-zinc-400 hover:text-red-500 transition"
+							@click="editorStore.clearAssetData(asset.id, 'descriptions')">
+							Remove
+						</button>
+					</div>
 
 					<!-- Opt-in Gemini transcript -->
 					<div class="mt-3">
@@ -157,10 +163,16 @@
 						<p v-if="!hasTranscript" class="mt-1.5 text-[10px] text-zinc-400 leading-snug">
 							Adds spoken text to each piece and enriches AI editing context. Costs tokens.
 						</p>
-						<p v-else class="text-[11px] text-accent font-medium">
-							<span class="iconify tabler--check w-3 h-3 inline-block align-[-1px]"></span>
-							Transcript ready
-						</p>
+						<div v-else class="flex items-center justify-between gap-2">
+							<p class="text-[11px] text-accent font-medium">
+								<span class="iconify tabler--check w-3 h-3 inline-block align-[-1px]"></span>
+								Transcript ready
+							</p>
+							<button class="text-[10px] font-bold uppercase tracking-widest text-zinc-400 hover:text-red-500 transition"
+								@click="editorStore.clearAssetData(asset.id, 'transcript')">
+								Remove
+							</button>
+						</div>
 					</div>
 				</div>
 

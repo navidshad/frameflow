@@ -272,6 +272,64 @@ export async function splitClip(
 }
 
 /**
+ * Remove derived Gemini data (transcript or scene descriptions) from ONE
+ * asset: deletes the backing JSON, clears the preprocessing path fields and
+ * the derived clip field (text / visual), and drops the step's task so the
+ * Inspector offers to re-run. The pieces (segmentation) are kept.
+ */
+export async function clearAssetData(
+	threadId: string,
+	assetId: string,
+	kind: 'transcript' | 'descriptions'
+): Promise<MediaAsset | null> {
+	const asset = getUpdatedAsset(threadId, assetId)
+	if (!asset) return null
+
+	// Delete the backing files (best-effort). Audio is intentionally kept so a
+	// later re-transcribe can skip re-extraction.
+	const thread = threadManager.getThread(threadId)!
+	if (kind === 'transcript') {
+		// The transcripts dir holds only transcript artifacts (json + raw
+		// response txt) — remove it wholesale for a clean sweep.
+		const dir = path.join(getAssetDir(thread, assetId), THREAD_DIRS.TRANSCRIPTS)
+		if (fs.existsSync(dir)) {
+			try { fs.rmSync(dir, { recursive: true, force: true }) } catch (e) { console.error('[editor] clear transcript:', e) }
+		}
+	} else {
+		// The analysis dir also holds scenes.json (kept) — delete just the file.
+		const f = asset.preprocessing?.sceneDescriptionsPath
+		if (f && fs.existsSync(f)) {
+			try { fs.rmSync(f, { force: true }) } catch (e) { console.error('[editor] clear descriptions:', e) }
+		}
+	}
+
+	await threadManager.updateThreadWith(threadId, (t) => {
+		if (!t.editor) return null
+		const media = t.editor.media.map((a) => {
+			if (a.id !== assetId) return a
+			const preprocessing = { ...a.preprocessing }
+			if (kind === 'transcript') {
+				delete preprocessing.transcriptPath
+				delete preprocessing.rawTranscriptPath
+				delete preprocessing.correctedTranscriptPath
+			} else {
+				delete preprocessing.sceneDescriptionsPath
+			}
+			const clips = a.clips.map((c) =>
+				kind === 'transcript' ? { ...c, text: undefined } : { ...c, visual: undefined }
+			)
+			return { ...a, preprocessing, clips }
+		})
+		// Drop the step's namespaced task(s) so a re-run reads as fresh.
+		const backgroundTasks = { ...(t.backgroundTasks || {}) }
+		delete backgroundTasks[`${assetId}:${kind === 'transcript' ? 'transcript' : 'descriptions'}`]
+		return { editor: { ...t.editor, media }, backgroundTasks }
+	})
+
+	return getUpdatedAsset(threadId, assetId)
+}
+
+/**
  * Removes an asset: aborts any live preprocessing, deletes its artifact dir,
  * and drops the asset plus its clips, timeline items, and namespaced tasks.
  */

@@ -502,6 +502,13 @@ app.whenReady().then(() => {
 		return true
 	})
 
+	// Remove derived Gemini data (transcript / scene descriptions) from an asset.
+	ipcMain.handle('clear-asset-data', (_event, { threadId, assetId, kind }: {
+		threadId: string, assetId: string, kind: 'transcript' | 'descriptions'
+	}) => {
+		return editorAssets.clearAssetData(threadId, assetId, kind)
+	})
+
 	// Scene-piece corrections (§5.2): merge adjacent pieces / split further.
 	ipcMain.handle('merge-clips', (_event, { threadId, assetId, clipIds }: {
 		threadId: string, assetId: string, clipIds: string[]

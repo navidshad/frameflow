@@ -521,6 +521,24 @@ export const useEditorStore = defineStore('editor', () => {
 		await api.preprocessMedia({ threadId: threadId.value, assetId, steps: ['audio', 'transcript'] })
 	}
 
+	/** Remove derived Gemini data (transcript / scene descriptions) from an asset. */
+	const clearAssetData = async (assetId: string, kind: 'transcript' | 'descriptions') => {
+		if (!threadId.value) return
+		const label = kind === 'transcript' ? 'transcript' : 'scene descriptions'
+		const confirmed = await api.showConfirmation({
+			title: `Remove ${label}?`,
+			message: `Delete the ${label} for this media?`,
+			detail: `The ${label} data is removed from every piece. Regenerating it later runs Gemini again and costs tokens.`,
+			buttons: ['Cancel', 'Remove']
+		})
+		if (!confirmed || confirmed.response !== 1) return
+		const updated = await api.clearAssetData({ threadId: threadId.value, assetId, kind })
+		if (updated && doc.value) {
+			const index = doc.value.media.findIndex((a) => a.id === updated.id)
+			if (index !== -1) doc.value.media[index] = { ...doc.value.media[index], clips: updated.clips, preprocessing: updated.preprocessing }
+		}
+	}
+
 	/** Rename the project (title is a main-owned Thread field). */
 	const renameProject = async (title: string) => {
 		if (!threadId.value) return
@@ -1686,6 +1704,7 @@ export const useEditorStore = defineStore('editor', () => {
 		retryAsset,
 		describeAsset,
 		transcribeAsset,
+		clearAssetData,
 		renameProject,
 		redetectScenes,
 		mergeSelectedClips,
