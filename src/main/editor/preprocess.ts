@@ -212,7 +212,8 @@ async function runProxyStep(threadId: string, assetId: string, signal: AbortSign
 				asset.originalPath,
 				proxyDir,
 				(percent) => setTask(threadId, assetId, 'proxy', { state: 'running', progress: percent }),
-				signal
+				signal,
+				{ sourceFps: asset.metadata?.fps }
 			)
 		)
 	}

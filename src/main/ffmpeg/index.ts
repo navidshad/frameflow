@@ -147,11 +147,16 @@ export async function isVideoLowResolution(filePath: string): Promise<boolean> {
 /**
  * Converts video to low resolution (480p).
  */
+// A proxy for scrubbing / thumbnails / scene detection never needs more than
+// this; halving a 60fps source roughly halves proxy encode time.
+const PROXY_MAX_FPS = 30
+
 export async function toLowResolution(
 	filePath: string,
 	outputDir: string,
 	onProgress?: (percent: number) => void,
-	signal?: AbortSignal
+	signal?: AbortSignal,
+	opts?: { sourceFps?: number }
 ): Promise<string> {
 	const ext = extname(filePath).toLowerCase()
 	const rawFilename = basename(filePath, extname(filePath))
@@ -162,12 +167,23 @@ export async function toLowResolution(
 		throw new Error('FFmpeg downscaling aborted by user before start')
 	}
 
-	return new Promise((resolve, reject) => {
-		const isWebm = ext === '.webm'
+	const isWebm = ext === '.webm'
 
+	// Cap fps only when the source is above the ceiling — applying fps=30 to a
+	// <=30fps source would DUPLICATE frames (slower + larger), not drop any.
+	const capFps = !!opts?.sourceFps && opts.sourceFps > PROXY_MAX_FPS
+	const vf = capFps ? `fps=${PROXY_MAX_FPS},scale=-2:480` : 'scale=-2:480'
 
+	// Hardware-accelerated DECODE (Mac) is a clear win for decode-bound proxies
+	// (~-25%). But when we're already dropping frames via the fps filter,
+	// benchmarks show the per-frame GPU→CPU download makes it slower than plain
+	// software decode — so only use hw decode when NOT capping fps.
+	const preferHwDecode = IS_MAC && !isWebm && !capFps
+
+	const encode = (hwDecode: boolean): Promise<string> => new Promise((resolve, reject) => {
 		const command = ffmpeg(filePath)
-			.outputOptions(['-vf', 'scale=-2:480'])
+		if (hwDecode) command.inputOptions(['-hwaccel', 'videotoolbox'])
+		command.outputOptions(['-vf', vf])
 
 		if (isWebm) {
 			// WebM (VP8/VP9) optimizations
@@ -180,8 +196,7 @@ export async function toLowResolution(
 				'-b:v', '1M'
 			])
 		} else if (IS_MAC) {
-			// Mac hardware acceleration
-
+			// Mac hardware encode
 			command.outputOptions([
 				'-c:v', 'h264_videotoolbox',
 				'-b:v', '2M',
@@ -200,10 +215,7 @@ export async function toLowResolution(
 		}
 
 		if (signal) {
-			signal.addEventListener('abort', () => {
-				console.log('FFmpeg toLowResolution aborted by signal')
-				command.kill('SIGKILL')
-			})
+			signal.addEventListener('abort', () => command.kill('SIGKILL'))
 		}
 
 		command
@@ -224,6 +236,18 @@ export async function toLowResolution(
 			})
 			.run()
 	})
+
+	try {
+		return await encode(preferHwDecode)
+	} catch (err) {
+		// Hardware decode can reject some inputs — fall back to software decode
+		// once rather than failing the whole proxy step.
+		if (!signal?.aborted && preferHwDecode) {
+			console.warn('[ffmpeg] hw-decode proxy failed, retrying with software decode:', (err as Error).message)
+			return await encode(false)
+		}
+		throw err
+	}
 }
 
 /**
