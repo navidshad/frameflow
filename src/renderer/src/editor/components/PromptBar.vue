@@ -90,11 +90,13 @@ const scopeRef = ref<HTMLElement | null>(null)
 // the AI needs pieces/transcript to reason about the footage.
 const inputDisabled = computed(() => store.promptRunning || !store.hasReadyMedia)
 
+// Keep placeholders short — the narrow rail clips a single-row textarea, and
+// the chat empty-state already carries the full guidance.
 const placeholder = computed(() => {
-	if (store.isEmpty) return 'Import media first, then ask your editor persona for a cut'
-	if (store.mediaProcessing) return 'Preparing your media… chat unlocks when it’s ready'
-	if (!store.hasReadyMedia) return 'Media isn’t ready yet — chat unlocks once pieces are available'
-	return `Ask ${store.activePersona?.name || 'your editor'} to build or refine the cut…`
+	if (store.isEmpty) return 'Import media to start…'
+	if (store.mediaProcessing) return 'Preparing media…'
+	if (!store.hasReadyMedia) return 'Media not ready yet…'
+	return `Message ${store.activePersona?.name || 'your editor'}…`
 })
 
 const canSend = computed(() => text.value.trim().length > 0 && !inputDisabled.value)
