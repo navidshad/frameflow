@@ -100,7 +100,14 @@ export function useEdlPlayback(
 			}
 			anyActive = true
 			const changed = activeAudioSeg.get(trackId) !== seg.itemId
-			if (el.src !== seg.src) el.src = seg.src
+			// Compare against the src we LAST SET (raw), never el.src — reading
+			// el.src back returns a normalized/encoded URL (media:///Users →
+			// media://users, %20 for spaces) that never equals seg.src, which
+			// would reset .src every frame and reload the element into silence.
+			if (el.dataset.edlSrc !== seg.src) {
+				el.src = seg.src
+				el.dataset.edlSrc = seg.src
+			}
 			el.playbackRate = seg.speed
 			el.volume = Math.max(0, Math.min(1, seg.gain ?? 1))
 			const target = seg.sourceIn + (t - seg.tStart) * seg.speed
