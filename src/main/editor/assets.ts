@@ -31,7 +31,7 @@ function ensureDir(dir: string) {
  */
 export async function createMediaAsset(
 	threadId: string,
-	options: { sourcePath: string; name?: string; move?: boolean; assetId?: string }
+	options: { sourcePath: string; name?: string; move?: boolean; assetId?: string; referenceInPlace?: boolean }
 ): Promise<MediaAsset | null> {
 	const thread = threadManager.getThread(threadId)
 	if (!thread || thread.type !== 'editor' || !thread.editor) return null
@@ -42,20 +42,30 @@ export async function createMediaAsset(
 
 	const assetId = options.assetId || uuidv4()
 	const assetDir = getAssetDir(thread, assetId)
-	const sourceDir = path.join(assetDir, ASSET_DIRS.SOURCE)
-	ensureDir(sourceDir)
 
 	const rawName = options.name || path.basename(options.sourcePath)
 	const fileName = sanitizeFilename(rawName)
-	const targetPath = path.join(sourceDir, fileName)
 
-	// Only copy/move if the file isn't already inside the asset's source dir
-	// (URL imports download straight into it).
-	if (path.resolve(options.sourcePath) !== path.resolve(targetPath)) {
-		if (options.move) {
-			fs.renameSync(options.sourcePath, targetPath)
-		} else {
-			fs.copyFileSync(options.sourcePath, targetPath)
+	// Reference the user's file where it lives instead of copying it in.
+	// Copying a large local source (10–15 GB) with fs.copyFileSync blocks the
+	// main process and freezes the whole UI (including the file dialog). The
+	// editor only needs the path: proxy/thumbnails/export read originalPath
+	// directly, media:// serves any absolute path, removeAsset only clears the
+	// asset dir, and path-repair leaves out-of-tempDir paths untouched. URL
+	// imports still live under the asset dir (they download straight into it).
+	let originalPath: string
+	if (options.referenceInPlace) {
+		originalPath = options.sourcePath
+	} else {
+		const sourceDir = path.join(assetDir, ASSET_DIRS.SOURCE)
+		ensureDir(sourceDir)
+		originalPath = path.join(sourceDir, fileName)
+		if (path.resolve(options.sourcePath) !== path.resolve(originalPath)) {
+			if (options.move) {
+				fs.renameSync(options.sourcePath, originalPath)
+			} else {
+				fs.copyFileSync(options.sourcePath, originalPath)
+			}
 		}
 	}
 
@@ -63,7 +73,7 @@ export async function createMediaAsset(
 		id: assetId,
 		kind: 'video',
 		name: rawName,
-		originalPath: targetPath,
+		originalPath,
 		preprocessing: {},
 		preprocessState: 'pending',
 		clips: [],
@@ -71,9 +81,9 @@ export async function createMediaAsset(
 	}
 
 	try {
-		asset.metadata = await getVideoMetadata(targetPath)
+		asset.metadata = await getVideoMetadata(originalPath)
 	} catch (error) {
-		console.error(`[editor] Failed to probe media ${targetPath}:`, error)
+		console.error(`[editor] Failed to probe media ${originalPath}:`, error)
 		asset.preprocessState = 'error'
 		asset.preprocessError = 'Could not read video metadata (corrupt or unsupported file).'
 	}

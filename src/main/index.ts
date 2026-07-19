@@ -435,7 +435,7 @@ app.whenReady().then(() => {
 	ipcMain.handle('add-media-asset', async (_event, { threadId, filePath, name }: {
 		threadId: string, filePath: string, name?: string
 	}) => {
-		const asset = await editorAssets.createMediaAsset(threadId, { sourcePath: filePath, name })
+		const asset = await editorAssets.createMediaAsset(threadId, { sourcePath: filePath, name, referenceInPlace: true })
 		if (asset && asset.preprocessState !== 'error') {
 			// Fire-and-forget: progress streams via background-task-update
 			editorPreprocess.preprocessMediaAsset(threadId, asset.id).catch((error) => {
