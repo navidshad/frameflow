@@ -24,10 +24,11 @@
 
 				<span class="text-zinc-300 dark:text-zinc-700 text-[9px]">·</span>
 
-				<!-- Scope: text-level control -->
-				<div class="relative min-w-0" ref="scopeRef">
+				<!-- Scope: text-level control — owns the flexible space so it
+				     truncates with clearance before the send button -->
+				<div class="relative flex-1 min-w-0" ref="scopeRef">
 					<button v-if="store.scopePreview"
-						class="flex items-center gap-1 px-1 py-0.5 rounded-md text-zinc-500 hover:text-secondary transition min-w-0"
+						class="max-w-full flex items-center gap-1 px-1 py-0.5 rounded-md text-zinc-500 hover:text-secondary transition min-w-0"
 						:title="'What the AI can see — click to change'"
 						@click="scopeMenuOpen = !scopeMenuOpen">
 						<span class="iconify tabler--focus-2 w-2.5 h-2.5 text-secondary/70 shrink-0"></span>
@@ -48,7 +49,7 @@
 
 				<!-- Send / Stop -->
 				<button
-					class="ml-auto shrink-0 w-6 h-6 rounded-full flex items-center justify-center transition active:scale-95"
+					class="ml-2 shrink-0 w-6 h-6 rounded-full flex items-center justify-center transition active:scale-95"
 					:class="store.promptRunning
 						? 'bg-red-500 text-white hover:bg-red-600'
 						: canSend
