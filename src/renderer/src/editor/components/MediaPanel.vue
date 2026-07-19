@@ -18,6 +18,13 @@
 						<span class="iconify tabler--link w-4 h-4"></span>
 					</button>
 				</SlimTooltip>
+				<SlimTooltip text="Collapse panel" placement="bottom">
+					<button
+						class="w-7 h-7 flex items-center justify-center rounded-lg text-zinc-400 hover:text-primary hover:bg-primary/10 transition active:scale-95"
+						@click="$emit('update:collapsed', true)">
+						<span class="iconify tabler--layout-sidebar-left-collapse w-4 h-4"></span>
+					</button>
+				</SlimTooltip>
 			</div>
 		</div>
 
@@ -91,6 +98,9 @@ import { useEditorStore } from '../../stores/editorStore'
 import AssetRow from './AssetRow.vue'
 import ClipTray from './ClipTray.vue'
 import ImportMediaModal from './ImportMediaModal.vue'
+
+defineProps<{ collapsed?: boolean }>()
+defineEmits<{ (e: 'update:collapsed', value: boolean): void }>()
 
 const editorStore = useEditorStore()
 const showImportModal = ref(false)

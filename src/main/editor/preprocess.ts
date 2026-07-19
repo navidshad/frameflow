@@ -29,7 +29,14 @@ import { getAssetDir, patchAsset, patchAssetPreprocessing } from './assets'
 export type PreprocessStep =
 	'proxy' | 'scenes' | 'thumbnails' | 'descriptions' | 'audio' | 'transcript' | 'filmstrip'
 
-const DEFAULT_STEPS: PreprocessStep[] = ['proxy', 'scenes', 'thumbnails']
+// Transcript runs UP FRONT (before scenes) so pieces derive from real speech
+// segments; scene detection stays as the fallback piece source for videos
+// with no usable transcript and for explicit sensitivity re-runs.
+const DEFAULT_STEPS: PreprocessStep[] = ['proxy', 'audio', 'transcript', 'scenes', 'thumbnails']
+
+// Audio/transcript failures (missing Gemini key, quota) must not brick the
+// import — the chain continues and pieces fall back to scene detection.
+const SOFT_FAIL_STEPS: PreprocessStep[] = ['audio', 'transcript']
 
 export const SCENEDETECT_MISSING = 'scenedetect-missing'
 
@@ -257,9 +264,13 @@ async function runScenesStep(
 	fs.writeFileSync(sceneTimesPath, JSON.stringify(scenes, null, 2))
 	await patchAssetPreprocessing(threadId, assetId, { sceneTimesPath })
 
-	// Derive clips IMMEDIATELY (thumbnails fill in progressively afterwards) so
-	// the pieces tray and counts populate as soon as scenes are known.
-	await deriveClips(threadId, assetId, scenes)
+	// Pieces come from the TRANSCRIPT when one was derived earlier in the
+	// chain; scenes only produce pieces as the fallback (no transcript) or on
+	// an explicit sensitivity re-run (the user asked for scene pieces).
+	const hasClips = (getAsset(threadId, assetId)?.clips || []).length > 0
+	if (forceRerun || !hasClips) {
+		await deriveClips(threadId, assetId, scenes)
+	}
 
 	await setTask(threadId, assetId, 'scenes', {
 		state: 'completed',
@@ -298,15 +309,86 @@ async function deriveClips(threadId: string, assetId: string, scenes: Scene[]) {
 	})
 }
 
+// Gap handling for transcript-derived pieces — mirrors timeline/enrichment.ts
+// so silence between statements stays visible and selectable.
+const MIN_GAP_SEC = 0.5
+const MAX_GAP_CHUNK_SEC = 15.0
+
+/**
+ * Map the transcript -> Clip[]: one piece per spoken statement, plus
+ * "[Silence]" pieces over gaps, so the tray shows REAL editorial segments
+ * (what was said) instead of visual scene cuts. Prior clip props survive by
+ * (in,out) epsilon-match.
+ */
+async function deriveClipsFromTranscript(threadId: string, assetId: string): Promise<number> {
+	const asset = getAsset(threadId, assetId)
+	const transcriptPath = asset?.preprocessing.transcriptPath
+	if (!asset || !exists(transcriptPath)) return 0
+
+	const items: { start: string; end: string; text: string }[] =
+		JSON.parse(fs.readFileSync(transcriptPath!, 'utf-8'))
+	const duration = asset.metadata?.duration || 0
+
+	type Seg = { in: number; out: number; text?: string }
+	const segments: Seg[] = []
+	const pushGap = (from: number, to: number) => {
+		let cursor = from
+		while (to - cursor > MIN_GAP_SEC) {
+			const end = Math.min(cursor + MAX_GAP_CHUNK_SEC, to)
+			segments.push({ in: cursor, out: end, text: '[Silence]' })
+			cursor = end
+		}
+	}
+
+	let previousEnd = 0
+	for (const item of [...items].sort((a, b) => srtToSeconds(a.start) - srtToSeconds(b.start))) {
+		const start = srtToSeconds(item.start)
+		const end = srtToSeconds(item.end)
+		if (!(end > start)) continue
+		if (start - previousEnd > MIN_GAP_SEC) pushGap(previousEnd, start)
+		segments.push({ in: start, out: end, text: item.text })
+		previousEnd = Math.max(previousEnd, end)
+	}
+	if (duration - previousEnd > MIN_GAP_SEC) pushGap(previousEnd, duration)
+
+	if (segments.length === 0) return 0
+
+	const EPSILON = 0.05
+	await patchAsset(threadId, assetId, (current) => {
+		const previous = current.clips || []
+		const clips: Clip[] = segments.map((seg, i) => {
+			const match = previous.find(
+				(c) => Math.abs(c.in - seg.in) <= EPSILON && Math.abs(c.out - seg.out) <= EPSILON
+			)
+			return {
+				id: match?.id || uuidv4(),
+				sourceAssetId: assetId,
+				index: i + 1,
+				in: seg.in,
+				out: seg.out,
+				duration: seg.out - seg.in,
+				thumbnailPath: match?.thumbnailPath,
+				visual: match?.visual,
+				text: seg.text,
+				selected: match?.selected ?? false,
+				masterSegmentIndex: undefined // speech segments don't map to master scenes
+			}
+		})
+		return { clips }
+	})
+	return segments.length
+}
+
 async function runThumbnailsStep(threadId: string, assetId: string, signal: AbortSignal) {
 	const asset = getAsset(threadId, assetId)!
-	const sceneTimesPath = asset.preprocessing.sceneTimesPath
-	if (!exists(sceneTimesPath)) {
-		await setTask(threadId, assetId, 'thumbnails', { state: 'completed', status: 'No scenes to thumbnail' })
+	// Thumbnails follow the CLIPS (whatever derived them — transcript segments
+	// or scene detection), one midpoint frame per piece.
+	const targets = (asset.clips || []).map((c) => ({ id: c.id, midpoint: c.in + c.duration / 2 }))
+	if (targets.length === 0) {
+		await setTask(threadId, assetId, 'thumbnails', { state: 'completed', status: 'No pieces to thumbnail' })
 		return
 	}
 
-	const scenes: Scene[] = JSON.parse(fs.readFileSync(sceneTimesPath!, 'utf-8'))
 	const thread = threadManager.getThread(threadId)!
 	const framesDir = path.join(getAssetDir(thread, assetId), ASSET_DIRS.FRAMES)
 	if (!fs.existsSync(framesDir)) fs.mkdirSync(framesDir, { recursive: true })
@@ -314,49 +396,41 @@ async function runThumbnailsStep(threadId: string, assetId: string, signal: Abor
 	await setTask(threadId, assetId, 'thumbnails', { state: 'running', status: 'Extracting thumbnails…', progress: 0 })
 
 	const videoPath = asset.proxyPath || asset.originalPath
-	const thumbnails: (string | undefined)[] = []
-	const EPSILON = 0.05
+	const thumbnails = new Map<string, string>() // clipId -> framePath
 
 	// Patch finished thumbnails into the (already-derived) clips so tiles fill
 	// in progressively. Every updateTask/patchAsset persists the thread JSON,
 	// so both are THROTTLED to a batch cadence rather than per-frame.
 	const flushThumbnails = async () => {
 		await patchAsset(threadId, assetId, (current) => ({
-			clips: (current.clips || []).map((clip) => {
-				const i = scenes.findIndex(
-					(s) => Math.abs(clip.in - s.startTime) <= EPSILON && Math.abs(clip.out - s.endTime) <= EPSILON
-				)
-				return i !== -1 && thumbnails[i]
-					? { ...clip, thumbnailPath: thumbnails[i] }
-					: clip
-			})
+			clips: (current.clips || []).map((clip) =>
+				thumbnails.has(clip.id) ? { ...clip, thumbnailPath: thumbnails.get(clip.id) } : clip
+			)
 		}))
 	}
 
-	const BATCH = Math.max(1, Math.min(8, Math.floor(scenes.length / 25) || 1))
+	const BATCH = Math.max(1, Math.min(8, Math.floor(targets.length / 25) || 1))
 
 	await withHeavySlot(async () => {
-		for (let i = 0; i < scenes.length; i++) {
+		for (let i = 0; i < targets.length; i++) {
 			if (signal.aborted) throw new Error('Aborted')
-			const scene = scenes[i]
-			const midpoint = scene.startTime + scene.duration / 2
 			try {
 				// extractFrame filenames are deterministic (…_frame_<t>.jpg) — re-runs reuse them
-				const framePath = await ffmpegAdapter.extractFrame(videoPath, midpoint, framesDir, signal)
-				thumbnails.push(framePath)
+				const framePath = await ffmpegAdapter.extractFrame(videoPath, targets[i].midpoint, framesDir, signal)
+				thumbnails.set(targets[i].id, framePath)
 			} catch (error) {
 				if (signal.aborted) throw error
-				console.error(`[editor] Thumbnail failed for scene ${i} of asset ${assetId}:`, error)
-				thumbnails.push(undefined) // tolerate individual frame failures
+				console.error(`[editor] Thumbnail failed for piece ${i} of asset ${assetId}:`, error)
+				// tolerate individual frame failures
 			}
 
 			const done = i + 1
-			if (done % BATCH === 0 || done === scenes.length) {
+			if (done % BATCH === 0 || done === targets.length) {
 				await flushThumbnails()
 				await setTask(threadId, assetId, 'thumbnails', {
 					state: 'running',
-					status: `${done}/${scenes.length} thumbnails`,
-					progress: Math.round((done / scenes.length) * 100)
+					status: `${done}/${targets.length} thumbnails`,
+					progress: Math.round((done / targets.length) * 100)
 				})
 			}
 		}
@@ -436,9 +510,29 @@ async function runTranscriptStep(threadId: string, assetId: string, signal: Abor
 	if (signal.aborted) throw new Error('Aborted')
 
 	await setTask(threadId, assetId, 'transcript', {
-		state: 'running', status: 'Merging transcript into pieces…', progress: 85
+		state: 'running', status: 'Deriving pieces from speech…', progress: 85
 	})
-	await mergeTranscriptIntoClips(threadId, assetId)
+
+	// Fresh import (no pieces yet): pieces ARE the transcript segments.
+	// Existing scene pieces (sensitivity re-run, later re-transcribe): keep
+	// them and just fill their text by overlap.
+	const hasClips = (getAsset(threadId, assetId)?.clips || []).length > 0
+	if (hasClips) {
+		await mergeTranscriptIntoClips(threadId, assetId)
+	} else {
+		const derived = await deriveClipsFromTranscript(threadId, assetId)
+		if (derived === 0) {
+			// Empty/unusable transcript — scenes step will derive fallback pieces
+			await setTask(threadId, assetId, 'transcript', {
+				state: 'completed', progress: 100, status: 'No speech found — using scene pieces'
+			})
+			return
+		}
+		await setTask(threadId, assetId, 'transcript', {
+			state: 'completed', progress: 100, status: `${derived} speech segments`
+		})
+		return
+	}
 
 	await setTask(threadId, assetId, 'transcript', { state: 'completed', progress: 100 })
 }
@@ -556,14 +650,24 @@ export async function preprocessMediaAsset(
 		for (const step of steps) {
 			if (signal.aborted) throw new Error('Aborted')
 			currentStep = step
-			switch (step) {
-				case 'proxy': await runProxyStep(threadId, assetId, signal); break
-				case 'scenes': await runScenesStep(threadId, assetId, signal, options?.threshold); break
-				case 'thumbnails': await runThumbnailsStep(threadId, assetId, signal); break
-				case 'descriptions': await runDescriptionsStep(threadId, assetId, signal); break
-				case 'audio': await runAudioStep(threadId, assetId, signal); break
-				case 'transcript': await runTranscriptStep(threadId, assetId, signal); break
-				case 'filmstrip': await runFilmstripStep(threadId, assetId, signal); break
+			try {
+				switch (step) {
+					case 'proxy': await runProxyStep(threadId, assetId, signal); break
+					case 'scenes': await runScenesStep(threadId, assetId, signal, options?.threshold); break
+					case 'thumbnails': await runThumbnailsStep(threadId, assetId, signal); break
+					case 'descriptions': await runDescriptionsStep(threadId, assetId, signal); break
+					case 'audio': await runAudioStep(threadId, assetId, signal); break
+					case 'transcript': await runTranscriptStep(threadId, assetId, signal); break
+					case 'filmstrip': await runFilmstripStep(threadId, assetId, signal); break
+				}
+			} catch (stepError: any) {
+				// Audio/transcript are best-effort in the default chain: a missing
+				// Gemini key or quota error falls back to scene pieces instead of
+				// bricking the import. Everything else still hard-fails.
+				if (signal.aborted || !SOFT_FAIL_STEPS.includes(step)) throw stepError
+				const message = stepError?.message || `${step} failed`
+				console.warn(`[editor] ${step} failed for asset ${assetId} — continuing without it:`, message)
+				await setTask(threadId, assetId, step, { state: 'error', error: message })
 			}
 		}
 
