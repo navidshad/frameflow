@@ -10,6 +10,7 @@ interface EdlSegment {
 	speed: number
 	muted: boolean
 	gain?: number
+	trackId?: string
 }
 
 /**
@@ -18,15 +19,15 @@ interface EdlSegment {
  * segment. Gaps render black and advance on the rAF wall clock. All external
  * seeks arrive via store.seekRequest; scrubbing while playing just re-seeks.
  *
- * Audio-track items (audio-kind assets on A-lanes) play through a separate
- * <audio> element slaved to the playhead: the video EDL remains the master
- * clock, and each tick/seek positions the audio element to match. Overlapping
- * audio tracks are a preview approximation (one plays); export mixes them (§5.9).
+ * Audio tracks play through a POOL of <audio> elements — one per audio track,
+ * created on demand — each slaved to the playhead. This lets every audio track
+ * sound in parallel with the video (which carries its own soundtrack), matching
+ * the multi-source amix that export produces (§5.9). The video EDL stays the
+ * master clock; each tick/seek repositions every audio element to match.
  */
 export function useEdlPlayback(
 	videoA: Ref<HTMLVideoElement | null>,
-	videoB: Ref<HTMLVideoElement | null>,
-	audio?: Ref<HTMLAudioElement | null>
+	videoB: Ref<HTMLVideoElement | null>
 ) {
 	const store = useEditorStore()
 
@@ -34,6 +35,19 @@ export function useEdlPlayback(
 	const inGap = ref(false)
 	const currentSegmentId = ref<string | null>(null)
 	const audioActive = ref(false)
+
+	// One <audio> element per audio track (created lazily, not in the DOM —
+	// detached elements still play through the media:// protocol).
+	const audioEls = new Map<string, HTMLAudioElement>()
+	const getAudioEl = (trackId: string): HTMLAudioElement => {
+		let el = audioEls.get(trackId)
+		if (!el) {
+			el = new Audio()
+			el.preload = 'auto'
+			audioEls.set(trackId, el)
+		}
+		return el
+	}
 
 	let rafId: number | null = null
 	let lastTick = 0
@@ -44,35 +58,50 @@ export function useEdlPlayback(
 	const audioSegments = computed<EdlSegment[]>(() => store.audioSegments as EdlSegment[])
 	const hasContent = computed(() => segments.value.length > 0 || audioSegments.value.length > 0)
 
-	const audioSegAt = (t: number): EdlSegment | null =>
-		audioSegments.value.find((s) => t >= s.tStart - 1e-6 && t < s.tEnd - 1e-6) || null
+	// Audio segments grouped by track — each track drives its own element.
+	const audioByTrack = computed<Map<string, EdlSegment[]>>(() => {
+		const m = new Map<string, EdlSegment[]>()
+		for (const s of audioSegments.value) {
+			const key = s.trackId || '_'
+			if (!m.has(key)) m.set(key, [])
+			m.get(key)!.push(s)
+		}
+		return m
+	})
 
 	/**
-	 * Position the standalone <audio> element to match the playhead. Called on
-	 * every tick and after seeks; seeks the element only when drift exceeds a
-	 * threshold so playback isn't stuttered by constant re-seeking.
+	 * Reposition every audio-track element to match the playhead. Each track
+	 * plays its covering segment in parallel; a track with no segment (or muted)
+	 * pauses. Elements are re-seeked only past a drift threshold to avoid stutter.
 	 */
 	const syncAudio = (t: number) => {
-		const el = audio?.value
-		if (!el) return
-		const seg = audioSegAt(t)
-		if (!seg || seg.muted) {
-			audioActive.value = false
-			if (!el.paused) el.pause()
-			return
+		let anyActive = false
+		const seen = new Set<string>()
+		for (const [trackId, segs] of audioByTrack.value) {
+			seen.add(trackId)
+			const el = getAudioEl(trackId)
+			const seg = segs.find((s) => t >= s.tStart - 1e-6 && t < s.tEnd - 1e-6)
+			if (!seg || seg.muted) {
+				if (!el.paused) el.pause()
+				continue
+			}
+			anyActive = true
+			if (el.src !== seg.src) el.src = seg.src
+			el.playbackRate = seg.speed
+			el.volume = Math.max(0, Math.min(1, seg.gain ?? 1))
+			const target = seg.sourceIn + (t - seg.tStart) * seg.speed
+			if (Math.abs(el.currentTime - target) > 0.15) el.currentTime = target
+			if (store.isPlaying) {
+				if (el.paused) el.play().catch(() => { })
+			} else if (!el.paused) {
+				el.pause()
+			}
 		}
-		audioActive.value = true
-		const wantedSrc = seg.src
-		if (el.src !== wantedSrc) el.src = wantedSrc
-		el.playbackRate = seg.speed
-		el.volume = Math.max(0, Math.min(1, seg.gain ?? 1))
-		const target = seg.sourceIn + (t - seg.tStart) * seg.speed
-		if (Math.abs(el.currentTime - target) > 0.15) el.currentTime = target
-		if (store.isPlaying) {
-			if (el.paused) el.play().catch(() => { })
-		} else if (!el.paused) {
-			el.pause()
+		// Pause elements whose track is gone (deleted/hidden this frame).
+		for (const [trackId, el] of audioEls) {
+			if (!seen.has(trackId) && !el.paused) el.pause()
 		}
+		audioActive.value = anyActive
 	}
 
 	const activeEl = () => (activeIsA.value ? videoA.value : videoB.value)
@@ -245,6 +274,11 @@ export function useEdlPlayback(
 
 	onUnmounted(() => {
 		if (rafId !== null) cancelAnimationFrame(rafId)
+		for (const el of audioEls.values()) {
+			el.pause()
+			el.src = ''
+		}
+		audioEls.clear()
 	})
 
 	return {

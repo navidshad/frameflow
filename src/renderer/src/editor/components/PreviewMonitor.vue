@@ -68,8 +68,8 @@
 					<video ref="videoBRef" class="absolute inset-0 w-full h-full object-contain transition-opacity"
 						:class="!edl.activeIsA.value && !edl.inGap.value ? 'opacity-100' : 'opacity-0'"
 						preload="auto"></video>
-					<!-- Audio-track playback (audio-kind items): heard, no picture -->
-					<audio ref="audioRef" preload="auto"></audio>
+					<!-- Audio tracks play through an element pool in the composable
+					     (one per track), heard in parallel with the video. -->
 					<div v-if="edl.inGap.value"
 						class="absolute inset-0 flex flex-col items-center justify-center gap-2 pointer-events-none">
 						<template v-if="edl.audioActive.value">
@@ -110,8 +110,7 @@ const mode = ref<'source' | 'timeline'>('source')
 // ===== EDL (timeline) mode =====
 const videoARef = ref<HTMLVideoElement | null>(null)
 const videoBRef = ref<HTMLVideoElement | null>(null)
-const audioRef = ref<HTMLAudioElement | null>(null)
-const edl = useEdlPlayback(videoARef, videoBRef, audioRef)
+const edl = useEdlPlayback(videoARef, videoBRef)
 
 onMounted(() => edl.start())
 

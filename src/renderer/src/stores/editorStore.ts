@@ -187,8 +187,9 @@ export const useEditorStore = defineStore('editor', () => {
 			})
 	})
 
-	// Audio-track segments for preview (PRD §5.3): items on audio-kind tracks,
-	// played through a separate <audio> element slaved to the playhead. Audio
+	// Audio-track segments for preview (PRD §5.3): items on audio-kind tracks.
+	// Carries trackId so preview can play each audio track through its OWN
+	// <audio> element in parallel with the video (multi-track sound). Audio
 	// assets have no proxy, so preview reads originalPath.
 	const audioSegments = computed(() => {
 		if (!doc.value) return []
@@ -207,6 +208,7 @@ export const useEditorStore = defineStore('editor', () => {
 				if (!src) return []
 				return [{
 					itemId: item.id,
+					trackId: item.trackId,
 					tStart: item.timelineStart,
 					tEnd: itemEnd(item),
 					src: `media://${src}`,
