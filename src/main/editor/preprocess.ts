@@ -2,7 +2,7 @@ import fs from 'fs'
 import path from 'path'
 import { setMaxListeners } from 'events'
 import { v4 as uuidv4 } from 'uuid'
-import type { Clip, MediaAsset } from '@shared/types'
+import type { Clip, MediaAsset, SilenceRegion } from '@shared/types'
 import type { PipelineContext } from '../pipeline'
 import { threadManager } from '../threads'
 import { backgroundTaskManager } from '../tasks'
@@ -27,17 +27,18 @@ import { getAssetDir, patchAsset, patchAssetPreprocessing } from './assets'
  */
 
 export type PreprocessStep =
-	'proxy' | 'scenes' | 'thumbnails' | 'descriptions' | 'audio' | 'transcript' | 'filmstrip'
+	'proxy' | 'scenes' | 'thumbnails' | 'descriptions' | 'audio' | 'transcript' | 'filmstrip' | 'segment'
 
 // Transcript runs UP FRONT (before scenes) so pieces derive from real speech
 // segments; scene detection stays as the fallback piece source for videos
 // with no usable transcript and for explicit sensitivity re-runs.
 const DEFAULT_STEPS: PreprocessStep[] = ['proxy', 'audio', 'transcript', 'scenes', 'thumbnails']
 
-// Audio-only assets have no picture: skip proxy/scenes/thumbnails/filmstrip and
-// derive pieces from the transcript (with a whole-file fallback when there is
-// no Gemini key). See the whole-file clip fallback at the end of the run.
-const AUDIO_STEPS: PreprocessStep[] = ['audio', 'transcript']
+// Audio-only assets have no picture: skip proxy/scenes/thumbnails/filmstrip.
+// Pieces come from a LOCAL, energy-based segmentation (silence split + interval
+// fallback for music) — no Gemini needed. Transcription stays opt-in (the
+// Transcribe button runs 'audio'+'transcript' on demand).
+const AUDIO_STEPS: PreprocessStep[] = ['segment']
 
 // Audio/transcript failures (missing Gemini key, quota) must not brick the
 // import — the chain continues and pieces fall back to scene detection.
@@ -315,11 +316,105 @@ async function deriveClips(threadId: string, assetId: string, scenes: Scene[]) {
 	})
 }
 
+// Audio segmentation tuning (§5.2 for audio).
+const AUDIO_SILENCE_DB = -30       // below this is "silence" for splitting
+const AUDIO_SILENCE_MIN = 0.6      // min silence gap (s) that forces a cut
+const AUDIO_MIN_PIECE = 1.0        // drop/merge pieces shorter than this
+const AUDIO_TARGET_PIECE = 20      // interval-fallback / max piece length (s)
+
 /**
- * Guarantees an audio asset has at least one placeable piece. When the
- * transcript step produced pieces this is a no-op; otherwise it creates one
- * clip spanning the whole file (labelled by name) so the asset can always be
- * dropped on the audio track. Non-audio assets are left to scene detection.
+ * Divides an audio duration into CONTIGUOUS pieces (full coverage — silence is
+ * split, not removed; the Silence Finder handles removal). Cut points are the
+ * midpoints of silence gaps; long runs (music, long monologue) are subdivided
+ * into ~AUDIO_TARGET_PIECE chunks and slivers merge into their predecessor.
+ */
+export function segmentAudio(duration: number, silence: SilenceRegion[]): { in: number; out: number }[] {
+	const cuts = new Set<number>([0, duration])
+	for (const s of silence) {
+		const a = Math.max(0, Math.min(s.start, duration))
+		const b = Math.max(0, Math.min(s.end, duration))
+		const mid = (a + b) / 2
+		if (mid > AUDIO_MIN_PIECE && mid < duration - AUDIO_MIN_PIECE) cuts.add(mid)
+	}
+	const points = [...cuts].sort((x, y) => x - y)
+
+	// Contiguous pieces, then subdivide long ones (music → even chunks).
+	const pieces: { in: number; out: number }[] = []
+	for (let i = 0; i < points.length - 1; i++) {
+		const seg = { in: points[i], out: points[i + 1] }
+		const len = seg.out - seg.in
+		if (len <= AUDIO_TARGET_PIECE * 1.5) {
+			pieces.push(seg)
+		} else {
+			const n = Math.ceil(len / AUDIO_TARGET_PIECE)
+			const step = len / n
+			for (let k = 0; k < n; k++) {
+				pieces.push({ in: seg.in + k * step, out: k === n - 1 ? seg.out : seg.in + (k + 1) * step })
+			}
+		}
+	}
+
+	// Merge slivers into the previous piece so nothing is unusably short.
+	const merged: { in: number; out: number }[] = []
+	for (const p of pieces) {
+		if (merged.length && p.out - p.in < AUDIO_MIN_PIECE) {
+			merged[merged.length - 1].out = p.out
+		} else {
+			merged.push({ ...p })
+		}
+	}
+	return merged.length ? merged : [{ in: 0, out: duration }]
+}
+
+/**
+ * Local, energy-based audio segmentation (no Gemini): silence split + interval
+ * fallback, so speech splits at pauses and music splits into even chunks. Runs
+ * silencedetect on the source directly (audio-kind assets have no proxy).
+ */
+async function runSegmentStep(threadId: string, assetId: string, signal: AbortSignal) {
+	const asset = getAsset(threadId, assetId)!
+	const duration = asset.metadata?.duration || 0
+	if (duration <= 0) {
+		await setTask(threadId, assetId, 'segment', { state: 'completed', progress: 100, status: 'No audio duration' })
+		return
+	}
+
+	await setTask(threadId, assetId, 'segment', { state: 'running', status: 'Segmenting audio…', progress: 0 })
+	const reportSeg = makeProgressReporter(threadId, assetId, 'segment')
+
+	const src = exists(asset.preprocessing.audioPath) ? asset.preprocessing.audioPath! : asset.originalPath
+	let silence: SilenceRegion[] = []
+	try {
+		silence = await withHeavySlot(() =>
+			ffmpegAdapter.detectSilence(src, { noiseDb: AUDIO_SILENCE_DB, minDurationSec: AUDIO_SILENCE_MIN }, signal, (p) => reportSeg(p))
+		)
+	} catch (error) {
+		if (signal.aborted) throw new Error('Aborted')
+		console.warn(`[editor] silencedetect failed for audio ${assetId} — using interval chunks:`, error)
+	}
+
+	if (signal.aborted) throw new Error('Aborted')
+	const ranges = segmentAudio(duration, silence)
+	await patchAsset(threadId, assetId, {
+		clips: ranges.map((r, i) => ({
+			id: uuidv4(),
+			sourceAssetId: assetId,
+			index: i + 1,
+			in: r.in,
+			out: r.out,
+			duration: r.out - r.in,
+			selected: false
+		}))
+	})
+
+	await setTask(threadId, assetId, 'segment', { state: 'completed', progress: 100, status: `${ranges.length} pieces` })
+}
+
+/**
+ * Guarantees an audio asset has at least one placeable piece. When segmentation
+ * produced pieces this is a no-op; otherwise it creates one clip spanning the
+ * whole file (labelled by name) so the asset can always be dropped on the audio
+ * track. Non-audio assets are left to scene detection.
  */
 async function ensureAudioHasClip(threadId: string, assetId: string): Promise<void> {
 	const asset = getAsset(threadId, assetId)
@@ -692,6 +787,7 @@ export async function preprocessMediaAsset(
 					case 'audio': await runAudioStep(threadId, assetId, signal); break
 					case 'transcript': await runTranscriptStep(threadId, assetId, signal); break
 					case 'filmstrip': await runFilmstripStep(threadId, assetId, signal); break
+					case 'segment': await runSegmentStep(threadId, assetId, signal); break
 				}
 			} catch (stepError: any) {
 				// Audio/transcript are best-effort in the default chain: a missing
