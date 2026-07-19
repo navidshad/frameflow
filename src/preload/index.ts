@@ -48,6 +48,68 @@ const api = {
 	getModelSettings: () => ipcRenderer.invoke('get-model-settings'),
 	setModelSettings: (settings: any) => ipcRenderer.invoke('set-model-settings', settings),
 	resetModelSettings: () => ipcRenderer.invoke('reset-model-settings'),
+	// Timeline Video Editor
+	createEditorProject: (title?: string) => ipcRenderer.invoke('create-editor-project', { title }),
+	saveEditorDoc: (data: { threadId: string, patch: any }) =>
+		ipcRenderer.invoke('save-editor-doc', data),
+	addMediaAsset: (data: { threadId: string, filePath: string, name?: string }) =>
+		ipcRenderer.invoke('add-media-asset', data),
+	importMediaUrl: (data: { threadId: string, url: string, resolution?: string }) =>
+		ipcRenderer.invoke('import-media-url', data),
+	removeMediaAsset: (data: { threadId: string, assetId: string }) =>
+		ipcRenderer.invoke('remove-media-asset', data),
+	preprocessMedia: (data: { threadId: string, assetId: string, steps?: string[], threshold?: number }) =>
+		ipcRenderer.invoke('preprocess-media', data),
+	findSilence: (data: { threadId: string, assetId: string, noiseDb?: number, minDurationSec?: number }) =>
+		ipcRenderer.invoke('find-silence', data),
+	mergeClips: (data: { threadId: string, assetId: string, clipIds: string[] }) =>
+		ipcRenderer.invoke('merge-clips', data),
+	splitClip: (data: { threadId: string, assetId: string, clipId: string, atSec?: number }) =>
+		ipcRenderer.invoke('split-clip', data),
+	onEditorImportProgress: (callback: (data: { threadId: string, assetId: string, url?: string, percent: number }) => void) => {
+		const listener = (_event: any, data: any) => callback(data)
+		ipcRenderer.on('editor-import-progress', listener)
+		return () => ipcRenderer.removeListener('editor-import-progress', listener)
+	},
+	onEditorSilenceProgress: (callback: (data: { assetId: string, percent: number }) => void) => {
+		const listener = (_event: any, data: any) => callback(data)
+		ipcRenderer.on('editor-silence-progress', listener)
+		return () => ipcRenderer.removeListener('editor-silence-progress', listener)
+	},
+	getPersonas: () => ipcRenderer.invoke('get-personas'),
+	setPersonas: (personas: any[]) => ipcRenderer.invoke('set-personas', personas),
+	exportEditorTimeline: (data: { threadId: string, quality: 'original' | 'preview' }) =>
+		ipcRenderer.invoke('export-editor-timeline', data),
+	abortEditorRender: (data: { renderId: string }) =>
+		ipcRenderer.invoke('abort-editor-render', data),
+	onEditorRenderProgress: (callback: (data: any) => void) => {
+		const listener = (_event: any, data: any) => callback(data)
+		ipcRenderer.on('editor-render-progress', listener)
+		return () => ipcRenderer.removeListener('editor-render-progress', listener)
+	},
+	runEditorPrompt: (data: { threadId: string, personaId: string, prompt: string, baseStepId: string, selectedItemIds: string[], playheadSec: number, widen?: string }) =>
+		ipcRenderer.invoke('run-editor-prompt', data),
+	abortEditorPrompt: (data: { threadId: string, turnId: string }) =>
+		ipcRenderer.invoke('abort-editor-prompt', data),
+	updateEditorTurn: (data: { threadId: string, turnId: string, patch: { resultStepId?: string, revisionId?: string } }) =>
+		ipcRenderer.invoke('update-editor-turn', data),
+	onEditorTurnUpdate: (callback: (data: any) => void) => {
+		const listener = (_event: any, data: any) => callback(data)
+		ipcRenderer.on('editor-turn-update', listener)
+		return () => ipcRenderer.removeListener('editor-turn-update', listener)
+	},
+	getEditorHistory: (threadId: string) => ipcRenderer.invoke('get-editor-history', threadId),
+	pushEditorStep: (data: { threadId: string, step: any, keyframe?: any }) =>
+		ipcRenderer.invoke('push-editor-step', data),
+	setEditorHistoryPointer: (data: { threadId: string, currentStepId: string }) =>
+		ipcRenderer.invoke('set-editor-history-pointer', data),
+	clearEditorHistory: (data: { threadId: string }) =>
+		ipcRenderer.invoke('clear-editor-history', data),
+	getEditorRevisions: (threadId: string) => ipcRenderer.invoke('get-editor-revisions', threadId),
+	pushEditorRevision: (data: { threadId: string, revision: any }) =>
+		ipcRenderer.invoke('push-editor-revision', data),
+	deleteEditorRevisions: (data: { threadId: string, ids: string[] }) =>
+		ipcRenderer.invoke('delete-editor-revisions', data),
 	// Thread Management
 	createThread: (data: { videoPath?: string, videoName: string, imagePaths?: string[] }) =>
 		ipcRenderer.invoke('create-thread', data),

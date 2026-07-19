@@ -1,9 +1,10 @@
 import ffmpeg from 'fluent-ffmpeg'
 import ffmpegPath from 'ffmpeg-static'
 import ffprobePath from 'ffprobe-static'
+import fs from 'fs'
 import { join, basename, extname } from 'path'
 import process from 'node:process'
-import { TimelineSegment } from '../../shared/types'
+import { TimelineSegment, SilenceRegion } from '../../shared/types'
 
 const IS_MAC = process.platform === 'darwin'
 
@@ -463,6 +464,129 @@ export async function extractFrame(
 				console.log('FFmpeg extractFrame aborted by signal')
 				command.kill('SIGKILL')
 			})
+		}
+
+		command.run()
+	})
+}
+
+/**
+ * Batched filmstrip extractor (PRD §5.5). ONE ffmpeg pass samples a frame
+ * every `intervalSec` seconds (`fps=1/interval`) at 120px height — unlike
+ * extractFrame's process-per-frame, a multi-hour source stays a single
+ * bounded run. Returns entries mapping each frame to its source time.
+ */
+export async function generateFilmstrip(
+	videoPath: string,
+	outputDir: string,
+	intervalSec: number,
+	signal?: AbortSignal,
+	onProgress?: (percent: number) => void
+): Promise<{ time: number; thumbnailPath: string }[]> {
+	if (signal?.aborted) {
+		throw new Error('Filmstrip generation aborted before start')
+	}
+
+	const pattern = join(outputDir, 'strip_%05d.jpg')
+
+	await new Promise<void>((resolve, reject) => {
+		const command = ffmpeg(videoPath)
+			.outputOptions([
+				'-vf', `fps=1/${intervalSec},scale=-2:120`,
+				'-q:v', '5'
+			])
+			.output(pattern)
+			.on('progress', (progress) => {
+				if (onProgress && progress.percent) {
+					onProgress(Math.round(progress.percent))
+				}
+			})
+			.on('end', () => resolve())
+			.on('error', (err) => {
+				if (signal?.aborted) {
+					return reject(new Error('Filmstrip generation aborted by user'))
+				}
+				console.error('Error generating filmstrip:', err)
+				reject(err)
+			})
+
+		if (signal) {
+			signal.addEventListener('abort', () => command.kill('SIGKILL'))
+		}
+
+		command.run()
+	})
+
+	return fs.readdirSync(outputDir)
+		.filter((f) => /^strip_\d+\.jpg$/.test(f))
+		.sort()
+		.map((f, i) => ({
+			// fps=1/N emits the frame representing window [iN, (i+1)N) — stamp it
+			// at the window centre so nearest-entry lookup lands inside the window.
+			time: (i + 0.5) * intervalSec,
+			thumbnailPath: join(outputDir, f)
+		}))
+}
+
+/**
+ * Assistive silence/dead-air finder (PRD §5.6). Runs ffmpeg's `silencedetect`
+ * audio filter over the source and parses the `silence_start`/`silence_end`
+ * markers off stderr into source-time regions. Read-only analysis — it never
+ * mutates media; the caller reviews the ranges before applying any cut.
+ *
+ * Requires an audio stream — guard with `metadata.hasAudio` before calling.
+ */
+export async function detectSilence(
+	videoPath: string,
+	opts?: { noiseDb?: number; minDurationSec?: number },
+	signal?: AbortSignal,
+	onProgress?: (percent: number) => void
+): Promise<SilenceRegion[]> {
+	const noiseDb = opts?.noiseDb ?? -30
+	const minDurationSec = opts?.minDurationSec ?? 0.5
+
+	if (signal?.aborted) {
+		throw new Error('Silence detection aborted before start')
+	}
+
+	return new Promise((resolve, reject) => {
+		const regions: SilenceRegion[] = []
+		let pendingStart: number | null = null
+
+		const command = ffmpeg(videoPath)
+			.audioFilters(`silencedetect=noise=${noiseDb}dB:d=${minDurationSec}`)
+			.outputOptions(['-f', 'null'])
+			.output(process.platform === 'win32' ? 'NUL' : '/dev/null')
+			.on('progress', (progress) => {
+				if (onProgress && progress.percent) {
+					onProgress(Math.round(progress.percent))
+				}
+			})
+			.on('stderr', (line: string) => {
+				const startMatch = line.match(/silence_start:\s*(-?[\d.]+)/)
+				if (startMatch) {
+					pendingStart = parseFloat(startMatch[1])
+					return
+				}
+				const endMatch = line.match(/silence_end:\s*(-?[\d.]+)/)
+				if (endMatch) {
+					const end = parseFloat(endMatch[1])
+					const start = Math.max(0, pendingStart ?? 0)
+					if (Number.isFinite(end) && end > start) regions.push({ start, end })
+					pendingStart = null
+				}
+			})
+			.on('end', () => resolve(regions))
+			.on('error', (err) => {
+				if (signal?.aborted) {
+					return reject(new Error('Silence detection aborted by user'))
+				}
+				console.error('Error during silence detection:', err)
+				reject(err)
+			})
+
+		if (signal) {
+			signal.addEventListener('abort', () => command.kill('SIGKILL'))
 		}
 
 		command.run()

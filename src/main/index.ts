@@ -18,10 +18,18 @@ import * as imageGeneration from './pipeline/phases/image-generation'
 import { backgroundTaskManager } from './tasks'
 import { GeminiAdapter } from './gemini/adapter'
 
-import { checkFFmpegAvailability, getVideoMetadata } from './ffmpeg'
+import { checkFFmpegAvailability, getVideoMetadata, detectSilence } from './ffmpeg'
 import { checkScenedetectAvailability } from './scenedetect'
 import { checkYtDlpAvailability, downloadVideo, getVideoFormats } from './ytdlp'
 import { dependencyManager } from './dependencies/manager'
+import * as editorAssets from './editor/assets'
+import * as editorPreprocess from './editor/preprocess'
+import * as editorHistory from './editor/history'
+import * as editorPrompt from './editor/prompt'
+import * as editorRender from './editor/render'
+import * as editorRevisions from './editor/revisions'
+import { BUILTIN_PERSONAS } from './constants/personas'
+import { v4 as uuidv4 } from 'uuid'
 import { THREAD_DIRS } from './constants/paths'
 import { GEMINI_MODEL_2_5_FLASH, MODEL_METADATA } from './constants/gemini'
 import { electronApp, optimizer, is } from '@electron-toolkit/utils'
@@ -329,6 +337,16 @@ app.whenReady().then(() => {
 		return MODEL_METADATA
 	})
 
+	// Editor personas: built-ins (code) merged with the user's global library
+	ipcMain.handle('get-personas', () => {
+		return [...BUILTIN_PERSONAS, ...settingsManager.getPersonas()]
+	})
+
+	ipcMain.handle('set-personas', (_event, personas: any[]) => {
+		const saved = settingsManager.setPersonas(personas)
+		return [...BUILTIN_PERSONAS, ...saved]
+	})
+
 	// Thread Management
 	ipcMain.handle('create-thread', async (_event, { videoPath, videoName, imagePaths }) => {
 		const newThread = await threadManager.createThread(videoPath, videoName, imagePaths)
@@ -345,6 +363,255 @@ app.whenReady().then(() => {
 		return true
 	})
 
+	// ===== Timeline Video Editor =====
+
+	// Creates an editor project thread. Deliberately does NOT auto-start
+	// preprocessing (media is imported per-asset inside the editor).
+	ipcMain.handle('create-editor-project', async (_event, { title }: { title?: string }) => {
+		return await threadManager.createEditorThread(title || 'Untitled Project')
+	})
+
+	// Autosave of RENDERER-OWNED editor fields only. Main owns preprocessing-derived
+	// asset state (preprocessing/proxyPath/metadata/preprocessState/clips content);
+	// the renderer owns selection, clip-selected flags, tracks, timeline, meta, personas.
+	// This ownership split is what prevents autosave/thread-updated echo clobbering.
+	ipcMain.handle('save-editor-doc', async (_event, { threadId, patch }: {
+		threadId: string
+		patch: {
+			tracks?: any[]
+			timeline?: any[]
+			timelineMeta?: any
+			selection?: any
+			activePersonaId?: string
+			customPersonas?: any[]
+			clipSelections?: Record<string, boolean>
+			historyRef?: any
+			markers?: any[]
+			currentRevisionId?: string
+		}
+	}) => {
+		return await threadManager.updateThreadWith(threadId, (thread) => {
+			if (thread.type !== 'editor' || !thread.editor) return null
+
+			const editor = { ...thread.editor }
+			if (patch.tracks) editor.tracks = patch.tracks
+			if (patch.timeline) editor.timeline = patch.timeline
+			if (patch.timelineMeta) editor.timelineMeta = patch.timelineMeta
+			if (patch.selection) editor.selection = patch.selection
+			if (patch.activePersonaId !== undefined) editor.activePersonaId = patch.activePersonaId
+			if (patch.customPersonas) editor.customPersonas = patch.customPersonas
+			// historyRef travels WITH the doc so the undo pointer and the timeline
+			// state land in one atomic write (crash-consistent by construction).
+			if (patch.historyRef) editor.historyRef = patch.historyRef
+			if (patch.markers) editor.markers = patch.markers
+			if (patch.currentRevisionId !== undefined) editor.currentRevisionId = patch.currentRevisionId
+
+			// Fold clip-selected flags into the matching clips (the one renderer-owned
+			// field living inside main-owned MediaAsset records).
+			if (patch.clipSelections) {
+				editor.media = editor.media.map(asset => ({
+					...asset,
+					clips: asset.clips.map(clip =>
+						patch.clipSelections![clip.id] !== undefined
+							? { ...clip, selected: patch.clipSelections![clip.id] }
+							: clip
+					)
+				}))
+			}
+
+			return { editor }
+		})
+	})
+
+	// Import a local file as a MediaAsset and start per-asset preprocessing.
+	ipcMain.handle('add-media-asset', async (_event, { threadId, filePath, name }: {
+		threadId: string, filePath: string, name?: string
+	}) => {
+		const asset = await editorAssets.createMediaAsset(threadId, { sourcePath: filePath, name })
+		if (asset && asset.preprocessState !== 'error') {
+			// Fire-and-forget: progress streams via background-task-update
+			editorPreprocess.preprocessMediaAsset(threadId, asset.id).catch((error) => {
+				console.error(`[editor] preprocess failed for ${asset.id}:`, error)
+			})
+		}
+		return asset
+	})
+
+	// Import from URL/YouTube: download straight into the asset's source dir,
+	// with per-asset progress (the legacy 'download-progress' event is keyless
+	// and breaks under concurrent imports).
+	ipcMain.handle('import-media-url', async (event, { threadId, url, resolution }: {
+		threadId: string, url: string, resolution?: string
+	}) => {
+		const thread = threadManager.getThread(threadId)
+		if (!thread || thread.type !== 'editor') throw new Error('Not an editor project')
+
+		const assetId = uuidv4()
+		const sourceDir = join(thread.tempDir, 'media', assetId, 'source')
+		fs.mkdirSync(sourceDir, { recursive: true })
+
+		try {
+			const result = await downloadVideo(url, sourceDir, resolution, (percent) => {
+				event.sender.send('editor-import-progress', { threadId, assetId, url, percent })
+			})
+
+			const asset = await editorAssets.createMediaAsset(threadId, {
+				sourcePath: result.path,
+				name: result.name,
+				assetId
+			})
+			if (asset && asset.preprocessState !== 'error') {
+				editorPreprocess.preprocessMediaAsset(threadId, asset.id).catch((error) => {
+					console.error(`[editor] preprocess failed for ${asset.id}:`, error)
+				})
+			}
+			return asset
+		} catch (error) {
+			// Failed import: remove the partial asset dir so nothing dangles
+			try {
+				fs.rmSync(join(thread.tempDir, 'media', assetId), { recursive: true, force: true })
+			} catch { /* best effort */ }
+			throw error
+		}
+	})
+
+	ipcMain.handle('remove-media-asset', async (_event, { threadId, assetId }: {
+		threadId: string, assetId: string
+	}) => {
+		return await editorAssets.removeAsset(threadId, assetId)
+	})
+
+	// Retry / re-run / opt-in steps (e.g. ['descriptions']) for one asset.
+	ipcMain.handle('preprocess-media', async (_event, { threadId, assetId, steps, threshold }: {
+		threadId: string, assetId: string, steps?: string[], threshold?: number
+	}) => {
+		editorPreprocess.preprocessMediaAsset(threadId, assetId, {
+			steps: steps as any,
+			threshold
+		}).catch((error) => {
+			console.error(`[editor] preprocess retry failed for ${assetId}:`, error)
+		})
+		return true
+	})
+
+	// Scene-piece corrections (§5.2): merge adjacent pieces / split further.
+	ipcMain.handle('merge-clips', (_event, { threadId, assetId, clipIds }: {
+		threadId: string, assetId: string, clipIds: string[]
+	}) => {
+		return editorAssets.mergeClips(threadId, assetId, clipIds)
+	})
+
+	ipcMain.handle('split-clip', (_event, { threadId, assetId, clipId, atSec }: {
+		threadId: string, assetId: string, clipId: string, atSec?: number
+	}) => {
+		return editorAssets.splitClip(threadId, assetId, clipId, atSec)
+	})
+
+	// Assistive silence/dead-air finder (§5.6). Read-only analysis over the
+	// asset's proxy/original — returns candidate source-time ranges the user
+	// reviews before applying as ripple-deletes. Never mutates media.
+	ipcMain.handle('find-silence', async (event, { threadId, assetId, noiseDb, minDurationSec }: {
+		threadId: string, assetId: string, noiseDb?: number, minDurationSec?: number
+	}) => {
+		const asset = threadManager.getThread(threadId)?.editor?.media.find((a) => a.id === assetId)
+		if (!asset) throw new Error('Asset not found')
+		if (asset.metadata && asset.metadata.hasAudio === false) return []
+		const source = asset.proxyPath || asset.originalPath
+		let lastPercent = -1
+		return await detectSilence(source, { noiseDb, minDurationSec }, undefined, (percent) => {
+			if (percent - lastPercent < 2 && percent !== 100) return
+			lastPercent = percent
+			if (!event.sender.isDestroyed()) {
+				event.sender.send('editor-silence-progress', { assetId, percent })
+			}
+		})
+	})
+
+	// AI prompt turns (M3): one structured call per turn, streamed via
+	// editor-turn-update; the base doc is never mutated until user accept.
+	ipcMain.handle('run-editor-prompt', (_event, options: {
+		threadId: string, personaId: string, prompt: string, baseStepId: string,
+		selectedItemIds: string[], playheadSec: number, widen?: 'chapter' | 'full'
+	}) => {
+		return editorPrompt.runEditorPrompt(options)
+	})
+
+	ipcMain.handle('abort-editor-prompt', (_event, { turnId }: { threadId: string, turnId: string }) => {
+		editorPrompt.abortEditorPrompt(turnId)
+		return true
+	})
+
+	// Renderer stamps the applied history step / revision back onto the turn.
+	ipcMain.handle('update-editor-turn', async (_event, { threadId, turnId, patch }: {
+		threadId: string, turnId: string, patch: { resultStepId?: string, revisionId?: string }
+	}) => {
+		return await threadManager.updateThreadWith(threadId, (thread) => {
+			if (!thread.editor) return null
+			const turns = thread.editor.turns.map((t) =>
+				t.id === turnId
+					? {
+						...t,
+						resultStepId: patch.resultStepId ?? t.resultStepId,
+						revisionId: patch.revisionId ?? t.revisionId
+					}
+					: t
+			)
+			return { editor: { ...thread.editor, turns } }
+		})
+	})
+
+	// Export / render (M4): fast path via assembleVideo, region path via
+	// segment-then-concat; progress streams over editor-render-progress.
+	ipcMain.handle('export-editor-timeline', (_event, { threadId, quality }: {
+		threadId: string, quality: 'original' | 'preview'
+	}) => {
+		return editorRender.startEditorRender({ threadId, quality })
+	})
+
+	ipcMain.handle('abort-editor-render', (_event, { renderId }: { renderId: string }) => {
+		editorRender.abortEditorRender(renderId)
+		return true
+	})
+
+	// Undo/redo history sidecar (renderer-authoritative; main persists)
+	ipcMain.handle('get-editor-history', (_event, threadId: string) => {
+		return editorHistory.loadHistory(threadId)
+	})
+
+	ipcMain.handle('push-editor-step', async (_event, { threadId, step, keyframe }: {
+		threadId: string, step: any, keyframe?: any
+	}) => {
+		return await editorHistory.pushStep(threadId, step, keyframe)
+	})
+
+	ipcMain.handle('set-editor-history-pointer', (_event, { threadId, currentStepId }: {
+		threadId: string, currentStepId: string
+	}) => {
+		return editorHistory.setPointer(threadId, currentStepId)
+	})
+
+	ipcMain.handle('clear-editor-history', (_event, { threadId }: { threadId: string }) => {
+		editorHistory.clearHistory(threadId)
+		return true
+	})
+
+	// Revision tree sidecar (renderer owns tree logic; main persists)
+	ipcMain.handle('get-editor-revisions', (_event, threadId: string) => {
+		return editorRevisions.loadRevisions(threadId)
+	})
+
+	ipcMain.handle('push-editor-revision', (_event, { threadId, revision }: {
+		threadId: string, revision: any
+	}) => {
+		return editorRevisions.pushRevision(threadId, revision)
+	})
+
+	ipcMain.handle('delete-editor-revisions', (_event, { threadId, ids }: {
+		threadId: string, ids: string[]
+	}) => {
+		return editorRevisions.deleteRevisions(threadId, ids)
+	})
+
 	ipcMain.handle('get-all-threads', () => {
 		return threadManager.getAllThreads()
 	})
@@ -354,6 +621,17 @@ app.whenReady().then(() => {
 	})
 
 	ipcMain.handle('delete-thread', (_event, id) => {
+		// Editor threads: abort any live per-asset preprocessing and renders,
+		// and remove the history sidecar before deletion
+		const thread = threadManager.getThread(id)
+		if (thread?.type === 'editor' && thread.editor) {
+			for (const asset of thread.editor.media) {
+				editorPreprocess.abortAssetPreprocessing(id, asset.id)
+			}
+			editorRender.abortRendersForThread(id)
+			editorHistory.deleteHistory(id)
+			editorRevisions.deleteRevisionsFile(id)
+		}
 		return threadManager.deleteThread(id)
 	})
 

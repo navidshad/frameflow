@@ -38,12 +38,20 @@ export default {
       animation: {
         'fade-in-up': 'fadeInUp 0.5s ease-out',
         'fade-in': 'fadeIn 0.5s ease-out',
+        'menu': 'menuIn 0.12s ease-out',
         'pulse-soft': 'pulseSoft 2s infinite ease-in-out',
+        'indeterminate': 'indeterminate 1.2s infinite ease-in-out',
       },
       keyframes: {
         fadeInUp: {
           '0%': { opacity: '0', transform: 'translateY(10px)' },
           '100%': { opacity: '1', transform: 'translateY(0)' },
+        },
+        // Snappy dropdown/popover entrance: quick fade + faint scale from
+        // the anchor edge (pair with origin-top / origin-bottom).
+        menuIn: {
+          '0%': { opacity: '0', transform: 'scale(0.97)' },
+          '100%': { opacity: '1', transform: 'scale(1)' },
         },
         fadeIn: {
           '0%': { opacity: '0' },
@@ -52,6 +60,10 @@ export default {
         pulseSoft: {
           '0%, 100%': { opacity: '1' },
           '50%': { opacity: '0.8' },
+        },
+        indeterminate: {
+          '0%': { transform: 'translateX(-100%)' },
+          '100%': { transform: 'translateX(100%)' },
         },
       },
     },
