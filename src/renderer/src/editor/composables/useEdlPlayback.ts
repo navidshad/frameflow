@@ -36,14 +36,18 @@ export function useEdlPlayback(
 	const currentSegmentId = ref<string | null>(null)
 	const audioActive = ref(false)
 
-	// One <audio> element per audio track (created lazily, not in the DOM —
-	// detached elements still play through the media:// protocol).
+	// One <audio> element per audio track, created lazily. Attached to the DOM
+	// (hidden) rather than a bare `new Audio()` — Chromium plays in-document
+	// media more reliably and it keeps them inspectable.
 	const audioEls = new Map<string, HTMLAudioElement>()
 	const getAudioEl = (trackId: string): HTMLAudioElement => {
 		let el = audioEls.get(trackId)
 		if (!el) {
-			el = new Audio()
+			el = document.createElement('audio')
 			el.preload = 'auto'
+			el.dataset.edlAudioTrack = trackId
+			el.style.display = 'none'
+			document.body.appendChild(el)
 			audioEls.set(trackId, el)
 		}
 		return el
@@ -277,6 +281,7 @@ export function useEdlPlayback(
 		for (const el of audioEls.values()) {
 			el.pause()
 			el.src = ''
+			el.remove()
 		}
 		audioEls.clear()
 	})
