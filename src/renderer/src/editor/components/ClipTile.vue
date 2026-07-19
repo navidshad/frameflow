@@ -72,6 +72,9 @@ const onClick = (event: MouseEvent) => {
 const onDragStart = (event: DragEvent) => {
 	if (!event.dataTransfer) return
 	event.dataTransfer.setData('application/x-frameflow-clip', props.clip.id)
+	// Kind hint (readable during dragover, unlike the payload) so a lane can
+	// accept/reject before drop: audio clips → audio lanes, else video lanes.
+	event.dataTransfer.setData(`application/x-frameflow-kind-${isAudio.value ? 'audio' : 'video'}`, '1')
 	event.dataTransfer.effectAllowed = 'copy'
 }
 

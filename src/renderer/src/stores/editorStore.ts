@@ -7,7 +7,7 @@ import type {
 } from '@shared/types'
 import {
 	applyTimelineDiff, clampSpeed, clipToItem, computeContentEnd,
-	diffTimelines, itemDuration, itemEnd, repairOverlaps,
+	diffTimelines, itemDuration, itemEnd, itemFromAsset, repairOverlaps,
 	type TimelineState
 } from '@shared/timeline'
 import { computeScope } from '@shared/ai-scope'
@@ -842,6 +842,10 @@ export const useEditorStore = defineStore('editor', () => {
 		sortedTracks.value.find((t) => t.kind === 'video' && !t.locked && !t.hidden)?.id || null
 	)
 
+	const firstAudioTrackId = computed(() =>
+		sortedTracks.value.find((t) => t.kind === 'audio' && !t.locked && !t.hidden)?.id || null
+	)
+
 	const findClip = (clipId: string): Clip | null => {
 		for (const asset of doc.value?.media || []) {
 			const clip = asset.clips.find((c) => c.id === clipId)
@@ -867,11 +871,14 @@ export const useEditorStore = defineStore('editor', () => {
 	const addItemFromClip = (clipId: string, trackId?: string | null, atSec?: number): TimelineItem | null => {
 		if (!doc.value) return null
 		const clip = findClip(clipId)
-		const targetTrackId = trackId || firstVideoTrackId.value
-		if (!clip || !targetTrackId) return null
+		if (!clip) return null
+		const asset = doc.value.media.find((a) => a.id === clip.sourceAssetId)
+		// Default the target lane by the clip's kind (audio piece → audio lane).
+		const targetTrackId = trackId
+			|| (asset?.kind === 'audio' ? firstAudioTrackId.value : firstVideoTrackId.value)
+		if (!targetTrackId) return null
 		const track = doc.value.tracks.find((t) => t.id === targetTrackId)
 		if (!track || track.locked || track.hidden) return null
-		const asset = doc.value.media.find((a) => a.id === clip.sourceAssetId)
 		if (track.kind !== 'video' && track.kind !== (asset?.kind || 'video')) return null
 
 		const before = snapshotState()
@@ -879,6 +886,33 @@ export const useEditorStore = defineStore('editor', () => {
 		const item = clipToItem(clip, targetTrackId, start)
 		doc.value.timeline.push(item)
 		commitStep({ before, label: `Add ${item.label || 'clip'}` })
+		selectItems([item.id])
+		return item
+	}
+
+	/**
+	 * Drop a WHOLE asset onto the timeline as a single full-span item. Defaults
+	 * the target track by kind (audio→A-lane, video→V-lane); kind must match
+	 * (audio assets only on audio tracks, video only on video tracks).
+	 */
+	const addItemFromAsset = (assetId: string, trackId?: string | null, atSec?: number): TimelineItem | null => {
+		if (!doc.value) return null
+		const asset = doc.value.media.find((a) => a.id === assetId)
+		if (!asset) return null
+		const targetTrackId = trackId || (asset.kind === 'audio' ? firstAudioTrackId.value : firstVideoTrackId.value)
+		if (!targetTrackId) return null
+		const track = doc.value.tracks.find((t) => t.id === targetTrackId)
+		if (!track || track.locked || track.hidden) return null
+		const compatible = asset.kind === 'audio' ? track.kind === 'audio' : track.kind === 'video'
+		if (!compatible) return null
+		const duration = asset.metadata?.duration || 0
+		if (duration <= 0) return null
+
+		const before = snapshotState()
+		const start = resolveFreePosition(targetTrackId, atSec ?? playheadSec.value, duration)
+		const item = itemFromAsset(asset, targetTrackId, start)
+		doc.value.timeline.push(item)
+		commitStep({ before, label: `Add ${asset.name}` })
 		selectItems([item.id])
 		return item
 	}
@@ -1732,6 +1766,7 @@ export const useEditorStore = defineStore('editor', () => {
 		canUndo,
 		canRedo,
 		firstVideoTrackId,
+		firstAudioTrackId,
 		historySteps,
 		// helpers
 		assetTasks,
@@ -1764,6 +1799,7 @@ export const useEditorStore = defineStore('editor', () => {
 		undo,
 		redo,
 		addItemFromClip,
+		addItemFromAsset,
 		splitAtPlayhead,
 		deleteItems,
 		setItemSpeed,
