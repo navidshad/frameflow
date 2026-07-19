@@ -12,7 +12,7 @@
 
 		<!-- Inline popover -->
 		<div v-if="open"
-			class="absolute top-full right-0 mt-2 w-56 rounded-xl border border-zinc-200 dark:border-zinc-800 bg-white/95 dark:bg-zinc-900/95 backdrop-blur-xl shadow-premium z-50 p-3 animate-fade-in-up">
+			class="absolute top-full right-0 mt-2 w-56 rounded-xl border border-zinc-200 dark:border-zinc-800 bg-white/95 dark:bg-zinc-900/95 backdrop-blur-xl shadow-premium z-50 p-3 origin-top animate-menu">
 			<template v-if="cleanNotice">
 				<p class="text-[11px] text-zinc-500 leading-snug">
 					No changes since <span class="font-mono font-bold text-primary">V{{ store.currentRevision?.seq }}</span>.

@@ -37,7 +37,7 @@
 						</span>
 					</button>
 					<div v-if="scopeMenuOpen"
-						class="absolute bottom-full left-0 mb-2 w-48 rounded-xl border border-zinc-200 dark:border-zinc-800 bg-white/95 dark:bg-zinc-900/95 backdrop-blur-xl shadow-premium z-50 py-1 animate-fade-in-up">
+						class="absolute bottom-full left-0 mb-2 w-48 rounded-xl border border-zinc-200 dark:border-zinc-800 bg-white/95 dark:bg-zinc-900/95 backdrop-blur-xl shadow-premium z-50 py-1 origin-bottom animate-menu">
 						<button v-for="option in scopeOptions" :key="option.value"
 							class="w-full px-3 py-1.5 flex items-center justify-between text-left hover:bg-primary/5 transition"
 							@click="setScope(option.value)">

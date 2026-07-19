@@ -38,7 +38,7 @@
 					:active="markersOpen" @click="markersOpen = !markersOpen" />
 				<template v-if="markersOpen">
 					<div class="fixed inset-0 z-40" @click="markersOpen = false"></div>
-					<div class="absolute right-0 top-7 z-50 w-60 glass-card rounded-xl border border-zinc-200 dark:border-zinc-800 shadow-lg py-1 max-h-52 overflow-y-auto custom-scrollbar">
+					<div class="absolute right-0 top-7 z-50 w-60 glass-card rounded-xl border border-zinc-200 dark:border-zinc-800 shadow-lg py-1 max-h-52 overflow-y-auto custom-scrollbar origin-top animate-menu">
 						<p v-if="!store.markers.length" class="px-3 py-2 text-[11px] text-zinc-400">
 							No markers yet — press <span class="font-mono font-bold">M</span> at the playhead to add one.
 						</p>

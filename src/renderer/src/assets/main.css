@@ -76,6 +76,7 @@
   }
 
   .animate-fade-in-up,
+  .animate-menu,
   .animate-pulse-soft,
   .animate-indeterminate {
     animation: none !important;
