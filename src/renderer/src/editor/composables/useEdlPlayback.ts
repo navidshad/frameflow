@@ -73,12 +73,20 @@ export function useEdlPlayback(
 		return m
 	})
 
+	// Which audio item each track element is currently locked onto. A track's
+	// element free-runs once started; we only hard-seek it on (re)entry to a
+	// segment, an explicit seek, or a large drift — NOT every frame, or the
+	// decoder never gets to play smoothly (it just stutters out "beats").
+	const activeAudioSeg = new Map<string, string>()
+	const AUDIO_DRIFT_HARD = 0.5
+
 	/**
-	 * Reposition every audio-track element to match the playhead. Each track
-	 * plays its covering segment in parallel; a track with no segment (or muted)
-	 * pauses. Elements are re-seeked only past a drift threshold to avoid stutter.
+	 * Reposition every audio-track element for playhead `t`. Each track plays its
+	 * covering segment in parallel with the video; a track with no segment (or
+	 * muted) pauses. `force` re-seeks the element (segment change / explicit seek);
+	 * otherwise the element free-runs and is only nudged on large drift.
 	 */
-	const syncAudio = (t: number) => {
+	const syncAudio = (t: number, force = false) => {
 		let anyActive = false
 		const seen = new Set<string>()
 		for (const [trackId, segs] of audioByTrack.value) {
@@ -86,15 +94,20 @@ export function useEdlPlayback(
 			const el = getAudioEl(trackId)
 			const seg = segs.find((s) => t >= s.tStart - 1e-6 && t < s.tEnd - 1e-6)
 			if (!seg || seg.muted) {
+				activeAudioSeg.delete(trackId)
 				if (!el.paused) el.pause()
 				continue
 			}
 			anyActive = true
+			const changed = activeAudioSeg.get(trackId) !== seg.itemId
 			if (el.src !== seg.src) el.src = seg.src
 			el.playbackRate = seg.speed
 			el.volume = Math.max(0, Math.min(1, seg.gain ?? 1))
 			const target = seg.sourceIn + (t - seg.tStart) * seg.speed
-			if (Math.abs(el.currentTime - target) > 0.15) el.currentTime = target
+			if (changed || force || Math.abs(el.currentTime - target) > AUDIO_DRIFT_HARD) {
+				el.currentTime = target
+			}
+			activeAudioSeg.set(trackId, seg.itemId)
 			if (store.isPlaying) {
 				if (el.paused) el.play().catch(() => { })
 			} else if (!el.paused) {
@@ -103,7 +116,10 @@ export function useEdlPlayback(
 		}
 		// Pause elements whose track is gone (deleted/hidden this frame).
 		for (const [trackId, el] of audioEls) {
-			if (!seen.has(trackId) && !el.paused) el.pause()
+			if (!seen.has(trackId)) {
+				activeAudioSeg.delete(trackId)
+				if (!el.paused) el.pause()
+			}
 		}
 		audioActive.value = anyActive
 	}
@@ -236,9 +252,10 @@ export function useEdlPlayback(
 	}
 
 	// ---------- reactions ----------
-	// Audio-track playback is slaved to the playhead: any playhead change
-	// (playback frame, scrub, or seek) re-positions the standalone <audio>.
-	watch(() => store.playheadSec, (t) => syncAudio(t))
+	// Audio elements free-run during playback: a plain playhead advance must NOT
+	// re-seek them (that stutters the decoder). Only align on segment entry or a
+	// real drift — handled inside syncAudio with force=false.
+	watch(() => store.playheadSec, (t) => syncAudio(t, false))
 
 	watch(() => store.isPlaying, (playing) => {
 		if (playing) {
@@ -250,13 +267,14 @@ export function useEdlPlayback(
 		} else {
 			activeEl()?.pause()
 		}
-		syncAudio(store.playheadSec)
+		// Force-anchor audio to the playhead on play/pause transitions.
+		syncAudio(store.playheadSec, true)
 	})
 
 	watch(() => store.seekRequest, (req) => {
 		suppressRafRead = true
 		activateAt(req.time)
-		syncAudio(req.time)
+		syncAudio(req.time, true) // explicit seek: re-anchor audio
 	})
 
 	// Timeline edits can change/remove the current segment — re-resolve.
@@ -266,7 +284,7 @@ export function useEdlPlayback(
 	watch(() => JSON.stringify(segments.value) + '|' + JSON.stringify(audioSegments.value), () => {
 		if (!store.isPlaying) {
 			activateAt(store.playheadSec)
-			syncAudio(store.playheadSec)
+			syncAudio(store.playheadSec, true)
 		}
 	})
 
