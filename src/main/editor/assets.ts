@@ -80,10 +80,23 @@ export async function createMediaAsset(
 
 	await threadManager.updateThreadWith(threadId, (t) => {
 		if (!t.editor) return null
-		return { editor: { ...t.editor, media: [...t.editor.media, asset] } }
+		const patch: Partial<Thread> = { editor: { ...t.editor, media: [...t.editor.media, asset] } }
+		// Auto-name the project after the first imported media while the title
+		// is still the default — mirrors how chat threads name from the video.
+		if (!t.title || t.title === 'Untitled Project') {
+			const derived = deriveProjectTitle(rawName)
+			if (derived) patch.title = derived
+		}
+		return patch
 	})
 
 	return asset
+}
+
+/** Filename → a clean project title: drop the extension, tidy separators. */
+function deriveProjectTitle(fileName: string): string {
+	const base = fileName.replace(/\.[^./\\]+$/, '') // strip a trailing extension
+	return base.replace(/[_]+/g, ' ').trim().slice(0, 120)
 }
 
 /** Merge a partial patch into one asset record (queued, safe under concurrency). */

@@ -11,7 +11,19 @@
         </button>
       </SlimTooltip>
 
-      <h1
+      <!-- Editable title (editor projects) — click to rename in place -->
+      <input v-if="editable && renaming" ref="titleInput" v-model="draft"
+        class="text-xl font-bold font-heading text-zinc-900 dark:text-zinc-100 tracking-tight min-w-[200px] max-w-[40%] ml-2 bg-transparent border-b border-primary/50 outline-none"
+        @keydown.enter.prevent="commitRename" @keydown.esc.prevent="cancelRename" @blur="commitRename" />
+      <button v-else-if="editable"
+        class="group/title flex items-center gap-1.5 min-w-0 max-w-[40%] ml-2"
+        title="Rename project" @click="startRename">
+        <span class="text-xl font-bold font-heading text-zinc-900 dark:text-zinc-100 truncate tracking-tight">
+          {{ title || 'Untitled Project' }}
+        </span>
+        <span class="iconify tabler--pencil w-3.5 h-3.5 text-zinc-400 opacity-0 group-hover/title:opacity-100 transition shrink-0"></span>
+      </button>
+      <h1 v-else
         class="text-xl font-bold font-heading text-zinc-900 dark:text-zinc-100 truncate tracking-tight min-w-[200px] max-w-[40%] ml-2">
         {{ title || 'Graph Task Manager' }}
       </h1>
@@ -48,13 +60,40 @@
 </template>
 
 <script setup lang="ts">
+import { nextTick, ref } from 'vue'
 import SlimTooltip from '../SlimTooltip.vue'
-defineProps<{
+
+const props = defineProps<{
   title?: string
   totalCost: number
+  editable?: boolean
 }>()
 
-defineEmits<{
+const emit = defineEmits<{
   (e: 'back'): void
+  (e: 'rename', value: string): void
 }>()
+
+const renaming = ref(false)
+const draft = ref('')
+const titleInput = ref<HTMLInputElement | null>(null)
+
+const startRename = async () => {
+  draft.value = props.title || ''
+  renaming.value = true
+  await nextTick()
+  titleInput.value?.focus()
+  titleInput.value?.select()
+}
+
+const commitRename = () => {
+  if (!renaming.value) return // guard: blur fires after esc/enter already closed it
+  renaming.value = false
+  const next = draft.value.trim()
+  if (next && next !== props.title) emit('rename', next)
+}
+
+const cancelRename = () => {
+  renaming.value = false
+}
 </script>

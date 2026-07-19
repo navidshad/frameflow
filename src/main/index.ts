@@ -371,6 +371,14 @@ app.whenReady().then(() => {
 		return await threadManager.createEditorThread(title || 'Untitled Project')
 	})
 
+	ipcMain.handle('rename-editor-project', async (_event, { threadId, title }: {
+		threadId: string, title: string
+	}) => {
+		const clean = (title || '').trim().slice(0, 120)
+		if (!clean) return null
+		return await threadManager.updateThread(threadId, { title: clean })
+	})
+
 	// Autosave of RENDERER-OWNED editor fields only. Main owns preprocessing-derived
 	// asset state (preprocessing/proxyPath/metadata/preprocessState/clips content);
 	// the renderer owns selection, clip-selected flags, tracks, timeline, meta, personas.

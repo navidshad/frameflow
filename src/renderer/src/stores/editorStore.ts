@@ -521,6 +521,15 @@ export const useEditorStore = defineStore('editor', () => {
 		await api.preprocessMedia({ threadId: threadId.value, assetId, steps: ['audio', 'transcript'] })
 	}
 
+	/** Rename the project (title is a main-owned Thread field). */
+	const renameProject = async (title: string) => {
+		if (!threadId.value) return
+		const clean = title.trim().slice(0, 120)
+		if (!clean) return
+		if (thread.value) thread.value.title = clean // optimistic; thread-updated echoes it
+		await api.renameEditorProject({ threadId: threadId.value, title: clean })
+	}
+
 	// ===== Scene-piece corrections (§5.2) =====
 
 	/**
@@ -1677,6 +1686,7 @@ export const useEditorStore = defineStore('editor', () => {
 		retryAsset,
 		describeAsset,
 		transcribeAsset,
+		renameProject,
 		redetectScenes,
 		mergeSelectedClips,
 		splitSelectedClips,

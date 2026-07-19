@@ -8,8 +8,8 @@
 			class="absolute bottom-[-10%] right-[-10%] w-[60%] h-[60%] bg-secondary/10 dark:bg-secondary/5 rounded-full blur-[140px] pointer-events-none transition-all duration-1000 animate-pulse-soft">
 		</div>
 
-		<GraphHeader :title="editorStore.thread?.title || 'Video Editor'" :total-cost="totalCost"
-			@back="router.push('/home')" />
+		<GraphHeader :title="editorStore.thread?.title || 'Untitled Project'" :total-cost="totalCost" editable
+			@back="router.push('/home')" @rename="editorStore.renameProject($event)" />
 
 		<!-- Export lives in the app's fixed top-right cluster so it composes
 		     with the settings/theme buttons instead of colliding with them -->
