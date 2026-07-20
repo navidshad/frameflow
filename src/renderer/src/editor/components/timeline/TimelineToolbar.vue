@@ -4,14 +4,15 @@
 			<span class="text-[10px] font-bold uppercase tracking-widest text-zinc-500">Timeline</span>
 
 			<!-- View toggle: Filmstrip / Context -->
-			<div class="flex items-center bg-zinc-100/80 dark:bg-zinc-900/80 rounded-lg p-0.5 border border-zinc-200 dark:border-zinc-800">
+			<div class="flex items-center bg-zinc-100/80 dark:bg-zinc-900/80 rounded-md p-0.5 border border-zinc-200 dark:border-zinc-800">
 				<button v-for="view in (['filmstrip', 'context'] as const)" :key="view"
-					class="px-2 py-1 rounded-md text-[9px] font-bold uppercase tracking-widest transition flex items-center gap-1"
+					:title="`${view} view`"
+					class="px-1.5 py-0.5 rounded text-[9px] font-bold uppercase tracking-widest transition flex items-center gap-1"
 					:class="store.timelineView === view
-						? 'bg-primary text-white shadow-md shadow-primary/20 ring-1 ring-primary/20'
+						? 'bg-primary text-white shadow-sm shadow-primary/20'
 						: 'text-zinc-500 hover:text-zinc-700 dark:hover:text-zinc-300'"
 					@click="store.timelineView = view">
-					<span :class="view === 'filmstrip' ? 'iconify tabler--photo' : 'iconify tabler--file-text'" class="w-3 h-3"></span>
+					<span :class="view === 'filmstrip' ? 'iconify tabler--photo' : 'iconify tabler--file-text'" class="w-2.5 h-2.5"></span>
 					{{ view }}
 				</button>
 			</div>
