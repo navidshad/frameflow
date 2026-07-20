@@ -76,10 +76,10 @@
 									<span v-if="tab === 'revisions' && revisionsBadge"
 										class="absolute top-0.5 right-0.5 w-1.5 h-1.5 rounded-full bg-secondary animate-pulse-soft"></span>
 								</button>
-								<button title="Close Chat"
-									class="ml-auto w-6 h-6 flex items-center justify-center rounded-lg text-zinc-400 hover:text-primary hover:bg-primary/10 transition shrink-0"
+								<button title="Collapse panel"
+									class="ml-auto w-7 h-7 flex items-center justify-center rounded-lg text-zinc-400 hover:text-primary hover:bg-primary/10 transition active:scale-95 shrink-0"
 									@click="chatColOpen = false">
-									<span class="iconify tabler--x w-3.5 h-3.5"></span>
+									<span class="iconify tabler--layout-sidebar-right-collapse w-4 h-4"></span>
 								</button>
 							</div>
 							<ChatPanel v-show="chatTab === 'chat'" class="flex-1 min-h-0" />
@@ -92,10 +92,10 @@
 						<div v-if="inspectorOpen" class="w-[280px] flex flex-col min-h-0 gap-1.5">
 							<div class="flex items-center gap-1 px-1 shrink-0">
 								<span class="text-[9px] font-bold uppercase tracking-widest text-primary bg-primary/10 px-2 py-1 rounded-lg">inspect</span>
-								<button title="Close Inspector"
-									class="ml-auto w-6 h-6 flex items-center justify-center rounded-lg text-zinc-400 hover:text-primary hover:bg-primary/10 transition shrink-0"
+								<button title="Collapse panel"
+									class="ml-auto w-7 h-7 flex items-center justify-center rounded-lg text-zinc-400 hover:text-primary hover:bg-primary/10 transition active:scale-95 shrink-0"
 									@click="inspectorOpen = false">
-									<span class="iconify tabler--x w-3.5 h-3.5"></span>
+									<span class="iconify tabler--layout-sidebar-right-collapse w-4 h-4"></span>
 								</button>
 							</div>
 							<InspectorPanel class="flex-1 min-h-0" />
