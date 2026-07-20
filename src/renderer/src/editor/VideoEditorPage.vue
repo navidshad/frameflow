@@ -59,31 +59,41 @@
 					<!-- Center: the monitor gets the full column now -->
 					<PreviewMonitor class="min-h-0" />
 
-					<!-- Right rail: Chat | Inspect | Revisions -->
+					<!-- Right rail: Inspect/Revisions (top) + Chat (bottom) — both visible -->
 					<div v-if="rightOpen" class="flex flex-col min-h-0 gap-1.5">
-						<!-- Naked segmented tabs — no container chrome -->
-						<div class="flex items-center gap-0.5 px-1 shrink-0">
-							<button v-for="tab in (['chat', 'inspect', 'revisions'] as const)" :key="tab"
-								class="px-2 py-1 rounded-lg text-[9px] font-bold uppercase tracking-widest transition relative"
-								:class="rightTab === tab
-									? 'text-primary bg-primary/10'
-									: 'text-zinc-400 hover:text-zinc-600 dark:hover:text-zinc-300'"
-								@click="selectRightTab(tab)">
-								{{ tab }}
-								<span v-if="tab === 'revisions' && revisionsBadge"
-									class="absolute top-0.5 right-0.5 w-1.5 h-1.5 rounded-full bg-secondary animate-pulse-soft"></span>
-								<span v-if="tab === 'chat' && chatBadge"
-									class="absolute top-0.5 right-0.5 w-1.5 h-1.5 rounded-full bg-accent animate-pulse-soft"></span>
-							</button>
-							<button title="Collapse panel"
-								class="ml-auto w-6 h-6 flex items-center justify-center rounded-lg text-zinc-400 hover:text-primary hover:bg-primary/10 transition shrink-0"
-								@click="rightOpen = false">
-								<span class="iconify tabler--layout-sidebar-right-collapse w-3.5 h-3.5"></span>
-							</button>
+						<!-- Top pane: Inspect | Revisions -->
+						<div class="flex flex-col min-h-0 flex-1">
+							<div class="flex items-center gap-0.5 px-1 shrink-0">
+								<button v-for="tab in (['inspect', 'revisions'] as const)" :key="tab"
+									class="px-2 py-1 rounded-lg text-[9px] font-bold uppercase tracking-widest transition relative"
+									:class="topTab === tab
+										? 'text-primary bg-primary/10'
+										: 'text-zinc-400 hover:text-zinc-600 dark:hover:text-zinc-300'"
+									@click="selectTopTab(tab)">
+									{{ tab }}
+									<span v-if="tab === 'revisions' && revisionsBadge"
+										class="absolute top-0.5 right-0.5 w-1.5 h-1.5 rounded-full bg-secondary animate-pulse-soft"></span>
+								</button>
+								<button title="Collapse panel"
+									class="ml-auto w-6 h-6 flex items-center justify-center rounded-lg text-zinc-400 hover:text-primary hover:bg-primary/10 transition shrink-0"
+									@click="rightOpen = false">
+									<span class="iconify tabler--layout-sidebar-right-collapse w-3.5 h-3.5"></span>
+								</button>
+							</div>
+							<InspectorPanel v-show="topTab === 'inspect'" class="flex-1 min-h-0" />
+							<RevisionsPanel v-if="topTab === 'revisions'" class="flex-1 min-h-0" />
 						</div>
-						<ChatPanel v-show="rightTab === 'chat'" class="flex-1 min-h-0" />
-						<InspectorPanel v-if="rightTab === 'inspect'" class="flex-1 min-h-0" />
-						<RevisionsPanel v-if="rightTab === 'revisions'" class="flex-1 min-h-0" />
+
+						<!-- Divider between the two panes -->
+						<div class="shrink-0 border-t border-zinc-200/70 dark:border-zinc-800 mx-1"></div>
+
+						<!-- Bottom pane: Chat, always visible alongside the Inspector -->
+						<div class="flex flex-col min-h-0 flex-[1.35]">
+							<div class="flex items-center gap-1 px-1 shrink-0">
+								<span class="text-[9px] font-bold uppercase tracking-widest text-primary bg-primary/10 px-2 py-1 rounded-lg">chat</span>
+							</div>
+							<ChatPanel class="flex-1 min-h-0" />
+						</div>
 					</div>
 					<CollapsedRail v-else side="right" label="Chat & Inspect" icon="tabler--message-circle"
 						:badge="chatBadge || revisionsBadge" @open="rightOpen = true" />
@@ -149,29 +159,33 @@ const CollapsedRail: FunctionalComponent<
 CollapsedRail.props = ['side', 'label', 'icon', 'badge']
 CollapsedRail.emits = ['open']
 
-// ===== Right-rail tabs =====
-const rightTab = ref<'chat' | 'inspect' | 'revisions'>('chat')
+// ===== Right rail =====
+// Chat is ALWAYS visible in the bottom pane; the top pane toggles between the
+// Inspector (selected item) and the Revisions tree.
+const topTab = ref<'inspect' | 'revisions'>('inspect')
 const revisionsBadge = ref(false)
 const chatBadge = ref(false)
 
-const selectRightTab = (tab: 'chat' | 'inspect' | 'revisions') => {
-	rightTab.value = tab
+const selectTopTab = (tab: 'inspect' | 'revisions') => {
+	topTab.value = tab
 	if (tab === 'revisions') revisionsBadge.value = false
-	if (tab === 'chat') chatBadge.value = false
 }
 
 watch(() => editorStore.lastResult, (result) => {
-	if (result && rightTab.value !== 'revisions') revisionsBadge.value = true
+	if (result && topTab.value !== 'revisions') revisionsBadge.value = true
 })
 
-// Badge the chat tab (or collapsed rail) when a turn completes off-screen
+// Badge the collapsed rail when a turn completes while the rail is closed.
 watch(() => editorStore.doc?.turns?.length ?? 0, (n, old) => {
-	if (n > (old ?? 0) && (rightTab.value !== 'chat' || !rightOpen.value)) chatBadge.value = true
+	if (n > (old ?? 0) && !rightOpen.value) chatBadge.value = true
 })
+watch(rightOpen, (open) => { if (open) chatBadge.value = false })
 
-// Auto-select a useful tab: picking a clip/item while on chat is common —
-// keep manual control, but jump to Inspect when a selection happens with the
-// rail on chat? Deliberately NOT auto-switching: predictability wins.
+// Selecting a clip while browsing Revisions flips the top pane to the Inspector
+// so its details are visible (Chat stays put below).
+watch(() => editorStore.selectedItemIds.length, (n) => {
+	if (n > 0 && topTab.value === 'revisions') topTab.value = 'inspect'
+})
 
 const totalCost = computed(() =>
 	(editorStore.thread?.usageHistory || []).reduce((sum, record) => sum + (record.cost || 0), 0)
