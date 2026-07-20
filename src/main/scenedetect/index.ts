@@ -173,11 +173,16 @@ export class SceneDetector {
      * @returns Array of detected scenes sorted by start time.
      * @throws If the CLI exits non-zero, the CSV is missing, or values cannot be parsed.
      */
-    async detectScenes(videoPath: string, signal?: AbortSignal): Promise<Scene[]> {
+    async detectScenes(
+        videoPath: string,
+        signal?: AbortSignal,
+        threshold: number = CONTENT_THRESHOLD,
+        onProgress?: (percent: number) => void
+    ): Promise<Scene[]> {
         const tempDir = await fs.mkdtemp(join(tmpdir(), 'scenedetect-'))
 
         try {
-            await this.runScenedetect(videoPath, tempDir, signal)
+            await this.runScenedetect(videoPath, tempDir, signal, threshold, onProgress)
             const csvPath = await this.locateCsvFile(tempDir, videoPath)
             const csvContent = await fs.readFile(csvPath, 'utf-8')
             return this.parseCsv(csvContent)
@@ -194,14 +199,20 @@ export class SceneDetector {
     /**
      * Execute the scenedetect CLI process.
      */
-    private async runScenedetect(videoPath: string, outputDir: string, signal?: AbortSignal): Promise<void> {
+    private async runScenedetect(
+        videoPath: string,
+        outputDir: string,
+        signal?: AbortSignal,
+        threshold: number = CONTENT_THRESHOLD,
+        onProgress?: (percent: number) => void
+    ): Promise<void> {
         const pathOrRef = await resolveScenedetectPath()
-        
+
         return new Promise((resolve, reject) => {
             const scenedetectArgs = [
                 '-i', videoPath,
                 'detect-content',
-                '-t', String(CONTENT_THRESHOLD),
+                '-t', String(threshold),
                 'list-scenes',
                 '-o', outputDir,
                 '-f', CSV_FILENAME,
@@ -219,6 +230,17 @@ export class SceneDetector {
                 args = scenedetectArgs
             }
 
+            const parseProgress = (chunk: Buffer | string) => {
+                // scenedetect's tqdm writes "Detected: N | Progress:  45%|…" to
+                // stderr even without a tty — surface the last percent per chunk.
+                if (!onProgress) return
+                const matches = String(chunk).match(/Progress:\s*(\d{1,3})%/g)
+                if (matches?.length) {
+                    const last = matches[matches.length - 1].match(/(\d{1,3})/)
+                    if (last) onProgress(Number(last[1]))
+                }
+            }
+
             const child = execFile(cmd, args, (error, _stdout, stderr) => {
                 if (error) {
                     if (signal?.aborted) {
@@ -234,6 +256,8 @@ export class SceneDetector {
                 }
                 resolve()
             })
+
+            child.stderr?.on('data', parseProgress)
 
             if (signal) {
                 signal.addEventListener('abort', () => {

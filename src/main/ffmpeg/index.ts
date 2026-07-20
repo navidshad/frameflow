@@ -1,9 +1,10 @@
 import ffmpeg from 'fluent-ffmpeg'
 import ffmpegPath from 'ffmpeg-static'
 import ffprobePath from 'ffprobe-static'
+import fs from 'fs'
 import { join, basename, extname } from 'path'
 import process from 'node:process'
-import { TimelineSegment } from '../../shared/types'
+import { TimelineSegment, SilenceRegion } from '../../shared/types'
 
 const IS_MAC = process.platform === 'darwin'
 
@@ -131,6 +132,33 @@ export async function getVideoMetadata(filePath: string): Promise<import('../../
 }
 
 /**
+ * Metadata for an audio-only source (no video stream). Mirrors VideoMetadata's
+ * shape so a MediaAsset can carry it uniformly; width/height/fps are 0 since
+ * there is no picture, and the export normalization target ignores audio assets.
+ */
+export async function getAudioMetadata(filePath: string): Promise<import('../../shared/types').VideoMetadata> {
+	return new Promise((resolve, reject) => {
+		ffmpeg.ffprobe(filePath, (err, metadata) => {
+			if (err) return reject(err)
+			const audioStream = metadata.streams.find((s) => s.codec_type === 'audio')
+			if (!audioStream) {
+				return reject(new Error('No audio stream found'))
+			}
+			resolve({
+				duration: metadata.format.duration || 0,
+				width: 0,
+				height: 0,
+				size: metadata.format.size || 0,
+				codec: audioStream.codec_name || 'unknown',
+				fps: 0,
+				format: metadata.format.format_name || 'unknown',
+				hasAudio: true
+			})
+		})
+	})
+}
+
+/**
  * Returns true if the video resolution is 480p or lower.
  */
 export async function isVideoLowResolution(filePath: string): Promise<boolean> {
@@ -146,11 +174,16 @@ export async function isVideoLowResolution(filePath: string): Promise<boolean> {
 /**
  * Converts video to low resolution (480p).
  */
+// A proxy for scrubbing / thumbnails / scene detection never needs more than
+// this; halving a 60fps source roughly halves proxy encode time.
+const PROXY_MAX_FPS = 30
+
 export async function toLowResolution(
 	filePath: string,
 	outputDir: string,
 	onProgress?: (percent: number) => void,
-	signal?: AbortSignal
+	signal?: AbortSignal,
+	opts?: { sourceFps?: number }
 ): Promise<string> {
 	const ext = extname(filePath).toLowerCase()
 	const rawFilename = basename(filePath, extname(filePath))
@@ -161,12 +194,23 @@ export async function toLowResolution(
 		throw new Error('FFmpeg downscaling aborted by user before start')
 	}
 
-	return new Promise((resolve, reject) => {
-		const isWebm = ext === '.webm'
+	const isWebm = ext === '.webm'
 
+	// Cap fps only when the source is above the ceiling — applying fps=30 to a
+	// <=30fps source would DUPLICATE frames (slower + larger), not drop any.
+	const capFps = !!opts?.sourceFps && opts.sourceFps > PROXY_MAX_FPS
+	const vf = capFps ? `fps=${PROXY_MAX_FPS},scale=-2:480` : 'scale=-2:480'
 
+	// Hardware-accelerated DECODE (Mac) is a clear win for decode-bound proxies
+	// (~-25%). But when we're already dropping frames via the fps filter,
+	// benchmarks show the per-frame GPU→CPU download makes it slower than plain
+	// software decode — so only use hw decode when NOT capping fps.
+	const preferHwDecode = IS_MAC && !isWebm && !capFps
+
+	const encode = (hwDecode: boolean): Promise<string> => new Promise((resolve, reject) => {
 		const command = ffmpeg(filePath)
-			.outputOptions(['-vf', 'scale=-2:480'])
+		if (hwDecode) command.inputOptions(['-hwaccel', 'videotoolbox'])
+		command.outputOptions(['-vf', vf])
 
 		if (isWebm) {
 			// WebM (VP8/VP9) optimizations
@@ -179,8 +223,7 @@ export async function toLowResolution(
 				'-b:v', '1M'
 			])
 		} else if (IS_MAC) {
-			// Mac hardware acceleration
-
+			// Mac hardware encode
 			command.outputOptions([
 				'-c:v', 'h264_videotoolbox',
 				'-b:v', '2M',
@@ -199,10 +242,7 @@ export async function toLowResolution(
 		}
 
 		if (signal) {
-			signal.addEventListener('abort', () => {
-				console.log('FFmpeg toLowResolution aborted by signal')
-				command.kill('SIGKILL')
-			})
+			signal.addEventListener('abort', () => command.kill('SIGKILL'))
 		}
 
 		command
@@ -223,6 +263,18 @@ export async function toLowResolution(
 			})
 			.run()
 	})
+
+	try {
+		return await encode(preferHwDecode)
+	} catch (err) {
+		// Hardware decode can reject some inputs — fall back to software decode
+		// once rather than failing the whole proxy step.
+		if (!signal?.aborted && preferHwDecode) {
+			console.warn('[ffmpeg] hw-decode proxy failed, retrying with software decode:', (err as Error).message)
+			return await encode(false)
+		}
+		throw err
+	}
 }
 
 /**
@@ -463,6 +515,129 @@ export async function extractFrame(
 				console.log('FFmpeg extractFrame aborted by signal')
 				command.kill('SIGKILL')
 			})
+		}
+
+		command.run()
+	})
+}
+
+/**
+ * Batched filmstrip extractor (PRD §5.5). ONE ffmpeg pass samples a frame
+ * every `intervalSec` seconds (`fps=1/interval`) at 120px height — unlike
+ * extractFrame's process-per-frame, a multi-hour source stays a single
+ * bounded run. Returns entries mapping each frame to its source time.
+ */
+export async function generateFilmstrip(
+	videoPath: string,
+	outputDir: string,
+	intervalSec: number,
+	signal?: AbortSignal,
+	onProgress?: (percent: number) => void
+): Promise<{ time: number; thumbnailPath: string }[]> {
+	if (signal?.aborted) {
+		throw new Error('Filmstrip generation aborted before start')
+	}
+
+	const pattern = join(outputDir, 'strip_%05d.jpg')
+
+	await new Promise<void>((resolve, reject) => {
+		const command = ffmpeg(videoPath)
+			.outputOptions([
+				'-vf', `fps=1/${intervalSec},scale=-2:120`,
+				'-q:v', '5'
+			])
+			.output(pattern)
+			.on('progress', (progress) => {
+				if (onProgress && progress.percent) {
+					onProgress(Math.round(progress.percent))
+				}
+			})
+			.on('end', () => resolve())
+			.on('error', (err) => {
+				if (signal?.aborted) {
+					return reject(new Error('Filmstrip generation aborted by user'))
+				}
+				console.error('Error generating filmstrip:', err)
+				reject(err)
+			})
+
+		if (signal) {
+			signal.addEventListener('abort', () => command.kill('SIGKILL'))
+		}
+
+		command.run()
+	})
+
+	return fs.readdirSync(outputDir)
+		.filter((f) => /^strip_\d+\.jpg$/.test(f))
+		.sort()
+		.map((f, i) => ({
+			// fps=1/N emits the frame representing window [iN, (i+1)N) — stamp it
+			// at the window centre so nearest-entry lookup lands inside the window.
+			time: (i + 0.5) * intervalSec,
+			thumbnailPath: join(outputDir, f)
+		}))
+}
+
+/**
+ * Assistive silence/dead-air finder (PRD §5.6). Runs ffmpeg's `silencedetect`
+ * audio filter over the source and parses the `silence_start`/`silence_end`
+ * markers off stderr into source-time regions. Read-only analysis — it never
+ * mutates media; the caller reviews the ranges before applying any cut.
+ *
+ * Requires an audio stream — guard with `metadata.hasAudio` before calling.
+ */
+export async function detectSilence(
+	videoPath: string,
+	opts?: { noiseDb?: number; minDurationSec?: number },
+	signal?: AbortSignal,
+	onProgress?: (percent: number) => void
+): Promise<SilenceRegion[]> {
+	const noiseDb = opts?.noiseDb ?? -30
+	const minDurationSec = opts?.minDurationSec ?? 0.5
+
+	if (signal?.aborted) {
+		throw new Error('Silence detection aborted before start')
+	}
+
+	return new Promise((resolve, reject) => {
+		const regions: SilenceRegion[] = []
+		let pendingStart: number | null = null
+
+		const command = ffmpeg(videoPath)
+			.audioFilters(`silencedetect=noise=${noiseDb}dB:d=${minDurationSec}`)
+			.outputOptions(['-f', 'null'])
+			.output(process.platform === 'win32' ? 'NUL' : '/dev/null')
+			.on('progress', (progress) => {
+				if (onProgress && progress.percent) {
+					onProgress(Math.round(progress.percent))
+				}
+			})
+			.on('stderr', (line: string) => {
+				const startMatch = line.match(/silence_start:\s*(-?[\d.]+)/)
+				if (startMatch) {
+					pendingStart = parseFloat(startMatch[1])
+					return
+				}
+				const endMatch = line.match(/silence_end:\s*(-?[\d.]+)/)
+				if (endMatch) {
+					const end = parseFloat(endMatch[1])
+					const start = Math.max(0, pendingStart ?? 0)
+					if (Number.isFinite(end) && end > start) regions.push({ start, end })
+					pendingStart = null
+				}
+			})
+			.on('end', () => resolve(regions))
+			.on('error', (err) => {
+				if (signal?.aborted) {
+					return reject(new Error('Silence detection aborted by user'))
+				}
+				console.error('Error during silence detection:', err)
+				reject(err)
+			})
+
+		if (signal) {
+			signal.addEventListener('abort', () => command.kill('SIGKILL'))
 		}
 
 		command.run()

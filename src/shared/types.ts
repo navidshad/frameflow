@@ -70,10 +70,12 @@ export interface Message {
 	createdAt: number;
 }
 
+export type ThreadType = 'video' | 'image' | 'editor'
+
 export interface Thread {
 	id: string
 	title: string
-	type?: 'video' | 'image' // New
+	type?: ThreadType
 	videoPath?: string // Now optional
 	preprocessing: {
 		/**
@@ -158,8 +160,285 @@ export interface Thread {
 	videoMetadata?: VideoMetadata
 	usageHistory?: UsageRecord[]
 	missing?: boolean
+	/** Present only when type === 'editor' — the timeline editor document. */
+	editor?: EditorDocument
 	createdAt: number
 	updatedAt: number
+}
+
+// ============================================================
+// Timeline Video Editor (see video-editor-prd.md §6)
+// Canonical time unit is SECONDS. SRT strings only appear at the
+// boundary with legacy generateTimeline/assembleVideo.
+// ============================================================
+
+export interface EditorDocument {
+	schemaVersion: 1
+	media: MediaAsset[]         // imported sources
+	tracks: Track[]             // lane definitions
+	timeline: TimelineItem[]    // placements across tracks — the live EDL
+	timelineMeta: TimelineMeta
+	activePersonaId: string
+	customPersonas?: EditorPersona[]  // project-local personas
+	turns: PromptTurn[]         // prompt-request log (no snapshots)
+	historyRef: EditorHistoryRef      // pointer into the sidecar history file
+	selection?: { clipIds?: string[]; itemIds?: string[] }
+	markers?: EditorMarker[]    // renderer-owned; NOT undoable (outside TimelineDiff)
+	/** Pointer into the revisions sidecar (userData/editor-revisions/{id}.json). */
+	currentRevisionId?: string
+}
+
+export interface TimelineMeta {
+	fps: number
+	width: number
+	height: number
+	duration: number            // seconds; derived = max(item.timelineStart + item.duration)
+	aspectRatio?: string        // "16:9" | "9:16"
+}
+
+export type MediaKind = 'video' | 'image' | 'audio'
+
+export type MediaPreprocessState = 'pending' | 'running' | 'completed' | 'error'
+
+export interface MediaAsset {
+	id: string
+	kind: MediaKind
+	name: string
+	originalPath: string        // absolute; served via media://
+	proxyPath?: string          // 480p proxy === lowResVideoPath
+	metadata?: VideoMetadata
+	/** Reuses the EXACT shape of Thread['preprocessing'] so existing phases run per-asset. */
+	preprocessing: Thread['preprocessing']
+	preprocessTasks?: Record<string, BackgroundTask>
+	preprocessState?: MediaPreprocessState
+	preprocessError?: string
+	clips: Clip[]               // derived from scene detection
+	filmstrip?: FilmstripEntry[]
+	createdAt: number
+}
+
+export interface FilmstripEntry { time: number; thumbnailPath: string }
+
+export interface Clip {        // a selectable scene piece
+	id: string
+	sourceAssetId: string
+	index: number               // 1-based, mirrors Scene/EnrichedTimelineSegment ordering
+	in: number                  // seconds into source (Scene.startTime)
+	out: number                 // seconds into source (Scene.endTime)
+	duration: number            // out - in
+	thumbnailPath?: string
+	visual?: string             // === EnrichedTimelineSegment.visual — context-preview text
+	text?: string               // transcript excerpt overlapping [in,out]
+	selected: boolean           // media-panel multi-select
+	masterSegmentIndex?: number // back-reference into the enriched master timeline
+}
+
+export type TrackKind = 'video' | 'audio' | 'overlay' | 'text'
+
+export interface Track {
+	id: string
+	kind: TrackKind             // 'overlay' | 'text' = "other objects for later"
+	name: string
+	order: number               // stacking order (0 = bottom video)
+	muted: boolean
+	locked: boolean
+	hidden: boolean
+	height: number              // px in the timeline UI
+}
+
+export interface TimelineItem {  // an instance of a clip placed on a track
+	id: string
+	trackId: string
+	sourceAssetId: string
+	sourceClipId?: string       // set when dragged from a detected Clip
+	masterSegmentIndex?: number // present only for a whole, un-split master scene
+	timelineStart: number       // seconds on the sequence timeline
+	in: number                  // seconds into source (trim start)
+	out: number                 // seconds into source (trim end)
+	speed: number               // constant playback rate (default 1.0); retime tool
+	preservePitch: boolean      // default true — audio retimed with atempo keeps pitch
+	duration: number            // ON-TIMELINE duration = (out - in) / speed
+	label?: string
+	gain?: number               // audio gain multiplier (default 1.0)
+	muted?: boolean
+	// ---- Stubs (deferred: effects/transitions/transforms/text) ----
+	transform?: TimelineItemTransform
+	effects?: EffectRef[]
+	transition?: { in?: TransitionRef; out?: TransitionRef }
+	text?: TextOverlaySpec
+}
+
+export interface TimelineItemTransform { x?: number; y?: number; scale?: number; rotation?: number }
+export interface EffectRef { id: string; kind: string; params?: Record<string, unknown> } // stub
+export interface TransitionRef { kind: string; duration: number }                          // stub
+export interface TextOverlaySpec { content: string; style?: Record<string, unknown> }      // stub
+
+export interface EditorPersona {
+	id: string
+	name: string
+	icon: string                // emoji or Tabler icon id
+	description: string
+	systemPrompt: string        // the whole backing for v1
+	builtin: boolean            // seeded personas can't be deleted, only cloned
+	tone?: string
+	mode?: 'longform' | 'summarize'
+	defaults?: { targetDurationSec?: number | null; aspectRatio?: string; pacing?: 'tight' | 'balanced' | 'relaxed' }
+	featureSets?: FeatureSetRef[]  // deferred; always [] in v1
+}
+
+export interface FeatureSetRef { id: string; name: string } // stub
+
+export interface EditorHistoryRef {
+	currentStepId: string       // undo/redo pointer (persisted with the doc → undo survives restart)
+	stepCount: number
+}
+
+export interface EditorMarker {
+	id: string
+	time: number                // seconds on the sequence timeline
+	label?: string
+}
+
+/** A low-energy region in a source asset (seconds into the source), from ffmpeg silencedetect. */
+export interface SilenceRegion {
+	start: number
+	end: number
+}
+
+// ---- Undo/redo sidecar file: userData/editor-history/{threadId}.json ----
+// Kept OUT of threads/{id}.json so the debounced doc autosave never rewrites
+// history, and history growth never bloats the doc (PRD §6).
+export interface EditorHistoryFile {
+	threadId: string
+	steps: EditorHistoryStep[]     // ring buffer, MAX_STEPS = 50
+	keyframes: TimelineSnapshot[]  // sparse; every K = 10 steps, bounds replay cost
+	currentStepId: string          // informational — the pointer of record is doc.historyRef
+}
+
+export interface EditorHistoryStep {
+	id: string
+	seq: number                 // monotonic (Thread.versionCounter via getNextVersion)
+	origin: 'init' | 'ai' | 'manual'
+	label?: string
+	forward: TimelineDiff       // apply to go newer
+	inverse: TimelineDiff       // apply to undo
+	turnId?: string             // set when origin === 'ai'
+	createdAt: number
+}
+
+export interface TimelineSnapshot {
+	stepId: string              // state AFTER this step was applied
+	tracks: Track[]
+	timeline: TimelineItem[]
+	timelineMeta: TimelineMeta
+}
+
+// ===== Revision tree (coarse, permanent checkpoints above the undo ring) =====
+
+export type RevisionOrigin = 'init' | 'ai' | 'manual'
+
+/**
+ * One node of the revision tree. Snapshots are FULL and self-contained —
+ * never diff-chained into the undo ring (the ring evicts steps: MAX 50 +
+ * redo-branch truncation), so a revision must always restore standalone.
+ */
+export interface EditorRevision {
+	id: string
+	parentId: string | null     // null only for the root 'init' revision
+	seq: number                 // sidecar revisionCounter; displayed "V{seq}"
+	origin: RevisionOrigin
+	label: string               // persona name / user label / 'Original' / 'Auto checkpoint'
+	turnId?: string             // origin === 'ai'
+	personaId?: string          // origin === 'ai' — drives the list-item icon
+	snapshot: {
+		tracks: Track[]
+		timeline: TimelineItem[]
+		timelineMeta: TimelineMeta
+		markers?: EditorMarker[]  // markers ride in the snapshot so switches restore them
+	}
+	createdAt: number
+}
+
+// ---- Revisions sidecar: userData/editor-revisions/{threadId}.json ----
+export interface EditorRevisionsFile {
+	threadId: string
+	schemaVersion: 1
+	revisionCounter: number     // max-ever; V numbers never reused after deletes
+	revisions: EditorRevision[]
+}
+
+export interface PromptTurn {
+	id: string
+	personaId: string
+	prompt: string
+	baseStepId: string
+	resultStepId?: string
+	status: 'pending' | 'running' | 'completed' | 'error'
+	error?: string
+	diff?: TimelineDiff
+	rationale?: string
+	answer?: string             // set when the request was a question, not an edit
+	droppedOps?: string[]       // ops pruned during validation (surfaced on the card)
+	scopeLabel?: string         // e.g. "Chapter 3 · 12 items"
+	revisionId?: string         // revision created from this turn's applied diff
+	usage?: Usage
+	cost?: number
+	createdAt: number
+}
+
+/**
+ * Constrained edit-operation schema the AI model returns (M3).
+ * Deliberately NOT a raw TimelineDiff: item ids for adds are generated
+ * server-side, durations are never model-set, and adds reference assets +
+ * scene numbers from the provided context. Mapped to TimelineDiff by
+ * opsToDiff() in src/main/editor/prompt.ts.
+ */
+export interface EditorOps {
+	answer?: string
+	rationale?: string
+	removeItemIds?: string[]
+	updateItems?: Array<{
+		id: string
+		timelineStart?: number
+		in?: number
+		out?: number
+		speed?: number
+		label?: string
+	}>
+	addClips?: Array<{
+		assetId: string
+		sceneIndex?: number       // preferred: a scene # from AVAILABLE SCENES
+		in?: number               // alternative: explicit source range
+		out?: number
+		atSec?: number            // placement (optional)
+		afterItemId?: string
+		label?: string
+	}>
+	addMarkers?: Array<{ atSec: number; label: string }>
+}
+
+export type TimelineDiff = {
+	schemaVersion: number
+	addItems?: TimelineItem[]
+	removeItemIds?: string[]
+	updateItems?: Array<{ id: string } & Partial<TimelineItem>>
+	addTracks?: Track[]
+	removeTrackIds?: string[]
+}
+
+// ===== Export / render (M4) =====
+
+export type ExportQuality = 'original' | 'preview'
+
+export type RenderPhase = 'rendering' | 'stitching' | 'done' | 'error'
+
+export interface EditorRenderProgress {
+	threadId: string
+	renderId: string
+	percent: number
+	phase: RenderPhase
+	outputPath?: string
+	error?: string
 }
 
 export interface TimelineSegment {
@@ -198,7 +477,7 @@ export interface ModelPricing {
 	}
 }
 
-export type OperationType = 'raw-transcript' | 'corrected-transcript' | 'intent' | 'timeline-new' | 'timeline-edit' | 'thumbnail' | 'scene-description' | 'image-extraction' | 'image-intent' | 'image-generation' | 'image-upscale'
+export type OperationType = 'raw-transcript' | 'corrected-transcript' | 'intent' | 'timeline-new' | 'timeline-edit' | 'thumbnail' | 'scene-description' | 'image-extraction' | 'image-intent' | 'image-generation' | 'image-upscale' | 'editor-edit'
 
 export type UpscaleFactor = 'x2' | 'x4'
 

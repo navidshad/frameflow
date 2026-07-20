@@ -5,6 +5,7 @@ import SettingsPage from './pages/SettingsPage.vue'
 import HomePage from './pages/HomePage.vue'
 
 import GraphChatPage from './pages/GraphChatPage.vue'
+import VideoEditorPage from './editor/VideoEditorPage.vue'
 
 const routes = [
 	{
@@ -27,6 +28,11 @@ const routes = [
 		path: '/chat/:id',
 		name: 'chat',
 		component: GraphChatPage
+	},
+	{
+		path: '/editor/:id',
+		name: 'editor',
+		component: VideoEditorPage
 	},
 
 	{

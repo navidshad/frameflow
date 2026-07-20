@@ -3,7 +3,7 @@ import fs from 'fs'
 import path from 'path'
 import { v4 as uuidv4 } from 'uuid'
 import { MessageRole, FileType } from '@shared/types'
-import type { Message, Thread, Usage, UsageRecord, VideoMetadata } from '@shared/types'
+import type { EditorDocument, Message, Thread, Track, Usage, UsageRecord, VideoMetadata } from '@shared/types'
 import { settingsManager } from '../settings'
 import { getVideoMetadata } from '../ffmpeg'
 import { THREAD_DIRS } from '../constants/paths'
@@ -137,6 +137,58 @@ class ThreadManager {
 		return thread
 	}
 
+	// Create a new timeline-editor project thread.
+	// Unlike createThread, no videoPath is required and NO preprocessing auto-starts —
+	// media is imported per-asset inside the editor (see src/main/editor/).
+	async createEditorThread(title: string): Promise<Thread> {
+		const id = uuidv4()
+		const tempDir = settingsManager.getThreadTempDir(id)
+
+		const seedTrack = (kind: Track['kind'], name: string, order: number): Track => ({
+			id: uuidv4(),
+			kind,
+			name,
+			order,
+			muted: false,
+			locked: false,
+			hidden: false,
+			height: 64
+		})
+
+		const editor: EditorDocument = {
+			schemaVersion: 1,
+			media: [],
+			tracks: [
+				seedTrack('video', 'V1', 0),
+				seedTrack('audio', 'A1', 1),
+				seedTrack('overlay', 'OV', 2)
+			],
+			timeline: [],
+			timelineMeta: { fps: 30, width: 1920, height: 1080, duration: 0 },
+			activePersonaId: '',
+			turns: [],
+			historyRef: { currentStepId: '', stepCount: 0 },
+			selection: {}
+		}
+
+		const thread: Thread = {
+			id,
+			title,
+			type: 'editor',
+			preprocessing: {},
+			tempDir,
+			messages: [],
+			versionCounter: 0,
+			usageHistory: [],
+			editor,
+			createdAt: Date.now(),
+			updatedAt: Date.now()
+		}
+
+		this.saveThread(thread)
+		return thread
+	}
+
 
 	// Helper to normalize paths (handles symlinks like /var vs /private/var on macOS)
 	private normalize(p: string | undefined): string | undefined {
@@ -208,6 +260,30 @@ class ThreadManager {
 					}
 					return msg
 				})
+
+				// Update editor document media paths (timeline editor threads)
+				if (thread.editor?.media) {
+					for (const asset of thread.editor.media) {
+						asset.originalPath = fixPath(asset.originalPath) || asset.originalPath
+						asset.proxyPath = fixPath(asset.proxyPath)
+						if (asset.preprocessing) {
+							for (const key of Object.keys(asset.preprocessing) as Array<keyof Thread['preprocessing']>) {
+								const value = asset.preprocessing[key]
+								if (typeof value === 'string') {
+									(asset.preprocessing as any)[key] = fixPath(value)
+								} else if (Array.isArray(value)) {
+									(asset.preprocessing as any)[key] = value.map(fixPath)
+								}
+							}
+						}
+						for (const clip of asset.clips || []) {
+							clip.thumbnailPath = fixPath(clip.thumbnailPath)
+						}
+						for (const entry of asset.filmstrip || []) {
+							entry.thumbnailPath = fixPath(entry.thumbnailPath) || entry.thumbnailPath
+						}
+					}
+				}
 
 				// Save the repaired thread back to metadata and mirror it
 				this.saveThread(thread)
@@ -320,13 +396,19 @@ class ThreadManager {
 		}
 	}
 
-	// Update a thread atomically
-	updateThread(id: string, updates: Partial<Thread>): Promise<Thread | null> {
+	// Update a thread atomically via a mutator that runs INSIDE the queued closure.
+	// The mutator receives the freshest thread state and returns the partial update
+	// (or null to skip). This makes concurrent read-modify-write patterns safe
+	// (e.g. multiple assets patching thread.editor.media in parallel).
+	updateThreadWith(id: string, mutator: (thread: Thread) => Partial<Thread> | null): Promise<Thread | null> {
 		const existingQueue = this.updateQueues.get(id) || Promise.resolve()
 
 		const nextUpdate = existingQueue.then(async () => {
 			const thread = this.getThread(id)
 			if (!thread) return null
+
+			const updates = mutator(thread)
+			if (!updates) return thread
 
 			const updatedThread = {
 				...thread,
@@ -357,6 +439,11 @@ class ThreadManager {
 		})
 
 		return nextUpdate
+	}
+
+	// Update a thread atomically with a precomputed partial.
+	updateThread(id: string, updates: Partial<Thread>): Promise<Thread | null> {
+		return this.updateThreadWith(id, () => updates)
 	}
 
 	private deleteFile(filePath: string) {
