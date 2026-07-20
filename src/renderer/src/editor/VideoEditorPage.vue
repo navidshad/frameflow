@@ -49,7 +49,7 @@
 			<main class="flex-1 min-h-0 flex flex-col z-10 p-3 gap-3">
 				<!-- Top zones: media | preview | right rail — rails collapse to slim strips -->
 				<div class="flex-1 min-h-0 grid gap-3 transition-all duration-300"
-					:style="{ gridTemplateColumns: `${leftOpen ? '280px' : '36px'} minmax(0,1fr) ${rightHasContent ? '340px' : '44px'}` }">
+					:style="{ gridTemplateColumns: `${leftOpen ? '280px' : '36px'} minmax(0,1fr) auto` }">
 
 					<!-- Left rail: media -->
 					<MediaPanel v-if="leftOpen" v-model:collapsed="leftCollapsedProxy" />
@@ -59,13 +59,12 @@
 					<!-- Center: the monitor gets the full column now -->
 					<PreviewMonitor class="min-h-0" />
 
-					<!-- Right rail: two independently-collapsible rows —
-					     [Chat | Revisions] and [Inspector]. Closing both narrows
-					     the rail so the player widens. -->
-					<div v-if="rightHasContent" class="flex flex-col min-h-0 gap-1.5">
-						<!-- Row 1: Chat / Revisions -->
-						<div v-if="chatRowOpen" class="flex flex-col min-h-0"
-							:class="inspectorOpen ? 'flex-[1.4]' : 'flex-1'">
+					<!-- Right region: two independently-collapsible COLUMNS —
+					     [Chat | Revisions] and [Inspector]. Closing a column frees
+					     its horizontal space so the player widens. -->
+					<div class="flex min-h-0 gap-3">
+						<!-- Column 1: Chat / Revisions -->
+						<div v-if="chatColOpen" class="w-[300px] flex flex-col min-h-0 gap-1.5">
 							<div class="flex items-center gap-0.5 px-1 shrink-0">
 								<button v-for="tab in (['chat', 'revisions'] as const)" :key="tab"
 									class="px-2 py-1 rounded-lg text-[9px] font-bold uppercase tracking-widest transition relative"
@@ -77,28 +76,23 @@
 									<span v-if="tab === 'revisions' && revisionsBadge"
 										class="absolute top-0.5 right-0.5 w-1.5 h-1.5 rounded-full bg-secondary animate-pulse-soft"></span>
 								</button>
-								<button title="Close this row"
+								<button title="Close Chat"
 									class="ml-auto w-6 h-6 flex items-center justify-center rounded-lg text-zinc-400 hover:text-primary hover:bg-primary/10 transition shrink-0"
-									@click="chatRowOpen = false">
+									@click="chatColOpen = false">
 									<span class="iconify tabler--x w-3.5 h-3.5"></span>
 								</button>
 							</div>
 							<ChatPanel v-show="chatTab === 'chat'" class="flex-1 min-h-0" />
 							<RevisionsPanel v-if="chatTab === 'revisions'" class="flex-1 min-h-0" />
 						</div>
-						<button v-else
-							class="shrink-0 flex items-center gap-1.5 px-2 py-1.5 rounded-lg text-[9px] font-bold uppercase tracking-widest text-zinc-400 hover:text-primary hover:bg-primary/10 transition"
-							@click="chatRowOpen = true">
-							<span class="iconify tabler--chevron-down w-3 h-3"></span> Chat &amp; Revisions
-						</button>
+						<CollapsedRail v-else side="right" label="Chat" icon="tabler--message-circle"
+							:badge="chatBadge || revisionsBadge" @open="chatColOpen = true" />
 
-						<div v-if="chatRowOpen && inspectorOpen" class="shrink-0 border-t border-zinc-200/70 dark:border-zinc-800 mx-1"></div>
-
-						<!-- Row 2: Inspector -->
-						<div v-if="inspectorOpen" class="flex flex-col min-h-0 flex-1">
+						<!-- Column 2: Inspector -->
+						<div v-if="inspectorOpen" class="w-[280px] flex flex-col min-h-0 gap-1.5">
 							<div class="flex items-center gap-1 px-1 shrink-0">
 								<span class="text-[9px] font-bold uppercase tracking-widest text-primary bg-primary/10 px-2 py-1 rounded-lg">inspect</span>
-								<button title="Close this row"
+								<button title="Close Inspector"
 									class="ml-auto w-6 h-6 flex items-center justify-center rounded-lg text-zinc-400 hover:text-primary hover:bg-primary/10 transition shrink-0"
 									@click="inspectorOpen = false">
 									<span class="iconify tabler--x w-3.5 h-3.5"></span>
@@ -106,26 +100,8 @@
 							</div>
 							<InspectorPanel class="flex-1 min-h-0" />
 						</div>
-						<button v-else
-							class="shrink-0 flex items-center gap-1.5 px-2 py-1.5 rounded-lg text-[9px] font-bold uppercase tracking-widest text-zinc-400 hover:text-primary hover:bg-primary/10 transition"
-							@click="inspectorOpen = true">
-							<span class="iconify tabler--chevron-down w-3 h-3"></span> Inspector
-						</button>
-					</div>
-
-					<!-- Both rows closed: slim strip with reopen buttons; player widens -->
-					<div v-else class="flex flex-col items-center gap-2 pt-1">
-						<button title="Open Chat & Revisions"
-							class="w-8 h-8 flex items-center justify-center rounded-lg text-zinc-400 hover:text-primary hover:bg-primary/10 transition relative"
-							@click="chatRowOpen = true">
-							<span class="iconify tabler--message-circle w-4 h-4"></span>
-							<span v-if="chatBadge || revisionsBadge" class="absolute top-1 right-1 w-1.5 h-1.5 rounded-full bg-accent animate-pulse-soft"></span>
-						</button>
-						<button title="Open Inspector"
-							class="w-8 h-8 flex items-center justify-center rounded-lg text-zinc-400 hover:text-primary hover:bg-primary/10 transition"
-							@click="inspectorOpen = true">
-							<span class="iconify tabler--adjustments w-4 h-4"></span>
-						</button>
+						<CollapsedRail v-else side="right" label="Inspector" icon="tabler--adjustments"
+							@open="inspectorOpen = true" />
 					</div>
 				</div>
 
@@ -161,14 +137,13 @@ const showExport = ref(false)
 
 // ===== Collapsible rails (persisted per machine) =====
 const leftOpen = ref(localStorage.getItem('editor.leftRail') !== 'closed')
-// Right rail = two independently-collapsible rows; the column narrows (widening
-// the player) only when BOTH are closed.
-const chatRowOpen = ref(localStorage.getItem('editor.chatRow') !== 'closed')
-const inspectorOpen = ref(localStorage.getItem('editor.inspectorRow') !== 'closed')
-const rightHasContent = computed(() => chatRowOpen.value || inspectorOpen.value)
+// Right region = two independently-collapsible COLUMNS. Closing a column frees
+// its horizontal space, widening the player.
+const chatColOpen = ref(localStorage.getItem('editor.chatCol') !== 'closed')
+const inspectorOpen = ref(localStorage.getItem('editor.inspectorCol') !== 'closed')
 watch(leftOpen, (v) => localStorage.setItem('editor.leftRail', v ? 'open' : 'closed'))
-watch(chatRowOpen, (v) => localStorage.setItem('editor.chatRow', v ? 'open' : 'closed'))
-watch(inspectorOpen, (v) => localStorage.setItem('editor.inspectorRow', v ? 'open' : 'closed'))
+watch(chatColOpen, (v) => localStorage.setItem('editor.chatCol', v ? 'open' : 'closed'))
+watch(inspectorOpen, (v) => localStorage.setItem('editor.inspectorCol', v ? 'open' : 'closed'))
 // MediaPanel exposes its own collapse control through this proxy
 const leftCollapsedProxy = computed({ get: () => !leftOpen.value, set: (v) => { leftOpen.value = !v } })
 
@@ -209,11 +184,11 @@ watch(() => editorStore.lastResult, (result) => {
 	if (result && chatTab.value !== 'revisions') revisionsBadge.value = true
 })
 
-// Badge Chat/Revisions when a turn completes while that row is closed.
+// Badge Chat/Revisions when a turn completes while that column is closed.
 watch(() => editorStore.doc?.turns?.length ?? 0, (n, old) => {
-	if (n > (old ?? 0) && !chatRowOpen.value) chatBadge.value = true
+	if (n > (old ?? 0) && !chatColOpen.value) chatBadge.value = true
 })
-watch(chatRowOpen, (open) => { if (open) chatBadge.value = false })
+watch(chatColOpen, (open) => { if (open) chatBadge.value = false })
 
 // Selecting a clip reveals the Inspector row so its details are visible.
 watch(() => editorStore.selectedItemIds.length, (n) => {
