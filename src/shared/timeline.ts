@@ -34,6 +34,28 @@ let uidCounter = 0
 const uid = (): string =>
 	`ti-${Date.now().toString(36)}-${(uidCounter++).toString(36)}-${Math.floor(Math.random() * 1e6).toString(36)}`
 
+/** Place a WHOLE asset on a track as one full-span item (drag the file in). */
+export function itemFromAsset(
+	asset: { id: string; name: string; metadata?: { duration?: number } },
+	trackId: string,
+	timelineStart: number,
+	durationOverride?: number
+): TimelineItem {
+	const duration = durationOverride ?? asset.metadata?.duration ?? 0
+	return {
+		id: uid(),
+		trackId,
+		sourceAssetId: asset.id,
+		timelineStart,
+		in: 0,
+		out: duration,
+		speed: 1.0,
+		preservePitch: true,
+		duration,
+		label: asset.name
+	}
+}
+
 /** Place a detected Clip (scene piece) on a track (PRD §6). */
 export function clipToItem(clip: Clip, trackId: string, timelineStart: number): TimelineItem {
 	return {

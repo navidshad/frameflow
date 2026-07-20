@@ -132,6 +132,33 @@ export async function getVideoMetadata(filePath: string): Promise<import('../../
 }
 
 /**
+ * Metadata for an audio-only source (no video stream). Mirrors VideoMetadata's
+ * shape so a MediaAsset can carry it uniformly; width/height/fps are 0 since
+ * there is no picture, and the export normalization target ignores audio assets.
+ */
+export async function getAudioMetadata(filePath: string): Promise<import('../../shared/types').VideoMetadata> {
+	return new Promise((resolve, reject) => {
+		ffmpeg.ffprobe(filePath, (err, metadata) => {
+			if (err) return reject(err)
+			const audioStream = metadata.streams.find((s) => s.codec_type === 'audio')
+			if (!audioStream) {
+				return reject(new Error('No audio stream found'))
+			}
+			resolve({
+				duration: metadata.format.duration || 0,
+				width: 0,
+				height: 0,
+				size: metadata.format.size || 0,
+				codec: audioStream.codec_name || 'unknown',
+				fps: 0,
+				format: metadata.format.format_name || 'unknown',
+				hasAudio: true
+			})
+		})
+	})
+}
+
+/**
  * Returns true if the video resolution is 480p or lower.
  */
 export async function isVideoLowResolution(filePath: string): Promise<boolean> {

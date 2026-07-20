@@ -3,13 +3,17 @@
 		:class="active
 			? 'bg-primary/5 dark:bg-primary/10 ring-1 ring-primary/30'
 			: 'hover:bg-zinc-100/70 dark:hover:bg-zinc-900/50'"
-		@click="$emit('select')">
+		:draggable="canPlace"
+		:title="canPlace ? 'Drag onto the timeline to place the whole file' : undefined"
+		@click="$emit('select')"
+		@dragstart="onDragStart">
 		<div class="flex items-start gap-3">
 			<!-- Thumbnail -->
 			<div
 				class="w-16 h-10 rounded-lg bg-zinc-200 dark:bg-zinc-800 overflow-hidden shrink-0 flex items-center justify-center">
 				<img v-if="thumbSrc" :src="thumbSrc" class="w-full h-full object-cover" loading="lazy" />
-				<span v-else class="iconify tabler--movie w-4 h-4 text-zinc-400"></span>
+				<span v-else class="iconify w-4 h-4 text-zinc-400"
+					:class="asset.kind === 'audio' ? 'tabler--music' : 'tabler--movie'"></span>
 			</div>
 
 			<div class="flex-1 min-w-0">
@@ -113,6 +117,16 @@ const thumbSrc = computed(() => {
 const isScenedetectMissing = computed(() =>
 	(props.asset.preprocessError || '').includes('scenedetect-missing') || !editorStore.deps.scenedetect
 )
+
+// Only a probed asset with a real duration can be dropped as a whole-file item.
+const canPlace = computed(() => (props.asset.metadata?.duration || 0) > 0)
+
+const onDragStart = (event: DragEvent) => {
+	if (!event.dataTransfer || !canPlace.value) return
+	event.dataTransfer.setData('application/x-frameflow-asset', props.asset.id)
+	event.dataTransfer.setData(`application/x-frameflow-kind-${props.asset.kind === 'audio' ? 'audio' : 'video'}`, '1')
+	event.dataTransfer.effectAllowed = 'copy'
+}
 
 const stateLabel = computed(() => {
 	if (interrupted.value) return 'paused'

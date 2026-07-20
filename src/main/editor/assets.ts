@@ -3,9 +3,42 @@ import path from 'path'
 import { v4 as uuidv4 } from 'uuid'
 import type { Clip, MediaAsset, Thread } from '@shared/types'
 import { threadManager } from '../threads'
-import { getVideoMetadata, sanitizeFilename } from '../ffmpeg'
+import { getVideoMetadata, getAudioMetadata, sanitizeFilename } from '../ffmpeg'
 import { ASSET_DIRS, THREAD_DIRS } from '../constants/paths'
 import { abortAssetPreprocessing } from './preprocess'
+
+const AUDIO_EXTENSIONS = new Set([
+	'.mp3', '.wav', '.m4a', '.aac', '.flac', '.ogg', '.oga', '.opus', '.wma'
+])
+
+/** Classify an imported source as audio or video by file extension. */
+export function detectMediaKind(filePath: string): 'audio' | 'video' {
+	return AUDIO_EXTENSIONS.has(path.extname(filePath).toLowerCase()) ? 'audio' : 'video'
+}
+
+/**
+ * Probes a source and returns its real kind + metadata based on which streams
+ * exist. `hint` (from the extension) only decides which probe runs first so the
+ * common case costs one ffprobe; both are tried before giving up.
+ */
+async function probeMediaKind(
+	filePath: string,
+	hint: 'audio' | 'video'
+): Promise<{ kind: 'audio' | 'video'; metadata: MediaAsset['metadata'] } | null> {
+	const tryVideo = async () => ({ kind: 'video' as const, metadata: await getVideoMetadata(filePath) })
+	const tryAudio = async () => ({ kind: 'audio' as const, metadata: await getAudioMetadata(filePath) })
+	const [first, second] = hint === 'audio' ? [tryAudio, tryVideo] : [tryVideo, tryAudio]
+	try {
+		return await first()
+	} catch {
+		try {
+			return await second()
+		} catch (error) {
+			console.error(`[editor] Failed to probe media ${filePath}:`, error)
+			return null
+		}
+	}
+}
 
 /**
  * Media-asset CRUD for the timeline editor.
@@ -80,12 +113,16 @@ export async function createMediaAsset(
 		createdAt: Date.now()
 	}
 
-	try {
-		asset.metadata = await getVideoMetadata(originalPath)
-	} catch (error) {
-		console.error(`[editor] Failed to probe media ${originalPath}:`, error)
+	// Kind is decided by what streams actually exist, not the extension —
+	// container formats (.webm/.mkv/.m4a) can be audio-only. The extension only
+	// picks which probe to try first so the common case is a single ffprobe.
+	const probed = await probeMediaKind(originalPath, detectMediaKind(originalPath))
+	if (probed) {
+		asset.kind = probed.kind
+		asset.metadata = probed.metadata
+	} else {
 		asset.preprocessState = 'error'
-		asset.preprocessError = 'Could not read video metadata (corrupt or unsupported file).'
+		asset.preprocessError = 'Could not read media metadata (corrupt or unsupported file).'
 	}
 
 	await threadManager.updateThreadWith(threadId, (t) => {

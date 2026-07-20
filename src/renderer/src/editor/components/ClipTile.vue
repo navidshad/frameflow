@@ -13,7 +13,8 @@
 			<img v-if="clip.thumbnailPath" :src="`media://${clip.thumbnailPath}`"
 				class="w-full h-full object-cover" loading="lazy" />
 			<div v-else class="w-full h-full flex items-center justify-center">
-				<span class="iconify tabler--photo w-4 h-4 text-zinc-400"></span>
+				<span class="iconify w-4 h-4 text-zinc-400"
+					:class="isAudio ? 'tabler--music' : 'tabler--photo'"></span>
 			</div>
 		</div>
 
@@ -48,6 +49,9 @@ const props = defineProps<{
 
 const editorStore = useEditorStore()
 
+const isAudio = computed(() =>
+	editorStore.assets.find((a) => a.id === props.clip.sourceAssetId)?.kind === 'audio')
+
 const format = (seconds: number) => {
 	const m = Math.floor(seconds / 60)
 	const s = Math.floor(seconds % 60)
@@ -68,6 +72,9 @@ const onClick = (event: MouseEvent) => {
 const onDragStart = (event: DragEvent) => {
 	if (!event.dataTransfer) return
 	event.dataTransfer.setData('application/x-frameflow-clip', props.clip.id)
+	// Kind hint (readable during dragover, unlike the payload) so a lane can
+	// accept/reject before drop: audio clips → audio lanes, else video lanes.
+	event.dataTransfer.setData(`application/x-frameflow-kind-${isAudio.value ? 'audio' : 'video'}`, '1')
 	event.dataTransfer.effectAllowed = 'copy'
 }
 

@@ -68,9 +68,15 @@
 					<video ref="videoBRef" class="absolute inset-0 w-full h-full object-contain transition-opacity"
 						:class="!edl.activeIsA.value && !edl.inGap.value ? 'opacity-100' : 'opacity-0'"
 						preload="auto"></video>
+					<!-- Audio tracks play through an element pool in the composable
+					     (one per track), heard in parallel with the video. -->
 					<div v-if="edl.inGap.value"
-						class="absolute inset-0 flex items-center justify-center pointer-events-none">
-						<span class="text-[10px] font-mono text-white/30 uppercase tracking-widest">gap</span>
+						class="absolute inset-0 flex flex-col items-center justify-center gap-2 pointer-events-none">
+						<template v-if="edl.audioActive.value">
+							<span class="iconify tabler--music w-6 h-6 text-white/40"></span>
+							<span class="text-[10px] font-mono text-white/30 uppercase tracking-widest">audio only</span>
+						</template>
+						<span v-else class="text-[10px] font-mono text-white/30 uppercase tracking-widest">gap</span>
 					</div>
 				</div>
 				<div class="px-4 py-2.5 flex items-center gap-3 border-t border-zinc-200 dark:border-zinc-800 shrink-0">

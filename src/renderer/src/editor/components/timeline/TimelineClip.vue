@@ -24,8 +24,9 @@
 						class="flex-1 min-w-0 h-full object-cover" loading="lazy" draggable="false" />
 				</div>
 				<img v-else-if="thumbSrc" :src="thumbSrc" class="w-full h-full object-cover" loading="lazy" draggable="false" />
-				<div v-else class="w-full h-full flex items-center justify-center">
-					<span class="iconify tabler--movie w-4 h-4 text-zinc-400"></span>
+				<div v-else class="w-full h-full flex items-center justify-center"
+					:class="isAudio ? 'bg-accent/10' : ''">
+					<span class="iconify w-4 h-4" :class="[isAudio ? 'tabler--music text-accent' : 'tabler--movie text-zinc-400']"></span>
 				</div>
 				<div class="absolute bottom-0 inset-x-0 px-1.5 py-0.5 bg-gradient-to-t from-black/60 to-transparent">
 					<p class="text-[9px] text-white/90 truncate font-medium">{{ item.label }}</p>
@@ -82,6 +83,8 @@ const hovering = ref(false)
 const selected = computed(() => store.selectedItemIds.includes(props.item.id))
 const end = computed(() => itemEnd(props.item))
 const track = computed(() => store.doc?.tracks.find((t) => t.id === props.item.trackId))
+const isAudio = computed(() =>
+	store.doc?.media.find((a) => a.id === props.item.sourceAssetId)?.kind === 'audio')
 
 const sourceClip = computed(() => {
 	const asset = store.doc?.media.find((a) => a.id === props.item.sourceAssetId)

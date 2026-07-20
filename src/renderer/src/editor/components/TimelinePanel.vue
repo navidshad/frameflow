@@ -4,19 +4,25 @@
 		<TimelineMinimap />
 
 		<div class="flex-1 min-h-0 grid grid-cols-[112px_1fr]">
-			<!-- Left: track headers (outside the scroll container) -->
-			<div class="border-r border-zinc-200 dark:border-zinc-800 bg-zinc-50/50 dark:bg-zinc-950/40 overflow-hidden">
-				<div class="h-6 border-b border-zinc-200 dark:border-zinc-800"></div> <!-- ruler spacer -->
-				<TrackHeader v-for="track in store.sortedTracks" :key="track.id" :track="track" />
+			<!-- Left: track headers. The ruler spacer stays pinned; the header
+			     stack is translated to follow the lanes' vertical scroll. -->
+			<div class="border-r border-zinc-200 dark:border-zinc-800 bg-zinc-50/50 dark:bg-zinc-950/40 overflow-hidden flex flex-col">
+				<div class="h-6 border-b border-zinc-200 dark:border-zinc-800 shrink-0"></div> <!-- ruler spacer -->
+				<div :style="{ transform: `translateY(${-vScroll}px)` }">
+					<TrackHeader v-for="track in store.sortedTracks" :key="track.id" :track="track" />
+				</div>
 			</div>
 
-			<!-- Right: ONE scroll container shared by ruler + lanes -->
+			<!-- Right: ONE scroll container shared by ruler + lanes (x AND y) -->
 			<div ref="scrollRef"
-				class="relative overflow-x-auto overflow-y-hidden custom-scrollbar"
+				class="relative overflow-x-auto overflow-y-auto custom-scrollbar"
 				role="application" aria-label="Timeline — Space to play, S to split, Delete to ripple-delete, arrows to step"
-				@scroll="viewport.onScroll" @wheel="onWheel">
+				@scroll="onScroll" @wheel="onWheel">
 				<div class="relative" :style="{ width: `${viewport.contentWidth.value}px`, minWidth: '100%' }">
-					<TimelineRuler />
+					<!-- Ruler pinned to the top while the lanes scroll vertically -->
+					<div class="sticky top-0 z-30 bg-zinc-50/95 dark:bg-zinc-950/95 backdrop-blur-sm">
+						<TimelineRuler />
+					</div>
 					<TrackLane v-for="track in store.sortedTracks" :key="track.id" :track="track" />
 					<TimelinePlayhead />
 					<!-- Snap guide -->
@@ -60,8 +66,16 @@ provide(TimelineInteractionsKey, interactions)
 useEditorShortcuts((factor) => viewport.zoomBy(factor))
 
 const scrollRef = ref<HTMLElement | null>(null)
+const vScroll = ref(0) // vertical scroll of the lanes, mirrored onto the headers
 
 onMounted(() => viewport.setScrollEl(scrollRef.value))
+
+// The lanes container owns both axes; forward horizontal scroll to the viewport
+// and mirror vertical scroll onto the (transform-driven) header column.
+const onScroll = (e: Event) => {
+	viewport.onScroll()
+	vScroll.value = (e.target as HTMLElement).scrollTop
+}
 
 const onWheel = (e: WheelEvent) => {
 	if (e.ctrlKey || e.metaKey) {

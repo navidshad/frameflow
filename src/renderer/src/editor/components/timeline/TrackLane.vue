@@ -48,37 +48,51 @@ const laneTint = computed(() => {
 
 const emptyHint = computed(() => {
 	switch (props.track.kind) {
-		case 'video': return 'Drag pieces here'
-		case 'audio': return 'Audio — preview arrives with export'
+		case 'video': return 'Drag a file or pieces here'
+		case 'audio': return 'Drag an audio file or pieces here'
 		default: return 'Overlay authoring arrives later'
 	}
 })
 
-const acceptsDrop = computed(() =>
-	props.track.kind === 'video' && !props.track.locked && !props.track.hidden
-)
+// A lane accepts video/audio drops when unlocked/visible AND the dragged item's
+// kind (from the readable kind-hint type) matches the lane. Overlay/text lanes
+// stay inert in v1.
+const dropKind = computed<'video' | 'audio' | null>(() => {
+	if (props.track.locked || props.track.hidden) return null
+	if (props.track.kind === 'video') return 'video'
+	if (props.track.kind === 'audio') return 'audio'
+	return null
+})
+
+const canAcceptDrag = (dt: DataTransfer | null): boolean => {
+	if (!dt || !dropKind.value) return false
+	const isPayload = dt.types.includes('application/x-frameflow-clip') || dt.types.includes('application/x-frameflow-asset')
+	return isPayload && dt.types.includes(`application/x-frameflow-kind-${dropKind.value}`)
+}
 
 const onDragOver = (e: DragEvent) => {
-	if (!e.dataTransfer?.types.includes('application/x-frameflow-clip') || !acceptsDrop.value) {
+	if (!canAcceptDrag(e.dataTransfer)) {
 		if (e.dataTransfer) e.dataTransfer.dropEffect = 'none'
 		return
 	}
 	e.preventDefault()
-	e.dataTransfer.dropEffect = 'copy'
+	e.dataTransfer!.dropEffect = 'copy'
 	dragOver.value = true
 }
 
 const onDrop = (e: DragEvent) => {
 	dragOver.value = false
-	if (!acceptsDrop.value) return
-	const clipId = e.dataTransfer?.getData('application/x-frameflow-clip')
-	if (!clipId) return
+	if (!canAcceptDrag(e.dataTransfer)) return
 	e.preventDefault()
 	const el = viewport.scrollEl.value
 	if (!el) return
 	const rect = el.getBoundingClientRect()
 	const atSec = Math.max(0, viewport.pxToSec(el.scrollLeft + (e.clientX - rect.left)))
-	store.addItemFromClip(clipId, props.track.id, atSec)
+
+	const assetId = e.dataTransfer!.getData('application/x-frameflow-asset')
+	if (assetId) { store.addItemFromAsset(assetId, props.track.id, atSec); return }
+	const clipId = e.dataTransfer!.getData('application/x-frameflow-clip')
+	if (clipId) store.addItemFromClip(clipId, props.track.id, atSec)
 }
 
 // Clicking empty lane space clears selection

@@ -49,7 +49,7 @@
 			<main class="flex-1 min-h-0 flex flex-col z-10 p-3 gap-3">
 				<!-- Top zones: media | preview | right rail — rails collapse to slim strips -->
 				<div class="flex-1 min-h-0 grid gap-3 transition-all duration-300"
-					:style="{ gridTemplateColumns: `${leftOpen ? '280px' : '36px'} minmax(0,1fr) ${rightOpen ? '320px' : '36px'}` }">
+					:style="{ gridTemplateColumns: `${leftOpen ? '280px' : '36px'} minmax(0,1fr) auto` }">
 
 					<!-- Left rail: media -->
 					<MediaPanel v-if="leftOpen" v-model:collapsed="leftCollapsedProxy" />
@@ -59,34 +59,50 @@
 					<!-- Center: the monitor gets the full column now -->
 					<PreviewMonitor class="min-h-0" />
 
-					<!-- Right rail: Chat | Inspect | Revisions -->
-					<div v-if="rightOpen" class="flex flex-col min-h-0 gap-1.5">
-						<!-- Naked segmented tabs — no container chrome -->
-						<div class="flex items-center gap-0.5 px-1 shrink-0">
-							<button v-for="tab in (['chat', 'inspect', 'revisions'] as const)" :key="tab"
-								class="px-2 py-1 rounded-lg text-[9px] font-bold uppercase tracking-widest transition relative"
-								:class="rightTab === tab
-									? 'text-primary bg-primary/10'
-									: 'text-zinc-400 hover:text-zinc-600 dark:hover:text-zinc-300'"
-								@click="selectRightTab(tab)">
-								{{ tab }}
-								<span v-if="tab === 'revisions' && revisionsBadge"
-									class="absolute top-0.5 right-0.5 w-1.5 h-1.5 rounded-full bg-secondary animate-pulse-soft"></span>
-								<span v-if="tab === 'chat' && chatBadge"
-									class="absolute top-0.5 right-0.5 w-1.5 h-1.5 rounded-full bg-accent animate-pulse-soft"></span>
-							</button>
-							<button title="Collapse panel"
-								class="ml-auto w-6 h-6 flex items-center justify-center rounded-lg text-zinc-400 hover:text-primary hover:bg-primary/10 transition shrink-0"
-								@click="rightOpen = false">
-								<span class="iconify tabler--layout-sidebar-right-collapse w-3.5 h-3.5"></span>
-							</button>
+					<!-- Right region: two independently-collapsible COLUMNS —
+					     [Chat | Revisions] and [Inspector]. Closing a column frees
+					     its horizontal space so the player widens. -->
+					<div class="flex min-h-0 gap-3">
+						<!-- Column 1: Chat / Revisions -->
+						<div v-if="chatColOpen" class="w-[300px] flex flex-col min-h-0 gap-1.5">
+							<div class="flex items-center gap-0.5 px-1 shrink-0">
+								<button v-for="tab in (['chat', 'revisions'] as const)" :key="tab"
+									class="px-2 py-1 rounded-lg text-[9px] font-bold uppercase tracking-widest transition relative"
+									:class="chatTab === tab
+										? 'text-primary bg-primary/10'
+										: 'text-zinc-400 hover:text-zinc-600 dark:hover:text-zinc-300'"
+									@click="selectChatTab(tab)">
+									{{ tab }}
+									<span v-if="tab === 'revisions' && revisionsBadge"
+										class="absolute top-0.5 right-0.5 w-1.5 h-1.5 rounded-full bg-secondary animate-pulse-soft"></span>
+								</button>
+								<button title="Collapse panel"
+									class="ml-auto w-7 h-7 flex items-center justify-center rounded-lg text-zinc-400 hover:text-primary hover:bg-primary/10 transition active:scale-95 shrink-0"
+									@click="chatColOpen = false">
+									<span class="iconify tabler--layout-sidebar-right-collapse w-4 h-4"></span>
+								</button>
+							</div>
+							<ChatPanel v-show="chatTab === 'chat'" class="flex-1 min-h-0" />
+							<RevisionsPanel v-if="chatTab === 'revisions'" class="flex-1 min-h-0" />
 						</div>
-						<ChatPanel v-show="rightTab === 'chat'" class="flex-1 min-h-0" />
-						<InspectorPanel v-if="rightTab === 'inspect'" class="flex-1 min-h-0" />
-						<RevisionsPanel v-if="rightTab === 'revisions'" class="flex-1 min-h-0" />
+						<CollapsedRail v-else side="right" label="Chat" icon="tabler--message-circle"
+							:badge="chatBadge || revisionsBadge" @open="chatColOpen = true" />
+
+						<!-- Column 2: Inspector -->
+						<div v-if="inspectorOpen" class="w-[280px] flex flex-col min-h-0 gap-1.5">
+							<div class="flex items-center gap-1 px-1 shrink-0">
+								<span class="text-[9px] font-bold uppercase tracking-widest text-primary bg-primary/10 px-2 py-1 rounded-lg">inspect</span>
+								<button title="Collapse panel"
+									class="ml-auto w-7 h-7 flex items-center justify-center rounded-lg text-zinc-400 hover:text-primary hover:bg-primary/10 transition active:scale-95 shrink-0"
+									@click="inspectorOpen = false">
+									<span class="iconify tabler--layout-sidebar-right-collapse w-4 h-4"></span>
+								</button>
+							</div>
+							<InspectorPanel class="flex-1 min-h-0" />
+						</div>
+						<CollapsedRail v-else side="right" label="Inspector" icon="tabler--adjustments"
+							@open="inspectorOpen = true" />
 					</div>
-					<CollapsedRail v-else side="right" label="Chat & Inspect" icon="tabler--message-circle"
-						:badge="chatBadge || revisionsBadge" @open="rightOpen = true" />
 				</div>
 
 				<!-- Bottom zone: timeline -->
@@ -121,9 +137,13 @@ const showExport = ref(false)
 
 // ===== Collapsible rails (persisted per machine) =====
 const leftOpen = ref(localStorage.getItem('editor.leftRail') !== 'closed')
-const rightOpen = ref(localStorage.getItem('editor.rightRail') !== 'closed')
+// Right region = two independently-collapsible COLUMNS. Closing a column frees
+// its horizontal space, widening the player.
+const chatColOpen = ref(localStorage.getItem('editor.chatCol') !== 'closed')
+const inspectorOpen = ref(localStorage.getItem('editor.inspectorCol') !== 'closed')
 watch(leftOpen, (v) => localStorage.setItem('editor.leftRail', v ? 'open' : 'closed'))
-watch(rightOpen, (v) => localStorage.setItem('editor.rightRail', v ? 'open' : 'closed'))
+watch(chatColOpen, (v) => localStorage.setItem('editor.chatCol', v ? 'open' : 'closed'))
+watch(inspectorOpen, (v) => localStorage.setItem('editor.inspectorCol', v ? 'open' : 'closed'))
 // MediaPanel exposes its own collapse control through this proxy
 const leftCollapsedProxy = computed({ get: () => !leftOpen.value, set: (v) => { leftOpen.value = !v } })
 
@@ -149,29 +169,31 @@ const CollapsedRail: FunctionalComponent<
 CollapsedRail.props = ['side', 'label', 'icon', 'badge']
 CollapsedRail.emits = ['open']
 
-// ===== Right-rail tabs =====
-const rightTab = ref<'chat' | 'inspect' | 'revisions'>('chat')
+// ===== Right rail =====
+// Row 1 toggles Chat | Revisions; Row 2 is the Inspector.
+const chatTab = ref<'chat' | 'revisions'>('chat')
 const revisionsBadge = ref(false)
 const chatBadge = ref(false)
 
-const selectRightTab = (tab: 'chat' | 'inspect' | 'revisions') => {
-	rightTab.value = tab
+const selectChatTab = (tab: 'chat' | 'revisions') => {
+	chatTab.value = tab
 	if (tab === 'revisions') revisionsBadge.value = false
-	if (tab === 'chat') chatBadge.value = false
 }
 
 watch(() => editorStore.lastResult, (result) => {
-	if (result && rightTab.value !== 'revisions') revisionsBadge.value = true
+	if (result && chatTab.value !== 'revisions') revisionsBadge.value = true
 })
 
-// Badge the chat tab (or collapsed rail) when a turn completes off-screen
+// Badge Chat/Revisions when a turn completes while that column is closed.
 watch(() => editorStore.doc?.turns?.length ?? 0, (n, old) => {
-	if (n > (old ?? 0) && (rightTab.value !== 'chat' || !rightOpen.value)) chatBadge.value = true
+	if (n > (old ?? 0) && !chatColOpen.value) chatBadge.value = true
 })
+watch(chatColOpen, (open) => { if (open) chatBadge.value = false })
 
-// Auto-select a useful tab: picking a clip/item while on chat is common —
-// keep manual control, but jump to Inspect when a selection happens with the
-// rail on chat? Deliberately NOT auto-switching: predictability wins.
+// Selecting a clip reveals the Inspector row so its details are visible.
+watch(() => editorStore.selectedItemIds.length, (n) => {
+	if (n > 0 && !inspectorOpen.value) inspectorOpen.value = true
+})
 
 const totalCost = computed(() =>
 	(editorStore.thread?.usageHistory || []).reduce((sum, record) => sum + (record.cost || 0), 0)

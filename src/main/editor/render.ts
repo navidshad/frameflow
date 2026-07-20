@@ -8,7 +8,7 @@ import type {
 	EditorDocument, EditorRenderProgress, ExportQuality, MediaAsset,
 	TimelineItem, TimelineSegment, Track
 } from '@shared/types'
-import { itemDuration, itemEnd } from '@shared/timeline'
+import { itemEnd } from '@shared/timeline'
 import { threadManager } from '../threads'
 import { assembleVideo, sanitizeFilename } from '../ffmpeg'
 import { THREAD_DIRS } from '../constants/paths'
@@ -34,6 +34,18 @@ const IS_MAC = process.platform === 'darwin'
 const GAP_EPS = 0.05
 
 // ===== Region model =====
+// Regions are sliced at the UNION of every video- AND audio-item boundary, so
+// each region is fully covered (or not) by each item — never partially. A
+// region carries at most one video slice (the primary video track) plus any
+// number of active audio sources (the video's own audio + audio-track items),
+// mixed to one stereo output at render time (§5.9).
+
+interface VideoSlice {
+	srcPath: string
+	in: number
+	out: number
+	speed: number
+}
 
 interface AudioSource {
 	srcPath: string
@@ -44,9 +56,11 @@ interface AudioSource {
 	gain: number
 }
 
-type Region =
-	| { kind: 'clip'; item: TimelineItem; asset: MediaAsset; srcPath: string; duration: number; audioSources: AudioSource[] }
-	| { kind: 'gap'; duration: number }
+interface Region {
+	duration: number
+	video: VideoSlice | null   // null → black frames of `duration`
+	audioSources: AudioSource[] // empty → silence of `duration`
+}
 
 interface RegionPlan {
 	regions: Region[]
@@ -55,74 +69,116 @@ interface RegionPlan {
 	fps: number
 }
 
+/** Map a covering item's source range onto a sub-region [t0,t1) of the timeline. */
+function sliceSource(item: TimelineItem, t0: number, t1: number): { in: number; out: number; speed: number } {
+	const speed = item.speed || 1
+	return {
+		in: item.in + (t0 - item.timelineStart) * speed,
+		out: item.in + (t1 - item.timelineStart) * speed,
+		speed
+	}
+}
+
 export function computeRegions(doc: EditorDocument, quality: ExportQuality): RegionPlan {
 	const videoTrack = doc.tracks
-		.filter((t) => t.kind === 'video')
-		.sort((a, b) => a.order - b.order)[0]
-	if (!videoTrack || videoTrack.hidden) {
-		throw new Error('Nothing to export — the video track is hidden or empty.')
-	}
+		.filter((t) => t.kind === 'video' && !t.hidden)
+		.sort((a, b) => a.order - b.order)[0] || null
+	const audioTrackById = new Map(
+		doc.tracks.filter((t) => t.kind === 'audio' && !t.hidden).map((t) => [t.id, t])
+	)
 
-	const items = doc.timeline
-		.filter((i) => i.trackId === videoTrack.id)
+	const videoItems = videoTrack
+		? doc.timeline.filter((i) => i.trackId === videoTrack.id).sort((a, b) => a.timelineStart - b.timelineStart)
+		: []
+	const audioItems = doc.timeline
+		.filter((i) => audioTrackById.has(i.trackId))
 		.sort((a, b) => a.timelineStart - b.timelineStart)
-	if (items.length === 0) {
+
+	if (videoItems.length === 0 && audioItems.length === 0) {
 		throw new Error('Nothing to export — the timeline is empty.')
 	}
 
-	// Normalization target: source-derived (timelineMeta is blindly seeded
-	// 1920x1080 and would silently upscale small sources).
-	const usedAssets = [...new Set(items.map((i) => i.sourceAssetId))]
-		.map((id) => doc.media.find((a) => a.id === id))
+	const assetById = new Map(doc.media.map((a) => [a.id, a]))
+	const srcFor = (asset: MediaAsset) =>
+		quality === 'preview' ? (asset.proxyPath || asset.originalPath) : asset.originalPath
+
+	// Normalization target: derived from the VIDEO assets in use (audio assets
+	// carry no picture). Defaults keep an audio-only export at a sane 720p.
+	const usedVideoAssets = [...new Set(videoItems.map((i) => i.sourceAssetId))]
+		.map((id) => assetById.get(id))
 		.filter((a): a is MediaAsset => !!a)
 	const even = (n: number) => Math.max(2, Math.floor(n / 2) * 2)
-	const largest = usedAssets.reduce((best, a) => {
+	const largest = usedVideoAssets.reduce((best, a) => {
 		const area = (a.metadata?.width || 0) * (a.metadata?.height || 0)
 		return area > best.area ? { area, w: a.metadata!.width, h: a.metadata!.height } : best
 	}, { area: 0, w: 1280, h: 720 })
 	const width = even(largest.w)
 	const height = even(largest.h)
 	const fps = Math.min(60, Math.max(10,
-		usedAssets.reduce((max, a) => Math.max(max, a.metadata?.fps || 0), 0) || 30
+		usedVideoAssets.reduce((max, a) => Math.max(max, a.metadata?.fps || 0), 0) || 30
 	))
 
+	// Boundary set = every video- and audio-item edge, clamped to [0, end].
+	const allItems = [...videoItems, ...audioItems]
+	const end = allItems.reduce((max, it) => Math.max(max, itemEnd(it)), 0)
+	const cuts = new Set<number>([0, end])
+	for (const it of allItems) {
+		cuts.add(Math.min(Math.max(it.timelineStart, 0), end))
+		cuts.add(Math.min(Math.max(itemEnd(it), 0), end))
+	}
+	const points = [...cuts].sort((a, b) => a - b)
+
+	// A video item's own audio contributes when unmuted and the source has audio.
+	const videoAudioActive = (item: TimelineItem, asset: MediaAsset) =>
+		!item.muted && !(videoTrack?.muted) && asset.metadata?.hasAudio !== false
+	// An audio-track item contributes when neither it nor its track is muted.
+	const audioItemActive = (item: TimelineItem) =>
+		!item.muted && !audioTrackById.get(item.trackId)?.muted
+
+	const covers = (item: TimelineItem, t0: number, t1: number) =>
+		item.timelineStart <= t0 + GAP_EPS && itemEnd(item) >= t1 - GAP_EPS
+
 	const regions: Region[] = []
-	let cursor = 0
-	for (const item of items) {
-		const gap = item.timelineStart - cursor
-		if (gap > GAP_EPS) {
-			regions.push({ kind: 'gap', duration: gap })
-		} else if (gap < -GAP_EPS) {
-			// Overlap (e.g. from an AI accept made before overlap repair):
-			// render magnetically — this item butts against the previous one,
-			// preserving all content instead of failing the export.
-			console.warn(`[render] Overlapping item ${item.id} repaired: butted at ${cursor.toFixed(2)}s`)
+	for (let i = 0; i < points.length - 1; i++) {
+		const t0 = points[i]
+		const t1 = points[i + 1]
+		const duration = t1 - t0
+		if (duration <= GAP_EPS) continue
+
+		// ---- Video: the single covering video-track item (if any) ----
+		let video: VideoSlice | null = null
+		const vItem = videoItems.find((it) => covers(it, t0, t1))
+		if (vItem) {
+			const asset = assetById.get(vItem.sourceAssetId)
+			if (!asset) throw new Error(`Missing media asset for clip "${vItem.label || vItem.id}".`)
+			const slice = sliceSource(vItem, t0, t1)
+			video = { srcPath: srcFor(asset), in: slice.in, out: slice.out, speed: slice.speed }
 		}
 
-		const asset = doc.media.find((a) => a.id === item.sourceAssetId)
-		if (!asset) throw new Error(`Missing media asset for clip "${item.label || item.id}".`)
-		const srcPath = quality === 'preview'
-			? (asset.proxyPath || asset.originalPath)
-			: asset.originalPath
+		// ---- Audio: video's own audio + every covering audio-track item ----
+		const audioSources: AudioSource[] = []
+		if (vItem) {
+			const asset = assetById.get(vItem.sourceAssetId)!
+			if (videoAudioActive(vItem, asset)) {
+				const slice = sliceSource(vItem, t0, t1)
+				audioSources.push({
+					srcPath: srcFor(asset), in: slice.in, out: slice.out,
+					speed: slice.speed, preservePitch: vItem.preservePitch !== false, gain: vItem.gain ?? 1
+				})
+			}
+		}
+		for (const aItem of audioItems) {
+			if (!covers(aItem, t0, t1) || !audioItemActive(aItem)) continue
+			const asset = assetById.get(aItem.sourceAssetId)
+			if (!asset) continue
+			const slice = sliceSource(aItem, t0, t1)
+			audioSources.push({
+				srcPath: srcFor(asset), in: slice.in, out: slice.out,
+				speed: slice.speed, preservePitch: aItem.preservePitch !== false, gain: aItem.gain ?? 1
+			})
+		}
 
-		const speed = item.speed || 1
-		const muted = !!item.muted || videoTrack.muted || asset.metadata?.hasAudio === false
-		regions.push({
-			kind: 'clip',
-			item,
-			asset,
-			srcPath,
-			duration: itemDuration(item),
-			audioSources: muted ? [] : [{
-				srcPath,
-				in: item.in,
-				out: item.out,
-				speed,
-				preservePitch: item.preservePitch !== false,
-				gain: item.gain ?? 1
-			}]
-		})
-		cursor = Math.max(cursor, itemEnd(item))
+		regions.push({ duration, video, audioSources })
 	}
 
 	return { regions, width, height, fps }
@@ -130,8 +186,9 @@ export function computeRegions(doc: EditorDocument, quality: ExportQuality): Reg
 
 // ===== Fast path =====
 
-export function isFastPathEligible(items: TimelineItem[], track: Track): boolean {
+export function isFastPathEligible(items: TimelineItem[], track: Track, hasAudioItems = false): boolean {
 	if (items.length === 0) return false
+	if (hasAudioItems) return false // audio-track items need the mixing region path
 	if (track.muted || track.hidden) return false // assembleVideo can't drop audio
 	const srcId = items[0].sourceAssetId
 	if (!items.every((i) => i.sourceAssetId === srcId)) return false
@@ -196,72 +253,77 @@ function runCommand(
 	})
 }
 
-async function renderClipRegion(
-	region: Extract<Region, { kind: 'clip' }>,
+/**
+ * Renders ONE region to a uniform intermediate: a video slice (or black) plus
+ * the region's mixed audio. 0 audio sources → silence; 1 → that stream; k>1 →
+ * amix (normalize=0, gains already applied) so overlapping audio-track items
+ * and a video's own soundtrack mix correctly and stay region-length (§5.9).
+ */
+async function renderRegion(
+	region: Region,
 	index: number,
 	plan: RegionPlan,
 	workDir: string,
 	signal: AbortSignal,
 	onProgress: (percent: number) => void
 ): Promise<string> {
-	const { item } = region
-	const speed = item.speed || 1
-	const cut = item.out - item.in
 	const duration = region.duration
+	const dur = duration.toFixed(3)
 	const outputPath = path.join(workDir, `region-${String(index).padStart(3, '0')}.mp4`)
-	const videoFilter = `[0:v]setpts=(PTS-STARTPTS)/${speed},${vnorm(plan.width, plan.height, plan.fps)}[v]`
 
-	let command: ffmpeg.FfmpegCommand
-	if (region.audioSources.length > 0) {
-		const audio = region.audioSources[0]
-		const retime = speed === 1
-			? ''
-			: audio.preservePitch
-				? `${atempoChain(speed)},`
-				: `asetrate=48000*${speed},`
-		const gain = audio.gain !== 1 ? `volume=${audio.gain},` : ''
-		command = ffmpeg(region.srcPath)
-			.inputOptions(['-ss', item.in.toFixed(3), '-t', cut.toFixed(3)])
-			.complexFilter(
-				`${videoFilter};` +
-				`[0:a]asetpts=PTS-STARTPTS,${retime}${gain}aresample=48000,` +
-				`aformat=sample_fmts=fltp:channel_layouts=stereo,apad=whole_dur=${duration.toFixed(3)}[a]`
-			)
+	const command = ffmpeg()
+	const filters: string[] = []
+	let inputIdx = 0
+
+	// ---- Video: source slice, or black of exactly `duration` ----
+	if (region.video) {
+		const v = region.video
+		const cut = (v.out - v.in).toFixed(3)
+		command.input(v.srcPath).inputOptions(['-ss', v.in.toFixed(3), '-t', cut])
+		filters.push(`[${inputIdx++}:v]setpts=(PTS-STARTPTS)/${v.speed},${vnorm(plan.width, plan.height, plan.fps)}[v]`)
 	} else {
-		// Silent clip: lavfi anullsrc keeps every intermediate A+V uniform
-		command = ffmpeg(region.srcPath)
-			.inputOptions(['-ss', item.in.toFixed(3), '-t', cut.toFixed(3)])
-			.input('anullsrc=r=48000:cl=stereo')
-			.inputFormat('lavfi')
-			.complexFilter(`${videoFilter};[1:a]atrim=0:${duration.toFixed(3)}[a]`)
+		command.input(`color=black:size=${plan.width}x${plan.height}:rate=${plan.fps}`)
+			.inputFormat('lavfi').inputOptions(['-t', dur])
+		filters.push(`[${inputIdx++}:v]setsar=1,format=yuv420p[v]`)
+	}
+
+	// ---- Audio: silence, single stream, or amix of k streams ----
+	let audioLabel = '[a]'
+	if (region.audioSources.length === 0) {
+		command.input('anullsrc=r=48000:cl=stereo').inputFormat('lavfi').inputOptions(['-t', dur])
+		filters.push(`[${inputIdx++}:a]atrim=0:${dur},asetpts=PTS-STARTPTS[a]`)
+	} else {
+		const labels: string[] = []
+		region.audioSources.forEach((a, k) => {
+			const cut = (a.out - a.in).toFixed(3)
+			command.input(a.srcPath).inputOptions(['-ss', a.in.toFixed(3), '-t', cut])
+			const retime = a.speed === 1
+				? ''
+				: a.preservePitch ? `${atempoChain(a.speed)},` : `asetrate=48000*${a.speed},`
+			const gain = a.gain !== 1 ? `volume=${a.gain},` : ''
+			const label = `[a${k}]`
+			// apad + atrim pin every stream to EXACTLY the region duration so amix
+			// aligns them and the intermediate stays A/V frame-aligned for concat.
+			filters.push(
+				`[${inputIdx++}:a]asetpts=PTS-STARTPTS,${retime}${gain}aresample=48000,` +
+				`aformat=sample_fmts=fltp:channel_layouts=stereo,apad=whole_dur=${dur},atrim=0:${dur}${label}`
+			)
+			labels.push(label)
+		})
+		if (labels.length === 1) {
+			audioLabel = labels[0]
+		} else {
+			filters.push(`${labels.join('')}amix=inputs=${labels.length}:normalize=0[a]`)
+		}
 	}
 
 	command
+		.complexFilter(filters.join(';'))
 		.map('[v]')
-		.map('[a]')
-		.outputOptions([...intermediateOpts(), '-t', duration.toFixed(3)])
+		.map(audioLabel)
+		.outputOptions([...intermediateOpts(), '-t', dur])
 
 	await runCommand(command, outputPath, signal, onProgress)
-	return outputPath
-}
-
-async function renderGapRegion(
-	region: Extract<Region, { kind: 'gap' }>,
-	index: number,
-	plan: RegionPlan,
-	workDir: string,
-	signal: AbortSignal
-): Promise<string> {
-	const duration = region.duration
-	const outputPath = path.join(workDir, `region-${String(index).padStart(3, '0')}.mp4`)
-	const command = ffmpeg(`color=black:size=${plan.width}x${plan.height}:rate=${plan.fps}`)
-		.inputFormat('lavfi')
-		.inputOptions(['-t', duration.toFixed(3)])
-		.input('anullsrc=r=48000:cl=stereo')
-		.inputFormat('lavfi')
-		.inputOptions(['-t', duration.toFixed(3)])
-		.outputOptions([...intermediateOpts(), '-vf', 'format=yuv420p', '-t', duration.toFixed(3)])
-	await runCommand(command, outputPath, signal)
 	return outputPath
 }
 
@@ -326,7 +388,10 @@ export function startEditorRender(options: { threadId: string; quality: ExportQu
 	// immediately instead of producing a ghost render) ----
 	const plan = computeRegions(doc, quality)
 	const srcPaths = [...new Set(
-		plan.regions.flatMap((r) => (r.kind === 'clip' ? [r.srcPath] : []))
+		plan.regions.flatMap((r) => [
+			...(r.video ? [r.video.srcPath] : []),
+			...r.audioSources.map((a) => a.srcPath)
+		])
 	)]
 	const missing = srcPaths.filter((p) => !fs.existsSync(p))
 	if (missing.length > 0) {
@@ -353,13 +418,19 @@ export function startEditorRender(options: { threadId: string; quality: ExportQu
 			progress(0, 'rendering')
 
 			const videoTrack = doc.tracks
-				.filter((t) => t.kind === 'video')
-				.sort((a, b) => a.order - b.order)[0]
-			const items = doc.timeline
-				.filter((i) => i.trackId === videoTrack.id)
-				.sort((a, b) => a.timelineStart - b.timelineStart)
+				.filter((t) => t.kind === 'video' && !t.hidden)
+				.sort((a, b) => a.order - b.order)[0] || null
+			const items = videoTrack
+				? doc.timeline
+					.filter((i) => i.trackId === videoTrack.id)
+					.sort((a, b) => a.timelineStart - b.timelineStart)
+				: []
+			const audioTrackIds = new Set(
+				doc.tracks.filter((t) => t.kind === 'audio' && !t.hidden).map((t) => t.id)
+			)
+			const hasAudioItems = doc.timeline.some((i) => audioTrackIds.has(i.trackId))
 
-			if (isFastPathEligible(items, videoTrack)) {
+			if (videoTrack && isFastPathEligible(items, videoTrack, hasAudioItems)) {
 				// ---- Fast path: single-source trim+concat via assembleVideo ----
 				const asset = doc.media.find((a) => a.id === items[0].sourceAssetId)!
 				const srcPath = quality === 'preview'
@@ -398,9 +469,7 @@ export function startEditorRender(options: { threadId: string; quality: ExportQu
 							progress(overall, 'rendering')
 						}
 					}
-					const file = region.kind === 'clip'
-						? await renderClipRegion(region, i, plan, workDir, signal, onRegionProgress)
-						: await renderGapRegion(region, i, plan, workDir, signal)
+					const file = await renderRegion(region, i, plan, workDir, signal, onRegionProgress)
 					regionFiles.push(file)
 					doneWeight += weight
 					progress(doneWeight * 96, 'rendering')
