@@ -199,9 +199,23 @@ const totalCost = computed(() =>
 	(editorStore.thread?.usageHistory || []).reduce((sum, record) => sum + (record.cost || 0), 0)
 )
 
-onMounted(async () => {
-	const id = route.params.id as string
+const openProject = async (id: string) => {
+	notFound.value = false
+	showExport.value = false
 	const ok = await editorStore.loadProject(id)
 	if (!ok) notFound.value = true
+}
+
+onMounted(() => openProject(route.params.id as string))
+
+// The /editor/:id route reuses this component instance, so navigating
+// directly from one editor project to another (e.g. via the background
+// render pill) only changes the param — reload the store to follow it.
+// Flush the debounced autosave FIRST so the previous project's last edits
+// aren't lost (or misdirected) when loadProject swaps threadId/doc.
+watch(() => route.params.id, async (id, oldId) => {
+	if (!id || id === oldId || typeof id !== 'string') return
+	await editorStore.persistDoc()
+	await openProject(id)
 })
 </script>
