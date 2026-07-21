@@ -19,11 +19,20 @@
 					</label>
 				</div>
 
-				<p v-if="store.exportNotice"
-					class="px-2.5 py-1.5 rounded-lg bg-amber-500/10 border border-amber-500/20 text-[10px] font-medium text-amber-600 dark:text-amber-400 leading-snug">
-					<span class="iconify tabler--alert-triangle w-3 h-3 inline-block align-[-1px] mr-1"></span>
-					{{ store.exportNotice }}
-				</p>
+				<div v-if="store.exportWarnings.length" class="space-y-1.5">
+					<div v-for="warning in store.exportWarnings" :key="warning.id"
+						class="flex items-center gap-2 px-2.5 py-1.5 rounded-lg bg-amber-500/10 border border-amber-500/20">
+						<p class="flex-1 text-[10px] font-medium text-amber-600 dark:text-amber-400 leading-snug">
+							<span class="iconify tabler--alert-triangle w-3 h-3 inline-block align-[-1px] mr-1"></span>
+							{{ warning.text }}
+						</p>
+						<button v-if="warning.action"
+							class="shrink-0 px-2 py-1 rounded-md border border-amber-500/40 text-[10px] font-bold text-amber-600 dark:text-amber-400 hover:bg-amber-500/20 transition active:scale-95"
+							@click="store.toggleTrackFlag(warning.action.trackId, warning.action.flag)">
+							{{ warning.action.label }}
+						</button>
+					</div>
+				</div>
 			</template>
 
 			<!-- ===== Rendering / stitching ===== -->
@@ -32,7 +41,9 @@
 					<p class="text-sm font-bold text-zinc-800 dark:text-zinc-200 font-heading mb-1">
 						{{ state.phase === 'stitching' ? 'Finalizing…' : 'Rendering regions…' }}
 					</p>
-					<p class="text-[10px] text-zinc-400">Your timeline is being rendered with FFmpeg.</p>
+					<p class="text-[10px] text-zinc-400">
+						Rendering from a snapshot of your timeline — you can keep editing or open another project meanwhile.
+					</p>
 				</div>
 				<div class="h-2 rounded-full bg-zinc-200 dark:bg-zinc-800 overflow-hidden">
 					<div class="h-full bg-primary rounded-full transition-all duration-300"
@@ -81,6 +92,11 @@
 				<template v-else-if="store.isRendering">
 					<button class="btn-ghost !text-red-500 hover:!bg-red-500/10" @click="store.abortExport()">
 						Cancel render
+					</button>
+					<button class="btn-primary" title="The export keeps running — you can keep editing or open another project"
+						@click="close">
+						<span class="iconify tabler--arrow-bar-to-down w-3.5 h-3.5 inline-block align-[-2px] mr-1"></span>
+						Continue in background
 					</button>
 				</template>
 				<!-- Done -->

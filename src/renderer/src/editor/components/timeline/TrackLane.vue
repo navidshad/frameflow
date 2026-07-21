@@ -2,7 +2,7 @@
 	<div class="relative border-b border-zinc-200/60 dark:border-zinc-800/60 transition-colors"
 		:data-track-id="track.id"
 		:style="{ height: `${track.height}px` }"
-		:class="[laneTint, { 'opacity-40': track.hidden, 'bg-zinc-500/5': dragOver }]"
+		:class="[laneTint, { 'opacity-40': track.hidden, 'opacity-50 saturate-50': track.muted && !track.hidden, 'bg-zinc-500/5': dragOver }]"
 		role="group" :aria-label="`${track.name} ${track.kind} track`"
 		@dragover="onDragOver" @dragleave="dragOver = false" @drop="onDrop"
 		@pointerdown="onLanePointerDown">

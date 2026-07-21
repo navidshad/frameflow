@@ -12,6 +12,12 @@ import { itemEnd } from '@shared/timeline'
 import { threadManager } from '../threads'
 import { assembleVideo, sanitizeFilename } from '../ffmpeg'
 import { THREAD_DIRS } from '../constants/paths'
+import {
+	audioBuilders, buildChain, videoBuilders,
+	type BuildCtx, type Region, type RegionPlan, type SourceSlice
+} from './renderBuilders'
+
+export { atempoChain } from './renderBuilders'
 
 /**
  * Export render engine (PRD §5.9 / §7 option C — segment-then-concat).
@@ -33,63 +39,37 @@ import { THREAD_DIRS } from '../constants/paths'
 const IS_MAC = process.platform === 'darwin'
 const GAP_EPS = 0.05
 
-// ===== Region model =====
+// ===== Region planning =====
 // Regions are sliced at the UNION of every video- AND audio-item boundary, so
-// each region is fully covered (or not) by each item — never partially. A
-// region carries at most one video slice (the primary video track) plus any
-// number of active audio sources (the video's own audio + audio-track items),
-// mixed to one stereo output at render time (§5.9).
-
-interface VideoSlice {
-	srcPath: string
-	in: number
-	out: number
-	speed: number
-}
-
-interface AudioSource {
-	srcPath: string
-	in: number
-	out: number
-	speed: number
-	preservePitch: boolean
-	gain: number
-}
-
-interface Region {
-	duration: number
-	video: VideoSlice | null   // null → black frames of `duration`
-	audioSources: AudioSource[] // empty → silence of `duration`
-}
-
-interface RegionPlan {
-	regions: Region[]
-	width: number
-	height: number
-	fps: number
-}
+// each region is fully covered (or not) by each item — never partially. The
+// region model (SourceSlice/Region/RegionPlan) lives in renderBuilders.ts;
+// slices carry their originating item+track so filter builders read every
+// adjustment field directly (§7 handler-based render).
 
 /** Map a covering item's source range onto a sub-region [t0,t1) of the timeline. */
-function sliceSource(item: TimelineItem, t0: number, t1: number): { in: number; out: number; speed: number } {
+function sliceSource(item: TimelineItem, t0: number, t1: number): { in: number; out: number } {
 	const speed = item.speed || 1
 	return {
 		in: item.in + (t0 - item.timelineStart) * speed,
-		out: item.in + (t1 - item.timelineStart) * speed,
-		speed
+		out: item.in + (t1 - item.timelineStart) * speed
 	}
 }
 
 export function computeRegions(doc: EditorDocument, quality: ExportQuality): RegionPlan {
-	const videoTrack = doc.tracks
+	// Video tracks TOP-most first (highest order wins visually); [0] of a
+	// region's videoLayers is the layer v1 actually renders.
+	const videoTracks = doc.tracks
 		.filter((t) => t.kind === 'video' && !t.hidden)
-		.sort((a, b) => a.order - b.order)[0] || null
+		.sort((a, b) => b.order - a.order)
 	const audioTrackById = new Map(
 		doc.tracks.filter((t) => t.kind === 'audio' && !t.hidden).map((t) => [t.id, t])
 	)
 
-	const videoItems = videoTrack
-		? doc.timeline.filter((i) => i.trackId === videoTrack.id).sort((a, b) => a.timelineStart - b.timelineStart)
-		: []
+	const trackById = new Map(doc.tracks.map((t) => [t.id, t]))
+	const videoTrackIds = new Set(videoTracks.map((t) => t.id))
+	const videoItems = doc.timeline
+		.filter((i) => videoTrackIds.has(i.trackId))
+		.sort((a, b) => a.timelineStart - b.timelineStart)
 	const audioItems = doc.timeline
 		.filter((i) => audioTrackById.has(i.trackId))
 		.sort((a, b) => a.timelineStart - b.timelineStart)
@@ -130,13 +110,20 @@ export function computeRegions(doc: EditorDocument, quality: ExportQuality): Reg
 
 	// A video item's own audio contributes when unmuted and the source has audio.
 	const videoAudioActive = (item: TimelineItem, asset: MediaAsset) =>
-		!item.muted && !(videoTrack?.muted) && asset.metadata?.hasAudio !== false
+		!item.muted && !trackById.get(item.trackId)?.muted && asset.metadata?.hasAudio !== false
 	// An audio-track item contributes when neither it nor its track is muted.
 	const audioItemActive = (item: TimelineItem) =>
 		!item.muted && !audioTrackById.get(item.trackId)?.muted
 
 	const covers = (item: TimelineItem, t0: number, t1: number) =>
 		item.timelineStart <= t0 + GAP_EPS && itemEnd(item) >= t1 - GAP_EPS
+
+	const toSlice = (item: TimelineItem, t0: number, t1: number): SourceSlice => {
+		const asset = assetById.get(item.sourceAssetId)
+		if (!asset) throw new Error(`Missing media asset for clip "${item.label || item.id}".`)
+		const { in: sIn, out: sOut } = sliceSource(item, t0, t1)
+		return { srcPath: srcFor(asset), in: sIn, out: sOut, item, track: trackById.get(item.trackId)! }
+	}
 
 	const regions: Region[] = []
 	for (let i = 0; i < points.length - 1; i++) {
@@ -145,40 +132,26 @@ export function computeRegions(doc: EditorDocument, quality: ExportQuality): Reg
 		const duration = t1 - t0
 		if (duration <= GAP_EPS) continue
 
-		// ---- Video: the single covering video-track item (if any) ----
-		let video: VideoSlice | null = null
-		const vItem = videoItems.find((it) => covers(it, t0, t1))
-		if (vItem) {
-			const asset = assetById.get(vItem.sourceAssetId)
-			if (!asset) throw new Error(`Missing media asset for clip "${vItem.label || vItem.id}".`)
-			const slice = sliceSource(vItem, t0, t1)
-			video = { srcPath: srcFor(asset), in: slice.in, out: slice.out, speed: slice.speed }
+		// ---- Video: covering item per video track, top-most first ----
+		const videoLayers: SourceSlice[] = []
+		for (const track of videoTracks) {
+			const vItem = videoItems.find((it) => it.trackId === track.id && covers(it, t0, t1))
+			if (vItem) videoLayers.push(toSlice(vItem, t0, t1))
 		}
 
-		// ---- Audio: video's own audio + every covering audio-track item ----
-		const audioSources: AudioSource[] = []
-		if (vItem) {
-			const asset = assetById.get(vItem.sourceAssetId)!
-			if (videoAudioActive(vItem, asset)) {
-				const slice = sliceSource(vItem, t0, t1)
-				audioSources.push({
-					srcPath: srcFor(asset), in: slice.in, out: slice.out,
-					speed: slice.speed, preservePitch: vItem.preservePitch !== false, gain: vItem.gain ?? 1
-				})
-			}
+		// ---- Audio: each video layer's own audio + covering audio-track items ----
+		const audioSources: SourceSlice[] = []
+		for (const layer of videoLayers) {
+			const asset = assetById.get(layer.item.sourceAssetId)!
+			if (videoAudioActive(layer.item, asset)) audioSources.push(toSlice(layer.item, t0, t1))
 		}
 		for (const aItem of audioItems) {
 			if (!covers(aItem, t0, t1) || !audioItemActive(aItem)) continue
-			const asset = assetById.get(aItem.sourceAssetId)
-			if (!asset) continue
-			const slice = sliceSource(aItem, t0, t1)
-			audioSources.push({
-				srcPath: srcFor(asset), in: slice.in, out: slice.out,
-				speed: slice.speed, preservePitch: aItem.preservePitch !== false, gain: aItem.gain ?? 1
-			})
+			if (!assetById.has(aItem.sourceAssetId)) continue
+			audioSources.push(toSlice(aItem, t0, t1))
 		}
 
-		regions.push({ duration, video, audioSources })
+		regions.push({ duration, videoLayers, audioSources })
 	}
 
 	return { regions, width, height, fps }
@@ -194,6 +167,10 @@ export function isFastPathEligible(items: TimelineItem[], track: Track, hasAudio
 	if (!items.every((i) => i.sourceAssetId === srcId)) return false
 	if (!items.every((i) => (i.speed ?? 1) === 1)) return false // no setpts in assembleVideo
 	if (items.some((i) => i.muted)) return false
+	// Any audio adjustment needs the builder chain (no volume/afade in assembleVideo).
+	if ((track.gain ?? 1) !== 1) return false
+	if (!items.every((i) => (i.gain ?? 1) === 1)) return false
+	if (items.some((i) => (i.fadeInSec ?? 0) > 0 || (i.fadeOutSec ?? 0) > 0)) return false
 	if (Math.abs(items[0].timelineStart) > GAP_EPS) return false // leading gap needs black
 	for (let i = 1; i < items.length; i++) {
 		if (Math.abs(items[i].timelineStart - itemEnd(items[i - 1])) > GAP_EPS) return false
@@ -206,16 +183,6 @@ export function isFastPathEligible(items: TimelineItem[], track: Track, hasAudio
 const vnorm = (w: number, h: number, fps: number) =>
 	`scale=${w}:${h}:force_original_aspect_ratio=decrease,` +
 	`pad=${w}:${h}:(ow-iw)/2:(oh-ih)/2,setsar=1,fps=${fps},format=yuv420p`
-
-/** Chain atempo stages so each stays within ffmpeg's 0.5–2.0 range. */
-export function atempoChain(speed: number): string {
-	const stages: number[] = []
-	let factor = speed
-	while (factor > 2) { stages.push(2); factor /= 2 }
-	while (factor < 0.5) { stages.push(0.5); factor /= 0.5 }
-	stages.push(factor)
-	return stages.map((s) => `atempo=${s.toFixed(4).replace(/0+$/, '').replace(/\.$/, '')}`).join(',')
-}
 
 // Uniform intermediates: identical codec/res/fps/rate/layout is REQUIRED for
 // concat -c copy. Forced h264+aac mp4 on all platforms (incl. webm sources).
@@ -254,10 +221,12 @@ function runCommand(
 }
 
 /**
- * Renders ONE region to a uniform intermediate: a video slice (or black) plus
- * the region's mixed audio. 0 audio sources → silence; 1 → that stream; k>1 →
- * amix (normalize=0, gains already applied) so overlapping audio-track items
- * and a video's own soundtrack mix correctly and stay region-length (§5.9).
+ * Renders ONE region to a uniform intermediate: the top video layer (or black)
+ * plus the region's mixed audio. 0 audio sources → silence; 1 → that stream;
+ * k>1 → amix (normalize=0, gains already applied) so overlapping audio-track
+ * items and a video's own soundtrack mix correctly and stay region-length
+ * (§5.9). Per-stream chains are composed from the ORDERED builder registries
+ * in renderBuilders.ts — new adjustments plug in there, not here.
  */
 async function renderRegion(
 	region: Region,
@@ -274,13 +243,16 @@ async function renderRegion(
 	const command = ffmpeg()
 	const filters: string[] = []
 	let inputIdx = 0
+	const ctxFor = (slice: SourceSlice): BuildCtx => ({ slice, regionDur: duration, plan })
 
-	// ---- Video: source slice, or black of exactly `duration` ----
-	if (region.video) {
-		const v = region.video
-		const cut = (v.out - v.in).toFixed(3)
-		command.input(v.srcPath).inputOptions(['-ss', v.in.toFixed(3), '-t', cut])
-		filters.push(`[${inputIdx++}:v]setpts=(PTS-STARTPTS)/${v.speed},${vnorm(plan.width, plan.height, plan.fps)}[v]`)
+	// ---- Video: top layer's slice, or black of exactly `duration`.
+	// videoLayers[1..n] are the compositing seam (PiP/overlay, deferred). ----
+	const topLayer = region.videoLayers[0]
+	if (topLayer) {
+		const cut = (topLayer.out - topLayer.in).toFixed(3)
+		command.input(topLayer.srcPath).inputOptions(['-ss', topLayer.in.toFixed(3), '-t', cut])
+		const chain = [...buildChain(videoBuilders, ctxFor(topLayer)), vnorm(plan.width, plan.height, plan.fps)]
+		filters.push(`[${inputIdx++}:v]${chain.join(',')}[v]`)
 	} else {
 		command.input(`color=black:size=${plan.width}x${plan.height}:rate=${plan.fps}`)
 			.inputFormat('lavfi').inputOptions(['-t', dur])
@@ -297,17 +269,18 @@ async function renderRegion(
 		region.audioSources.forEach((a, k) => {
 			const cut = (a.out - a.in).toFixed(3)
 			command.input(a.srcPath).inputOptions(['-ss', a.in.toFixed(3), '-t', cut])
-			const retime = a.speed === 1
-				? ''
-				: a.preservePitch ? `${atempoChain(a.speed)},` : `asetrate=48000*${a.speed},`
-			const gain = a.gain !== 1 ? `volume=${a.gain},` : ''
 			const label = `[a${k}]`
-			// apad + atrim pin every stream to EXACTLY the region duration so amix
-			// aligns them and the intermediate stays A/V frame-aligned for concat.
-			filters.push(
-				`[${inputIdx++}:a]asetpts=PTS-STARTPTS,${retime}${gain}aresample=48000,` +
-				`aformat=sample_fmts=fltp:channel_layouts=stereo,apad=whole_dur=${dur},atrim=0:${dur}${label}`
-			)
+			// Head: PTS reset. Builders: speed → gain → fade → effects. Tail:
+			// conform + apad + atrim pin every stream to EXACTLY the region
+			// duration so amix aligns them and the intermediate stays A/V
+			// frame-aligned for concat.
+			const chain = [
+				'asetpts=PTS-STARTPTS',
+				...buildChain(audioBuilders, ctxFor(a)),
+				'aresample=48000',
+				`aformat=sample_fmts=fltp:channel_layouts=stereo,apad=whole_dur=${dur},atrim=0:${dur}`
+			]
+			filters.push(`[${inputIdx++}:a]${chain.join(',')}${label}`)
 			labels.push(label)
 		})
 		if (labels.length === 1) {
@@ -376,20 +349,30 @@ export function abortRendersForThread(threadId: string): void {
 	}
 }
 
-export function startEditorRender(options: { threadId: string; quality: ExportQuality }): { renderId: string } {
+export function startEditorRender(options: {
+	threadId: string
+	quality: ExportQuality
+	/**
+	 * In-memory timeline snapshot (serialized over IPC). When present, the
+	 * render works ENTIRELY off this object — the live document can keep
+	 * changing, revisions can switch, another project can load; nothing here
+	 * is persisted. Falls back to the persisted thread doc when absent.
+	 */
+	doc?: EditorDocument
+}): { renderId: string } {
 	const { threadId, quality } = options
 	const thread = threadManager.getThread(threadId)
 	if (!thread || thread.type !== 'editor' || !thread.editor) {
 		throw new Error('Not an editor project')
 	}
-	const doc = thread.editor
+	const doc = options.doc ?? thread.editor
 
 	// ---- Pre-flight (synchronous — a bad timeline rejects the invoke
 	// immediately instead of producing a ghost render) ----
 	const plan = computeRegions(doc, quality)
 	const srcPaths = [...new Set(
 		plan.regions.flatMap((r) => [
-			...(r.video ? [r.video.srcPath] : []),
+			...r.videoLayers.map((v) => v.srcPath),
 			...r.audioSources.map((a) => a.srcPath)
 		])
 	)]
@@ -429,8 +412,15 @@ export function startEditorRender(options: { threadId: string; quality: ExportQu
 				doc.tracks.filter((t) => t.kind === 'audio' && !t.hidden).map((t) => t.id)
 			)
 			const hasAudioItems = doc.timeline.some((i) => audioTrackIds.has(i.trackId))
+			// Items on a SECOND video track need the region path (layering).
+			const videoTrackIds = new Set(
+				doc.tracks.filter((t) => t.kind === 'video' && !t.hidden).map((t) => t.id)
+			)
+			const hasOtherVideoItems = doc.timeline.some(
+				(i) => videoTrackIds.has(i.trackId) && i.trackId !== videoTrack?.id
+			)
 
-			if (videoTrack && isFastPathEligible(items, videoTrack, hasAudioItems)) {
+			if (videoTrack && !hasOtherVideoItems && isFastPathEligible(items, videoTrack, hasAudioItems)) {
 				// ---- Fast path: single-source trim+concat via assembleVideo ----
 				const asset = doc.media.find((a) => a.id === items[0].sourceAssetId)!
 				const srcPath = quality === 'preview'

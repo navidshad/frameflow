@@ -43,7 +43,10 @@ export const EDITOR_OPS_SCHEMA = {
 					in: { type: 'number' },
 					out: { type: 'number' },
 					speed: { type: 'number' },
-					label: { type: 'string' }
+					label: { type: 'string' },
+					gain: { type: 'number' },
+					fadeInSec: { type: 'number' },
+					fadeOutSec: { type: 'number' }
 				},
 				required: ['id']
 			}
@@ -100,7 +103,8 @@ export function composeSystemInstruction(persona: EditorPersona): string {
 		"    from that asset's AVAILABLE SCENES list (preferred), or explicit in/out seconds",
 		"    within the asset's duration.",
 		'  - Never invent ids or scene numbers. All times are seconds.',
-		'  - `updateItems` may change timelineStart, in, out, speed (0.25-4.0), label.',
+		'  - `updateItems` may change timelineStart, in, out, speed (0.25-4.0), label,',
+		'    gain (0-2, audio mix level), and fadeInSec / fadeOutSec (audio fade lengths, seconds).',
 		'    Never set durations — they are derived from (out - in) / speed.',
 		'  - Only modify items listed in the items section.',
 		'- Always include a short `rationale` describing what you changed and why, citing',
@@ -145,6 +149,10 @@ export function opsToDiff(
 			if (typeof update.out === 'number') clean.out = update.out
 			if (typeof update.speed === 'number') clean.speed = update.speed
 			if (typeof update.label === 'string') clean.label = update.label
+			// Audio adjustments — clamped again in applyTimelineDiff's normalize
+			if (typeof update.gain === 'number') clean.gain = Math.max(0, Math.min(2, update.gain))
+			if (typeof update.fadeInSec === 'number') clean.fadeInSec = Math.max(0, update.fadeInSec)
+			if (typeof update.fadeOutSec === 'number') clean.fadeOutSec = Math.max(0, update.fadeOutSec)
 			if (Object.keys(clean).length > 1) updates.push(clean)
 		}
 		if (updates.length) diff.updateItems = updates

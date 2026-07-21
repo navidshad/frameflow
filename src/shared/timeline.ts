@@ -78,9 +78,9 @@ export function clipToItem(clip: Clip, trackId: string, timelineStart: number): 
 const ITEM_FIELDS: (keyof TimelineItem)[] = [
 	'trackId', 'sourceAssetId', 'sourceClipId', 'masterSegmentIndex',
 	'timelineStart', 'in', 'out', 'speed', 'preservePitch', 'duration',
-	'label', 'gain', 'muted'
+	'label', 'gain', 'muted', 'fadeInSec', 'fadeOutSec'
 ]
-const TRACK_FIELDS: (keyof Track)[] = ['kind', 'name', 'order', 'muted', 'locked', 'hidden', 'height']
+const TRACK_FIELDS: (keyof Track)[] = ['kind', 'name', 'order', 'muted', 'locked', 'hidden', 'height', 'gain']
 
 function changedFields<T extends { id: string }>(before: T, after: T, fields: (keyof T)[]): Partial<T> | null {
 	let changed: Partial<T> | null = null
@@ -239,7 +239,17 @@ export function applyTimelineDiff(
 
 	const normalize = (item: TimelineItem): TimelineItem => {
 		const speed = clampSpeed(item.speed || 1)
-		return { ...item, speed, duration: (item.out - item.in) / speed }
+		const duration = (item.out - item.in) / speed
+		const clampFade = (v: number | undefined) =>
+			typeof v === 'number' && Number.isFinite(v) && v > 0 ? Math.min(v, duration) : undefined
+		const gain = typeof item.gain === 'number' && Number.isFinite(item.gain)
+			? Math.max(0, Math.min(2, item.gain))
+			: undefined
+		return {
+			...item, speed, duration, gain,
+			fadeInSec: clampFade(item.fadeInSec),
+			fadeOutSec: clampFade(item.fadeOutSec)
+		}
 	}
 
 	// Removals before additions (track-update encoding relies on this order).

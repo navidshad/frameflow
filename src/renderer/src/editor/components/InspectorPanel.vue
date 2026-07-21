@@ -57,6 +57,29 @@
 							Level for this clip in the exported audio mix. 1.0× is unchanged.
 						</p>
 					</div>
+
+					<!-- Audio fades (applied in preview + export) -->
+					<div class="grid grid-cols-2 gap-2">
+						<div>
+							<label class="text-[10px] font-bold uppercase tracking-widest text-zinc-500 block mb-1">
+								Fade in (s)
+							</label>
+							<input type="number" min="0" step="0.1" :value="fadeInValue"
+								class="w-full px-2 py-1.5 rounded-lg border border-zinc-200 dark:border-zinc-700 bg-white dark:bg-zinc-900 text-xs font-mono text-zinc-800 dark:text-zinc-200 input-focus-ring"
+								@change="editorStore.setItemFade(timelineItem!.id, 'in', parseFloat(($event.target as HTMLInputElement).value))" />
+						</div>
+						<div>
+							<label class="text-[10px] font-bold uppercase tracking-widest text-zinc-500 block mb-1">
+								Fade out (s)
+							</label>
+							<input type="number" min="0" step="0.1" :value="fadeOutValue"
+								class="w-full px-2 py-1.5 rounded-lg border border-zinc-200 dark:border-zinc-700 bg-white dark:bg-zinc-900 text-xs font-mono text-zinc-800 dark:text-zinc-200 input-focus-ring"
+								@change="editorStore.setItemFade(timelineItem!.id, 'out', parseFloat(($event.target as HTMLInputElement).value))" />
+						</div>
+						<p class="col-span-2 -mt-1 text-[9px] text-zinc-400 leading-snug">
+							Audio ramps at the clip's edges — heard in preview and applied at export.
+						</p>
+					</div>
 				</div>
 
 				<!-- Actions -->
@@ -233,6 +256,8 @@ const trackName = computed(() =>
 )
 
 const gainValue = computed(() => timelineItem.value?.gain ?? 1)
+const fadeInValue = computed(() => timelineItem.value?.fadeInSec ?? 0)
+const fadeOutValue = computed(() => timelineItem.value?.fadeOutSec ?? 0)
 
 const onSpeedInput = (event: Event) => {
 	const value = parseFloat((event.target as HTMLInputElement).value)

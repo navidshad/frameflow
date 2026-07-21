@@ -86,14 +86,27 @@ export const useEditorStore = defineStore('editor', () => {
 	}
 	const lastResult = ref<AiResult | null>(null)
 
-	// ===== Export / render (M4) =====
-	const renderState = ref<{
+	// ===== Export / render (M4 + background exports) =====
+	// Renders are keyed by THREAD id and survive project switches: the render
+	// itself runs in main off an in-memory snapshot, so the user can keep
+	// editing or load another project while it finishes. This map is
+	// session-global — loadProject must NOT reset it.
+	interface RenderEntry {
+		threadId: string
+		title: string
 		renderId: string
 		percent: number
 		phase: 'rendering' | 'stitching' | 'done' | 'error'
 		outputPath?: string
 		error?: string
-	} | null>(null)
+		startedAt: number
+	}
+	const renders = ref<Record<string, RenderEntry>>({})
+
+	/** The CURRENT project's render state (compat shim for header/dialog). */
+	const renderState = computed<RenderEntry | null>(() =>
+		(threadId.value && renders.value[threadId.value]) || null
+	)
 
 	let autosaveTimer: ReturnType<typeof setTimeout> | null = null
 
@@ -215,7 +228,9 @@ export const useEditorStore = defineStore('editor', () => {
 					sourceIn: item.in,
 					speed: item.speed || 1,
 					muted: !!item.muted || !!trackMuted.get(item.trackId),
-					gain: item.gain ?? 1
+					gain: item.gain ?? 1,
+					fadeInSec: item.fadeInSec ?? 0,
+					fadeOutSec: item.fadeOutSec ?? 0
 				}]
 			})
 	})
@@ -304,6 +319,11 @@ export const useEditorStore = defineStore('editor', () => {
 		renderState.value?.phase === 'rendering' || renderState.value?.phase === 'stitching'
 	)
 
+	/** Every tracked render, newest first — feeds the global background pill. */
+	const backgroundRenders = computed<RenderEntry[]>(() =>
+		Object.values(renders.value).sort((a, b) => b.startedAt - a.startedAt)
+	)
+
 	// The AI has nothing to work with until at least one asset finished
 	// preprocessing (pieces/transcript exist) — the chat gates on this.
 	const hasReadyMedia = computed(() =>
@@ -320,13 +340,67 @@ export const useEditorStore = defineStore('editor', () => {
 		return doc.value.timeline.some((i) => i.trackId === videoTrack.id)
 	})
 
-	const exportNotice = computed(() => {
-		if (!doc.value) return null
+	/**
+	 * Pre-flight export warnings (PRD §5.9): content that exists on the timeline
+	 * but will be missing from the render — muted/hidden tracks with clips,
+	 * individually muted clips, overlay/text items. Warnings with an `action`
+	 * offer a one-click fix (e.g. Unmute) in the export dialog.
+	 */
+	const exportWarnings = computed<Array<{
+		id: string
+		text: string
+		action?: { label: string; trackId: string; flag: 'muted' | 'hidden' }
+	}>>(() => {
+		if (!doc.value) return []
+		const warnings: Array<{ id: string; text: string; action?: { label: string; trackId: string; flag: 'muted' | 'hidden' } }> = []
+		const itemsByTrack = new Map<string, number>()
+		for (const item of doc.value.timeline) {
+			itemsByTrack.set(item.trackId, (itemsByTrack.get(item.trackId) || 0) + 1)
+		}
+		const plural = (n: number) => n === 1 ? '1 clip' : `${n} clips`
+
+		for (const track of doc.value.tracks) {
+			const count = itemsByTrack.get(track.id) || 0
+			if (count === 0 || track.kind === 'overlay' || track.kind === 'text') continue
+			if (track.hidden) {
+				warnings.push({
+					id: `hidden-${track.id}`,
+					text: `${track.name} (${plural(count)}) is hidden and won't be in the export.`,
+					action: { label: 'Show', trackId: track.id, flag: 'hidden' }
+				})
+			} else if (track.muted) {
+				warnings.push({
+					id: `muted-${track.id}`,
+					text: track.kind === 'audio'
+						? `${track.name} (${plural(count)}) is muted and won't be heard in the export.`
+						: `${track.name} (${plural(count)}) is muted — its clips render without their audio.`,
+					action: { label: 'Unmute', trackId: track.id, flag: 'muted' }
+				})
+			}
+		}
+
+		const trackById = new Map(doc.value.tracks.map((t) => [t.id, t]))
+		const mutedItems = doc.value.timeline.filter((i) => {
+			const track = trackById.get(i.trackId)
+			return i.muted && track && !track.muted && !track.hidden &&
+				(track.kind === 'video' || track.kind === 'audio')
+		})
+		if (mutedItems.length > 0) {
+			warnings.push({
+				id: 'muted-items',
+				text: `${plural(mutedItems.length)} ${mutedItems.length === 1 ? 'has' : 'have'} muted audio and won't be heard in the export.`
+			})
+		}
+
 		const hasOverlayItems = doc.value.timeline.some((item) => {
-			const track = doc.value!.tracks.find((t) => t.id === item.trackId)
+			const track = trackById.get(item.trackId)
 			return track && (track.kind === 'overlay' || track.kind === 'text')
 		})
-		return hasOverlayItems ? "Overlay/text tracks won't appear in this export." : null
+		if (hasOverlayItems) {
+			warnings.push({ id: 'overlay', text: "Overlay/text tracks won't appear in this export." })
+		}
+
+		return warnings
 	})
 
 	// ===== Persistence =====
@@ -1018,6 +1092,17 @@ export const useEditorStore = defineStore('editor', () => {
 		commitStep({ before, label: `Gain ${item.gain.toFixed(2)}` })
 	}
 
+	/** Audio fade-in/out length in seconds, clamped to the item's on-timeline duration. */
+	const setItemFade = (id: string, edge: 'in' | 'out', seconds: number) => {
+		const item = doc.value?.timeline.find((i) => i.id === id)
+		if (!item || !Number.isFinite(seconds)) return
+		const before = snapshotState()
+		const clamped = Math.max(0, Math.min(item.duration, seconds))
+		if (edge === 'in') item.fadeInSec = clamped || undefined
+		else item.fadeOutSec = clamped || undefined
+		commitStep({ before, label: `Fade ${edge} ${clamped.toFixed(1)}s` })
+	}
+
 	const nudgeItems = (ids: string[], deltaSec: number) => {
 		if (!doc.value || !ids.length) return
 		const before = snapshotState()
@@ -1471,25 +1556,33 @@ export const useEditorStore = defineStore('editor', () => {
 		lastAnswer.value = null
 	}
 
-	// ===== Export actions (M4) =====
+	// ===== Export actions (M4 + background exports) =====
 	const startExport = async (quality: 'original' | 'preview') => {
-		if (!threadId.value || !canExport.value) return
-		// Flush the debounced autosave — main renders from the persisted doc
-		dirty.value = true
-		await persistDoc()
-		renderState.value = { renderId: '', percent: 0, phase: 'rendering' }
+		if (!threadId.value || !canExport.value || !doc.value) return
+		const tid = threadId.value
+		const entry: RenderEntry = {
+			threadId: tid,
+			title: thread.value?.title || 'Export',
+			renderId: '',
+			percent: 0,
+			phase: 'rendering',
+			startedAt: Date.now()
+		}
+		renders.value = { ...renders.value, [tid]: entry }
 		try {
-			const result = await api.exportEditorTimeline({ threadId: threadId.value, quality })
-			if (result?.renderId && renderState.value) {
-				renderState.value = { ...renderState.value, renderId: result.renderId }
+			// Pass an in-memory SNAPSHOT of the live doc: the render detaches
+			// from the editor entirely (keep editing / switch revision / load
+			// another project), and the snapshot is never persisted.
+			const snapshot = JSON.parse(JSON.stringify(doc.value))
+			const result = await api.exportEditorTimeline({ threadId: tid, quality, doc: snapshot })
+			if (result?.renderId && renders.value[tid]) {
+				renders.value = { ...renders.value, [tid]: { ...renders.value[tid], renderId: result.renderId } }
 			}
 		} catch (error: any) {
 			// Pre-flight rejection (missing files, empty timeline, …)
-			renderState.value = {
-				renderId: '',
-				percent: 0,
-				phase: 'error',
-				error: error?.message || 'Export failed to start'
+			renders.value = {
+				...renders.value,
+				[tid]: { ...entry, phase: 'error', error: error?.message || 'Export failed to start' }
 			}
 		}
 	}
@@ -1499,8 +1592,13 @@ export const useEditorStore = defineStore('editor', () => {
 		await api.abortEditorRender({ renderId: renderState.value.renderId })
 	}
 
-	const clearRenderState = () => {
-		renderState.value = null
+	/** Dismiss a render entry (defaults to the current project's). */
+	const clearRenderState = (tid?: string) => {
+		const key = tid || threadId.value
+		if (!key || !renders.value[key]) return
+		const next = { ...renders.value }
+		delete next[key]
+		renders.value = next
 	}
 
 	/**
@@ -1714,15 +1812,23 @@ export const useEditorStore = defineStore('editor', () => {
 				phase: 'rendering' | 'stitching' | 'done' | 'error'
 				outputPath?: string; error?: string
 			}) => {
-				if (data.threadId !== threadId.value) return
-				// Ignore stale renders (a fresh export may have started)
-				if (renderState.value?.renderId && data.renderId !== renderState.value.renderId) return
-				renderState.value = {
-					renderId: data.renderId,
-					percent: data.percent,
-					phase: data.phase,
-					outputPath: data.outputPath,
-					error: data.error
+				// Renders are background jobs — track progress for ANY thread,
+				// not just the currently open project.
+				const existing = renders.value[data.threadId]
+				// Ignore stale renders (a fresh export may have started for this thread)
+				if (existing?.renderId && data.renderId !== existing.renderId) return
+				renders.value = {
+					...renders.value,
+					[data.threadId]: {
+						threadId: data.threadId,
+						title: existing?.title || 'Export',
+						startedAt: existing?.startedAt || Date.now(),
+						renderId: data.renderId,
+						percent: data.percent,
+						phase: data.phase,
+						outputPath: data.outputPath,
+						error: data.error
+					}
 				}
 			})
 		}
@@ -1809,6 +1915,7 @@ export const useEditorStore = defineStore('editor', () => {
 		setItemPreservePitch,
 		toggleItemMuted,
 		setItemGain,
+		setItemFade,
 		nudgeItems,
 		addMarker,
 		removeMarker,
@@ -1856,9 +1963,11 @@ export const useEditorStore = defineStore('editor', () => {
 		dismissResult,
 		// export
 		renderState,
+		renders,
+		backgroundRenders,
 		isRendering,
 		canExport,
-		exportNotice,
+		exportWarnings,
 		startExport,
 		abortExport,
 		clearRenderState

@@ -244,6 +244,7 @@ export interface Track {
 	locked: boolean
 	hidden: boolean
 	height: number              // px in the timeline UI
+	gain?: number               // track-level audio gain, composed with item gain at render (default 1.0)
 }
 
 export interface TimelineItem {  // an instance of a clip placed on a track
@@ -260,6 +261,8 @@ export interface TimelineItem {  // an instance of a clip placed on a track
 	duration: number            // ON-TIMELINE duration = (out - in) / speed
 	label?: string
 	gain?: number               // audio gain multiplier (default 1.0)
+	fadeInSec?: number          // audio fade-in length (item-local seconds on the timeline)
+	fadeOutSec?: number         // audio fade-out length (item-local seconds on the timeline)
 	muted?: boolean
 	// ---- Stubs (deferred: effects/transitions/transforms/text) ----
 	transform?: TimelineItemTransform
@@ -404,6 +407,9 @@ export interface EditorOps {
 		out?: number
 		speed?: number
 		label?: string
+		gain?: number
+		fadeInSec?: number
+		fadeOutSec?: number
 	}>
 	addClips?: Array<{
 		assetId: string
