@@ -46,79 +46,59 @@
 
 		<!-- Editor workspace -->
 		<template v-else>
-			<main class="flex-1 min-h-0 flex flex-col z-10 p-3 gap-3">
-				<!-- Top zones: media | preview | right rail — rails collapse to slim strips -->
-				<div class="flex-1 min-h-0 grid gap-3 transition-all duration-300"
-					:style="{ gridTemplateColumns: `${leftOpen ? leftW + 'px' : '36px'} minmax(0,1fr) auto` }">
+			<!-- ROW: [workspace column (top zones + timeline)] + any FULL-HEIGHT right
+			     panels. A full-height panel narrows the workspace, so the timeline
+			     adapts to the remaining width. -->
+			<main class="flex-1 min-h-0 flex z-10 p-3 gap-3">
+				<div class="flex-1 min-w-0 flex flex-col gap-3">
+					<!-- Top zones: media | preview | right rail — rails collapse to slim strips -->
+					<div class="flex-1 min-h-0 grid gap-3 transition-all duration-300"
+						:style="{ gridTemplateColumns: `${leftOpen ? leftW + 'px' : '36px'} minmax(0,1fr) auto` }">
 
-					<!-- Left rail: media (drag its right edge to resize) -->
-					<div v-if="leftOpen" class="relative min-h-0 flex">
-						<MediaPanel v-model:collapsed="leftCollapsedProxy" class="flex-1 min-w-0" />
-						<ResizeHandle direction="vertical" class="absolute inset-y-0 -right-2.5 z-20"
-							@resize="resizeLeft" @reset="resetLeft" />
-					</div>
-					<CollapsedRail v-else side="left" label="Media" icon="tabler--photo-video"
-						@open="leftOpen = true" />
-
-					<!-- Center: the monitor gets the full column now -->
-					<PreviewMonitor class="min-h-0" />
-
-					<!-- Right region: two independently-collapsible COLUMNS —
-					     [Chat | Revisions] and [Inspector]. Closing a column frees
-					     its horizontal space so the player widens. -->
-					<div class="flex min-h-0 gap-3">
-						<!-- Column 1: Chat / Revisions (drag its left edge to resize) -->
-						<div v-if="chatColOpen" class="relative flex flex-col min-h-0 gap-1.5"
-							:style="{ width: chatW + 'px' }">
-							<ResizeHandle direction="vertical" reverse class="absolute inset-y-0 -left-2.5 z-20"
-								@resize="resizeChat" @reset="resetChat" />
-							<div class="flex items-center gap-0.5 px-1 shrink-0">
-								<button v-for="tab in (['chat', 'revisions'] as const)" :key="tab"
-									class="px-2 py-1 rounded-lg text-[9px] font-bold uppercase tracking-widest transition relative"
-									:class="chatTab === tab
-										? 'text-primary bg-primary/10'
-										: 'text-zinc-400 hover:text-zinc-600 dark:hover:text-zinc-300'"
-									@click="selectChatTab(tab)">
-									{{ tab }}
-									<span v-if="tab === 'revisions' && revisionsBadge"
-										class="absolute top-0.5 right-0.5 w-1.5 h-1.5 rounded-full bg-secondary animate-pulse-soft"></span>
-								</button>
-								<button title="Collapse panel"
-									class="ml-auto w-7 h-7 flex items-center justify-center rounded-lg text-zinc-400 hover:text-primary hover:bg-primary/10 transition active:scale-95 shrink-0"
-									@click="chatColOpen = false">
-									<span class="iconify tabler--layout-sidebar-right-collapse w-4 h-4"></span>
-								</button>
-							</div>
-							<ChatPanel v-show="chatTab === 'chat'" class="flex-1 min-h-0" />
-							<RevisionsPanel v-if="chatTab === 'revisions'" class="flex-1 min-h-0" />
+						<!-- Left rail: media (drag its right edge to resize) -->
+						<div v-if="leftOpen" class="relative min-h-0 flex">
+							<MediaPanel v-model:collapsed="leftCollapsedProxy" class="flex-1 min-w-0" />
+							<ResizeHandle direction="vertical" class="absolute inset-y-0 -right-2.5 z-20"
+								@resize="resizeLeft" @reset="resetLeft" />
 						</div>
-						<CollapsedRail v-else side="right" label="Chat" icon="tabler--message-circle"
-							:badge="chatBadge || revisionsBadge" @open="chatColOpen = true" />
+						<CollapsedRail v-else side="left" label="Media" icon="tabler--photo-video"
+							@open="leftOpen = true" />
 
-						<!-- Column 2: Inspector (drag its left edge to resize) -->
-						<div v-if="inspectorOpen" class="relative flex flex-col min-h-0 gap-1.5"
-							:style="{ width: inspectorW + 'px' }">
-							<ResizeHandle direction="vertical" reverse class="absolute inset-y-0 -left-2.5 z-20"
-								@resize="resizeInspector" @reset="resetInspector" />
-							<div class="flex items-center gap-1 px-1 shrink-0">
-								<span class="text-[9px] font-bold uppercase tracking-widest text-primary bg-primary/10 px-2 py-1 rounded-lg">inspect</span>
-								<button title="Collapse panel"
-									class="ml-auto w-7 h-7 flex items-center justify-center rounded-lg text-zinc-400 hover:text-primary hover:bg-primary/10 transition active:scale-95 shrink-0"
-									@click="inspectorOpen = false">
-									<span class="iconify tabler--layout-sidebar-right-collapse w-4 h-4"></span>
-								</button>
-							</div>
-							<InspectorPanel class="flex-1 min-h-0" />
+						<!-- Center: the monitor gets the full column now -->
+						<PreviewMonitor class="min-h-0" />
+
+						<!-- Right region (top-row slot): columns render here unless
+						     toggled full-height; collapsed rails always live here -->
+						<div class="flex min-h-0 gap-3">
+							<ChatColumn v-if="chatColOpen && !chatFull" :width="chatW" v-model:tab="chatTab"
+								:revisions-badge="revisionsBadge"
+								@collapse="chatColOpen = false" @toggle-full="chatFull = true"
+								@resize="resizeChat" @reset-size="resetChat" />
+							<CollapsedRail v-if="!chatColOpen" side="right" label="Chat" icon="tabler--message-circle"
+								:badge="chatBadge || revisionsBadge" @open="chatColOpen = true" />
+
+							<InspectorColumn v-if="inspectorOpen && !inspectorFull" :width="inspectorW"
+								@collapse="inspectorOpen = false" @toggle-full="inspectorFull = true"
+								@resize="resizeInspector" @reset-size="resetInspector" />
+							<CollapsedRail v-if="!inspectorOpen" side="right" label="Inspector" icon="tabler--adjustments"
+								@open="inspectorOpen = true" />
 						</div>
-						<CollapsedRail v-else side="right" label="Inspector" icon="tabler--adjustments"
-							@open="inspectorOpen = true" />
 					</div>
+
+					<!-- Bottom zone: timeline — drag the bar above it to resize -->
+					<ResizeHandle direction="horizontal" reverse class="-my-2 z-20"
+						@resize="resizeTimeline" @reset="resetTimeline" />
+					<TimelinePanel class="shrink-0" :style="{ height: timelineH + 'px' }" />
 				</div>
 
-				<!-- Bottom zone: timeline — drag the bar above it to resize -->
-				<ResizeHandle direction="horizontal" reverse class="-my-2 z-20"
-					@resize="resizeTimeline" @reset="resetTimeline" />
-				<TimelinePanel class="shrink-0" :style="{ height: timelineH + 'px' }" />
+				<!-- Full-height slot: panels toggled to span the whole workspace height -->
+				<ChatColumn v-if="chatColOpen && chatFull" full :width="chatW" v-model:tab="chatTab"
+					:revisions-badge="revisionsBadge"
+					@collapse="chatColOpen = false" @toggle-full="chatFull = false"
+					@resize="resizeChat" @reset-size="resetChat" />
+				<InspectorColumn v-if="inspectorOpen && inspectorFull" full :width="inspectorW"
+					@collapse="inspectorOpen = false" @toggle-full="inspectorFull = false"
+					@resize="resizeInspector" @reset-size="resetInspector" />
 			</main>
 
 			<ExportDialog v-model="showExport" />
@@ -132,12 +112,11 @@ import type { FunctionalComponent } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import GraphHeader from '../components/graph/GraphHeader.vue'
 import { useEditorStore } from '../stores/editorStore'
-import RevisionsPanel from './components/RevisionsPanel.vue'
 import MediaPanel from './components/MediaPanel.vue'
 import PreviewMonitor from './components/PreviewMonitor.vue'
-import InspectorPanel from './components/InspectorPanel.vue'
 import TimelinePanel from './components/TimelinePanel.vue'
-import ChatPanel from './components/ChatPanel.vue'
+import ChatColumn from './components/ChatColumn.vue'
+import InspectorColumn from './components/InspectorColumn.vue'
 import ExportDialog from './components/ExportDialog.vue'
 import ResizeHandle from './components/ResizeHandle.vue'
 
@@ -154,9 +133,15 @@ const leftOpen = ref(localStorage.getItem('editor.leftRail') !== 'closed')
 // its horizontal space, widening the player.
 const chatColOpen = ref(localStorage.getItem('editor.chatCol') !== 'closed')
 const inspectorOpen = ref(localStorage.getItem('editor.inspectorCol') !== 'closed')
+// Full-height mode: the column leaves the top row and spans the whole
+// workspace height; the timeline adapts to the remaining width.
+const chatFull = ref(localStorage.getItem('editor.chatFull') === 'true')
+const inspectorFull = ref(localStorage.getItem('editor.inspectorFull') === 'true')
 watch(leftOpen, (v) => localStorage.setItem('editor.leftRail', v ? 'open' : 'closed'))
 watch(chatColOpen, (v) => localStorage.setItem('editor.chatCol', v ? 'open' : 'closed'))
 watch(inspectorOpen, (v) => localStorage.setItem('editor.inspectorCol', v ? 'open' : 'closed'))
+watch(chatFull, (v) => localStorage.setItem('editor.chatFull', String(v)))
+watch(inspectorFull, (v) => localStorage.setItem('editor.inspectorFull', String(v)))
 // MediaPanel exposes its own collapse control through this proxy
 const leftCollapsedProxy = computed({ get: () => !leftOpen.value, set: (v) => { leftOpen.value = !v } })
 
@@ -208,10 +193,10 @@ const chatTab = ref<'chat' | 'revisions'>('chat')
 const revisionsBadge = ref(false)
 const chatBadge = ref(false)
 
-const selectChatTab = (tab: 'chat' | 'revisions') => {
-	chatTab.value = tab
+// Opening the revisions tab clears its badge (tab is v-modeled from ChatColumn)
+watch(chatTab, (tab) => {
 	if (tab === 'revisions') revisionsBadge.value = false
-}
+})
 
 watch(() => editorStore.lastResult, (result) => {
 	if (result && chatTab.value !== 'revisions') revisionsBadge.value = true
