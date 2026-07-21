@@ -82,7 +82,8 @@ const api = {
 	},
 	getPersonas: () => ipcRenderer.invoke('get-personas'),
 	setPersonas: (personas: any[]) => ipcRenderer.invoke('set-personas', personas),
-	exportEditorTimeline: (data: { threadId: string, quality: 'original' | 'preview' }) =>
+	// `doc` = in-memory timeline snapshot at click time (render detaches from the live doc)
+	exportEditorTimeline: (data: { threadId: string, quality: 'original' | 'preview', doc?: unknown }) =>
 		ipcRenderer.invoke('export-editor-timeline', data),
 	abortEditorRender: (data: { renderId: string }) =>
 		ipcRenderer.invoke('abort-editor-render', data),
