@@ -49,10 +49,14 @@
 			<main class="flex-1 min-h-0 flex flex-col z-10 p-3 gap-3">
 				<!-- Top zones: media | preview | right rail — rails collapse to slim strips -->
 				<div class="flex-1 min-h-0 grid gap-3 transition-all duration-300"
-					:style="{ gridTemplateColumns: `${leftOpen ? '280px' : '36px'} minmax(0,1fr) auto` }">
+					:style="{ gridTemplateColumns: `${leftOpen ? leftW + 'px' : '36px'} minmax(0,1fr) auto` }">
 
-					<!-- Left rail: media -->
-					<MediaPanel v-if="leftOpen" v-model:collapsed="leftCollapsedProxy" />
+					<!-- Left rail: media (drag its right edge to resize) -->
+					<div v-if="leftOpen" class="relative min-h-0 flex">
+						<MediaPanel v-model:collapsed="leftCollapsedProxy" class="flex-1 min-w-0" />
+						<ResizeHandle direction="vertical" class="absolute inset-y-0 -right-2.5 z-20"
+							@resize="resizeLeft" @reset="resetLeft" />
+					</div>
 					<CollapsedRail v-else side="left" label="Media" icon="tabler--photo-video"
 						@open="leftOpen = true" />
 
@@ -63,8 +67,11 @@
 					     [Chat | Revisions] and [Inspector]. Closing a column frees
 					     its horizontal space so the player widens. -->
 					<div class="flex min-h-0 gap-3">
-						<!-- Column 1: Chat / Revisions -->
-						<div v-if="chatColOpen" class="w-[300px] flex flex-col min-h-0 gap-1.5">
+						<!-- Column 1: Chat / Revisions (drag its left edge to resize) -->
+						<div v-if="chatColOpen" class="relative flex flex-col min-h-0 gap-1.5"
+							:style="{ width: chatW + 'px' }">
+							<ResizeHandle direction="vertical" reverse class="absolute inset-y-0 -left-2.5 z-20"
+								@resize="resizeChat" @reset="resetChat" />
 							<div class="flex items-center gap-0.5 px-1 shrink-0">
 								<button v-for="tab in (['chat', 'revisions'] as const)" :key="tab"
 									class="px-2 py-1 rounded-lg text-[9px] font-bold uppercase tracking-widest transition relative"
@@ -88,8 +95,11 @@
 						<CollapsedRail v-else side="right" label="Chat" icon="tabler--message-circle"
 							:badge="chatBadge || revisionsBadge" @open="chatColOpen = true" />
 
-						<!-- Column 2: Inspector -->
-						<div v-if="inspectorOpen" class="w-[280px] flex flex-col min-h-0 gap-1.5">
+						<!-- Column 2: Inspector (drag its left edge to resize) -->
+						<div v-if="inspectorOpen" class="relative flex flex-col min-h-0 gap-1.5"
+							:style="{ width: inspectorW + 'px' }">
+							<ResizeHandle direction="vertical" reverse class="absolute inset-y-0 -left-2.5 z-20"
+								@resize="resizeInspector" @reset="resetInspector" />
 							<div class="flex items-center gap-1 px-1 shrink-0">
 								<span class="text-[9px] font-bold uppercase tracking-widest text-primary bg-primary/10 px-2 py-1 rounded-lg">inspect</span>
 								<button title="Collapse panel"
@@ -105,8 +115,10 @@
 					</div>
 				</div>
 
-				<!-- Bottom zone: timeline -->
-				<TimelinePanel class="h-52 shrink-0" />
+				<!-- Bottom zone: timeline — drag the bar above it to resize -->
+				<ResizeHandle direction="horizontal" reverse class="-my-2 z-20"
+					@resize="resizeTimeline" @reset="resetTimeline" />
+				<TimelinePanel class="shrink-0" :style="{ height: timelineH + 'px' }" />
 			</main>
 
 			<ExportDialog v-model="showExport" />
@@ -127,6 +139,7 @@ import InspectorPanel from './components/InspectorPanel.vue'
 import TimelinePanel from './components/TimelinePanel.vue'
 import ChatPanel from './components/ChatPanel.vue'
 import ExportDialog from './components/ExportDialog.vue'
+import ResizeHandle from './components/ResizeHandle.vue'
 
 const route = useRoute()
 const router = useRouter()
@@ -146,6 +159,26 @@ watch(chatColOpen, (v) => localStorage.setItem('editor.chatCol', v ? 'open' : 'c
 watch(inspectorOpen, (v) => localStorage.setItem('editor.inspectorCol', v ? 'open' : 'closed'))
 // MediaPanel exposes its own collapse control through this proxy
 const leftCollapsedProxy = computed({ get: () => !leftOpen.value, set: (v) => { leftOpen.value = !v } })
+
+// ===== Resizable panel sizes (persisted per machine, like the rail flags) =====
+const persistedSize = (key: string, def: number, min: number, max: () => number) => {
+	const stored = parseFloat(localStorage.getItem(key) || '')
+	const size = ref(Number.isFinite(stored) ? Math.min(Math.max(stored, min), max()) : def)
+	watch(size, (v) => localStorage.setItem(key, String(Math.round(v))))
+	const resize = (delta: number) => {
+		size.value = Math.min(Math.max(size.value + delta, min), max())
+	}
+	const reset = () => { size.value = def }
+	return { size, resize, reset }
+}
+const { size: timelineH, resize: resizeTimeline, reset: resetTimeline } =
+	persistedSize('editor.timelineH', 208, 140, () => Math.round(window.innerHeight * 0.6))
+const { size: leftW, resize: resizeLeft, reset: resetLeft } =
+	persistedSize('editor.leftW', 280, 200, () => 440)
+const { size: chatW, resize: resizeChat, reset: resetChat } =
+	persistedSize('editor.chatW', 300, 240, () => 480)
+const { size: inspectorW, resize: resizeInspector, reset: resetInspector } =
+	persistedSize('editor.inspectorW', 280, 240, () => 480)
 
 /** Slim vertical strip shown in place of a collapsed rail. */
 const CollapsedRail: FunctionalComponent<
