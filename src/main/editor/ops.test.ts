@@ -290,6 +290,56 @@ describe('opsToDiff / gaps', () => {
 		expect(startOf(result, 't-4')).toBe(10)
 	})
 
+	it('pulls the rest left when clips are RETIMED, not just removed', () => {
+		// What a "make it shorter" edit actually does: speed up many clips. Each
+		// one gets shorter and leaves its own hole unless the track follows.
+		const asset = makeAsset('a', uniform(4, 10))
+		const timeline = laidOut(asset)          // 0, 10, 20, 30
+		const result = opsToDiff({
+			updateItems: [{ id: 't-1', speed: 2 }, { id: 't-2', speed: 2 }]
+		}, makeDoc([asset], timeline))
+
+		// t-1 and t-2 now play in 5s each, so everything after moves up 10s total.
+		expect(startOf(result, 't-2')).toBe(5)
+		expect(startOf(result, 't-3')).toBe(10)
+		expect(startOf(result, 't-4')).toBe(20)
+	})
+
+	it('pulls the rest left when a clip is trimmed shorter', () => {
+		const asset = makeAsset('a', uniform(3, 10))
+		const timeline = laidOut(asset)
+		const result = opsToDiff({
+			updateItems: [{ id: 't-1', out: 4 }]   // 10s -> 4s
+		}, makeDoc([asset], timeline))
+
+		expect(startOf(result, 't-2')).toBe(4)
+		expect(startOf(result, 't-3')).toBe(14)
+	})
+
+	it('pushes the rest right when a clip is lengthened', () => {
+		const asset = makeAsset('a', uniform(3, 10))
+		const timeline = laidOut(asset)
+		const result = opsToDiff({
+			updateItems: [{ id: 't-1', speed: 0.5 }]   // 10s -> 20s
+		}, makeDoc([asset], timeline))
+
+		expect(startOf(result, 't-2')).toBe(20)
+		expect(startOf(result, 't-3')).toBe(30)
+	})
+
+	it('combines removals and retimes in one pass', () => {
+		const asset = makeAsset('a', uniform(4, 10))
+		const timeline = laidOut(asset)
+		const result = opsToDiff({
+			removeItemIds: ['t-1'],                  // frees 10s at 0
+			updateItems: [{ id: 't-2', speed: 2 }]   // frees 5s at 10
+		}, makeDoc([asset], timeline))
+
+		expect(startOf(result, 't-2')).toBe(0)
+		expect(startOf(result, 't-3')).toBe(5)
+		expect(startOf(result, 't-4')).toBe(15)
+	})
+
 	it('closes an existing gap on request', () => {
 		const asset = makeAsset('a', uniform(3, 5))
 		const timeline = laidOut(asset)

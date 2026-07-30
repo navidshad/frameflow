@@ -2,7 +2,7 @@ import { v4 as uuidv4 } from 'uuid'
 import type { Clip, EditorDocument, EditorOps, EditorPersona, TimelineDiff, TimelineItem } from '@shared/types'
 import {
 	clampSpeed, closeTimelineGaps, computeContentEnd, itemDuration, itemEnd,
-	rippleAfterRemoval, TIMELINE_DIFF_SCHEMA_VERSION
+	rippleTimeline, TIMELINE_DIFF_SCHEMA_VERSION, type RippleChange
 } from '@shared/timeline'
 
 /**
@@ -218,10 +218,11 @@ export function composeSystemInstruction(persona: EditorPersona, stats: PromptSt
 		'    gain (0-2, audio mix level), and fadeInSec / fadeOutSec (audio fade lengths, seconds).',
 		'    Never set durations — they are derived from (out - in) / speed.',
 		'  - Only modify items listed in the items section.',
-		'  - Gaps: removing items ALREADY pulls the rest left, so you never need to rewrite',
-		'    timelineStart to close the hole a removal leaves. If the user reports a gap or',
-		'    empty space that is already on the timeline, set `closeGaps: true` — do not try',
-		'    to fix it by editing timelineStart one item at a time.',
+		'  - Gaps: removing, retiming or trimming clips ALREADY pulls the rest of the track',
+		'    left to fill the time freed, so NEVER rewrite timelineStart to close a hole —',
+		'    doing so turns the automatic layout off and is how gaps get left behind. Set',
+		'    timelineStart only to move a clip somewhere deliberately. If the user reports a',
+		'    gap or empty space already on the timeline, set `closeGaps: true`.',
 		'  - Chapter markers: use `atScene` when the material is being added in this response',
 		'    (you cannot know its timeline time yet), `atSec` when it is already on the timeline.',
 		'  - Order material by the `recorded` window in the asset list when one is shown, not by',
@@ -608,18 +609,37 @@ export function opsToDiff(ops: EditorOps, doc: EditorDocument): OpsToDiffResult 
 	}
 
 	// ===== Leave no holes =====
-	// Removing items without pulling the rest left leaves a gap on the timeline.
-	// Manual delete has always rippled (editorStore.deleteItems); AI removals
-	// used to not, which is where stray gaps came from.
+	// Anything that frees time on a track leaves a hole unless the rest moves
+	// up: removing clips, but equally retiming or trimming them. Manual editing
+	// ripples for both (deleteItems, setItemSpeed); the AI path must too, or a
+	// "make it shorter" edit that speeds up 200 clips leaves 200 gaps.
 	const removedIds = new Set(diff.removeItemIds || [])
 	const removedItems = doc.timeline.filter((i) => removedIds.has(i.id))
+	const updateById = new Map((diff.updateItems || []).map((u) => [u.id, u]))
+
+	const changes: RippleChange[] = removedItems.map((r) => ({
+		trackId: r.trackId,
+		at: r.timelineStart,
+		delta: -itemDuration(r)
+	}))
+	for (const original of doc.timeline) {
+		if (removedIds.has(original.id)) continue
+		const update = updateById.get(original.id)
+		if (!update) continue
+		if (update.in == null && update.out == null && update.speed == null) continue
+		const after = itemDuration({ ...original, ...update } as TimelineItem)
+		const delta = after - itemDuration(original)
+		if (Math.abs(delta) > 1e-9) {
+			changes.push({ trackId: original.trackId, at: original.timelineStart, delta })
+		}
+	}
+
 	// If the model positioned items itself, respect that rather than shifting
 	// its work a second time.
 	const modelMovedItems = (diff.updateItems || []).some((u) => typeof u.timelineStart === 'number')
 	const wantsCloseGaps = ops.closeGaps === true
 
-	if (wantsCloseGaps || (removedItems.length > 0 && !modelMovedItems)) {
-		const updateById = new Map((diff.updateItems || []).map((u) => [u.id, u]))
+	if (wantsCloseGaps || (changes.length > 0 && !modelMovedItems)) {
 		const survivors = doc.timeline
 			.filter((i) => !removedIds.has(i.id))
 			.map((i) => {
@@ -632,7 +652,7 @@ export function opsToDiff(ops: EditorOps, doc: EditorDocument): OpsToDiffResult 
 
 		const moved = wantsCloseGaps
 			? closeTimelineGaps({ tracks: doc.tracks, timeline: working })
-			: rippleAfterRemoval(working, removedItems)
+			: rippleTimeline(working, changes)
 
 		if (moved) {
 			const updates = diff.updateItems ? [...diff.updateItems] : []

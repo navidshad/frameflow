@@ -208,28 +208,49 @@ export function repairOverlaps(state: TimelineState, eps = MIN_ITEM_DURATION): b
 }
 
 /**
- * Shift items left by the total duration of removed items that preceded them
- * on the same track — the magnetic behaviour manual ripple-delete already has
- * (editorStore.deleteItems). Removing items WITHOUT this leaves a hole in the
- * timeline, which is what an AI `removeItemIds` used to do.
- *
- * Conservative on purpose: it only takes back the time the removal freed, so
- * spacing elsewhere on the track survives. Use closeTimelineGaps for a full
- * reflow. Returns true if anything moved.
+ * One edit that changed how much time a track occupies at a point: a removal
+ * (negative delta) or a retime/trim that made a clip shorter or longer.
  */
-export function rippleAfterRemoval(items: TimelineItem[], removed: TimelineItem[]): boolean {
-	if (!removed.length) return false
-	let changed = false
+export interface RippleChange {
+	trackId: string
+	/** Where on the timeline the change happened. */
+	at: number
+	/** Seconds gained (+) or freed (-) at that point. */
+	delta: number
+}
+
+/**
+ * Shift items by the time that edits before them freed or consumed — the
+ * magnetic behaviour manual editing already has (deleteItems ripples on
+ * delete, setItemSpeed ripples on retime). Without it, shortening or removing
+ * anything leaves a hole in the timeline.
+ *
+ * Conservative on purpose: only the time an edit actually changed moves, so a
+ * gap nobody touched survives. Use closeTimelineGaps for a full reflow.
+ * Returns true if anything moved.
+ */
+export function rippleTimeline(items: TimelineItem[], changes: RippleChange[]): boolean {
+	if (!changes.length) return false
+	let moved = false
 	for (const item of items) {
-		const shift = removed
-			.filter((r) => r.trackId === item.trackId && r.timelineStart < item.timelineStart)
-			.reduce((sum, r) => sum + itemDuration(r), 0)
-		if (shift > 0) {
-			item.timelineStart = Math.max(0, item.timelineStart - shift)
-			changed = true
+		const shift = changes
+			.filter((c) => c.trackId === item.trackId && c.at < item.timelineStart)
+			.reduce((sum, c) => sum + c.delta, 0)
+		if (Math.abs(shift) > 1e-9) {
+			item.timelineStart = Math.max(0, item.timelineStart + shift)
+			moved = true
 		}
 	}
-	return changed
+	return moved
+}
+
+/** rippleTimeline for the common case: items were deleted. */
+export function rippleAfterRemoval(items: TimelineItem[], removed: TimelineItem[]): boolean {
+	return rippleTimeline(items, removed.map((r) => ({
+		trackId: r.trackId,
+		at: r.timelineStart,
+		delta: -itemDuration(r)
+	})))
 }
 
 /**
