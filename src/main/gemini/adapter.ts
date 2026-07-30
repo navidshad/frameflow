@@ -338,7 +338,8 @@ export class GeminiAdapter {
 		fileUris: string[],
 		systemInstruction?: string,
 		audioDuration: number = 0,
-		signal?: AbortSignal
+		signal?: AbortSignal,
+		options?: { maxOutputTokens?: number; temperature?: number }
 	): Promise<{ text: string, record: UsageRecord }> {
 		const contents = [
 			{
@@ -361,6 +362,16 @@ export class GeminiAdapter {
 			};
 		}
 
+		// A long transcript is a LOT of output tokens. Without an explicit ceiling
+		// the model stops at its default and returns a transcript that looks
+		// well-formed but covers only the first few minutes of the audio.
+		if (options?.maxOutputTokens != null || options?.temperature != null) {
+			const config = (request.config || {}) as any;
+			if (options.maxOutputTokens != null) config.maxOutputTokens = options.maxOutputTokens;
+			if (options.temperature != null) config.temperature = options.temperature;
+			request.config = config;
+		}
+
 		try {
 			const response = await this.withRetry(
 				() => (this.client.models as any).generateContent(request, { signal }) as Promise<any>,
@@ -368,6 +379,10 @@ export class GeminiAdapter {
 			);
 			const usage = this.extractUsage(response);
 			const cost = GeminiAdapter.calculateCost(modelName, usage, audioDuration);
+			const finishReason = response?.candidates?.[0]?.finishReason;
+			if (finishReason && finishReason !== 'STOP') {
+				console.warn(`[GEMINI ADAPTER] generateTextFromFiles finished with ${finishReason} — output may be incomplete`);
+			}
 
 			return {
 				text: this.extractResultText(response),

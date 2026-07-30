@@ -705,7 +705,9 @@ async function runTranscriptStep(threadId: string, assetId: string, signal: Abor
 			progress: 100,
 			status: health?.looped
 				? `${derived} segments — transcription looped, text unreliable`
-				: `${derived} speech segments`
+				: health?.truncated
+					? `${derived} segments — speech stops at ${Math.round((health.lastSpeechEndSec || 0) / 60)}m of ${Math.round((health.durationSec || 0) / 60)}m`
+					: `${derived} speech segments`
 		})
 		return
 	}
@@ -719,13 +721,20 @@ async function recordTranscriptHealth(
 	threadId: string,
 	assetId: string
 ): Promise<TranscriptHealth | undefined> {
-	const clips = getAsset(threadId, assetId)?.clips || []
+	const asset = getAsset(threadId, assetId)
+	const clips = asset?.clips || []
 	if (!clips.length) return undefined
-	const health = analyzeTranscriptHealth(clips)
+	const health = analyzeTranscriptHealth(clips, { durationSec: asset?.metadata?.duration })
 	if (health.looped) {
 		console.warn(
 			`[editor] transcript loop in asset ${assetId}: ${health.maxRepeatRun} identical lines, ` +
 			`${Math.round(health.loopedSeconds)}s affected`
+		)
+	}
+	if (health.truncated) {
+		console.warn(
+			`[editor] transcript truncated in asset ${assetId}: speech ends at ` +
+			`${Math.round(health.lastSpeechEndSec || 0)}s of ${Math.round(health.durationSec || 0)}s`
 		)
 	}
 	await patchAsset(threadId, assetId, () => ({ transcriptHealth: health }))
@@ -785,7 +794,9 @@ async function runRetranscribeStep(threadId: string, assetId: string, signal: Ab
 		progress: 100,
 		status: health?.looped
 			? 'Still looping — the audio may be unclear in that span'
-			: 'Transcript repaired'
+			: health?.truncated
+				? 'Still incomplete — speech stops before the end of the file'
+				: 'Transcript repaired'
 	})
 }
 

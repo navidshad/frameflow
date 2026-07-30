@@ -81,6 +81,43 @@ describe('analyzeTranscriptHealth', () => {
 		expect(health.looped).toBe(true)
 	})
 
+	it('flags a transcript that stops long before the file does', () => {
+		// The real failure: 117 items covering 15 min of a 43 min recording.
+		const health = analyzeTranscriptHealth(
+			pieces(['a', 'b', 'c']), { durationSec: 2604 }
+		)
+		expect(health.truncated).toBe(true)
+		expect(health.coverageRatio).toBeLessThan(0.01)
+		expect(health.lastSpeechEndSec).toBe(6)
+		// It is NOT a loop — this is the case that used to pass every check.
+		expect(health.looped).toBe(false)
+		expect(health.distinctRatio).toBe(1)
+	})
+
+	it('does not flag a recording that merely ends on silence', () => {
+		const health = analyzeTranscriptHealth(
+			[{ in: 0, out: 580, text: 'a long spoken stretch' }, { in: 580, out: 600, text: '[Silence]' }],
+			{ durationSec: 600 }
+		)
+		expect(health.truncated).toBe(false)
+		expect(health.coverageRatio).toBeCloseTo(580 / 600, 3)
+	})
+
+	it('does not flag audio with no speech at all', () => {
+		// Music or ambience: nothing was transcribed because there was nothing to say.
+		const health = analyzeTranscriptHealth(
+			pieces(['[Silence]', '[Silence]']), { durationSec: 3600 }
+		)
+		expect(health.spokenSegments).toBe(0)
+		expect(health.truncated).toBe(false)
+	})
+
+	it('reports no coverage verdict when the duration is unknown', () => {
+		const health = analyzeTranscriptHealth(pieces(['a', 'b']))
+		expect(health.coverageRatio).toBeUndefined()
+		expect(health.truncated).toBe(false)
+	})
+
 	it('handles an empty or text-free asset', () => {
 		expect(analyzeTranscriptHealth([]).looped).toBe(false)
 		expect(analyzeTranscriptHealth(pieces([undefined, undefined])).spokenSegments).toBe(0)

@@ -61,7 +61,12 @@ export const extractRawTranscript: PipelineFunction = async (data, context) => {
 	context.updateStatus('Extracting raw transcript...')
 	const duration = await ffmpegAdapter.getVideoDuration(audioPath)
 
-	const { items: transcript, rawResponseText, record } = await extractTranscript(audioPath, duration, undefined, context.signal)
+	const { items: transcript, rawResponseText, record } = await extractTranscript(
+		audioPath, duration, undefined, context.signal,
+		(done, total) => {
+			if (total > 1) context.updateStatus(`Transcribing part ${Math.min(done + 1, total)} of ${total}…`)
+		}
+	)
 
 	// Record usage immediately
 	await context.recordUsage(record)
@@ -98,7 +103,12 @@ export const extractCorrectedTranscript: PipelineFunction = async (data, context
 	const rawTranscript = JSON.parse(transcriptJson)
 	const rawTranscriptText = formatTranscript(rawTranscript)
 
-	const { items: transcript, rawResponseText, record } = await extractTranscript(audioPath, duration, rawTranscriptText, context.signal)
+	const { items: transcript, rawResponseText, record } = await extractTranscript(
+		audioPath, duration, rawTranscriptText, context.signal,
+		(done, total) => {
+			if (total > 1) context.updateStatus(`Re-checking part ${Math.min(done + 1, total)} of ${total}…`)
+		}
+	)
 
 	// Record usage immediately
 	await context.recordUsage(record)

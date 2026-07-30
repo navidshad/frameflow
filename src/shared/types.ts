@@ -235,7 +235,11 @@ export interface TranscriptHealth {
 	maxRepeatRun: number        // longest run of consecutive identical lines
 	loopedSeconds: number       // source seconds inside runs long enough to be loops
 	repeatedText?: string       // the offending line, truncated
-	looped: boolean             // the verdict the UI acts on
+	looped: boolean             // verdict: speech-to-text repeated one line
+	lastSpeechEndSec?: number   // where the last spoken piece ends
+	durationSec?: number        // asset duration the coverage was measured against
+	coverageRatio?: number      // lastSpeechEndSec / durationSec — 1 is full coverage
+	truncated: boolean          // verdict: transcription stopped well before the end
 	checkedAt: number
 }
 

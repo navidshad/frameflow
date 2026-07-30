@@ -206,9 +206,9 @@
 							Adds spoken text to each piece and enriches AI editing context. Costs tokens.
 						</p>
 						<div v-else class="flex items-center justify-between gap-2">
-							<p v-if="loopedTranscript" class="text-[11px] text-amber-500 font-medium">
+							<p v-if="badTranscript" class="text-[11px] text-amber-500 font-medium">
 								<span class="iconify tabler--alert-triangle w-3 h-3 inline-block align-[-1px]"></span>
-								Transcript unreliable
+								{{ badTranscript.looped ? 'Transcript unreliable' : 'Transcript incomplete' }}
 							</p>
 							<p v-else class="text-[11px] text-accent font-medium">
 								<span class="iconify tabler--check w-3 h-3 inline-block align-[-1px]"></span>
@@ -219,17 +219,24 @@
 								Remove
 							</button>
 						</div>
-						<div v-if="loopedTranscript"
+						<div v-if="badTranscript"
 							class="mt-2 px-2.5 py-2 rounded-lg bg-amber-500/10 border border-amber-500/20">
-							<p class="text-[10px] font-medium text-amber-600 dark:text-amber-400 leading-snug">
+							<p v-if="badTranscript.looped"
+								class="text-[10px] font-medium text-amber-600 dark:text-amber-400 leading-snug">
 								Speech-to-text looped here: one line repeats
-								<span class="font-mono">{{ loopedTranscript.maxRepeatRun }}</span> times across
-								<span class="font-mono">{{ formatSpan(loopedTranscript.loopedSeconds) }}</span> of audio.
+								<span class="font-mono">{{ badTranscript.maxRepeatRun }}</span> times across
+								<span class="font-mono">{{ formatSpan(badTranscript.loopedSeconds) }}</span> of audio.
 								The footage is fine, but the AI editor cannot tell what is said in that span.
 							</p>
-							<p v-if="loopedTranscript.repeatedText"
-								class="mt-1 text-[10px] text-zinc-500 italic truncate" :title="loopedTranscript.repeatedText">
-								“{{ loopedTranscript.repeatedText }}”
+							<p v-else class="text-[10px] font-medium text-amber-600 dark:text-amber-400 leading-snug">
+								Transcription stopped early: speech ends at
+								<span class="font-mono">{{ formatSpan(badTranscript.lastSpeechEndSec || 0) }}</span> of
+								<span class="font-mono">{{ formatSpan(badTranscript.durationSec || 0) }}</span>.
+								The AI editor sees the rest of this file as silence.
+							</p>
+							<p v-if="badTranscript.looped && badTranscript.repeatedText"
+								class="mt-1 text-[10px] text-zinc-500 italic truncate" :title="badTranscript.repeatedText">
+								“{{ badTranscript.repeatedText }}”
 							</p>
 							<button
 								class="mt-2 w-full px-3 py-1.5 rounded-lg bg-amber-500/15 text-amber-600 dark:text-amber-400 text-[10px] font-bold uppercase tracking-widest hover:bg-amber-500/25 transition active:scale-95 disabled:opacity-50"
@@ -303,10 +310,11 @@ const hasTranscript = computed(() =>
 	(asset.value?.clips || []).some((c) => !!c.text)
 )
 
-/** Set by the transcript step when speech-to-text got stuck repeating a line. */
-const loopedTranscript = computed(() =>
-	asset.value?.transcriptHealth?.looped ? asset.value.transcriptHealth : null
-)
+/** Set by the transcript step when speech-to-text looped or stopped early. */
+const badTranscript = computed(() => {
+	const health = asset.value?.transcriptHealth
+	return health && (health.looped || health.truncated) ? health : null
+})
 
 const retranscribing = computed(() =>
 	!!asset.value && editorStore.assetTasks(asset.value.id)

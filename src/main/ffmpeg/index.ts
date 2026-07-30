@@ -345,6 +345,46 @@ export async function toAudio(
 }
 
 /**
+ * Cuts [startSec, startSec + durationSec) out of an audio file.
+ * Used to transcribe long recordings in windows — one Gemini call cannot
+ * transcribe an hour of speech without running into its output ceiling.
+ */
+export async function extractAudioSegment(
+	filePath: string,
+	startSec: number,
+	durationSec: number,
+	outputPath: string,
+	signal?: AbortSignal
+): Promise<string> {
+	if (signal?.aborted) {
+		throw new Error('FFmpeg audio segment extraction aborted by user before start')
+	}
+
+	return new Promise((resolve, reject) => {
+		const command = ffmpeg(filePath)
+			// -ss before the input seeks by keyframe (fast); the re-encode below
+			// keeps the segment exactly the requested length.
+			.setStartTime(startSec)
+			.setDuration(durationSec)
+			.toFormat('mp3')
+			.output(outputPath)
+			.on('end', () => resolve(outputPath))
+			.on('error', (err) => {
+				if (signal?.aborted) {
+					return reject(new Error('FFmpeg audio segment extraction aborted by user'))
+				}
+				reject(err)
+			})
+
+		if (signal) {
+			signal.addEventListener('abort', () => command.kill('SIGKILL'))
+		}
+
+		command.run()
+	})
+}
+
+/**
  * Assembles a video from segments identified in the timeline.
  * Uses a complex filter to avoid temporary files and ensure efficiency.
  */

@@ -17,13 +17,24 @@ export const LOOP_RUN_MIN = 8
 /** …but only call it a loop once it has eaten a meaningful chunk of the source. */
 export const LOOP_MIN_SECONDS = 60
 
+/**
+ * Truncation: speech that stops well before the file does. The other way a
+ * transcription call fails on long audio — it hits its output ceiling and
+ * returns a perfectly well-formed transcript of the first few minutes, which
+ * passes every other check.
+ */
+export const COVERAGE_MIN_RATIO = 0.8
+/** Ignore a short tail — plenty of recordings end on silence. */
+export const COVERAGE_MIN_GAP_SECONDS = 120
+
 const normalize = (text: string | undefined): string =>
 	(text || '').replace(/\s+/g, ' ').trim().toLowerCase()
 
 export function analyzeTranscriptHealth(
 	clips: Pick<Clip, 'in' | 'out' | 'text'>[],
-	silenceText = '[Silence]'
+	options: { durationSec?: number; silenceText?: string } = {}
 ): TranscriptHealth {
+	const silenceText = options.silenceText ?? '[Silence]'
 	const spoken = clips.filter((c) => {
 		const text = normalize(c.text)
 		return text.length > 0 && text !== normalize(silenceText)
@@ -54,6 +65,16 @@ export function analyzeTranscriptHealth(
 		index = end + 1
 	}
 
+	// Coverage: where does speech stop, relative to the file?
+	const durationSec = options.durationSec && options.durationSec > 0 ? options.durationSec : undefined
+	const lastSpeechEnd = spoken.length ? Math.max(...spoken.map((c) => c.out)) : 0
+	const coverageRatio = durationSec ? Math.min(1, lastSpeechEnd / durationSec) : undefined
+	// An asset with NO speech at all (music, ambience) is not truncated — there
+	// was nothing to transcribe. Truncation means it started and gave up.
+	const truncated = !!durationSec && spoken.length > 0 &&
+		coverageRatio! < COVERAGE_MIN_RATIO &&
+		durationSec - lastSpeechEnd >= COVERAGE_MIN_GAP_SECONDS
+
 	return {
 		segments: clips.length,
 		spokenSegments: spoken.length,
@@ -62,6 +83,10 @@ export function analyzeTranscriptHealth(
 		loopedSeconds,
 		repeatedText: maxRepeatRun >= LOOP_RUN_MIN ? repeatedText?.slice(0, 120) : undefined,
 		looped: maxRepeatRun >= LOOP_RUN_MIN && loopedSeconds >= LOOP_MIN_SECONDS,
+		lastSpeechEndSec: spoken.length ? lastSpeechEnd : undefined,
+		durationSec,
+		coverageRatio,
+		truncated,
 		checkedAt: Date.now()
 	}
 }

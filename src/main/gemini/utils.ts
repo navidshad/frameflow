@@ -1,12 +1,23 @@
+import * as fs from 'fs'
+import * as os from 'os'
+import * as path from 'path'
 import { GeminiAdapter } from './adapter'
 import { settingsManager } from '../settings'
 import { UsageRecord } from '../../shared/types'
+import { extractAudioSegment } from '../ffmpeg'
+import {
+	mergeChunkTranscripts, planChunks, rebaseChunkItems, sliceTranscriptForChunk,
+	type AudioChunk, type TranscriptItem
+} from './transcript-chunks'
 
-export interface TranscriptItem {
-	start: string
-	end: string
-	text: string
-}
+export type { TranscriptItem }
+
+/**
+ * Output ceiling for one transcription call. A 15-minute window of dense
+ * speech is well under this; the point is to stop inheriting a model default
+ * that silently truncates.
+ */
+const TRANSCRIPT_MAX_OUTPUT_TOKENS = 32_768
 
 const TRANSCRIPT_PROMPT = `Extract a detailed transcript from the provided audio file. 
 
@@ -104,29 +115,21 @@ export function formatTranscript(items: TranscriptItem[]): string {
 	}).join('\n')
 }
 
-/**
- * Extracts or corrects a transcript from an audio file using Gemini.
- */
-export async function extractTranscript(
+/** One transcription call over one audio file (whole file or a single window). */
+async function transcribeOne(
+	adapter: GeminiAdapter,
+	modelName: string,
 	audioPath: string,
-	audioDuration: number = 0,
-	rawTranscriptText?: string,
+	audioDuration: number,
+	priorTranscriptText: string | undefined,
 	signal?: AbortSignal
-): Promise<{ items: TranscriptItem[], rawResponseText: string, record: UsageRecord }> {
-	const adapter = GeminiAdapter.create()
-	const modelSettings = settingsManager.getModelSettings()
-
-	const modelName = rawTranscriptText
-		? modelSettings.selection['corrected-transcript']
-		: modelSettings.selection['raw-transcript']
-
+): Promise<{ items: TranscriptItem[]; text: string; record: UsageRecord }> {
 	const fileUri = await adapter.uploadFile(audioPath, 'audio/mpeg')
 
-	const userPrompt = rawTranscriptText
-		? `Initial Transcript:\n${rawTranscriptText}`
+	const userPrompt = priorTranscriptText
+		? `Initial Transcript:\n${priorTranscriptText}`
 		: 'Generate the transcript for this audio.'
-
-	const systemInstruction = rawTranscriptText
+	const systemInstruction = priorTranscriptText
 		? TRANSCRIPT_CORRECTION_PROMPT
 		: TRANSCRIPT_PROMPT
 
@@ -136,12 +139,89 @@ export async function extractTranscript(
 		[fileUri],
 		systemInstruction,
 		audioDuration,
-		signal
+		signal,
+		{ maxOutputTokens: TRANSCRIPT_MAX_OUTPUT_TOKENS }
 	)
 
+	return { items: parseTranscript(text), text, record }
+}
+
+const sumRecords = (records: UsageRecord[]): UsageRecord => ({
+	usage: {
+		promptTokens: records.reduce((s, r) => s + (r.usage?.promptTokens || 0), 0),
+		candidatesTokens: records.reduce((s, r) => s + (r.usage?.candidatesTokens || 0), 0),
+		thinkingTokens: records.reduce((s, r) => s + (r.usage?.thinkingTokens || 0), 0),
+		totalTokens: records.reduce((s, r) => s + (r.usage?.totalTokens || 0), 0)
+	},
+	cost: records.reduce((s, r) => s + (r.cost || 0), 0)
+})
+
+/**
+ * Extracts or corrects a transcript from an audio file using Gemini.
+ *
+ * Audio longer than one window is transcribed in sequential windows and
+ * stitched back together: a single call over an hour of speech hits the
+ * model's output ceiling and returns a transcript that stops partway through
+ * (or degenerates into one repeated line) with no error to notice.
+ */
+export async function extractTranscript(
+	audioPath: string,
+	audioDuration: number = 0,
+	rawTranscriptText?: string,
+	signal?: AbortSignal,
+	onProgress?: (done: number, total: number) => void
+): Promise<{ items: TranscriptItem[], rawResponseText: string, record: UsageRecord }> {
+	const adapter = GeminiAdapter.create()
+	const modelSettings = settingsManager.getModelSettings()
+
+	const modelName = rawTranscriptText
+		? modelSettings.selection['corrected-transcript']
+		: modelSettings.selection['raw-transcript']
+
+	const chunks = planChunks(audioDuration)
+
+	// Short audio (or unknown duration): exactly one call, as before.
+	if (chunks.length <= 1) {
+		onProgress?.(0, 1)
+		const single = await transcribeOne(adapter, modelName, audioPath, audioDuration, rawTranscriptText, signal)
+		onProgress?.(1, 1)
+		return { items: single.items, rawResponseText: single.text, record: single.record }
+	}
+
+	const priorItems = rawTranscriptText ? parseTranscript(rawTranscriptText) : []
+	const workDir = fs.mkdtempSync(path.join(os.tmpdir(), 'frameflow-transcript-'))
+	const perChunk: TranscriptItem[][] = []
+	const responses: string[] = []
+	const records: UsageRecord[] = []
+
+	try {
+		for (const chunk of chunks) {
+			if (signal?.aborted) throw new Error('Aborted')
+			onProgress?.(chunk.index, chunks.length)
+
+			const span = chunk.end - chunk.start
+			const segmentPath = path.join(workDir, `chunk-${chunk.index}.mp3`)
+			await extractAudioSegment(audioPath, chunk.start, span, segmentPath, signal)
+
+			const prior = priorItems.length
+				? formatTranscript(sliceTranscriptForChunk(priorItems, chunk))
+				: undefined
+
+			const result = await transcribeOne(adapter, modelName, segmentPath, span, prior, signal)
+			perChunk.push(rebaseChunkItems(result.items, chunk))
+			responses.push(`# chunk ${chunk.index} (${chunk.start}s-${chunk.end}s)\n${result.text}`)
+			records.push(result.record)
+
+			try { fs.unlinkSync(segmentPath) } catch { /* best effort */ }
+		}
+	} finally {
+		try { fs.rmSync(workDir, { recursive: true, force: true }) } catch { /* best effort */ }
+	}
+
+	onProgress?.(chunks.length, chunks.length)
 	return {
-		items: parseTranscript(text),
-		rawResponseText: text,
-		record
+		items: mergeChunkTranscripts(perChunk),
+		rawResponseText: responses.join('\n\n'),
+		record: sumRecords(records)
 	}
 }
