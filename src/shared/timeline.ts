@@ -208,6 +208,66 @@ export function repairOverlaps(state: TimelineState, eps = MIN_ITEM_DURATION): b
 }
 
 /**
+ * Shift items left by the total duration of removed items that preceded them
+ * on the same track — the magnetic behaviour manual ripple-delete already has
+ * (editorStore.deleteItems). Removing items WITHOUT this leaves a hole in the
+ * timeline, which is what an AI `removeItemIds` used to do.
+ *
+ * Conservative on purpose: it only takes back the time the removal freed, so
+ * spacing elsewhere on the track survives. Use closeTimelineGaps for a full
+ * reflow. Returns true if anything moved.
+ */
+export function rippleAfterRemoval(items: TimelineItem[], removed: TimelineItem[]): boolean {
+	if (!removed.length) return false
+	let changed = false
+	for (const item of items) {
+		const shift = removed
+			.filter((r) => r.trackId === item.trackId && r.timelineStart < item.timelineStart)
+			.reduce((sum, r) => sum + itemDuration(r), 0)
+		if (shift > 0) {
+			item.timelineStart = Math.max(0, item.timelineStart - shift)
+			changed = true
+		}
+	}
+	return changed
+}
+
+/**
+ * Make each track's items run back to back from the start, closing every gap
+ * (and any overlap) in one pass. Unlike repairOverlaps, this pulls items LEFT.
+ * Returns true if anything moved.
+ */
+export function closeTimelineGaps(
+	state: TimelineState,
+	opts: { trackIds?: string[]; eps?: number } = {}
+): boolean {
+	const eps = opts.eps ?? MIN_ITEM_DURATION
+	const only = opts.trackIds?.length ? new Set(opts.trackIds) : null
+	let changed = false
+
+	const byTrack = new Map<string, TimelineItem[]>()
+	for (const item of state.timeline) {
+		if (only && !only.has(item.trackId)) continue
+		const list = byTrack.get(item.trackId) || []
+		list.push(item)
+		byTrack.set(item.trackId, list)
+	}
+
+	for (const items of byTrack.values()) {
+		items.sort((a, b) => a.timelineStart - b.timelineStart)
+		let cursor = 0
+		for (const item of items) {
+			if (Math.abs(item.timelineStart - cursor) > eps) {
+				item.timelineStart = cursor
+				changed = true
+			}
+			cursor = itemEnd(item)
+		}
+	}
+	return changed
+}
+
+/**
  * Applies a TimelineDiff to a state IN PLACE, with validation (PRD §5.7):
  * unknown schemaVersion rejected wholesale; unknown ids skipped (reported);
  * `0 <= in < out <= asset.duration` when assets provided; speed clamped;

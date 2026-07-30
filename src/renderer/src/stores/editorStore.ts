@@ -7,7 +7,7 @@ import type {
 } from '@shared/types'
 import {
 	applyTimelineDiff, clampSpeed, clipToItem, computeContentEnd,
-	diffTimelines, itemDuration, itemEnd, itemFromAsset, repairOverlaps,
+	closeTimelineGaps, diffTimelines, itemDuration, itemEnd, itemFromAsset, repairOverlaps,
 	type TimelineState
 } from '@shared/timeline'
 import { computeScope } from '@shared/ai-scope'
@@ -1060,6 +1060,28 @@ export const useEditorStore = defineStore('editor', () => {
 		commitStep({ before, label: ripple ? 'Ripple delete' : 'Delete' })
 	}
 
+	/**
+	 * Pull every clip left so each track runs back to back. Removals already
+	 * ripple, so this is for holes that are already there — an AI edit from
+	 * before removals rippled, or a clip dragged out of line by hand.
+	 * `hasGaps` drives the toolbar button's enabled state.
+	 */
+	const hasGaps = computed(() => {
+		if (!doc.value?.timeline.length) return false
+		const probe = {
+			tracks: doc.value.tracks,
+			timeline: doc.value.timeline.map((i) => ({ ...i }))
+		}
+		return closeTimelineGaps(probe)
+	})
+
+	const closeGaps = () => {
+		if (!doc.value?.timeline.length) return
+		const before = snapshotState()
+		if (!closeTimelineGaps({ tracks: doc.value.tracks, timeline: doc.value.timeline })) return
+		commitStep({ before, label: 'Close gaps' })
+	}
+
 	const rippleDownstream = (item: TimelineItem, delta: number) => {
 		if (!doc.value || Math.abs(delta) < 1e-9) return
 		for (const other of doc.value.timeline) {
@@ -1932,6 +1954,8 @@ export const useEditorStore = defineStore('editor', () => {
 		addItemFromAsset,
 		splitAtPlayhead,
 		deleteItems,
+		closeGaps,
+		hasGaps,
 		setItemSpeed,
 		setItemTargetDuration,
 		setItemPreservePitch,

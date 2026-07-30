@@ -261,6 +261,68 @@ describe('opsToDiff / source coverage', () => {
 	})
 })
 
+// ===== Gaps =====
+
+describe('opsToDiff / gaps', () => {
+	/** An asset laid out contiguously on the timeline. */
+	function laidOut(asset: MediaAsset): TimelineItem[] {
+		let start = 0
+		return asset.clips.map((c) => {
+			const item: TimelineItem = {
+				id: `t-${c.index}`, trackId: 'v1', sourceAssetId: asset.id, sourceClipId: c.id,
+				timelineStart: start, in: c.in, out: c.out, speed: 1, preservePitch: true, duration: c.duration
+			}
+			start += c.duration
+			return item
+		})
+	}
+	const startOf = (result: ReturnType<typeof opsToDiff>, id: string) =>
+		(result.diff.updateItems || []).find((u) => u.id === id)?.timelineStart
+
+	it('pulls the rest left when items are removed, leaving no hole', () => {
+		const asset = makeAsset('a', uniform(4, 5))
+		const timeline = laidOut(asset)
+		const result = opsToDiff({ removeItemIds: ['t-2'] }, makeDoc([asset], timeline))
+
+		// t-1 stays at 0; t-3 and t-4 each move up by the removed 5s.
+		expect(startOf(result, 't-1')).toBeUndefined()
+		expect(startOf(result, 't-3')).toBe(5)
+		expect(startOf(result, 't-4')).toBe(10)
+	})
+
+	it('closes an existing gap on request', () => {
+		const asset = makeAsset('a', uniform(3, 5))
+		const timeline = laidOut(asset)
+		timeline[1].timelineStart = 40      // a hole the user is complaining about
+		timeline[2].timelineStart = 45
+		const result = opsToDiff({ closeGaps: true }, makeDoc([asset], timeline))
+
+		expect(startOf(result, 't-2')).toBe(5)
+		expect(startOf(result, 't-3')).toBe(10)
+		expect(result.notes.join(' ')).toContain('Closed the gaps')
+	})
+
+	it('does not shift items the model positioned itself', () => {
+		// The model rewriting timelineStart means it is doing the layout; adding
+		// an automatic ripple on top would move its work twice.
+		const asset = makeAsset('a', uniform(3, 5))
+		const timeline = laidOut(asset)
+		const result = opsToDiff({
+			removeItemIds: ['t-1'],
+			updateItems: [{ id: 't-2', timelineStart: 0 }, { id: 't-3', timelineStart: 5 }]
+		}, makeDoc([asset], timeline))
+
+		expect(startOf(result, 't-2')).toBe(0)
+		expect(startOf(result, 't-3')).toBe(5)
+	})
+
+	it('leaves a contiguous timeline untouched', () => {
+		const asset = makeAsset('a', uniform(3, 5))
+		const result = opsToDiff({ closeGaps: true }, makeDoc([asset], laidOut(asset)))
+		expect(result.diff.updateItems).toBeUndefined()
+	})
+})
+
 // ===== Markers =====
 
 describe('opsToDiff / atScene markers', () => {

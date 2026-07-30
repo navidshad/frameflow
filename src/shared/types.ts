@@ -471,6 +471,12 @@ export interface EditorOps {
 		label?: string
 	}>
 	/**
+	 * Pull every clip left so each track runs back to back with no gaps.
+	 * Removals already close their own gap; this is for holes that are
+	 * already on the timeline.
+	 */
+	closeGaps?: boolean
+	/**
 	 * `atSec` is timeline time; `atScene` anchors to a source piece and is
 	 * resolved AFTER adds are placed (the only way to chapter material you are
 	 * adding in the same response). Exactly one should be set — atSec wins.

@@ -1,6 +1,9 @@
 import { v4 as uuidv4 } from 'uuid'
 import type { Clip, EditorDocument, EditorOps, EditorPersona, TimelineDiff, TimelineItem } from '@shared/types'
-import { clampSpeed, computeContentEnd, itemEnd, TIMELINE_DIFF_SCHEMA_VERSION } from '@shared/timeline'
+import {
+	clampSpeed, closeTimelineGaps, computeContentEnd, itemDuration, itemEnd,
+	rippleAfterRemoval, TIMELINE_DIFF_SCHEMA_VERSION
+} from '@shared/timeline'
 
 /**
  * The editor's AI contract: the ops schema the model fills in, the system
@@ -23,6 +26,10 @@ export const EDITOR_OPS_SCHEMA = {
 			description: 'Plain-language explanation of the proposed edit, citing what is in the pieces'
 		},
 		removeItemIds: { type: 'array', items: { type: 'string' } },
+		closeGaps: {
+			type: 'boolean',
+			description: 'Pull every clip left so each track runs back to back with no gaps. Use when the user reports a gap or empty space in the timeline.'
+		},
 		updateItems: {
 			type: 'array',
 			items: {
@@ -211,6 +218,10 @@ export function composeSystemInstruction(persona: EditorPersona, stats: PromptSt
 		'    gain (0-2, audio mix level), and fadeInSec / fadeOutSec (audio fade lengths, seconds).',
 		'    Never set durations — they are derived from (out - in) / speed.',
 		'  - Only modify items listed in the items section.',
+		'  - Gaps: removing items ALREADY pulls the rest left, so you never need to rewrite',
+		'    timelineStart to close the hole a removal leaves. If the user reports a gap or',
+		'    empty space that is already on the timeline, set `closeGaps: true` — do not try',
+		'    to fix it by editing timelineStart one item at a time.',
 		'  - Chapter markers: use `atScene` when the material is being added in this response',
 		'    (you cannot know its timeline time yet), `atSec` when it is already on the timeline.',
 		'  - Order material by the `recorded` window in the asset list when one is shown, not by',
@@ -594,6 +605,52 @@ export function opsToDiff(ops: EditorOps, doc: EditorDocument): OpsToDiffResult 
 	if (adds.length) diff.addItems = adds
 	if (adds.length > EXPANSION_ADVISORY) {
 		notes.push(`This edit expands to ${adds.length} clips — fewer, larger ranges would keep the timeline easier to work with.`)
+	}
+
+	// ===== Leave no holes =====
+	// Removing items without pulling the rest left leaves a gap on the timeline.
+	// Manual delete has always rippled (editorStore.deleteItems); AI removals
+	// used to not, which is where stray gaps came from.
+	const removedIds = new Set(diff.removeItemIds || [])
+	const removedItems = doc.timeline.filter((i) => removedIds.has(i.id))
+	// If the model positioned items itself, respect that rather than shifting
+	// its work a second time.
+	const modelMovedItems = (diff.updateItems || []).some((u) => typeof u.timelineStart === 'number')
+	const wantsCloseGaps = ops.closeGaps === true
+
+	if (wantsCloseGaps || (removedItems.length > 0 && !modelMovedItems)) {
+		const updateById = new Map((diff.updateItems || []).map((u) => [u.id, u]))
+		const survivors = doc.timeline
+			.filter((i) => !removedIds.has(i.id))
+			.map((i) => {
+				const merged = { ...i, ...(updateById.get(i.id) || {}) } as TimelineItem
+				merged.duration = itemDuration(merged)
+				return merged
+			})
+		// `adds` are the real objects, so the helpers reposition them in place.
+		const working = [...survivors, ...adds]
+
+		const moved = wantsCloseGaps
+			? closeTimelineGaps({ tracks: doc.tracks, timeline: working })
+			: rippleAfterRemoval(working, removedItems)
+
+		if (moved) {
+			const updates = diff.updateItems ? [...diff.updateItems] : []
+			const byId = new Map(updates.map((u, index) => [u.id, index]))
+			const originalStart = new Map(doc.timeline.map((i) => [i.id, i.timelineStart]))
+			let shifted = 0
+			for (const item of survivors) {
+				if (Math.abs(item.timelineStart - (originalStart.get(item.id) ?? 0)) < 1e-6) continue
+				shifted++
+				const index = byId.get(item.id)
+				if (index != null) updates[index] = { ...updates[index], timelineStart: item.timelineStart }
+				else updates.push({ id: item.id, timelineStart: item.timelineStart })
+			}
+			if (updates.length) diff.updateItems = updates
+			if (wantsCloseGaps && shifted) {
+				notes.push(`Closed the gaps — ${shifted} clip${shifted === 1 ? '' : 's'} moved up.`)
+			}
+		}
 	}
 
 	// ===== Markers: atSec directly, atScene resolved against final placements =====
