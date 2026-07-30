@@ -194,3 +194,15 @@ export const BUILTIN_PERSONAS: EditorPersona[] = [
 export function findBuiltinPersona(id: string): EditorPersona | undefined {
 	return BUILTIN_PERSONAS.find((p) => p.id === id)
 }
+
+/**
+ * The single arbiter of "does this persona shrink the runtime?".
+ * `mode` and `defaults.targetDurationSec` can disagree — the persona editor
+ * lets a user tick "preserve length" on a summarize persona and vice versa —
+ * so an explicit length target ALWAYS wins: it means "select a subset",
+ * whatever the label says.
+ */
+export function effectiveMode(persona: EditorPersona): 'longform' | 'summarize' {
+	if (persona.defaults?.targetDurationSec != null) return 'summarize'
+	return persona.mode ?? 'longform'
+}

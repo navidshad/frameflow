@@ -127,7 +127,8 @@ export const useEditorStore = defineStore('editor', () => {
 		return null
 	})
 
-	const STEP_ORDER = ['proxy', 'scenes', 'thumbnails', 'descriptions']
+	// Chain order, so a running task list reads top-to-bottom like the pipeline.
+	const STEP_ORDER = ['proxy', 'audio', 'transcript', 'retranscribe', 'scenes', 'thumbnails', 'descriptions']
 
 	const assetTasks = (assetId: string): BackgroundTask[] => {
 		const prefix = `${assetId}:`
@@ -626,6 +627,23 @@ export const useEditorStore = defineStore('editor', () => {
 	const transcribeAsset = async (assetId: string) => {
 		if (!threadId.value) return
 		await api.preprocessMedia({ threadId: threadId.value, assetId, steps: ['audio', 'transcript'] })
+	}
+
+	/**
+	 * Repair a looped transcript: a stronger model re-checks it against the audio
+	 * and the speech pieces are rebuilt from the result. Confirmed because it
+	 * costs tokens and replaces every piece derived from the old transcript.
+	 */
+	const repairTranscript = async (assetId: string) => {
+		if (!threadId.value) return
+		const confirmed = await api.showConfirmation({
+			title: 'Re-transcribe this media?',
+			message: 'Check the audio again and rebuild the speech pieces?',
+			detail: 'A stronger model re-reads the audio alongside the current transcript to fix the repeated section. This runs Gemini (costs tokens) and replaces the pieces derived from the old transcript. Clips already on the timeline keep playing the same footage.',
+			buttons: ['Cancel', 'Re-transcribe']
+		})
+		if (!confirmed || confirmed.response !== 1) return
+		await api.preprocessMedia({ threadId: threadId.value, assetId, steps: ['retranscribe'] })
 	}
 
 	/** Remove derived Gemini data (transcript / scene descriptions) from an asset. */
@@ -1508,7 +1526,10 @@ export const useEditorStore = defineStore('editor', () => {
 	}
 
 	// ===== AI prompt actions (M3) =====
-	const runPrompt = async (prompt: string) => {
+	// `override.widen` applies to THIS call only — it never rewrites the user's
+	// scope chip. Used by "Keep building", which must see the whole timeline even
+	// once it has grown past the chapter-window threshold.
+	const runPrompt = async (prompt: string, override?: { widen?: 'chapter' | 'full' }) => {
 		if (!threadId.value || !doc.value || promptRunning.value) return
 		promptError.value = null
 		lastAnswer.value = null
@@ -1523,7 +1544,7 @@ export const useEditorStore = defineStore('editor', () => {
 				baseStepId: doc.value.historyRef.currentStepId,
 				selectedItemIds: JSON.parse(JSON.stringify(selectedItemIds.value)),
 				playheadSec: playheadSec.value,
-				widen: scopeWiden.value === 'auto' ? undefined : scopeWiden.value
+				widen: override?.widen ?? (scopeWiden.value === 'auto' ? undefined : scopeWiden.value)
 			})
 			if (result?.turnId) activeTurnId.value = result.turnId
 		} catch (error: any) {
@@ -1887,6 +1908,7 @@ export const useEditorStore = defineStore('editor', () => {
 		retryAsset,
 		describeAsset,
 		transcribeAsset,
+		repairTranscript,
 		clearAssetData,
 		renameProject,
 		redetectScenes,

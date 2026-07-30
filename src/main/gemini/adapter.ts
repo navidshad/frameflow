@@ -194,7 +194,13 @@ export class GeminiAdapter {
 		systemInstruction?: string,
 		signal?: AbortSignal,
 		imagePaths?: string[],
-		options?: { includeThinking?: boolean }
+		options?: {
+			includeThinking?: boolean
+			maxOutputTokens?: number
+			thinkingBudget?: number
+			thinkingLevel?: 'LOW' | 'MEDIUM' | 'HIGH'
+			temperature?: number
+		}
 	): Promise<{ data: T, record: UsageRecord }> {
 		const parts: any[] = []
 
@@ -238,6 +244,23 @@ export class GeminiAdapter {
 			};
 		}
 
+		// Explicit generation limits. Thinking draws from the SAME output budget on
+		// Gemini 3, so an unbounded thinking pass can starve the JSON body — the
+		// truncated body then fails to parse below with no hint of the cause.
+		// Thinking tokens also bill at the OUTPUT rate (see calculateCost).
+		if (options?.maxOutputTokens != null) {
+			(request.config as any).maxOutputTokens = options.maxOutputTokens;
+		}
+		if (options?.temperature != null) {
+			(request.config as any).temperature = options.temperature;
+		}
+		if (options?.thinkingLevel || options?.thinkingBudget != null) {
+			const thinkingConfig = (request.config as any).thinkingConfig || {};
+			if (options.thinkingLevel) thinkingConfig.thinkingLevel = options.thinkingLevel;
+			if (options.thinkingBudget != null) thinkingConfig.thinkingBudget = options.thinkingBudget;
+			(request.config as any).thinkingConfig = thinkingConfig;
+		}
+
 		const response = await this.withRetry(
 			() => (this.client.models as any).generateContent(request, { signal }) as Promise<any>,
 			signal
@@ -252,12 +275,15 @@ export class GeminiAdapter {
 				data: JSON.parse(text) as T,
 				record: { usage, cost }
 			};
-		} catch (parseError) {
-			console.error(`[GEMINI ADAPTER] Failed to parse structured response:`, text);
-			throw parseError;
+		} catch (parseError: any) {
+			const finishReason = response?.candidates?.[0]?.finishReason;
+			console.error(`[GEMINI ADAPTER] Failed to parse structured response (finishReason: ${finishReason}):`, text);
+			// MAX_TOKENS is by far the most common cause on long structured outputs —
+			// surface it instead of a bare "Unexpected end of JSON input".
+			throw new Error(
+				`Model response was not valid JSON${finishReason ? ` (finishReason: ${finishReason})` : ''}: ${parseError?.message || parseError}`
+			);
 		}
-
-		throw new Error('Unexpected fallthrough in generateStructuredText');
 	}
 
 	/**

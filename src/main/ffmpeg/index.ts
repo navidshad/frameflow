@@ -97,6 +97,26 @@ export async function getVideoDuration(filePath: string): Promise<number> {
 }
 
 /**
+ * Capture time from the container's creation_time tag, as epoch ms.
+ * Checked on the format first, then on any stream — muxers disagree about
+ * where it belongs. Returns undefined when absent or unparseable; many
+ * exports and re-encodes strip the tag entirely.
+ */
+function parseRecordedAt(metadata: any): number | undefined {
+	const candidates = [
+		metadata?.format?.tags?.creation_time,
+		...(metadata?.streams || []).map((s: any) => s?.tags?.creation_time)
+	]
+	for (const value of candidates) {
+		if (typeof value !== 'string') continue
+		const parsed = Date.parse(value)
+		// Guard against placeholder epochs some cameras write when the clock is unset.
+		if (Number.isFinite(parsed) && parsed > 0) return parsed
+	}
+	return undefined
+}
+
+/**
  * Gets comprehensive metadata for a video file.
  */
 export async function getVideoMetadata(filePath: string): Promise<import('../../shared/types').VideoMetadata> {
@@ -125,7 +145,8 @@ export async function getVideoMetadata(filePath: string): Promise<import('../../
 				codec: videoStream.codec_name || 'unknown',
 				fps: Math.round(fps * 100) / 100,
 				format: metadata.format.format_name || 'unknown',
-				hasAudio: !!audioStream
+				hasAudio: !!audioStream,
+				recordedAt: parseRecordedAt(metadata)
 			})
 		})
 	})
@@ -152,7 +173,8 @@ export async function getAudioMetadata(filePath: string): Promise<import('../../
 				codec: audioStream.codec_name || 'unknown',
 				fps: 0,
 				format: metadata.format.format_name || 'unknown',
-				hasAudio: true
+				hasAudio: true,
+				recordedAt: parseRecordedAt(metadata)
 			})
 		})
 	})

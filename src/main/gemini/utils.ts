@@ -34,7 +34,14 @@ Rules:
 from-timestamp , to-timestamp - Caption segment text
 2. Each entry must be on its own line.
 3. Do not include any preamble, conversational text, or markdown code blocks.
-4. **CRITICAL**: Preserve all audio event markers (e.g., [Music], [Applause]) unless they are clearly incorrect.`
+4. **CRITICAL**: Preserve all audio event markers (e.g., [Music], [Applause]) unless they are clearly incorrect.
+5. **REPETITION LOOPS**: the initial transcript may contain a stretch where the SAME sentence repeats
+   dozens or hundreds of times. That is a transcription failure, not real speech. Ignore what the initial
+   transcript claims for that stretch, listen to the audio, and write what is actually said. If the audio
+   there really is non-speech, emit a single event marker (e.g. [Music], [Silence]) covering the span
+   instead of repeating a line.
+6. Timestamps must be strictly increasing and must never overlap the previous segment or run past the
+   end of the audio.`
 
 /**
  * Normalizes a timestamp string to HH:MM:SS,mmm format.

@@ -52,6 +52,25 @@
 			<span class="iconify tabler--info-circle w-3 h-3 inline-block align-[-1px] mr-1"></span>
 			Long project — the AI saw a summarized view of out-of-scope material.
 		</p>
+		<div v-if="turn?.notes?.length" class="mt-2 px-2.5 py-1.5 rounded-lg bg-zinc-500/5 border border-zinc-500/10">
+			<p v-for="(note, i) in turn.notes" :key="i"
+				class="text-[10px] font-medium text-zinc-500 leading-snug">
+				<span class="iconify tabler--info-circle w-3 h-3 inline-block align-[-1px] mr-1"></span>
+				{{ note }}
+			</p>
+		</div>
+		<div v-if="turn?.build?.shortfall"
+			class="mt-2 px-2.5 py-1.5 rounded-lg bg-secondary/10 border border-secondary/20 flex items-center justify-between gap-2">
+			<p class="text-[10px] font-medium text-secondary leading-snug">
+				<span class="iconify tabler--player-track-next w-3 h-3 inline-block align-[-1px] mr-1"></span>
+				Built {{ clock(turn.build.producedSec) }} of ~{{ clock(turn.build.sourceSec) }} of source.
+			</p>
+			<button
+				class="px-2 py-1 rounded-lg bg-secondary/10 text-secondary text-[9px] font-bold uppercase tracking-widest hover:bg-secondary/20 transition shrink-0 disabled:opacity-40"
+				:disabled="store.promptRunning" @click="keepBuilding">
+				Keep building
+			</button>
+		</div>
 
 		<!-- Footer -->
 		<div class="mt-3 flex items-center justify-between gap-3">
@@ -95,4 +114,17 @@ const goBack = async () => {
 	const ok = await store.switchRevision(result.value.parentRevisionId)
 	if (ok) store.dismissResult()
 }
+
+const clock = (seconds: number): string => {
+	const total = Math.max(0, Math.round(seconds))
+	return `${Math.floor(total / 60)}:${String(total % 60).padStart(2, '0')}`
+}
+
+// A fresh turn, so it lands as its own revision and stays undoable in one step.
+// widen: 'full' is required — by now the timeline may be long enough that the
+// default scope would only show the AI a chapter window of its own work.
+const keepBuilding = () => store.runPrompt(
+	'Continue building: append the source material that is still missing from the timeline, in chronological order. Do not change what is already there.',
+	{ widen: 'full' }
+)
 </script>

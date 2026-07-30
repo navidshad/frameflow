@@ -12,6 +12,7 @@
     "typecheck:node": "tsc -p tsconfig.node.json --noEmit",
     "typecheck:web": "vue-tsc -p tsconfig.web.json --noEmit",
     "typecheck": "npm run typecheck:node && npm run typecheck:web || true",
+    "test": "vitest run",
     "start": "electron-vite preview",
     "start:debug": "electron-vite build && electron out/main/index.js --remote-debugging-port=9222",
     "dev": "electron-vite dev",
@@ -58,6 +59,7 @@
     "tailwindcss": "^3.4.3",
     "typescript": "^5.4.2",
     "vite": "^5.1.6",
+    "vitest": "^4.1.10",
     "vue-tsc": "^2.0.6"
   },
   "build": {
