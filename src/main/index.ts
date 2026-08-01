@@ -296,13 +296,24 @@ app.whenReady().then(() => {
 		}
 
 		const selectedPath = result.filePaths[0]
-		const newPath = join(selectedPath, 'FrameFlow')
+		// Nest a "FrameFlow" folder inside the chosen directory — UNLESS the user
+		// picked the store itself, which is the natural thing to do when changing
+		// location (the picker opens there). Appending unconditionally produced
+		// FrameFlow/FrameFlow and hid every existing project, because they live
+		// under the old root.
+		const newPath = basename(selectedPath) === 'FrameFlow'
+			? selectedPath
+			: join(selectedPath, 'FrameFlow')
 
 		if (!fs.existsSync(newPath)) {
 			fs.mkdirSync(newPath, { recursive: true })
 		}
 
-		settingsManager.setTempDir(newPath)
+		// Report a failed write instead of leaving the app pointed at a location
+		// it will forget on restart — projects created meanwhile would vanish.
+		if (!settingsManager.setTempDir(newPath)) {
+			throw new Error(`Could not save the storage location to settings. Projects would be lost on restart, so the change was not applied.`)
+		}
 		threadManager.syncWithArtifactDir()
 		return newPath
 	})
