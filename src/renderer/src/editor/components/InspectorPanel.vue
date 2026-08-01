@@ -177,7 +177,7 @@
 							class="w-full px-3 py-2 rounded-xl border border-secondary/40 text-secondary text-xs font-bold hover:bg-secondary/10 transition active:scale-95 disabled:opacity-50"
 							:disabled="describing" @click="describe">
 							<span class="iconify tabler--sparkles w-3.5 h-3.5 inline-block align-[-2px] mr-1"></span>
-							{{ describing ? 'Describing scenes…' : 'Describe scenes (uses Gemini)' }}
+							{{ describing ? 'Describing scenes…' : `Describe scenes (${descriptionModel})` }}
 						</button>
 						<p v-if="!hasDescriptions" class="mt-1.5 text-[10px] text-zinc-400 leading-snug">
 							Generates a one-line description per piece for the context view. Costs tokens.
@@ -200,7 +200,7 @@
 							class="w-full px-3 py-2 rounded-xl border border-secondary/40 text-secondary text-xs font-bold hover:bg-secondary/10 transition active:scale-95 disabled:opacity-50"
 							:disabled="transcribing" @click="transcribe">
 							<span class="iconify tabler--file-text w-3.5 h-3.5 inline-block align-[-2px] mr-1"></span>
-							{{ transcribing ? 'Transcribing…' : 'Transcribe (uses Gemini)' }}
+							{{ transcribing ? 'Transcribing…' : `Transcribe (${transcriptModel})` }}
 						</button>
 						<p v-if="!hasTranscript" class="mt-1.5 text-[10px] text-zinc-400 leading-snug">
 							Adds spoken text to each piece and enriches AI editing context. Costs tokens.
@@ -249,7 +249,7 @@
 							<button
 								class="mt-2 w-full px-3 py-1.5 rounded-lg bg-amber-500/15 text-amber-600 dark:text-amber-400 text-[10px] font-bold uppercase tracking-widest hover:bg-amber-500/25 transition active:scale-95 disabled:opacity-50"
 								:disabled="retranscribing" @click="editorStore.repairTranscript(asset.id)">
-								{{ retranscribing ? 'Re-transcribing…' : 'Re-transcribe (uses Gemini)' }}
+								{{ retranscribing ? 'Re-transcribing…' : `Re-transcribe (${correctionModel})` }}
 							</button>
 						</div>
 					</div>
@@ -323,6 +323,12 @@ const badTranscript = computed(() => {
 	const health = asset.value?.transcriptHealth
 	return health && (health.looped || health.truncated || health.hasHole) ? health : null
 })
+
+// Each of these buttons spends tokens, and which model it spends them on is
+// configurable in Settings — so name it rather than just saying "Gemini".
+const transcriptModel = computed(() => editorStore.modelLabelFor('raw-transcript'))
+const correctionModel = computed(() => editorStore.modelLabelFor('corrected-transcript'))
+const descriptionModel = computed(() => editorStore.modelLabelFor('scene-description'))
 
 const retranscribing = computed(() =>
 	!!asset.value && editorStore.assetTasks(asset.value.id)

@@ -288,6 +288,21 @@ export const useEditorStore = defineStore('editor', () => {
 		})
 	})
 
+	// ===== Model selection (display only) =====
+	const modelSelection = ref<Record<string, string>>({})
+	const modelMetadata = ref<Record<string, { label: string }>>({})
+
+	/**
+	 * Friendly name of the model configured for an operation, e.g.
+	 * modelLabelFor('corrected-transcript') -> "Gemini 2.5 Pro".
+	 * Falls back to plain "Gemini" so a label never renders blank.
+	 */
+	const modelLabelFor = (operation: string): string => {
+		const id = modelSelection.value[operation]
+		if (!id) return 'Gemini'
+		return modelMetadata.value[id]?.label || id
+	}
+
 	// ===== Revision computeds =====
 	/** Markers are compared by position and label — ids are not meaningful here. */
 	const markersDiffer = (a: EditorMarker[], b: EditorMarker[]): boolean => {
@@ -490,6 +505,20 @@ export const useEditorStore = defineStore('editor', () => {
 				personas.value = (await api.getPersonas()) || []
 			} catch (error) {
 				console.error('[editorStore] Failed to load personas:', error)
+			}
+
+			// ---- Which model each operation is configured to use ----
+			// So buttons that spend tokens can name the model instead of just
+			// saying "uses Gemini" — the selection is user-configurable.
+			try {
+				const [settings, metadata] = await Promise.all([
+					api.getModelSettings(),
+					api.getModelMetadata()
+				])
+				modelSelection.value = settings?.selection || {}
+				modelMetadata.value = metadata || {}
+			} catch (error) {
+				console.error('[editorStore] Failed to load model settings:', error)
 			}
 
 			// ---- Revisions sidecar + pointer reconciliation ----
@@ -1944,6 +1973,7 @@ export const useEditorStore = defineStore('editor', () => {
 		describeAsset,
 		transcribeAsset,
 		repairTranscript,
+		modelLabelFor,
 		clearAssetData,
 		renameProject,
 		redetectScenes,
