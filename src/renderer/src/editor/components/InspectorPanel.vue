@@ -228,11 +228,19 @@
 								<span class="font-mono">{{ formatSpan(badTranscript.loopedSeconds) }}</span> of audio.
 								The footage is fine, but the AI editor cannot tell what is said in that span.
 							</p>
-							<p v-else class="text-[10px] font-medium text-amber-600 dark:text-amber-400 leading-snug">
+							<p v-else-if="badTranscript.truncated"
+								class="text-[10px] font-medium text-amber-600 dark:text-amber-400 leading-snug">
 								Transcription stopped early: speech ends at
 								<span class="font-mono">{{ formatSpan(badTranscript.lastSpeechEndSec || 0) }}</span> of
 								<span class="font-mono">{{ formatSpan(badTranscript.durationSec || 0) }}</span>.
 								The AI editor sees the rest of this file as silence.
+							</p>
+							<p v-else class="text-[10px] font-medium text-amber-600 dark:text-amber-400 leading-snug">
+								A stretch in the middle has no transcript:
+								<span class="font-mono">{{ formatSpan(badTranscript.largestGapSec || 0) }}</span> with no
+								speech starting at
+								<span class="font-mono">{{ formatSpan(badTranscript.gapAtSec || 0) }}</span>.
+								The AI editor reads that span as dead air and will cut it.
 							</p>
 							<p v-if="badTranscript.looped && badTranscript.repeatedText"
 								class="mt-1 text-[10px] text-zinc-500 italic truncate" :title="badTranscript.repeatedText">
@@ -313,7 +321,7 @@ const hasTranscript = computed(() =>
 /** Set by the transcript step when speech-to-text looped or stopped early. */
 const badTranscript = computed(() => {
 	const health = asset.value?.transcriptHealth
-	return health && (health.looped || health.truncated) ? health : null
+	return health && (health.looped || health.truncated || health.hasHole) ? health : null
 })
 
 const retranscribing = computed(() =>

@@ -6,7 +6,8 @@ import { settingsManager } from '../settings'
 import { UsageRecord } from '../../shared/types'
 import { extractAudioSegment } from '../ffmpeg'
 import {
-	mergeChunkTranscripts, planChunks, rebaseChunkItems, sliceTranscriptForChunk,
+	chunkCoverage, halveChunk, mergeChunkTranscripts, MIN_CHUNK_COVERAGE, MIN_RETRY_SPAN_SEC,
+	planChunks, rebaseChunkItems, sliceTranscriptForChunk,
 	type AudioChunk, type TranscriptItem
 } from './transcript-chunks'
 
@@ -123,7 +124,7 @@ async function transcribeOne(
 	audioDuration: number,
 	priorTranscriptText: string | undefined,
 	signal?: AbortSignal
-): Promise<{ items: TranscriptItem[]; text: string; record: UsageRecord }> {
+): Promise<{ items: TranscriptItem[]; text: string; record: UsageRecord; finishReason?: string }> {
 	const fileUri = await adapter.uploadFile(audioPath, 'audio/mpeg')
 
 	const userPrompt = priorTranscriptText
@@ -133,7 +134,7 @@ async function transcribeOne(
 		? TRANSCRIPT_CORRECTION_PROMPT
 		: TRANSCRIPT_PROMPT
 
-	const { text, record } = await adapter.generateTextFromFiles(
+	const { text, record, finishReason } = await adapter.generateTextFromFiles(
 		modelName,
 		userPrompt,
 		[fileUri],
@@ -143,7 +144,7 @@ async function transcribeOne(
 		{ maxOutputTokens: TRANSCRIPT_MAX_OUTPUT_TOKENS }
 	)
 
-	return { items: parseTranscript(text), text, record }
+	return { items: parseTranscript(text), text, record, finishReason }
 }
 
 const sumRecords = (records: UsageRecord[]): UsageRecord => ({
@@ -194,25 +195,60 @@ export async function extractTranscript(
 	const responses: string[] = []
 	const records: UsageRecord[] = []
 
+	let segmentCounter = 0
+
+	/**
+	 * Transcribe one window. If it comes back short — empty, cut off by the
+	 * output ceiling, or reaching only part way through — split it and retry.
+	 * A window that silently returns half its audio is how minutes go missing
+	 * from the MIDDLE of a transcript, where a trailing-coverage check can
+	 * never see them.
+	 */
+	const runWindow = async (chunk: AudioChunk, canRetry: boolean): Promise<void> => {
+		if (signal?.aborted) throw new Error('Aborted')
+		const span = chunk.end - chunk.start
+		const segmentPath = path.join(workDir, `chunk-${segmentCounter++}.mp3`)
+		await extractAudioSegment(audioPath, chunk.start, span, segmentPath, signal)
+
+		const prior = priorItems.length
+			? formatTranscript(sliceTranscriptForChunk(priorItems, chunk))
+			: undefined
+
+		const result = await transcribeOne(adapter, modelName, segmentPath, span, prior, signal)
+		try { fs.unlinkSync(segmentPath) } catch { /* best effort */ }
+
+		// The call is paid for either way — always bank the usage.
+		records.push(result.record)
+		responses.push(`# window ${chunk.start}s-${chunk.end}s\n${result.text}`)
+
+		const cutOff = !!result.finishReason && result.finishReason !== 'STOP'
+		const coverage = chunkCoverage(result.items, span)
+		const short = result.items.length === 0 || cutOff || coverage < MIN_CHUNK_COVERAGE
+
+		if (short && canRetry && span > MIN_RETRY_SPAN_SEC) {
+			console.warn(
+				`[transcript] window ${Math.round(chunk.start)}s-${Math.round(chunk.end)}s came back ` +
+				`${Math.round(coverage * 100)}% covered${cutOff ? ` (${result.finishReason})` : ''} — splitting and retrying`
+			)
+			const [first, second] = halveChunk(chunk)
+			await runWindow(first, false)
+			await runWindow(second, false)
+			return
+		}
+
+		if (short) {
+			console.warn(
+				`[transcript] window ${Math.round(chunk.start)}s-${Math.round(chunk.end)}s is still incomplete ` +
+				`(${Math.round(coverage * 100)}% covered) — that span will read as silence`
+			)
+		}
+		perChunk.push(rebaseChunkItems(result.items, chunk))
+	}
+
 	try {
 		for (const chunk of chunks) {
-			if (signal?.aborted) throw new Error('Aborted')
 			onProgress?.(chunk.index, chunks.length)
-
-			const span = chunk.end - chunk.start
-			const segmentPath = path.join(workDir, `chunk-${chunk.index}.mp3`)
-			await extractAudioSegment(audioPath, chunk.start, span, segmentPath, signal)
-
-			const prior = priorItems.length
-				? formatTranscript(sliceTranscriptForChunk(priorItems, chunk))
-				: undefined
-
-			const result = await transcribeOne(adapter, modelName, segmentPath, span, prior, signal)
-			perChunk.push(rebaseChunkItems(result.items, chunk))
-			responses.push(`# chunk ${chunk.index} (${chunk.start}s-${chunk.end}s)\n${result.text}`)
-			records.push(result.record)
-
-			try { fs.unlinkSync(segmentPath) } catch { /* best effort */ }
+			await runWindow(chunk, true)
 		}
 	} finally {
 		try { fs.rmSync(workDir, { recursive: true, force: true }) } catch { /* best effort */ }

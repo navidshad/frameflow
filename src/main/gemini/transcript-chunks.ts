@@ -30,6 +30,31 @@ export const CHUNK_TARGET_SEC = 900        // 15 min
 export const CHUNK_MIN_TAIL_SEC = 120
 /** Boundary items closer together than this are treated as the same line. */
 export const BOUNDARY_DEDUPE_SEC = 1.5
+/** A window whose transcript reaches less than this far into it is suspect. */
+export const MIN_CHUNK_COVERAGE = 0.6
+/** Don't keep halving forever, and don't bother below this span. */
+export const MIN_RETRY_SPAN_SEC = 90
+
+/**
+ * How far into its window a chunk's transcript actually reaches, 0..1.
+ * A window that hits the model's output ceiling comes back well-formed but
+ * short — this is what catches it. Items are CHUNK-RELATIVE (pre-rebase).
+ */
+export function chunkCoverage(items: TranscriptItem[], spanSec: number): number {
+	if (!(spanSec > 0)) return 1
+	if (!items.length) return 0
+	const reach = Math.max(...items.map((i) => timestampToSeconds(i.end)))
+	return Math.min(1, Math.max(0, reach) / spanSec)
+}
+
+/** Split a window down the middle, for retrying one that came back short. */
+export function halveChunk(chunk: AudioChunk): [AudioChunk, AudioChunk] {
+	const mid = chunk.start + (chunk.end - chunk.start) / 2
+	return [
+		{ index: chunk.index, start: chunk.start, end: mid },
+		{ index: chunk.index, start: mid, end: chunk.end }
+	]
+}
 
 export function timestampToSeconds(timestamp: string): number {
 	const clean = (timestamp || '').trim().replace('.', ',')

@@ -27,6 +27,14 @@ export const COVERAGE_MIN_RATIO = 0.8
 /** Ignore a short tail — plenty of recordings end on silence. */
 export const COVERAGE_MIN_GAP_SECONDS = 120
 
+/**
+ * A hole in the MIDDLE is the nastier case: one failed window inside a long
+ * recording comes back as silence, every other measure reads healthy, and the
+ * AI editor drops the span as dead air. Real conversation rarely goes this
+ * long without a word.
+ */
+export const INTERIOR_GAP_SECONDS = 180
+
 const normalize = (text: string | undefined): string =>
 	(text || '').replace(/\s+/g, ' ').trim().toLowerCase()
 
@@ -65,6 +73,19 @@ export function analyzeTranscriptHealth(
 		index = end + 1
 	}
 
+	// The longest stretch between one spoken piece and the next.
+	const byTime = [...spoken].sort((a, b) => a.in - b.in)
+	let largestGapSec = 0
+	let gapAtSec: number | undefined
+	for (let i = 1; i < byTime.length; i++) {
+		const gap = byTime[i].in - byTime[i - 1].out
+		if (gap > largestGapSec) {
+			largestGapSec = gap
+			gapAtSec = byTime[i - 1].out
+		}
+	}
+	const hasHole = largestGapSec >= INTERIOR_GAP_SECONDS
+
 	// Coverage: where does speech stop, relative to the file?
 	const durationSec = options.durationSec && options.durationSec > 0 ? options.durationSec : undefined
 	const lastSpeechEnd = spoken.length ? Math.max(...spoken.map((c) => c.out)) : 0
@@ -87,6 +108,9 @@ export function analyzeTranscriptHealth(
 		durationSec,
 		coverageRatio,
 		truncated,
+		largestGapSec: spoken.length > 1 ? largestGapSec : undefined,
+		gapAtSec: hasHole ? gapAtSec : undefined,
+		hasHole,
 		checkedAt: Date.now()
 	}
 }

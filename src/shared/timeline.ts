@@ -229,10 +229,15 @@ export interface RippleChange {
  * gap nobody touched survives. Use closeTimelineGaps for a full reflow.
  * Returns true if anything moved.
  */
-export function rippleTimeline(items: TimelineItem[], changes: RippleChange[]): boolean {
+export function rippleTimeline(
+	items: TimelineItem[],
+	changes: RippleChange[],
+	pinnedIds?: ReadonlySet<string>
+): boolean {
 	if (!changes.length) return false
 	let moved = false
 	for (const item of items) {
+		if (pinnedIds?.has(item.id)) continue
 		const shift = changes
 			.filter((c) => c.trackId === item.trackId && c.at < item.timelineStart)
 			.reduce((sum, c) => sum + c.delta, 0)
@@ -264,11 +269,18 @@ export function closeTimelineGaps(
 ): boolean {
 	const eps = opts.eps ?? MIN_ITEM_DURATION
 	const only = opts.trackIds?.length ? new Set(opts.trackIds) : null
+	// A locked track is the user saying "do not move this" — reflowing a locked
+	// music bed to t=0 would knock it out of sync with picture. Hidden tracks
+	// are skipped too: never silently rearrange what cannot be seen.
+	const protectedTracks = new Set(
+		state.tracks.filter((t) => t.locked || t.hidden).map((t) => t.id)
+	)
 	let changed = false
 
 	const byTrack = new Map<string, TimelineItem[]>()
 	for (const item of state.timeline) {
 		if (only && !only.has(item.trackId)) continue
+		if (protectedTracks.has(item.trackId)) continue
 		const list = byTrack.get(item.trackId) || []
 		list.push(item)
 		byTrack.set(item.trackId, list)

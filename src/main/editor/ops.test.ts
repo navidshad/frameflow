@@ -232,6 +232,74 @@ describe('opsToDiff / source coverage', () => {
 		expect(items(result)[0].out).toBe(8)
 	})
 
+	it('keeps every free slice when covered material sits in the middle of a piece', () => {
+		// One 20s piece with 8-12s already on the timeline must contribute BOTH
+		// 0-8 and 12-20. Keeping only the longest slice silently loses footage.
+		const asset = makeAsset('a', [20])
+		const existing: TimelineItem = {
+			id: 't-mid', trackId: 'v1', sourceAssetId: 'a', timelineStart: 0,
+			in: 8, out: 12, speed: 1, preservePitch: true, duration: 4
+		}
+		const result = opsToDiff(
+			{ addSceneRanges: [{ assetId: 'a', fromScene: 1, toScene: 1 }] },
+			makeDoc([asset], [existing])
+		)
+
+		const spans = items(result).map((i) => [i.in, i.out]).sort((a, b) => a[0] - b[0])
+		expect(spans).toEqual([[0, 8], [12, 20]])
+	})
+
+	it('does not merge across a covered hole', () => {
+		// Pieces 1-4 contiguous, with piece 2's source already on the timeline.
+		// The survivors must NOT merge into one span that replays piece 2.
+		const asset = makeAsset('a', uniform(4, 5))
+		const existing: TimelineItem = {
+			id: 't-2', trackId: 'v1', sourceAssetId: 'a', timelineStart: 0,
+			in: 5, out: 10, speed: 1, preservePitch: true, duration: 5
+		}
+		const result = opsToDiff(
+			{ addSceneRanges: [{ assetId: 'a', fromScene: 1, toScene: 4 }] },
+			makeDoc([asset], [existing])
+		)
+
+		for (const item of items(result)) {
+			expect(item.in <= 5 && item.out >= 10).toBe(false)
+		}
+	})
+
+	it('appends after the target track only, ignoring an audio bed', () => {
+		// A music bed on A1 must not push the video assembly to the end of it.
+		const asset = makeAsset('a', uniform(2, 5))
+		const musicAsset = makeAsset('m', [150])
+		const music: TimelineItem = {
+			id: 'music', trackId: 'a1', sourceAssetId: 'm', timelineStart: 0,
+			in: 0, out: 150, speed: 1, preservePitch: true, duration: 150
+		}
+		const doc = makeDoc([asset, musicAsset], [music])
+		doc.tracks = [
+			...doc.tracks,
+			{ id: 'a1', kind: 'audio', name: 'A1', order: 1, muted: false, locked: false, hidden: false, height: 72 }
+		]
+		const result = opsToDiff({ addSceneRanges: [{ assetId: 'a', fromScene: 1, toScene: 2 }] }, doc)
+
+		expect(items(result)[0].timelineStart).toBe(0)
+	})
+
+	it('appends after survivors, not after items this edit removes', () => {
+		const asset = makeAsset('a', uniform(4, 5))
+		const existing: TimelineItem[] = [0, 1].map((k) => ({
+			id: `t-${k + 1}`, trackId: 'v1', sourceAssetId: 'a', timelineStart: k * 5,
+			in: k * 5, out: k * 5 + 5, speed: 1, preservePitch: true, duration: 5
+		}))
+		const result = opsToDiff({
+			removeItemIds: ['t-2'],
+			addSceneRanges: [{ assetId: 'a', fromScene: 3, toScene: 3 }]
+		}, makeDoc([asset], existing))
+
+		// t-1 survives at 0-5, so the add lands at 5 — not at 10.
+		expect(items(result)[0].timelineStart).toBe(5)
+	})
+
 	it('trims overlapping source so a corrupt transcript cannot replay audio', () => {
 		// Shape of a speech-to-text repetition loop: each piece overlaps its
 		// predecessor by ~2s, far past the coalescing tolerance.
@@ -364,6 +432,22 @@ describe('opsToDiff / gaps', () => {
 
 		expect(startOf(result, 't-2')).toBe(0)
 		expect(startOf(result, 't-3')).toBe(5)
+	})
+
+	it('still ripples everything the model did NOT position', () => {
+		// One deliberate nudge must not switch gap-closing off for the whole edit:
+		// that is how a 200-clip retime ended up with 200 holes.
+		const asset = makeAsset('a', uniform(6, 5))
+		const timeline = laidOut(asset)          // 0,5,10,15,20,25
+		const result = opsToDiff({
+			removeItemIds: ['t-1', 't-2'],           // frees 10s at the front
+			updateItems: [{ id: 't-6', timelineStart: 55 }]   // one pinned clip
+		}, makeDoc([asset], timeline))
+
+		expect(startOf(result, 't-3')).toBe(0)
+		expect(startOf(result, 't-4')).toBe(5)
+		expect(startOf(result, 't-5')).toBe(10)
+		expect(startOf(result, 't-6')).toBe(55)   // stays where the model put it
 	})
 
 	it('leaves a contiguous timeline untouched', () => {

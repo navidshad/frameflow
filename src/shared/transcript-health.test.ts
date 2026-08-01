@@ -94,6 +94,33 @@ describe('analyzeTranscriptHealth', () => {
 		expect(health.distinctRatio).toBe(1)
 	})
 
+	it('flags a hole in the MIDDLE, which every other measure reads as healthy', () => {
+		// One failed transcription window inside a long recording. Coverage looks
+		// fine (speech reaches the end), nothing repeats, distinctRatio is 1 —
+		// this check is the only thing that can see it.
+		const health = analyzeTranscriptHealth([
+			{ in: 0, out: 300, text: 'first stretch' },
+			{ in: 900, out: 1200, text: 'second stretch' }
+		], { durationSec: 1200 })
+
+		expect(health.hasHole).toBe(true)
+		expect(health.largestGapSec).toBe(600)
+		expect(health.gapAtSec).toBe(300)
+		expect(health.truncated).toBe(false)
+		expect(health.looped).toBe(false)
+		expect(health.distinctRatio).toBe(1)
+	})
+
+	it('does not flag ordinary pauses between speech', () => {
+		const health = analyzeTranscriptHealth([
+			{ in: 0, out: 60, text: 'a' },
+			{ in: 75, out: 140, text: 'b' },
+			{ in: 150, out: 600, text: 'c' }
+		], { durationSec: 600 })
+		expect(health.hasHole).toBe(false)
+		expect(health.largestGapSec).toBe(15)
+	})
+
 	it('does not flag a recording that merely ends on silence', () => {
 		const health = analyzeTranscriptHealth(
 			[{ in: 0, out: 580, text: 'a long spoken stretch' }, { in: 580, out: 600, text: '[Silence]' }],

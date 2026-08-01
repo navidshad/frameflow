@@ -340,7 +340,7 @@ export class GeminiAdapter {
 		audioDuration: number = 0,
 		signal?: AbortSignal,
 		options?: { maxOutputTokens?: number; temperature?: number }
-	): Promise<{ text: string, record: UsageRecord }> {
+	): Promise<{ text: string, record: UsageRecord, finishReason?: string }> {
 		const contents = [
 			{
 				role: 'user',
@@ -386,7 +386,10 @@ export class GeminiAdapter {
 
 			return {
 				text: this.extractResultText(response),
-				record: { usage, cost }
+				record: { usage, cost },
+				// Callers need this: MAX_TOKENS means the text is a PREFIX of the
+				// real answer, which for a transcript looks perfectly well-formed.
+				finishReason
 			};
 		} catch (error) {
 			if (signal?.aborted) throw error;

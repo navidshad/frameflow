@@ -289,6 +289,15 @@ export const useEditorStore = defineStore('editor', () => {
 	})
 
 	// ===== Revision computeds =====
+	/** Markers are compared by position and label — ids are not meaningful here. */
+	const markersDiffer = (a: EditorMarker[], b: EditorMarker[]): boolean => {
+		if (a.length !== b.length) return true
+		const key = (m: EditorMarker) => `${Math.round(m.time * 1000)}|${m.label || ''}`
+		const left = [...a].map(key).sort()
+		const right = [...b].map(key).sort()
+		return left.some((value, index) => value !== right[index])
+	}
+
 	const currentRevision = computed<EditorRevision | null>(() =>
 		revisions.value.find((r) => r.id === doc.value?.currentRevisionId) || null
 	)
@@ -297,10 +306,14 @@ export const useEditorStore = defineStore('editor', () => {
 	const revisionDirty = computed(() => {
 		const rev = currentRevision.value
 		if (!rev || !doc.value) return false
-		return diffTimelines(
+		if (diffTimelines(
 			{ tracks: rev.snapshot.tracks, timeline: rev.snapshot.timeline },
 			{ tracks: doc.value.tracks, timeline: doc.value.timeline }
-		) !== null
+		) !== null) return true
+		// Markers live outside TimelineDiff, so the timeline comparison above is
+		// blind to them. Without this, marker-only work counts as "clean" and
+		// switchRevision overwrites it with no checkpoint and no undo.
+		return markersDiffer(rev.snapshot.markers || [], doc.value.markers || [])
 	})
 
 	/** Children grouped by parentId (null key = root), createdAt-sorted. */

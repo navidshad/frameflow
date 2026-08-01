@@ -240,6 +240,9 @@ export interface TranscriptHealth {
 	durationSec?: number        // asset duration the coverage was measured against
 	coverageRatio?: number      // lastSpeechEndSec / durationSec — 1 is full coverage
 	truncated: boolean          // verdict: transcription stopped well before the end
+	largestGapSec?: number      // longest stretch with no speech
+	gapAtSec?: number           // where that stretch starts, when it counts as a hole
+	hasHole: boolean            // verdict: a window in the MIDDLE came back empty
 	checkedAt: number
 }
 

@@ -294,27 +294,27 @@ class SourceCoverage {
 		this.byAsset.set(assetId, merged)
 	}
 
-	/** The longest still-uncovered slice of [inSec, outSec), or null. */
-	uncovered(assetId: string, inSec: number, outSec: number): { in: number; out: number } | null {
+	/**
+	 * EVERY still-uncovered slice of [inSec, outSec), in order. Returning only
+	 * the longest one would silently drop the rest of the piece: a 20s piece
+	 * with an existing item over 8-12s would contribute 0-8 and lose 12-20.
+	 */
+	freeSlices(assetId: string, inSec: number, outSec: number): { in: number; out: number }[] {
+		if (!(outSec > inSec)) return []
 		const spans = this.byAsset.get(assetId)
-		if (!spans?.length) return outSec > inSec ? { in: inSec, out: outSec } : null
-		let best: { in: number; out: number } | null = null
+		if (!spans?.length) return [{ in: inSec, out: outSec }]
+
+		const slices: { in: number; out: number }[] = []
 		let cursor = inSec
 		for (const span of spans) {
 			if (span.out <= cursor) continue
 			if (span.in >= outSec) break
-			if (span.in > cursor) {
-				const gap = { in: cursor, out: Math.min(span.in, outSec) }
-				if (!best || gap.out - gap.in > best.out - best.in) best = gap
-			}
+			if (span.in > cursor) slices.push({ in: cursor, out: Math.min(span.in, outSec) })
 			cursor = Math.max(cursor, span.out)
 			if (cursor >= outSec) break
 		}
-		if (cursor < outSec) {
-			const tail = { in: cursor, out: outSec }
-			if (!best || tail.out - tail.in > best.out - best.in) best = tail
-		}
-		return best && best.out - best.in >= MIN_TRIMMED_PIECE_SEC ? best : null
+		if (cursor < outSec) slices.push({ in: cursor, out: outSec })
+		return slices.filter((s) => s.out - s.in >= MIN_TRIMMED_PIECE_SEC)
 	}
 }
 
@@ -384,11 +384,18 @@ export function opsToDiff(ops: EditorOps, doc: EditorDocument): OpsToDiffResult 
 	for (const item of doc.timeline) {
 		if (!removed.has(item.id)) coverage.add(item.sourceAssetId, item.in, item.out)
 	}
-	// Sequential placement cursor for adds without explicit position
-	let appendCursor = computeContentEnd(doc.timeline)
 	const targetTrack = [...doc.tracks]
 		.sort((a, b) => a.order - b.order)
 		.find((t) => t.kind === 'video' && !t.locked && !t.hidden)
+
+	// Sequential placement cursor for adds without explicit position. Only the
+	// TARGET track's SURVIVING items count: measuring every track would park the
+	// whole assembly after a music bed on the audio track (an export that opens
+	// with minutes of black), and counting items this edit removes would leave a
+	// hole where they used to be.
+	let appendCursor = computeContentEnd(
+		doc.timeline.filter((i) => i.trackId === targetTrack?.id && !removed.has(i.id))
+	)
 
 	/** Explicit atSec > after a known item > append at end. */
 	const positionFor = (add: { atSec?: number; afterItemId?: string }): number => {
@@ -520,15 +527,23 @@ export function opsToDiff(ops: EditorOps, doc: EditorDocument): OpsToDiffResult 
 		// timeline. Fully-covered pieces vanish; partially-covered ones shrink.
 		// Done in index order so a piece also yields to its own predecessors.
 		let alreadyCovered = 0
-		const trimmed: { clip: Clip; in: number; out: number }[] = []
+		const trimmed: { clip: Clip; in: number; out: number; whole: boolean }[] = []
 		for (const clip of selected) {
-			const free = coverage.uncovered(asset.id, clip.in, clip.out)
-			if (!free) {
+			const free = coverage.freeSlices(asset.id, clip.in, clip.out)
+			if (!free.length) {
 				alreadyCovered++
 				continue
 			}
-			coverage.add(asset.id, free.in, free.out)
-			trimmed.push({ clip, in: free.in, out: free.out })
+			// A piece can survive in more than one slice when covered material
+			// sits in its middle; each free slice is placed.
+			for (const slice of free) {
+				coverage.add(asset.id, slice.in, slice.out)
+				// `whole` records that nothing was trimmed off the FRONT. A slice
+				// that starts late begins just after material already on the
+				// timeline, so merging it into the previous run would stretch that
+				// run back over the covered hole and replay it.
+				trimmed.push({ clip, in: slice.in, out: slice.out, whole: slice.in === clip.in })
+			}
 		}
 		if (alreadyCovered) {
 			notes.push(`Skipped ${alreadyCovered} piece${alreadyCovered === 1 ? '' : 's'} of "${asset.name}" already on the timeline.`)
@@ -539,13 +554,20 @@ export function opsToDiff(ops: EditorOps, doc: EditorDocument): OpsToDiffResult 
 		}
 
 		const runs: Run[] = []
-		for (const { clip, in: clipIn, out: clipOut } of trimmed) {
+		for (const { clip, in: clipIn, out: clipOut, whole } of trimmed) {
 			const last = runs[runs.length - 1]
 			const delta = last ? clipIn - last.out : Number.POSITIVE_INFINITY
 			// Index adjacency is MANDATORY and not implied by the time test: an
 			// excluded piece shorter than MERGE_GAP_TOL_SEC would otherwise be
 			// silently swallowed back into the merged item's [in, out].
+			// Safe to merge when nothing was trimmed off this slice's front, OR when
+			// the trim was caused by the previous run itself (the slice starts
+			// exactly where that run ends). A slice pushed forward past OTHER
+			// covered material must start its own run, or the merged span would
+			// stretch back over that material and replay it.
+			const continuesRun = whole || (!!last && Math.abs(clipIn - last.out) <= 1e-6)
 			const adjacent = !!last &&
+				continuesRun &&
 				clip.index === last.lastIdx + 1 &&
 				delta <= MERGE_GAP_TOL_SEC &&
 				delta >= -MERGE_OVERLAP_TOL_SEC &&
@@ -634,12 +656,17 @@ export function opsToDiff(ops: EditorOps, doc: EditorDocument): OpsToDiffResult 
 		}
 	}
 
-	// If the model positioned items itself, respect that rather than shifting
-	// its work a second time.
-	const modelMovedItems = (diff.updateItems || []).some((u) => typeof u.timelineStart === 'number')
+	// Items the model positioned itself stay where it put them — but ONLY those.
+	// Suppressing the whole pass because of one deliberate nudge is how an edit
+	// that retimes 200 clips ends up with 200 holes.
+	const pinnedIds = new Set(
+		(diff.updateItems || [])
+			.filter((u) => typeof u.timelineStart === 'number')
+			.map((u) => u.id)
+	)
 	const wantsCloseGaps = ops.closeGaps === true
 
-	if (wantsCloseGaps || (changes.length > 0 && !modelMovedItems)) {
+	if (wantsCloseGaps || changes.length > 0) {
 		const survivors = doc.timeline
 			.filter((i) => !removedIds.has(i.id))
 			.map((i) => {
@@ -652,7 +679,7 @@ export function opsToDiff(ops: EditorOps, doc: EditorDocument): OpsToDiffResult 
 
 		const moved = wantsCloseGaps
 			? closeTimelineGaps({ tracks: doc.tracks, timeline: working })
-			: rippleTimeline(working, changes)
+			: rippleTimeline(working, changes, pinnedIds)
 
 		if (moved) {
 			const updates = diff.updateItems ? [...diff.updateItems] : []

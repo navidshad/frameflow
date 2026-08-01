@@ -1,7 +1,8 @@
 import { describe, expect, it } from 'vitest'
 import {
-	CHUNK_TARGET_SEC, mergeChunkTranscripts, planChunks, rebaseChunkItems,
-	secondsToTimestamp, sliceTranscriptForChunk, timestampToSeconds, type TranscriptItem
+	CHUNK_TARGET_SEC, chunkCoverage, halveChunk, mergeChunkTranscripts, planChunks,
+	rebaseChunkItems, secondsToTimestamp, sliceTranscriptForChunk, timestampToSeconds,
+	type TranscriptItem
 } from './transcript-chunks'
 
 const item = (start: string, end: string, text: string): TranscriptItem => ({ start, end, text })
@@ -104,6 +105,23 @@ describe('mergeChunkTranscripts', () => {
 			[item('00:20:01,000', '00:20:02,000', 'okay')]
 		])
 		expect(merged).toHaveLength(2)
+	})
+})
+
+describe('chunkCoverage', () => {
+	it('reports how far into the window the transcript reaches', () => {
+		expect(chunkCoverage([item('00:00:00,000', '00:14:30,000', 'x')], 900)).toBeCloseTo(0.966, 2)
+		// A window cut off by the output ceiling: well-formed, but only a third.
+		expect(chunkCoverage([item('00:00:00,000', '00:05:00,000', 'x')], 900)).toBeCloseTo(0.333, 2)
+		expect(chunkCoverage([], 900)).toBe(0)
+	})
+})
+
+describe('halveChunk', () => {
+	it('splits a window down the middle with no gap', () => {
+		const [a, b] = halveChunk({ index: 0, start: 900, end: 1800 })
+		expect(a).toEqual({ index: 0, start: 900, end: 1350 })
+		expect(b).toEqual({ index: 0, start: 1350, end: 1800 })
 	})
 })
 

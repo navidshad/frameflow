@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import type { TimelineItem, Track } from './types'
-import { closeTimelineGaps, rippleAfterRemoval } from './timeline'
+import { closeTimelineGaps, rippleAfterRemoval, rippleTimeline } from './timeline'
 
 const track = (id: string): Track => ({
 	id, kind: 'video', name: id, order: 0, muted: false, locked: false, hidden: false, height: 72
@@ -56,6 +56,22 @@ describe('closeTimelineGaps', () => {
 		expect(starts(timeline.filter((i) => i.trackId === 'a1'))).toEqual([20])
 	})
 
+	it('never touches a locked track', () => {
+		// A locked music bed reflowed to t=0 would fall out of sync with picture.
+		const locked: Track = { ...track('a1'), locked: true }
+		const timeline = [...items([[0, 10], [40, 10]], 'v1'), ...items([[30, 20]], 'a1')]
+		closeTimelineGaps({ tracks: [track('v1'), locked], timeline })
+		expect(starts(timeline.filter((i) => i.trackId === 'v1'))).toEqual([0, 10])
+		expect(starts(timeline.filter((i) => i.trackId === 'a1'))).toEqual([30])
+	})
+
+	it('never touches a hidden track', () => {
+		const hidden: Track = { ...track('a1'), hidden: true }
+		const timeline = items([[30, 20]], 'a1')
+		expect(closeTimelineGaps({ tracks: [hidden], timeline })).toBe(false)
+		expect(starts(timeline)).toEqual([30])
+	})
+
 	it('accounts for speed when measuring an item', () => {
 		const timeline = items([[0, 10], [30, 10]])
 		timeline[0].speed = 2   // 10s of source plays in 5s
@@ -94,6 +110,19 @@ describe('rippleAfterRemoval', () => {
 	it('does nothing when nothing was removed', () => {
 		const survivors = items([[0, 10], [10, 10]])
 		expect(rippleAfterRemoval(survivors, [])).toBe(false)
+	})
+
+	it('leaves pinned items where they are, but ripples the rest', () => {
+		const all = items([[0, 10], [10, 10], [20, 10], [30, 10]])
+		const removed = [all[0]]
+		const survivors = all.slice(1)
+		const changes = [{ trackId: 'v1', at: 0, delta: -10 }]
+		expect(rippleTimeline(survivors, changes, new Set(['v1-3']))).toBe(true)
+		// The first clip was removed, so the two unpinned survivors move up 10s;
+		// the pinned one holds its position.
+		expect(survivors.map((i) => [i.id, i.timelineStart])).toEqual([
+			['v1-1', 0], ['v1-2', 10], ['v1-3', 30]
+		])
 	})
 
 	it('only ripples within the same track', () => {

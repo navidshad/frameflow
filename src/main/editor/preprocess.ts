@@ -707,7 +707,9 @@ async function runTranscriptStep(threadId: string, assetId: string, signal: Abor
 				? `${derived} segments — transcription looped, text unreliable`
 				: health?.truncated
 					? `${derived} segments — speech stops at ${Math.round((health.lastSpeechEndSec || 0) / 60)}m of ${Math.round((health.durationSec || 0) / 60)}m`
-					: `${derived} speech segments`
+					: health?.hasHole
+						? `${derived} segments — ${Math.round((health.largestGapSec || 0) / 60)}m with no transcript in the middle`
+						: `${derived} speech segments`
 		})
 		return
 	}
@@ -735,6 +737,12 @@ async function recordTranscriptHealth(
 		console.warn(
 			`[editor] transcript truncated in asset ${assetId}: speech ends at ` +
 			`${Math.round(health.lastSpeechEndSec || 0)}s of ${Math.round(health.durationSec || 0)}s`
+		)
+	}
+	if (health.hasHole) {
+		console.warn(
+			`[editor] transcript hole in asset ${assetId}: ${Math.round(health.largestGapSec || 0)}s ` +
+			`with no speech starting at ${Math.round(health.gapAtSec || 0)}s`
 		)
 	}
 	await patchAsset(threadId, assetId, () => ({ transcriptHealth: health }))
