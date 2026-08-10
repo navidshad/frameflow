@@ -6,7 +6,8 @@ import { pathToFileURL } from 'url'
 import { Pipeline } from './pipeline'
 import { settingsManager } from './settings'
 import { threadManager } from './threads'
-import type { EditorDocument } from '@shared/types'
+import type { EditorDocument, TimelineItem } from '@shared/types'
+import { pruneOrphanItems } from '@shared/timeline'
 import * as extraction from './pipeline/phases/extraction'
 import * as generation from './pipeline/phases/generation'
 import * as intent from './pipeline/phases/intent'
@@ -419,7 +420,21 @@ app.whenReady().then(() => {
 
 			const editor = { ...thread.editor }
 			if (patch.tracks) editor.tracks = patch.tracks
-			if (patch.timeline) editor.timeline = patch.timeline
+			if (patch.timeline) {
+				// A renderer that saved before it learned an asset was removed must
+				// not put those clips back on disk. This closes a window the
+				// renderer cannot: its 800ms autosave timer is not cancelled by a
+				// removal, so a queued save can land after main has already purged.
+				// Main always learns about an asset FIRST (createMediaAsset persists
+				// inside the queued mutator and only then resolves the IPC), so an id
+				// missing from editor.media is genuinely gone, never not-yet-known.
+				const state = { tracks: editor.tracks, timeline: patch.timeline as TimelineItem[] }
+				const dropped = pruneOrphanItems(state, new Set(editor.media.map((a) => a.id)))
+				if (dropped.length) {
+					console.warn(`[editor] save: dropped ${dropped.length} timeline item(s) with removed media`)
+				}
+				editor.timeline = state.timeline
+			}
 			if (patch.timelineMeta) editor.timelineMeta = patch.timelineMeta
 			if (patch.selection) editor.selection = patch.selection
 			if (patch.activePersonaId !== undefined) editor.activePersonaId = patch.activePersonaId

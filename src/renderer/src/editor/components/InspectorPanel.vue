@@ -169,8 +169,10 @@
 				</dl>
 				<p v-else class="mt-3 text-xs text-zinc-400">Metadata unavailable for this file.</p>
 
-				<!-- Opt-in Gemini descriptions -->
-				<div v-if="asset.preprocessState === 'completed' && asset.clips.length > 0" class="mt-5">
+				<!-- Opt-in Gemini extras. Shown on 'error' too: these are optional,
+				     and an unrelated step failure must not take away the only way to
+				     run them (leaving Retry, which re-runs the default steps). -->
+				<div v-if="(asset.preprocessState === 'completed' || asset.preprocessState === 'error') && asset.clips.length > 0" class="mt-5">
 					<!-- Scene descriptions are visual (thumbnail-derived) — video only -->
 					<template v-if="asset.kind !== 'audio'">
 						<button v-if="!hasDescriptions"
@@ -183,13 +185,30 @@
 							Generates a one-line description per piece for the context view. Costs tokens.
 						</p>
 						<div v-else class="flex items-center justify-between gap-2">
-							<p class="text-[11px] text-accent font-medium">
+							<p v-if="missingDescriptions" class="text-[11px] text-amber-500 font-medium">
+								<span class="iconify tabler--alert-triangle w-3 h-3 inline-block align-[-1px]"></span>
+								Scene descriptions incomplete
+							</p>
+							<p v-else class="text-[11px] text-accent font-medium">
 								<span class="iconify tabler--check w-3 h-3 inline-block align-[-1px]"></span>
 								Scene descriptions ready
 							</p>
 							<button class="text-[10px] font-bold uppercase tracking-widest text-zinc-400 hover:text-red-500 transition"
 								@click="editorStore.clearAssetData(asset.id, 'descriptions')">
 								Remove
+							</button>
+						</div>
+						<div v-if="hasDescriptions && missingDescriptions"
+							class="mt-2 px-2.5 py-2 rounded-lg bg-amber-500/10 border border-amber-500/20">
+							<p class="text-[10px] font-medium text-amber-600 dark:text-amber-400 leading-snug">
+								<span class="font-mono">{{ missingDescriptions }}</span> of
+								<span class="font-mono">{{ descriptionHealth?.describable }}</span> scenes came back with no
+								description. The AI editor has no visual context for those spans.
+							</p>
+							<button
+								class="mt-2 w-full px-3 py-1.5 rounded-lg bg-amber-500/15 text-amber-600 dark:text-amber-400 text-[10px] font-bold uppercase tracking-widest hover:bg-amber-500/25 transition active:scale-95 disabled:opacity-50"
+								:disabled="describing" @click="describe">
+								{{ describing ? 'Describing scenes…' : `Describe remaining (${descriptionModel})` }}
 							</button>
 						</div>
 					</template>
@@ -310,9 +329,22 @@ const onDurationInput = (event: Event) => {
 	}
 }
 
+/** Set by the descriptions step: how many scenes actually got described. */
+const descriptionHealth = computed(() => asset.value?.descriptionHealth || null)
+
+// `some` on its own reported "ready" when one batch out of seven survived, and
+// hid the Describe button so the run could not be finished. Fall back to it
+// only for assets described before coverage was recorded.
 const hasDescriptions = computed(() =>
-	(asset.value?.clips || []).some((c) => !!c.visual)
+	descriptionHealth.value
+		? descriptionHealth.value.described > 0
+		: (asset.value?.clips || []).some((c) => !!c.visual)
 )
+
+const missingDescriptions = computed(() => {
+	const health = descriptionHealth.value
+	return health ? Math.max(0, health.describable - health.described) : 0
+})
 
 const hasTranscript = computed(() =>
 	(asset.value?.clips || []).some((c) => !!c.text)

@@ -8,7 +8,7 @@ import type {
 	EditorDocument, EditorRenderProgress, ExportQuality, MediaAsset,
 	TimelineItem, TimelineSegment, Track
 } from '@shared/types'
-import { itemEnd } from '@shared/timeline'
+import { findOrphanItems, itemEnd } from '@shared/timeline'
 import { threadManager } from '../threads'
 import { assembleVideo, sanitizeFilename } from '../ffmpeg'
 import { THREAD_DIRS } from '../constants/paths'
@@ -79,6 +79,26 @@ export function computeRegions(doc: EditorDocument, quality: ExportQuality): Reg
 	}
 
 	const assetById = new Map(doc.media.map((a) => [a.id, a]))
+
+	// ---- Orphan pre-flight ----
+	// A clip whose media was removed cannot be rendered. Report EVERY offender
+	// at once with enough detail to find them, instead of dying on the first one
+	// with a bare label. Scoped to the items the render actually consumes:
+	// hidden tracks and overlay/text lanes never reach ffmpeg, so an orphan
+	// parked there must not block an export that would otherwise succeed.
+	const orphans = findOrphanItems([...videoItems, ...audioItems], new Set(assetById.keys()))
+	if (orphans.length) {
+		const at = (t: number) => `${Math.floor(t / 60)}:${String(Math.floor(t % 60)).padStart(2, '0')}`
+		const listed = orphans.slice(0, 5)
+			.map((i) => `"${i.label || i.id}" on ${trackById.get(i.trackId)?.name || i.trackId} at ${at(i.timelineStart)}`)
+			.join(', ')
+		const more = orphans.length > 5 ? `, and ${orphans.length - 5} more` : ''
+		throw new Error(
+			`${orphans.length} clip${orphans.length === 1 ? '' : 's'} reference media that is no longer in ` +
+			`the project: ${listed}${more}. Delete them from the timeline, or re-import the media, then export again.`
+		)
+	}
+
 	const srcFor = (asset: MediaAsset) =>
 		quality === 'preview' ? (asset.proxyPath || asset.originalPath) : asset.originalPath
 
@@ -147,7 +167,8 @@ export function computeRegions(doc: EditorDocument, quality: ExportQuality): Reg
 		}
 		for (const aItem of audioItems) {
 			if (!covers(aItem, t0, t1) || !audioItemActive(aItem)) continue
-			if (!assetById.has(aItem.sourceAssetId)) continue
+			// No missing-asset check here: the pre-flight above already threw.
+			// Silently skipping would drop audio from the export without a word.
 			audioSources.push(toSlice(aItem, t0, t1))
 		}
 
@@ -422,7 +443,10 @@ export function startEditorRender(options: {
 
 			if (videoTrack && !hasOtherVideoItems && isFastPathEligible(items, videoTrack, hasAudioItems)) {
 				// ---- Fast path: single-source trim+concat via assembleVideo ----
-				const asset = doc.media.find((a) => a.id === items[0].sourceAssetId)!
+				// computeRegions' orphan pre-flight already ran, so this resolves —
+				// but assert rather than `!`, so a future reordering fails loudly.
+				const asset = doc.media.find((a) => a.id === items[0].sourceAssetId)
+				if (!asset) throw new Error(`Missing media asset for clip "${items[0].label || items[0].id}".`)
 				const srcPath = quality === 'preview'
 					? (asset.proxyPath || asset.originalPath)
 					: asset.originalPath

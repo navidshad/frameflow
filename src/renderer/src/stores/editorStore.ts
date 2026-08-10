@@ -7,7 +7,8 @@ import type {
 } from '@shared/types'
 import {
 	applyTimelineDiff, clampSpeed, clipToItem, computeContentEnd,
-	closeTimelineGaps, diffTimelines, itemDuration, itemEnd, itemFromAsset, repairOverlaps,
+	closeTimelineGaps, diffTimelines, findOverlaps, itemDuration, itemEnd, itemFromAsset,
+	pruneOrphanItems, repairOverlaps,
 	type TimelineState
 } from '@shared/timeline'
 import { computeScope } from '@shared/ai-scope'
@@ -491,11 +492,27 @@ export const useEditorStore = defineStore('editor', () => {
 			playheadSec.value = 0
 			isPlaying.value = false
 
-			// Heal any pre-existing same-track overlaps (e.g. from AI accepts
-			// made before overlap repair existed) — persists via autosave.
-			if (doc.value && repairOverlaps({ tracks: doc.value.tracks, timeline: doc.value.timeline })) {
-				console.warn('[editorStore] Repaired overlapping timeline items on load')
-				markDirty()
+			if (doc.value) {
+				const state: TimelineState = { tracks: doc.value.tracks, timeline: doc.value.timeline }
+
+				// Heal projects saved before removeAsset purged the timeline: clips
+				// whose media is gone draw as empty, play nothing, and kill the
+				// export. Swept BEFORE the overlap repair — repairing against items
+				// about to be deleted would push survivors right for nothing.
+				const orphans = pruneOrphanItems(state, new Set(doc.value.media.map((a) => a.id)))
+				if (orphans.length) {
+					doc.value.timeline = state.timeline
+					console.warn(`[editorStore] Dropped ${orphans.length} timeline item(s) whose media is gone`)
+					refreshMetaDuration()
+					markDirty()
+				}
+
+				// Heal any pre-existing same-track overlaps (e.g. from AI accepts
+				// made before overlap repair existed) — persists via autosave.
+				if (repairOverlaps(state)) {
+					console.warn('[editorStore] Repaired overlapping timeline items on load')
+					markDirty()
+				}
 			}
 
 			backgroundTasks.value = (await api.getBackgroundTasks(id)) || {}
@@ -639,16 +656,38 @@ export const useEditorStore = defineStore('editor', () => {
 
 	const removeAsset = async (assetId: string) => {
 		if (!threadId.value || !doc.value) return
+		// Counted before the IPC: the dialog has to say what will actually be lost.
+		const clipCount = doc.value.timeline.filter((i) => i.sourceAssetId === assetId).length
 		const confirmed = await api.showConfirmation({
 			title: 'Remove media',
-			message: 'Remove this media and all its clips from the project?',
-			detail: 'The imported copy and generated thumbnails will be deleted. The original file on disk is not affected.',
+			message: clipCount
+				? `Remove this media and the ${clipCount} clip${clipCount === 1 ? '' : 's'} it has on the timeline?`
+				: 'Remove this media from the project?',
+			detail: clipCount
+				? 'The imported copy and generated thumbnails will be deleted, and those clips will leave gaps you can close with Close gaps. This cannot be undone. The original file on disk is not affected.'
+				: 'The imported copy and generated thumbnails will be deleted. This cannot be undone. The original file on disk is not affected.',
 			buttons: ['Cancel', 'Remove']
 		})
 		if (!confirmed || confirmed.response !== 1) return
 		const success = await api.removeMediaAsset({ threadId: threadId.value, assetId })
 		if (success) {
 			doc.value.media = doc.value.media.filter((a) => a.id !== assetId)
+			// Mirror the purge main already made (editor/assets.ts removeAsset).
+			// Without this the stale timeline goes straight back to disk on the
+			// next autosave and the export dies on a clip with no media.
+			//
+			// No ripple and no history step, deliberately: the asset directory is
+			// gone from disk so the removal cannot be undone, and shifting
+			// survivors here would move them outside the undo ring — which stores
+			// absolute positions — so undoing any EARLIER step would snap them
+			// back and re-open the hole. Main's purge does not ripple either.
+			const state: TimelineState = { tracks: doc.value.tracks, timeline: doc.value.timeline }
+			if (pruneOrphanItems(state, new Set(doc.value.media.map((a) => a.id))).length) {
+				doc.value.timeline = state.timeline
+				refreshMetaDuration()
+				pruneSelection()
+				markDirty()
+			}
 			if (selectedAssetId.value === assetId) selectedAssetId.value = doc.value.media[0]?.id || null
 			if (selectedClip.value?.sourceAssetId === assetId) selectedClipId.value = null
 			if (silenceScan.value?.assetId === assetId) silenceScan.value = null
@@ -893,6 +932,17 @@ export const useEditorStore = defineStore('editor', () => {
 		}
 	): boolean => {
 		if (!doc.value || !threadId.value) return false
+
+		// Log-only tripwire. Nothing here repairs the timeline — repairing after
+		// the diff would leave the doc and its history out of step — but a
+		// gesture or diff that produces an overlap corrupts the export silently,
+		// so surface it on the first drag instead of at export time.
+		if (import.meta.env.DEV) {
+			const bad = findOverlaps(currentState())
+			if (bad.length) {
+				console.warn(`[editorStore] ${options.label || 'edit'} left ${bad.length} overlapping pair(s):`, bad)
+			}
+		}
 
 		let forward: TimelineDiff, inverse: TimelineDiff
 		if (options.prebuilt) {
@@ -1542,8 +1592,17 @@ export const useEditorStore = defineStore('editor', () => {
 
 		// Apply the snapshot
 		const snap = deepClone(target.snapshot)
-		doc.value.tracks = snap.tracks
-		doc.value.timeline = snap.timeline
+		// A revision taken before a media removal still holds that media's clips;
+		// restoring it verbatim would put orphans straight back. Sanitised on the
+		// way in only — the stored revision is a record of what was, not a mirror
+		// of the present, so the sidecar on disk is left untouched.
+		const snapState: TimelineState = { tracks: snap.tracks, timeline: snap.timeline }
+		const dropped = pruneOrphanItems(snapState, new Set(doc.value.media.map((a) => a.id)))
+		if (dropped.length) {
+			console.warn(`[editorStore] V${target.seq}: dropped ${dropped.length} clip(s) whose media is gone`)
+		}
+		doc.value.tracks = snapState.tracks
+		doc.value.timeline = snapState.timeline
 		doc.value.timelineMeta = snap.timelineMeta
 		doc.value.markers = snap.markers || []
 		doc.value.currentRevisionId = id
@@ -1682,10 +1741,15 @@ export const useEditorStore = defineStore('editor', () => {
 				renders.value = { ...renders.value, [tid]: { ...renders.value[tid], renderId: result.renderId } }
 			}
 		} catch (error: any) {
-			// Pre-flight rejection (missing files, empty timeline, …)
+			// Pre-flight rejection (missing files, missing media, empty timeline…).
+			// Strip Electron's "Error invoking remote method '…': Error:" prefix so
+			// the actionable part is what the user actually reads.
 			renders.value = {
 				...renders.value,
-				[tid]: { ...entry, phase: 'error', error: error?.message || 'Export failed to start' }
+				[tid]: {
+					...entry, phase: 'error',
+					error: error?.message?.split('Error: ').pop() || 'Export failed to start'
+				}
 			}
 		}
 	}

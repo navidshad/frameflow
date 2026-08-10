@@ -2,8 +2,9 @@ import fs from 'fs'
 import path from 'path'
 import { setMaxListeners } from 'events'
 import { v4 as uuidv4 } from 'uuid'
-import type { Clip, MediaAsset, SilenceRegion, TranscriptHealth } from '@shared/types'
+import type { Clip, DescriptionHealth, MediaAsset, SilenceRegion, TranscriptHealth } from '@shared/types'
 import { analyzeTranscriptHealth } from '@shared/transcript-health'
+import { MIN_DESCRIBABLE_DURATION } from '../gemini/scene-descriptions'
 import type { PipelineContext } from '../pipeline'
 import { threadManager } from '../threads'
 import { backgroundTaskManager } from '../tasks'
@@ -44,7 +45,11 @@ const AUDIO_STEPS: PreprocessStep[] = ['segment']
 
 // Audio/transcript failures (missing Gemini key, quota) must not brick the
 // import — the chain continues and pieces fall back to scene detection.
-const SOFT_FAIL_STEPS: PreprocessStep[] = ['audio', 'transcript']
+// 'descriptions' is here for a sharper reason: it is an opt-in extra, and
+// flipping preprocessState to 'error' hides the WHOLE Gemini block in the
+// Inspector (Describe and Transcribe), leaving only Retry — which re-runs the
+// default steps and would re-bill a full transcription.
+const SOFT_FAIL_STEPS: PreprocessStep[] = ['audio', 'transcript', 'descriptions']
 
 export const SCENEDETECT_MISSING = 'scenedetect-missing'
 
@@ -645,7 +650,66 @@ async function runDescriptionsStep(threadId: string, assetId: string, signal: Ab
 		}
 	}
 
-	await setTask(threadId, assetId, 'descriptions', { state: 'completed', progress: 100 })
+	const health = await recordDescriptionHealth(threadId, assetId)
+	if (health && health.describable > 0 && health.described === 0) {
+		throw new Error('Scene descriptions failed — no scene could be described.')
+	}
+	await setTask(threadId, assetId, 'descriptions', {
+		state: 'completed',
+		progress: 100,
+		status: health && health.described < health.describable
+			? `${health.described} of ${health.describable} scenes described`
+			: `${health?.described ?? 0} scenes described`
+	})
+}
+
+/**
+ * Score description coverage and store the verdict on the asset.
+ *
+ * Derived from the artifacts rather than plumbed out of the pipeline phase, so
+ * it stays honest for the chat flow too. `describable` uses the SAME threshold
+ * the phase skips on — if the two ever drift, the coverage number lies.
+ */
+async function recordDescriptionHealth(
+	threadId: string,
+	assetId: string
+): Promise<DescriptionHealth | undefined> {
+	const asset = getAsset(threadId, assetId)
+	if (!exists(asset?.preprocessing.sceneTimesPath)) return undefined
+
+	let scenes: { duration: number }[] = []
+	try {
+		scenes = JSON.parse(fs.readFileSync(asset!.preprocessing.sceneTimesPath!, 'utf-8'))
+	} catch {
+		return undefined
+	}
+
+	let described = 0
+	if (exists(asset?.preprocessing.sceneDescriptionsPath)) {
+		try {
+			const rows = JSON.parse(fs.readFileSync(asset!.preprocessing.sceneDescriptionsPath!, 'utf-8'))
+			described = Array.isArray(rows) ? rows.filter((r) => !!r?.description).length : 0
+		} catch { /* unreadable: treated as nothing described */ }
+	}
+
+	const describable = scenes.filter((s) => s.duration >= MIN_DESCRIBABLE_DURATION).length
+	const health: DescriptionHealth = {
+		scenes: scenes.length,
+		describable,
+		described,
+		coverage: describable > 0 ? Math.min(1, described / describable) : 1,
+		checkedAt: Date.now()
+	}
+
+	if (described < describable) {
+		console.warn(
+			`[editor] scene descriptions incomplete for asset ${assetId}: ` +
+			`${described} of ${describable} scenes described`
+		)
+	}
+
+	await patchAsset(threadId, assetId, () => ({ descriptionHealth: health }))
+	return health
 }
 
 async function runAudioStep(threadId: string, assetId: string, signal: AbortSignal) {
@@ -665,8 +729,28 @@ async function runAudioStep(threadId: string, assetId: string, signal: AbortSign
 	await setTask(threadId, assetId, 'audio', { state: 'completed', progress: 100 })
 }
 
-async function runTranscriptStep(threadId: string, assetId: string, signal: AbortSignal) {
+async function runTranscriptStep(
+	threadId: string,
+	assetId: string,
+	signal: AbortSignal,
+	explicit = false
+) {
 	const asset = getAsset(threadId, assetId)!
+
+	// Transcription is the single most expensive step in the app, and the Retry
+	// button re-runs the DEFAULT chain — which includes this one. Without this
+	// guard, one click on Retry after an unrelated failure silently pays for a
+	// full re-transcription of a 45-minute file. Only skip when the work is
+	// visibly complete (artifact on disk AND text on the pieces), and never when
+	// the caller asked for this step by name.
+	if (!explicit && exists(asset.preprocessing.rawTranscriptPath) &&
+		(asset.clips || []).some((c) => !!c.text)) {
+		await setTask(threadId, assetId, 'transcript', {
+			state: 'completed', progress: 100, status: 'Already transcribed'
+		})
+		return
+	}
+
 	if (!exists(asset.preprocessing.audioPath)) {
 		throw new Error('Audio must be extracted before transcription.')
 	}
@@ -904,8 +988,12 @@ export async function preprocessMediaAsset(
 	if (!asset) return
 	if (isAssetPreprocessing(threadId, assetId)) return // already running
 
-	const steps = options?.steps?.length
-		? options.steps
+	// "Explicit" = the caller named the steps (Transcribe/Describe buttons,
+	// repair flows). The default chain is a resume, so steps whose work already
+	// exists skip themselves rather than re-billing for it.
+	const explicitSteps = !!options?.steps?.length
+	const steps = explicitSteps
+		? options!.steps!
 		: asset.kind === 'audio' ? AUDIO_STEPS : DEFAULT_STEPS
 	const controller = new AbortController()
 	// Every ffmpeg call (one per scene thumbnail) attaches an abort listener to
@@ -939,7 +1027,7 @@ export async function preprocessMediaAsset(
 					case 'thumbnails': await runThumbnailsStep(threadId, assetId, signal); break
 					case 'descriptions': await runDescriptionsStep(threadId, assetId, signal); break
 					case 'audio': await runAudioStep(threadId, assetId, signal); break
-					case 'transcript': await runTranscriptStep(threadId, assetId, signal); break
+					case 'transcript': await runTranscriptStep(threadId, assetId, signal, explicitSteps); break
 				// Explicitly requested repair — surfaces its errors, never soft-fails.
 				case 'retranscribe': await runRetranscribeStep(threadId, assetId, signal); break
 					case 'filmstrip': await runFilmstripStep(threadId, assetId, signal); break

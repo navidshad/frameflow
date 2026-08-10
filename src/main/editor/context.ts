@@ -247,12 +247,18 @@ export function buildPromptContext(
 		let anyRecordedAt = false
 		for (const asset of doc.media) {
 			const clips = asset.clips
-			const described = clips.some((c) => !!c.visual)
+			const describedCount = clips.filter((c) => !!c.visual).length
 			const transcribed = clips.some((c) => !!c.text && c.text !== SILENCE_TEXT)
 			const range = clips.length ? ` #${clips[0].index}..#${clips[clips.length - 1].index}` : ''
 			const recorded = recordedWindow(asset)
 			if (recorded) anyRecordedAt = true
-			lines.push(`- Asset ${asset.id} "${asset.name}" ${asset.kind} ${fmt(asset.metadata?.duration || 0)}s — ${clips.length} pieces${range}, transcript: ${transcribed ? 'yes' : 'no'}, descriptions: ${described ? 'yes' : 'no'}${recorded ? `, recorded ${recorded}` : ''}`)
+			// Coverage, not a yes/no: a partial describe run left most pieces
+			// blank, and "yes" would have the model read those blanks as
+			// "nothing on screen here" rather than "not looked at".
+			const described = describedCount === 0
+				? 'no'
+				: describedCount >= clips.length ? 'yes' : `${describedCount}/${clips.length}`
+			lines.push(`- Asset ${asset.id} "${asset.name}" ${asset.kind} ${fmt(asset.metadata?.duration || 0)}s — ${clips.length} pieces${range}, transcript: ${transcribed ? 'yes' : 'no'}, descriptions: ${described}${recorded ? `, recorded ${recorded}` : ''}`)
 		}
 		if (anyRecordedAt) {
 			lines.push('(Assets are listed in IMPORT order, which is not necessarily the order they were')

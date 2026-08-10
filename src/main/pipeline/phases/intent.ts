@@ -88,8 +88,10 @@ export const determineIntent: PipelineFunction = async (data, context) => {
 	if (sceneDescriptionsPath && fs.existsSync(sceneDescriptionsPath)) {
 		// Use Enriched Timeline Segments as primary visual-first context
 		const scenes = JSON.parse(fs.readFileSync(sceneDescriptionsPath, 'utf-8'));
-		videoContextText = `ENRICHED TIMELINE SEGMENTS (Scene Descriptions):\n` + 
-			scenes.map((s: any, idx: number) => `Scene ${idx+1} [${s.start} - ${s.end}]: ${s.description}`).join('\n');
+		// The records carry startTime — `start`/`end` were never written, so every
+		// line used to render as "[undefined - undefined]" into the prompt.
+		videoContextText = `ENRICHED TIMELINE SEGMENTS (Scene Descriptions):\n` +
+			scenes.map((s: any, idx: number) => `Scene ${idx+1} [${(s.startTime ?? 0).toFixed(1)}s]: ${s.description}`).join('\n');
 	} else if (transcriptPath && fs.existsSync(transcriptPath)) {
 		// Fallback to audio transcript if scenes are missing
 		const transcript: TranscriptItem[] = JSON.parse(fs.readFileSync(transcriptPath, 'utf-8'));

@@ -222,7 +222,21 @@ export interface MediaAsset {
 	clips: Clip[]               // derived from scene detection
 	filmstrip?: FilmstripEntry[]
 	transcriptHealth?: TranscriptHealth  // set by the transcript step
+	descriptionHealth?: DescriptionHealth  // set by the descriptions step
 	createdAt: number
+}
+
+/**
+ * Scene-description coverage for one asset. Mirrors TranscriptHealth: score the
+ * artifact, store the verdict on the asset, surface it in the Inspector — so a
+ * run that only half worked cannot report itself as done.
+ */
+export interface DescriptionHealth {
+	scenes: number              // rows in scenes.json
+	describable: number         // scenes long enough to be worth a frame
+	described: number           // scenes that actually got a description
+	coverage: number            // described / describable — 1 is complete
+	checkedAt: number
 }
 
 export interface FilmstripEntry { time: number; thumbnailPath: string }

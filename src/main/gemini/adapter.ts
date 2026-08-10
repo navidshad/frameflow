@@ -507,11 +507,27 @@ export class GeminiAdapter {
 		imageUris: string[],
 		schema: any,
 		signal?: AbortSignal,
-		options?: { includeThinking?: boolean }
-	): Promise<{ data: T, record: UsageRecord }> {
-		const parts: any[] = imageUris.map(uri => ({
-			fileData: { fileUri: uri, mimeType: 'image/jpeg' }
-		}));
+		options?: {
+			includeThinking?: boolean
+			/**
+			 * One label per image, emitted as a text part immediately BEFORE it, so
+			 * the model can COPY an identifier back rather than counting positions.
+			 */
+			labels?: string[]
+			maxOutputTokens?: number
+			/**
+			 * Called with the usage record BEFORE the body is parsed — a response
+			 * that comes back malformed still billed for the tokens it burned.
+			 */
+			onUsage?: (record: UsageRecord) => void
+		}
+	): Promise<{ data: T, record: UsageRecord, finishReason?: string }> {
+		const parts: any[] = [];
+		imageUris.forEach((uri, i) => {
+			const label = options?.labels?.[i];
+			if (label) parts.push({ text: label });
+			parts.push({ fileData: { fileUri: uri, mimeType: 'image/jpeg' } });
+		});
 		parts.push({ text: userPrompt });
 
 		const contents = [{ role: 'user', parts }];
@@ -525,6 +541,13 @@ export class GeminiAdapter {
 			}
 		};
 
+		// Thinking draws from the SAME output budget on Gemini 3, so an unbounded
+		// thinking pass can starve the JSON body — which then fails to parse below
+		// with no hint of the cause. finishReason (returned) is the other tell.
+		if (options?.maxOutputTokens != null) {
+			(request.config as any).maxOutputTokens = options.maxOutputTokens;
+		}
+
 		const response = await this.withRetry(
 			() => (this.client.models as any).generateContent(request, { signal }) as Promise<any>,
 			signal
@@ -533,18 +556,24 @@ export class GeminiAdapter {
 		const usage = this.extractUsage(response);
 		const cost = GeminiAdapter.calculateCost(modelName, usage, 0, imageUris.length);
 		const text = this.extractResultText(response);
+		const finishReason = response?.candidates?.[0]?.finishReason;
+
+		// Bank the usage BEFORE parsing: the call is paid for either way.
+		options?.onUsage?.({ usage, cost });
 
 		try {
 			return {
 				data: JSON.parse(text) as T,
-				record: { usage, cost }
+				record: { usage, cost },
+				finishReason
 			};
-		} catch (parseError) {
-			console.error(`[GEMINI ADAPTER] Failed to parse structured response:`, text);
-			throw parseError;
+		} catch (parseError: any) {
+			console.error(`[GEMINI ADAPTER] Failed to parse structured response (finishReason: ${finishReason}):`, text);
+			throw new Error(
+				`Model response was not valid JSON${finishReason ? ` (finishReason: ${finishReason})` : ''}: ` +
+				`${parseError?.message || parseError}`
+			);
 		}
-
-		throw new Error('Unexpected fallthrough in generateStructuredFromImages');
 	}
 
 	/**
