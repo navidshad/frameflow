@@ -736,6 +736,24 @@ export const useEditorStore = defineStore('editor', () => {
 	}
 	watch([timelineView, () => doc.value?.timeline.length], () => ensureFilmstrips())
 
+	/**
+	 * Repair assets whose pieces lost their thumbnails (a re-transcribe used to
+	 * clear them). Local ffmpeg only — no Gemini, no cost. Runs once per asset.
+	 */
+	const thumbnailsRequested = new Set<string>()
+	const ensureThumbnails = () => {
+		if (!threadId.value || !doc.value) return
+		for (const asset of doc.value.media) {
+			if (asset.preprocessState !== 'completed') continue
+			if (!asset.clips?.length || thumbnailsRequested.has(asset.id)) continue
+			if (asset.clips.some((c) => !!c.thumbnailPath)) continue
+			thumbnailsRequested.add(asset.id)
+			console.warn(`[editorStore] ${asset.name} has no piece thumbnails — regenerating`)
+			api.preprocessMedia({ threadId: threadId.value, assetId: asset.id, steps: ['thumbnails'] })
+		}
+	}
+	watch(() => doc.value?.media.map((a) => a.id).join(','), () => ensureThumbnails())
+
 	/** Re-run scene detection with a custom threshold (lower = more pieces). */
 	const redetectScenes = async (assetId: string, threshold: number) => {
 		if (!threadId.value) return

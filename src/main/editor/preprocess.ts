@@ -517,9 +517,13 @@ async function runThumbnailsStep(threadId: string, assetId: string, signal: Abor
 	const asset = getAsset(threadId, assetId)!
 	// Thumbnails follow the CLIPS (whatever derived them — transcript segments
 	// or scene detection), one midpoint frame per piece.
-	const targets = (asset.clips || []).map((c) => ({ id: c.id, midpoint: c.in + c.duration / 2 }))
+	// Skip pieces that already have a thumbnail on disk, so re-running this after
+	// a re-transcribe only fills the gaps instead of re-extracting every frame.
+	const targets = (asset.clips || [])
+		.filter((c) => !(c.thumbnailPath && fs.existsSync(c.thumbnailPath)))
+		.map((c) => ({ id: c.id, midpoint: c.in + c.duration / 2 }))
 	if (targets.length === 0) {
-		await setTask(threadId, assetId, 'thumbnails', { state: 'completed', status: 'No pieces to thumbnail' })
+		await setTask(threadId, assetId, 'thumbnails', { state: 'completed', progress: 100, status: 'Thumbnails ready' })
 		return
 	}
 
@@ -786,8 +790,10 @@ async function runRetranscribeStep(threadId: string, assetId: string, signal: Ab
 	})
 
 	if (fromTranscript) {
-		// Drop the old pieces so derivation cannot inherit their bounds.
-		await patchAsset(threadId, assetId, () => ({ clips: [] }))
+		// Do NOT clear the pieces first: derivation takes its bounds from the new
+		// transcript regardless, and it uses the existing pieces to carry over
+		// thumbnails and descriptions for segments that did not move. Wiping them
+		// threw away every thumbnail on the asset.
 		const derived = await deriveClipsFromTranscript(threadId, assetId)
 		if (derived === 0) {
 			throw new Error('The corrected transcript had no usable speech segments.')
@@ -795,6 +801,9 @@ async function runRetranscribeStep(threadId: string, assetId: string, signal: Ab
 	} else {
 		await mergeTranscriptIntoClips(threadId, assetId)
 	}
+
+	// Segments that shifted have no thumbnail to inherit — fill those in.
+	await runThumbnailsStep(threadId, assetId, signal)
 
 	const health = await recordTranscriptHealth(threadId, assetId)
 	await setTask(threadId, assetId, 'retranscribe', {
