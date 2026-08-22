@@ -9,17 +9,14 @@
 			</svg>
 		</div>
 		<h3 class="text-xl font-bold text-zinc-900 dark:text-white mb-2">No videos yet</h3>
-		<p class="text-zinc-500 dark:text-zinc-400 max-w-md mx-auto mb-8">
-			Start by creating a new edit to summarize and chat with a video.
+		<p class="text-zinc-500 dark:text-zinc-400 max-w-md mx-auto">
+			Pick how you want to start below — summarize and chat with a video, build an
+			image edit, or cut clips on the timeline in the video editor.
 		</p>
-		<Button @click="$emit('create')" variant="secondary" size="lg">
-			Create Your First Edit
-		</Button>
 	</div>
 </template>
 
 <script setup lang="ts">
-import { Button } from 'pilotui/elements'
-
-defineEmits(['create'])
+// Intro copy only: the ways to start are the cards rendered directly below it,
+// so the empty state can never offer a different set of actions than the grid.
 </script>

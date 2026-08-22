@@ -194,7 +194,13 @@ export class GeminiAdapter {
 		systemInstruction?: string,
 		signal?: AbortSignal,
 		imagePaths?: string[],
-		options?: { includeThinking?: boolean }
+		options?: {
+			includeThinking?: boolean
+			maxOutputTokens?: number
+			thinkingBudget?: number
+			thinkingLevel?: 'LOW' | 'MEDIUM' | 'HIGH'
+			temperature?: number
+		}
 	): Promise<{ data: T, record: UsageRecord }> {
 		const parts: any[] = []
 
@@ -238,6 +244,23 @@ export class GeminiAdapter {
 			};
 		}
 
+		// Explicit generation limits. Thinking draws from the SAME output budget on
+		// Gemini 3, so an unbounded thinking pass can starve the JSON body — the
+		// truncated body then fails to parse below with no hint of the cause.
+		// Thinking tokens also bill at the OUTPUT rate (see calculateCost).
+		if (options?.maxOutputTokens != null) {
+			(request.config as any).maxOutputTokens = options.maxOutputTokens;
+		}
+		if (options?.temperature != null) {
+			(request.config as any).temperature = options.temperature;
+		}
+		if (options?.thinkingLevel || options?.thinkingBudget != null) {
+			const thinkingConfig = (request.config as any).thinkingConfig || {};
+			if (options.thinkingLevel) thinkingConfig.thinkingLevel = options.thinkingLevel;
+			if (options.thinkingBudget != null) thinkingConfig.thinkingBudget = options.thinkingBudget;
+			(request.config as any).thinkingConfig = thinkingConfig;
+		}
+
 		const response = await this.withRetry(
 			() => (this.client.models as any).generateContent(request, { signal }) as Promise<any>,
 			signal
@@ -252,12 +275,15 @@ export class GeminiAdapter {
 				data: JSON.parse(text) as T,
 				record: { usage, cost }
 			};
-		} catch (parseError) {
-			console.error(`[GEMINI ADAPTER] Failed to parse structured response:`, text);
-			throw parseError;
+		} catch (parseError: any) {
+			const finishReason = response?.candidates?.[0]?.finishReason;
+			console.error(`[GEMINI ADAPTER] Failed to parse structured response (finishReason: ${finishReason}):`, text);
+			// MAX_TOKENS is by far the most common cause on long structured outputs —
+			// surface it instead of a bare "Unexpected end of JSON input".
+			throw new Error(
+				`Model response was not valid JSON${finishReason ? ` (finishReason: ${finishReason})` : ''}: ${parseError?.message || parseError}`
+			);
 		}
-
-		throw new Error('Unexpected fallthrough in generateStructuredText');
 	}
 
 	/**
@@ -312,8 +338,9 @@ export class GeminiAdapter {
 		fileUris: string[],
 		systemInstruction?: string,
 		audioDuration: number = 0,
-		signal?: AbortSignal
-	): Promise<{ text: string, record: UsageRecord }> {
+		signal?: AbortSignal,
+		options?: { maxOutputTokens?: number; temperature?: number }
+	): Promise<{ text: string, record: UsageRecord, finishReason?: string }> {
 		const contents = [
 			{
 				role: 'user',
@@ -335,6 +362,16 @@ export class GeminiAdapter {
 			};
 		}
 
+		// A long transcript is a LOT of output tokens. Without an explicit ceiling
+		// the model stops at its default and returns a transcript that looks
+		// well-formed but covers only the first few minutes of the audio.
+		if (options?.maxOutputTokens != null || options?.temperature != null) {
+			const config = (request.config || {}) as any;
+			if (options.maxOutputTokens != null) config.maxOutputTokens = options.maxOutputTokens;
+			if (options.temperature != null) config.temperature = options.temperature;
+			request.config = config;
+		}
+
 		try {
 			const response = await this.withRetry(
 				() => (this.client.models as any).generateContent(request, { signal }) as Promise<any>,
@@ -342,10 +379,17 @@ export class GeminiAdapter {
 			);
 			const usage = this.extractUsage(response);
 			const cost = GeminiAdapter.calculateCost(modelName, usage, audioDuration);
+			const finishReason = response?.candidates?.[0]?.finishReason;
+			if (finishReason && finishReason !== 'STOP') {
+				console.warn(`[GEMINI ADAPTER] generateTextFromFiles finished with ${finishReason} — output may be incomplete`);
+			}
 
 			return {
 				text: this.extractResultText(response),
-				record: { usage, cost }
+				record: { usage, cost },
+				// Callers need this: MAX_TOKENS means the text is a PREFIX of the
+				// real answer, which for a transcript looks perfectly well-formed.
+				finishReason
 			};
 		} catch (error) {
 			if (signal?.aborted) throw error;
@@ -463,11 +507,27 @@ export class GeminiAdapter {
 		imageUris: string[],
 		schema: any,
 		signal?: AbortSignal,
-		options?: { includeThinking?: boolean }
-	): Promise<{ data: T, record: UsageRecord }> {
-		const parts: any[] = imageUris.map(uri => ({
-			fileData: { fileUri: uri, mimeType: 'image/jpeg' }
-		}));
+		options?: {
+			includeThinking?: boolean
+			/**
+			 * One label per image, emitted as a text part immediately BEFORE it, so
+			 * the model can COPY an identifier back rather than counting positions.
+			 */
+			labels?: string[]
+			maxOutputTokens?: number
+			/**
+			 * Called with the usage record BEFORE the body is parsed — a response
+			 * that comes back malformed still billed for the tokens it burned.
+			 */
+			onUsage?: (record: UsageRecord) => void
+		}
+	): Promise<{ data: T, record: UsageRecord, finishReason?: string }> {
+		const parts: any[] = [];
+		imageUris.forEach((uri, i) => {
+			const label = options?.labels?.[i];
+			if (label) parts.push({ text: label });
+			parts.push({ fileData: { fileUri: uri, mimeType: 'image/jpeg' } });
+		});
 		parts.push({ text: userPrompt });
 
 		const contents = [{ role: 'user', parts }];
@@ -481,6 +541,13 @@ export class GeminiAdapter {
 			}
 		};
 
+		// Thinking draws from the SAME output budget on Gemini 3, so an unbounded
+		// thinking pass can starve the JSON body — which then fails to parse below
+		// with no hint of the cause. finishReason (returned) is the other tell.
+		if (options?.maxOutputTokens != null) {
+			(request.config as any).maxOutputTokens = options.maxOutputTokens;
+		}
+
 		const response = await this.withRetry(
 			() => (this.client.models as any).generateContent(request, { signal }) as Promise<any>,
 			signal
@@ -489,18 +556,24 @@ export class GeminiAdapter {
 		const usage = this.extractUsage(response);
 		const cost = GeminiAdapter.calculateCost(modelName, usage, 0, imageUris.length);
 		const text = this.extractResultText(response);
+		const finishReason = response?.candidates?.[0]?.finishReason;
+
+		// Bank the usage BEFORE parsing: the call is paid for either way.
+		options?.onUsage?.({ usage, cost });
 
 		try {
 			return {
 				data: JSON.parse(text) as T,
-				record: { usage, cost }
+				record: { usage, cost },
+				finishReason
 			};
-		} catch (parseError) {
-			console.error(`[GEMINI ADAPTER] Failed to parse structured response:`, text);
-			throw parseError;
+		} catch (parseError: any) {
+			console.error(`[GEMINI ADAPTER] Failed to parse structured response (finishReason: ${finishReason}):`, text);
+			throw new Error(
+				`Model response was not valid JSON${finishReason ? ` (finishReason: ${finishReason})` : ''}: ` +
+				`${parseError?.message || parseError}`
+			);
 		}
-
-		throw new Error('Unexpected fallthrough in generateStructuredFromImages');
 	}
 
 	/**

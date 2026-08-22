@@ -78,9 +78,9 @@ export function clipToItem(clip: Clip, trackId: string, timelineStart: number): 
 const ITEM_FIELDS: (keyof TimelineItem)[] = [
 	'trackId', 'sourceAssetId', 'sourceClipId', 'masterSegmentIndex',
 	'timelineStart', 'in', 'out', 'speed', 'preservePitch', 'duration',
-	'label', 'gain', 'muted'
+	'label', 'gain', 'muted', 'fadeInSec', 'fadeOutSec'
 ]
-const TRACK_FIELDS: (keyof Track)[] = ['kind', 'name', 'order', 'muted', 'locked', 'hidden', 'height']
+const TRACK_FIELDS: (keyof Track)[] = ['kind', 'name', 'order', 'muted', 'locked', 'hidden', 'height', 'gain']
 
 function changedFields<T extends { id: string }>(before: T, after: T, fields: (keyof T)[]): Partial<T> | null {
 	let changed: Partial<T> | null = null
@@ -207,6 +207,265 @@ export function repairOverlaps(state: TimelineState, eps = MIN_ITEM_DURATION): b
 	return changed
 }
 
+export interface TrimOptions {
+	/** Alt-drag: downstream items absorb the length change (magnetic). */
+	ripple?: boolean
+	/** Source asset duration — the out-point can never run past it. */
+	sourceDuration?: number
+	minDuration?: number
+}
+
+export interface TrimSolution {
+	/** New absolute geometry for the trimmed item. */
+	item: { id: string; timelineStart: number; in: number; out: number; duration: number }
+	/**
+	 * New absolute start for every same-track item after it. Present even when
+	 * NOT rippling (unchanged values) so a caller that drops out of ripple mode
+	 * mid-gesture puts the followers back where they were.
+	 */
+	shifts: { id: string; timelineStart: number }[]
+	/** Seconds the trim added (+) or freed (-). */
+	delta: number
+}
+
+/**
+ * Solves one trim against the timeline as it was when the gesture STARTED.
+ *
+ * Pure and absolute: the answer depends only on (snapshot, edge, pointer), so
+ * every tick of a drag recomputes the whole layout instead of stacking another
+ * increment onto the last tick's result. That is what makes a drag idempotent —
+ * drag out and back and you land on exactly the values you started with.
+ *
+ * Ripple mode PINS the item's start and lets its LENGTH change: trimming the
+ * head keeps the clip butted where it was and pulls its tail — and every clip
+ * after it — up. That is what deleteItems, setItemSpeed and the AI diff path
+ * (editor/ops.ts) already do. A head trim that moved the start instead would
+ * shift the followers by time freed at an edge that never moved, overlapping
+ * the next clip by exactly the amount trimmed.
+ *
+ * Returns null when the clamps leave no legal position.
+ */
+export function solveTrim(
+	before: TimelineState,
+	itemId: string,
+	edge: 'left' | 'right',
+	pointerSec: number,
+	opts: TrimOptions = {}
+): TrimSolution | null {
+	const item = before.timeline.find((i) => i.id === itemId)
+	if (!item) return null
+
+	const min = opts.minDuration ?? MIN_ITEM_DURATION
+	const speed = item.speed || 1
+	const start0 = item.timelineStart
+	const end0 = start0 + itemDuration(item)
+	const others = before.timeline.filter((o) => o.id !== itemId && o.trackId === item.trackId)
+
+	let start = start0
+	let inPoint = item.in
+	let outPoint = item.out
+
+	if (edge === 'left') {
+		// Floor: t=0, the previous clip's tail, and the head of the source.
+		// Ceiling: leave at least `min` on the timeline. A ripple shifts what
+		// comes AFTER, so the predecessor clamp applies in both modes.
+		const prevEnd = others
+			.filter((o) => itemEnd(o) <= start0 + 1e-6)
+			.reduce((max, o) => Math.max(max, itemEnd(o)), 0)
+		const floor = Math.max(0, prevEnd, start0 - item.in / speed)
+		const ceiling = end0 - min
+		if (floor > ceiling) return null
+		start = Math.min(Math.max(pointerSec, floor), ceiling)
+		inPoint = item.in + (start - start0) * speed
+	} else {
+		// Ceiling: the source tail, plus the next clip's head unless we ripple
+		// (a ripple pushes it instead). Math.max(sourceEnd, item.out) so a clip
+		// whose out already exceeds the probed duration is never shrunk by it.
+		const sourceEnd = opts.sourceDuration ?? Number.POSITIVE_INFINITY
+		const nextStart = opts.ripple
+			? Number.POSITIVE_INFINITY
+			: others
+				.filter((o) => o.timelineStart >= end0 - 1e-6)
+				.reduce((m, o) => Math.min(m, o.timelineStart), Number.POSITIVE_INFINITY)
+		const floor = start0 + min
+		const ceiling = Math.min(nextStart, start0 + (Math.max(sourceEnd, item.out) - item.in) / speed)
+		if (floor > ceiling) return null
+		outPoint = item.in + (Math.min(Math.max(pointerSec, floor), ceiling) - start0) * speed
+	}
+
+	const duration = (outPoint - inPoint) / speed
+	const delta = duration - itemDuration(item)
+	const shift = opts.ripple ? delta : 0
+
+	return {
+		item: {
+			id: itemId,
+			// Rippling pins the head: the LENGTH change is what moves.
+			// `start === start0` on the right branch, so this is right for both.
+			timelineStart: opts.ripple ? start0 : start,
+			in: inPoint,
+			out: outPoint,
+			duration
+		},
+		shifts: others
+			.filter((o) => o.timelineStart > start0)
+			.map((o) => ({ id: o.id, timelineStart: Math.max(0, o.timelineStart + shift) })),
+		delta
+	}
+}
+
+/** Same-track item pairs that overlap. Diagnostic only — nothing is mutated. */
+export function findOverlaps(state: TimelineState, eps = 1e-6): [string, string][] {
+	const pairs: [string, string][] = []
+	const byTrack = new Map<string, TimelineItem[]>()
+	for (const item of state.timeline) {
+		const list = byTrack.get(item.trackId) || []
+		list.push(item)
+		byTrack.set(item.trackId, list)
+	}
+	for (const items of byTrack.values()) {
+		const sorted = [...items].sort((a, b) => a.timelineStart - b.timelineStart)
+		for (let i = 1; i < sorted.length; i++) {
+			if (sorted[i].timelineStart < itemEnd(sorted[i - 1]) - eps) {
+				pairs.push([sorted[i - 1].id, sorted[i].id])
+			}
+		}
+	}
+	return pairs
+}
+
+/**
+ * Timeline items whose source asset is gone (removed media). Orphans draw as
+ * empty clips, play nothing, and make the export engine throw, so every path
+ * that could introduce one sweeps first.
+ *
+ * `sourceAssetId` is the ONLY link checked. sourceClipId legitimately dangles —
+ * a scene re-detect rebuilds every Clip id, and merged range items clear it on
+ * purpose — while the item is still perfectly renderable from its own in/out.
+ */
+export function findOrphanItems(
+	items: readonly TimelineItem[],
+	assetIds: ReadonlySet<string>
+): TimelineItem[] {
+	return items.filter((item) => !assetIds.has(item.sourceAssetId))
+}
+
+/**
+ * Drops orphan items from a state IN PLACE; returns what was removed.
+ *
+ * Positions are deliberately NOT rippled: main purges the same way when the
+ * asset is removed (editor/assets.ts), and a purge that moved survivors would
+ * make the two sides disagree — and would invalidate the absolute
+ * timelineStart values already recorded in the undo ring.
+ *
+ * NOTE this REASSIGNS state.timeline (like applyTimelineDiff, unlike
+ * repairOverlaps): callers holding their own array must write it back.
+ */
+export function pruneOrphanItems(
+	state: TimelineState,
+	assetIds: ReadonlySet<string>
+): TimelineItem[] {
+	const orphans = findOrphanItems(state.timeline, assetIds)
+	if (orphans.length) {
+		const dead = new Set(orphans.map((i) => i.id))
+		state.timeline = state.timeline.filter((i) => !dead.has(i.id))
+	}
+	return orphans
+}
+
+/**
+ * One edit that changed how much time a track occupies at a point: a removal
+ * (negative delta) or a retime/trim that made a clip shorter or longer.
+ */
+export interface RippleChange {
+	trackId: string
+	/** Where on the timeline the change happened. */
+	at: number
+	/** Seconds gained (+) or freed (-) at that point. */
+	delta: number
+}
+
+/**
+ * Shift items by the time that edits before them freed or consumed — the
+ * magnetic behaviour manual editing already has (deleteItems ripples on
+ * delete, setItemSpeed ripples on retime). Without it, shortening or removing
+ * anything leaves a hole in the timeline.
+ *
+ * Conservative on purpose: only the time an edit actually changed moves, so a
+ * gap nobody touched survives. Use closeTimelineGaps for a full reflow.
+ * Returns true if anything moved.
+ */
+export function rippleTimeline(
+	items: TimelineItem[],
+	changes: RippleChange[],
+	pinnedIds?: ReadonlySet<string>
+): boolean {
+	if (!changes.length) return false
+	let moved = false
+	for (const item of items) {
+		if (pinnedIds?.has(item.id)) continue
+		const shift = changes
+			.filter((c) => c.trackId === item.trackId && c.at < item.timelineStart)
+			.reduce((sum, c) => sum + c.delta, 0)
+		if (Math.abs(shift) > 1e-9) {
+			item.timelineStart = Math.max(0, item.timelineStart + shift)
+			moved = true
+		}
+	}
+	return moved
+}
+
+/** rippleTimeline for the common case: items were deleted. */
+export function rippleAfterRemoval(items: TimelineItem[], removed: TimelineItem[]): boolean {
+	return rippleTimeline(items, removed.map((r) => ({
+		trackId: r.trackId,
+		at: r.timelineStart,
+		delta: -itemDuration(r)
+	})))
+}
+
+/**
+ * Make each track's items run back to back from the start, closing every gap
+ * (and any overlap) in one pass. Unlike repairOverlaps, this pulls items LEFT.
+ * Returns true if anything moved.
+ */
+export function closeTimelineGaps(
+	state: TimelineState,
+	opts: { trackIds?: string[]; eps?: number } = {}
+): boolean {
+	const eps = opts.eps ?? MIN_ITEM_DURATION
+	const only = opts.trackIds?.length ? new Set(opts.trackIds) : null
+	// A locked track is the user saying "do not move this" — reflowing a locked
+	// music bed to t=0 would knock it out of sync with picture. Hidden tracks
+	// are skipped too: never silently rearrange what cannot be seen.
+	const protectedTracks = new Set(
+		state.tracks.filter((t) => t.locked || t.hidden).map((t) => t.id)
+	)
+	let changed = false
+
+	const byTrack = new Map<string, TimelineItem[]>()
+	for (const item of state.timeline) {
+		if (only && !only.has(item.trackId)) continue
+		if (protectedTracks.has(item.trackId)) continue
+		const list = byTrack.get(item.trackId) || []
+		list.push(item)
+		byTrack.set(item.trackId, list)
+	}
+
+	for (const items of byTrack.values()) {
+		items.sort((a, b) => a.timelineStart - b.timelineStart)
+		let cursor = 0
+		for (const item of items) {
+			if (Math.abs(item.timelineStart - cursor) > eps) {
+				item.timelineStart = cursor
+				changed = true
+			}
+			cursor = itemEnd(item)
+		}
+	}
+	return changed
+}
+
 /**
  * Applies a TimelineDiff to a state IN PLACE, with validation (PRD §5.7):
  * unknown schemaVersion rejected wholesale; unknown ids skipped (reported);
@@ -224,13 +483,15 @@ export function applyTimelineDiff(
 		return { ok: false, errors: [`Unknown TimelineDiff schemaVersion ${diff.schemaVersion}`] }
 	}
 
-	const assetById = new Map((assets || []).map((a) => [a.id, a]))
+	// null when no assets were supplied, so "not supplied" and "supplied but
+	// empty" stay distinguishable — the add check below is opt-in.
+	const assetById = assets ? new Map(assets.map((a) => [a.id, a])) : null
 
 	const validateRange = (item: Pick<TimelineItem, 'sourceAssetId' | 'in' | 'out'>): string | null => {
 		if (item.in < 0 || item.out <= item.in) {
 			return `invalid range in=${item.in} out=${item.out}`
 		}
-		const asset = assetById.get(item.sourceAssetId)
+		const asset = assetById?.get(item.sourceAssetId)
 		if (asset?.metadata?.duration && item.out > asset.metadata.duration + 0.01) {
 			return `out=${item.out} exceeds asset duration ${asset.metadata.duration}`
 		}
@@ -239,7 +500,17 @@ export function applyTimelineDiff(
 
 	const normalize = (item: TimelineItem): TimelineItem => {
 		const speed = clampSpeed(item.speed || 1)
-		return { ...item, speed, duration: (item.out - item.in) / speed }
+		const duration = (item.out - item.in) / speed
+		const clampFade = (v: number | undefined) =>
+			typeof v === 'number' && Number.isFinite(v) && v > 0 ? Math.min(v, duration) : undefined
+		const gain = typeof item.gain === 'number' && Number.isFinite(item.gain)
+			? Math.max(0, Math.min(2, item.gain))
+			: undefined
+		return {
+			...item, speed, duration, gain,
+			fadeInSec: clampFade(item.fadeInSec),
+			fadeOutSec: clampFade(item.fadeOutSec)
+		}
 	}
 
 	// Removals before additions (track-update encoding relies on this order).
@@ -269,6 +540,15 @@ export function applyTimelineDiff(
 		for (const item of diff.addItems) {
 			if (state.timeline.some((i) => i.id === item.id)) {
 				errors.push(`addItems: duplicate id ${item.id} skipped`)
+				continue
+			}
+			// An add for media that is no longer in the project is stale by
+			// definition. The undo ring stores full item clones in its inverse,
+			// so undoing an edit made BEFORE a media removal would otherwise put
+			// orphans straight back. Adds only — updates on an existing orphan
+			// still apply, so a pre-fix doc stays editable.
+			if (assetById && !assetById.has(item.sourceAssetId)) {
+				errors.push(`addItems ${item.id}: media asset ${item.sourceAssetId} is not in the project`)
 				continue
 			}
 			const rangeError = validateRange(item)

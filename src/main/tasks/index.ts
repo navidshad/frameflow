@@ -229,11 +229,27 @@ class BackgroundTaskManager extends EventEmitter {
 
 		// Chain 3: Enrichment (Wait for BOTH)
 		const enrichmentChain = async () => {
-			// Don't catch here - if dependencies fail, this chain should not proceed
-			await Promise.all([
-				this.waitForTask(threadId, 'correctedTranscript'),
-				this.waitForTask(threadId, 'sceneDescriptions')
-			])
+			// A dependency failure must not just abandon this chain. waitForTask
+			// resolves off a task-update EVENT, so anything waiting on 'enrichment'
+			// (generation.waitForEnrichTranscript) would wait on a record that is
+			// now never created — a promise that never settles, and a
+			// generate-timeline request that hangs with no error and no timeout.
+			// Record the failure instead, so waiters reject.
+			try {
+				await Promise.all([
+					this.waitForTask(threadId, 'correctedTranscript'),
+					this.waitForTask(threadId, 'sceneDescriptions')
+				])
+			} catch (error) {
+				const message = error instanceof Error ? error.message : String(error)
+				console.error(`[BACKGROUND] enrichment dependencies failed for ${threadId}:`, message)
+				await this.updateTask(threadId, 'enrichment', {
+					name: 'Unifying Visuals & Text',
+					state: 'error',
+					error: `Cannot unify visuals and text: ${message}`
+				})
+				return
+			}
 
 			const currentThread = threadManager.getThread(threadId)
 			if (!currentThread) return

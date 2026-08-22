@@ -7,7 +7,8 @@ import type {
 } from '@shared/types'
 import {
 	applyTimelineDiff, clampSpeed, clipToItem, computeContentEnd,
-	diffTimelines, itemDuration, itemEnd, itemFromAsset, repairOverlaps,
+	closeTimelineGaps, diffTimelines, findOverlaps, itemDuration, itemEnd, itemFromAsset,
+	pruneOrphanItems, repairOverlaps,
 	type TimelineState
 } from '@shared/timeline'
 import { computeScope } from '@shared/ai-scope'
@@ -86,14 +87,27 @@ export const useEditorStore = defineStore('editor', () => {
 	}
 	const lastResult = ref<AiResult | null>(null)
 
-	// ===== Export / render (M4) =====
-	const renderState = ref<{
+	// ===== Export / render (M4 + background exports) =====
+	// Renders are keyed by THREAD id and survive project switches: the render
+	// itself runs in main off an in-memory snapshot, so the user can keep
+	// editing or load another project while it finishes. This map is
+	// session-global — loadProject must NOT reset it.
+	interface RenderEntry {
+		threadId: string
+		title: string
 		renderId: string
 		percent: number
 		phase: 'rendering' | 'stitching' | 'done' | 'error'
 		outputPath?: string
 		error?: string
-	} | null>(null)
+		startedAt: number
+	}
+	const renders = ref<Record<string, RenderEntry>>({})
+
+	/** The CURRENT project's render state (compat shim for header/dialog). */
+	const renderState = computed<RenderEntry | null>(() =>
+		(threadId.value && renders.value[threadId.value]) || null
+	)
 
 	let autosaveTimer: ReturnType<typeof setTimeout> | null = null
 
@@ -114,7 +128,8 @@ export const useEditorStore = defineStore('editor', () => {
 		return null
 	})
 
-	const STEP_ORDER = ['proxy', 'scenes', 'thumbnails', 'descriptions']
+	// Chain order, so a running task list reads top-to-bottom like the pipeline.
+	const STEP_ORDER = ['proxy', 'audio', 'transcript', 'retranscribe', 'scenes', 'thumbnails', 'descriptions']
 
 	const assetTasks = (assetId: string): BackgroundTask[] => {
 		const prefix = `${assetId}:`
@@ -215,7 +230,9 @@ export const useEditorStore = defineStore('editor', () => {
 					sourceIn: item.in,
 					speed: item.speed || 1,
 					muted: !!item.muted || !!trackMuted.get(item.trackId),
-					gain: item.gain ?? 1
+					gain: item.gain ?? 1,
+					fadeInSec: item.fadeInSec ?? 0,
+					fadeOutSec: item.fadeOutSec ?? 0
 				}]
 			})
 	})
@@ -272,7 +289,31 @@ export const useEditorStore = defineStore('editor', () => {
 		})
 	})
 
+	// ===== Model selection (display only) =====
+	const modelSelection = ref<Record<string, string>>({})
+	const modelMetadata = ref<Record<string, { label: string }>>({})
+
+	/**
+	 * Friendly name of the model configured for an operation, e.g.
+	 * modelLabelFor('corrected-transcript') -> "Gemini 2.5 Pro".
+	 * Falls back to plain "Gemini" so a label never renders blank.
+	 */
+	const modelLabelFor = (operation: string): string => {
+		const id = modelSelection.value[operation]
+		if (!id) return 'Gemini'
+		return modelMetadata.value[id]?.label || id
+	}
+
 	// ===== Revision computeds =====
+	/** Markers are compared by position and label — ids are not meaningful here. */
+	const markersDiffer = (a: EditorMarker[], b: EditorMarker[]): boolean => {
+		if (a.length !== b.length) return true
+		const key = (m: EditorMarker) => `${Math.round(m.time * 1000)}|${m.label || ''}`
+		const left = [...a].map(key).sort()
+		const right = [...b].map(key).sort()
+		return left.some((value, index) => value !== right[index])
+	}
+
 	const currentRevision = computed<EditorRevision | null>(() =>
 		revisions.value.find((r) => r.id === doc.value?.currentRevisionId) || null
 	)
@@ -281,10 +322,14 @@ export const useEditorStore = defineStore('editor', () => {
 	const revisionDirty = computed(() => {
 		const rev = currentRevision.value
 		if (!rev || !doc.value) return false
-		return diffTimelines(
+		if (diffTimelines(
 			{ tracks: rev.snapshot.tracks, timeline: rev.snapshot.timeline },
 			{ tracks: doc.value.tracks, timeline: doc.value.timeline }
-		) !== null
+		) !== null) return true
+		// Markers live outside TimelineDiff, so the timeline comparison above is
+		// blind to them. Without this, marker-only work counts as "clean" and
+		// switchRevision overwrites it with no checkpoint and no undo.
+		return markersDiffer(rev.snapshot.markers || [], doc.value.markers || [])
 	})
 
 	/** Children grouped by parentId (null key = root), createdAt-sorted. */
@@ -304,6 +349,11 @@ export const useEditorStore = defineStore('editor', () => {
 		renderState.value?.phase === 'rendering' || renderState.value?.phase === 'stitching'
 	)
 
+	/** Every tracked render, newest first — feeds the global background pill. */
+	const backgroundRenders = computed<RenderEntry[]>(() =>
+		Object.values(renders.value).sort((a, b) => b.startedAt - a.startedAt)
+	)
+
 	// The AI has nothing to work with until at least one asset finished
 	// preprocessing (pieces/transcript exist) — the chat gates on this.
 	const hasReadyMedia = computed(() =>
@@ -320,13 +370,67 @@ export const useEditorStore = defineStore('editor', () => {
 		return doc.value.timeline.some((i) => i.trackId === videoTrack.id)
 	})
 
-	const exportNotice = computed(() => {
-		if (!doc.value) return null
+	/**
+	 * Pre-flight export warnings (PRD §5.9): content that exists on the timeline
+	 * but will be missing from the render — muted/hidden tracks with clips,
+	 * individually muted clips, overlay/text items. Warnings with an `action`
+	 * offer a one-click fix (e.g. Unmute) in the export dialog.
+	 */
+	const exportWarnings = computed<Array<{
+		id: string
+		text: string
+		action?: { label: string; trackId: string; flag: 'muted' | 'hidden' }
+	}>>(() => {
+		if (!doc.value) return []
+		const warnings: Array<{ id: string; text: string; action?: { label: string; trackId: string; flag: 'muted' | 'hidden' } }> = []
+		const itemsByTrack = new Map<string, number>()
+		for (const item of doc.value.timeline) {
+			itemsByTrack.set(item.trackId, (itemsByTrack.get(item.trackId) || 0) + 1)
+		}
+		const plural = (n: number) => n === 1 ? '1 clip' : `${n} clips`
+
+		for (const track of doc.value.tracks) {
+			const count = itemsByTrack.get(track.id) || 0
+			if (count === 0 || track.kind === 'overlay' || track.kind === 'text') continue
+			if (track.hidden) {
+				warnings.push({
+					id: `hidden-${track.id}`,
+					text: `${track.name} (${plural(count)}) is hidden and won't be in the export.`,
+					action: { label: 'Show', trackId: track.id, flag: 'hidden' }
+				})
+			} else if (track.muted) {
+				warnings.push({
+					id: `muted-${track.id}`,
+					text: track.kind === 'audio'
+						? `${track.name} (${plural(count)}) is muted and won't be heard in the export.`
+						: `${track.name} (${plural(count)}) is muted — its clips render without their audio.`,
+					action: { label: 'Unmute', trackId: track.id, flag: 'muted' }
+				})
+			}
+		}
+
+		const trackById = new Map(doc.value.tracks.map((t) => [t.id, t]))
+		const mutedItems = doc.value.timeline.filter((i) => {
+			const track = trackById.get(i.trackId)
+			return i.muted && track && !track.muted && !track.hidden &&
+				(track.kind === 'video' || track.kind === 'audio')
+		})
+		if (mutedItems.length > 0) {
+			warnings.push({
+				id: 'muted-items',
+				text: `${plural(mutedItems.length)} ${mutedItems.length === 1 ? 'has' : 'have'} muted audio and won't be heard in the export.`
+			})
+		}
+
 		const hasOverlayItems = doc.value.timeline.some((item) => {
-			const track = doc.value!.tracks.find((t) => t.id === item.trackId)
+			const track = trackById.get(item.trackId)
 			return track && (track.kind === 'overlay' || track.kind === 'text')
 		})
-		return hasOverlayItems ? "Overlay/text tracks won't appear in this export." : null
+		if (hasOverlayItems) {
+			warnings.push({ id: 'overlay', text: "Overlay/text tracks won't appear in this export." })
+		}
+
+		return warnings
 	})
 
 	// ===== Persistence =====
@@ -388,11 +492,27 @@ export const useEditorStore = defineStore('editor', () => {
 			playheadSec.value = 0
 			isPlaying.value = false
 
-			// Heal any pre-existing same-track overlaps (e.g. from AI accepts
-			// made before overlap repair existed) — persists via autosave.
-			if (doc.value && repairOverlaps({ tracks: doc.value.tracks, timeline: doc.value.timeline })) {
-				console.warn('[editorStore] Repaired overlapping timeline items on load')
-				markDirty()
+			if (doc.value) {
+				const state: TimelineState = { tracks: doc.value.tracks, timeline: doc.value.timeline }
+
+				// Heal projects saved before removeAsset purged the timeline: clips
+				// whose media is gone draw as empty, play nothing, and kill the
+				// export. Swept BEFORE the overlap repair — repairing against items
+				// about to be deleted would push survivors right for nothing.
+				const orphans = pruneOrphanItems(state, new Set(doc.value.media.map((a) => a.id)))
+				if (orphans.length) {
+					doc.value.timeline = state.timeline
+					console.warn(`[editorStore] Dropped ${orphans.length} timeline item(s) whose media is gone`)
+					refreshMetaDuration()
+					markDirty()
+				}
+
+				// Heal any pre-existing same-track overlaps (e.g. from AI accepts
+				// made before overlap repair existed) — persists via autosave.
+				if (repairOverlaps(state)) {
+					console.warn('[editorStore] Repaired overlapping timeline items on load')
+					markDirty()
+				}
 			}
 
 			backgroundTasks.value = (await api.getBackgroundTasks(id)) || {}
@@ -402,6 +522,20 @@ export const useEditorStore = defineStore('editor', () => {
 				personas.value = (await api.getPersonas()) || []
 			} catch (error) {
 				console.error('[editorStore] Failed to load personas:', error)
+			}
+
+			// ---- Which model each operation is configured to use ----
+			// So buttons that spend tokens can name the model instead of just
+			// saying "uses Gemini" — the selection is user-configurable.
+			try {
+				const [settings, metadata] = await Promise.all([
+					api.getModelSettings(),
+					api.getModelMetadata()
+				])
+				modelSelection.value = settings?.selection || {}
+				modelMetadata.value = metadata || {}
+			} catch (error) {
+				console.error('[editorStore] Failed to load model settings:', error)
 			}
 
 			// ---- Revisions sidecar + pointer reconciliation ----
@@ -522,16 +656,38 @@ export const useEditorStore = defineStore('editor', () => {
 
 	const removeAsset = async (assetId: string) => {
 		if (!threadId.value || !doc.value) return
+		// Counted before the IPC: the dialog has to say what will actually be lost.
+		const clipCount = doc.value.timeline.filter((i) => i.sourceAssetId === assetId).length
 		const confirmed = await api.showConfirmation({
 			title: 'Remove media',
-			message: 'Remove this media and all its clips from the project?',
-			detail: 'The imported copy and generated thumbnails will be deleted. The original file on disk is not affected.',
+			message: clipCount
+				? `Remove this media and the ${clipCount} clip${clipCount === 1 ? '' : 's'} it has on the timeline?`
+				: 'Remove this media from the project?',
+			detail: clipCount
+				? 'The imported copy and generated thumbnails will be deleted, and those clips will leave gaps you can close with Close gaps. This cannot be undone. The original file on disk is not affected.'
+				: 'The imported copy and generated thumbnails will be deleted. This cannot be undone. The original file on disk is not affected.',
 			buttons: ['Cancel', 'Remove']
 		})
 		if (!confirmed || confirmed.response !== 1) return
 		const success = await api.removeMediaAsset({ threadId: threadId.value, assetId })
 		if (success) {
 			doc.value.media = doc.value.media.filter((a) => a.id !== assetId)
+			// Mirror the purge main already made (editor/assets.ts removeAsset).
+			// Without this the stale timeline goes straight back to disk on the
+			// next autosave and the export dies on a clip with no media.
+			//
+			// No ripple and no history step, deliberately: the asset directory is
+			// gone from disk so the removal cannot be undone, and shifting
+			// survivors here would move them outside the undo ring — which stores
+			// absolute positions — so undoing any EARLIER step would snap them
+			// back and re-open the hole. Main's purge does not ripple either.
+			const state: TimelineState = { tracks: doc.value.tracks, timeline: doc.value.timeline }
+			if (pruneOrphanItems(state, new Set(doc.value.media.map((a) => a.id))).length) {
+				doc.value.timeline = state.timeline
+				refreshMetaDuration()
+				pruneSelection()
+				markDirty()
+			}
 			if (selectedAssetId.value === assetId) selectedAssetId.value = doc.value.media[0]?.id || null
 			if (selectedClip.value?.sourceAssetId === assetId) selectedClipId.value = null
 			if (silenceScan.value?.assetId === assetId) silenceScan.value = null
@@ -552,6 +708,23 @@ export const useEditorStore = defineStore('editor', () => {
 	const transcribeAsset = async (assetId: string) => {
 		if (!threadId.value) return
 		await api.preprocessMedia({ threadId: threadId.value, assetId, steps: ['audio', 'transcript'] })
+	}
+
+	/**
+	 * Repair a looped transcript: a stronger model re-checks it against the audio
+	 * and the speech pieces are rebuilt from the result. Confirmed because it
+	 * costs tokens and replaces every piece derived from the old transcript.
+	 */
+	const repairTranscript = async (assetId: string) => {
+		if (!threadId.value) return
+		const confirmed = await api.showConfirmation({
+			title: 'Re-transcribe this media?',
+			message: 'Check the audio again and rebuild the speech pieces?',
+			detail: 'A stronger model re-reads the audio alongside the current transcript to fix the repeated section. This runs Gemini (costs tokens) and replaces the pieces derived from the old transcript. Clips already on the timeline keep playing the same footage.',
+			buttons: ['Cancel', 'Re-transcribe']
+		})
+		if (!confirmed || confirmed.response !== 1) return
+		await api.preprocessMedia({ threadId: threadId.value, assetId, steps: ['retranscribe'] })
 	}
 
 	/** Remove derived Gemini data (transcript / scene descriptions) from an asset. */
@@ -601,6 +774,24 @@ export const useEditorStore = defineStore('editor', () => {
 		}
 	}
 	watch([timelineView, () => doc.value?.timeline.length], () => ensureFilmstrips())
+
+	/**
+	 * Repair assets whose pieces lost their thumbnails (a re-transcribe used to
+	 * clear them). Local ffmpeg only — no Gemini, no cost. Runs once per asset.
+	 */
+	const thumbnailsRequested = new Set<string>()
+	const ensureThumbnails = () => {
+		if (!threadId.value || !doc.value) return
+		for (const asset of doc.value.media) {
+			if (asset.preprocessState !== 'completed') continue
+			if (!asset.clips?.length || thumbnailsRequested.has(asset.id)) continue
+			if (asset.clips.some((c) => !!c.thumbnailPath)) continue
+			thumbnailsRequested.add(asset.id)
+			console.warn(`[editorStore] ${asset.name} has no piece thumbnails — regenerating`)
+			api.preprocessMedia({ threadId: threadId.value, assetId: asset.id, steps: ['thumbnails'] })
+		}
+	}
+	watch(() => doc.value?.media.map((a) => a.id).join(','), () => ensureThumbnails())
 
 	/** Re-run scene detection with a custom threshold (lower = more pieces). */
 	const redetectScenes = async (assetId: string, threshold: number) => {
@@ -741,6 +932,17 @@ export const useEditorStore = defineStore('editor', () => {
 		}
 	): boolean => {
 		if (!doc.value || !threadId.value) return false
+
+		// Log-only tripwire. Nothing here repairs the timeline — repairing after
+		// the diff would leave the doc and its history out of step — but a
+		// gesture or diff that produces an overlap corrupts the export silently,
+		// so surface it on the first drag instead of at export time.
+		if (import.meta.env.DEV) {
+			const bad = findOverlaps(currentState())
+			if (bad.length) {
+				console.warn(`[editorStore] ${options.label || 'edit'} left ${bad.length} overlapping pair(s):`, bad)
+			}
+		}
 
 		let forward: TimelineDiff, inverse: TimelineDiff
 		if (options.prebuilt) {
@@ -968,6 +1170,28 @@ export const useEditorStore = defineStore('editor', () => {
 		commitStep({ before, label: ripple ? 'Ripple delete' : 'Delete' })
 	}
 
+	/**
+	 * Pull every clip left so each track runs back to back. Removals already
+	 * ripple, so this is for holes that are already there — an AI edit from
+	 * before removals rippled, or a clip dragged out of line by hand.
+	 * `hasGaps` drives the toolbar button's enabled state.
+	 */
+	const hasGaps = computed(() => {
+		if (!doc.value?.timeline.length) return false
+		const probe = {
+			tracks: doc.value.tracks,
+			timeline: doc.value.timeline.map((i) => ({ ...i }))
+		}
+		return closeTimelineGaps(probe)
+	})
+
+	const closeGaps = () => {
+		if (!doc.value?.timeline.length) return
+		const before = snapshotState()
+		if (!closeTimelineGaps({ tracks: doc.value.tracks, timeline: doc.value.timeline })) return
+		commitStep({ before, label: 'Close gaps' })
+	}
+
 	const rippleDownstream = (item: TimelineItem, delta: number) => {
 		if (!doc.value || Math.abs(delta) < 1e-9) return
 		for (const other of doc.value.timeline) {
@@ -1016,6 +1240,17 @@ export const useEditorStore = defineStore('editor', () => {
 		const before = snapshotState()
 		item.gain = Math.max(0, Math.min(2, gain))
 		commitStep({ before, label: `Gain ${item.gain.toFixed(2)}` })
+	}
+
+	/** Audio fade-in/out length in seconds, clamped to the item's on-timeline duration. */
+	const setItemFade = (id: string, edge: 'in' | 'out', seconds: number) => {
+		const item = doc.value?.timeline.find((i) => i.id === id)
+		if (!item || !Number.isFinite(seconds)) return
+		const before = snapshotState()
+		const clamped = Math.max(0, Math.min(item.duration, seconds))
+		if (edge === 'in') item.fadeInSec = clamped || undefined
+		else item.fadeOutSec = clamped || undefined
+		commitStep({ before, label: `Fade ${edge} ${clamped.toFixed(1)}s` })
 	}
 
 	const nudgeItems = (ids: string[], deltaSec: number) => {
@@ -1357,8 +1592,17 @@ export const useEditorStore = defineStore('editor', () => {
 
 		// Apply the snapshot
 		const snap = deepClone(target.snapshot)
-		doc.value.tracks = snap.tracks
-		doc.value.timeline = snap.timeline
+		// A revision taken before a media removal still holds that media's clips;
+		// restoring it verbatim would put orphans straight back. Sanitised on the
+		// way in only — the stored revision is a record of what was, not a mirror
+		// of the present, so the sidecar on disk is left untouched.
+		const snapState: TimelineState = { tracks: snap.tracks, timeline: snap.timeline }
+		const dropped = pruneOrphanItems(snapState, new Set(doc.value.media.map((a) => a.id)))
+		if (dropped.length) {
+			console.warn(`[editorStore] V${target.seq}: dropped ${dropped.length} clip(s) whose media is gone`)
+		}
+		doc.value.tracks = snapState.tracks
+		doc.value.timeline = snapState.timeline
 		doc.value.timelineMeta = snap.timelineMeta
 		doc.value.markers = snap.markers || []
 		doc.value.currentRevisionId = id
@@ -1423,7 +1667,10 @@ export const useEditorStore = defineStore('editor', () => {
 	}
 
 	// ===== AI prompt actions (M3) =====
-	const runPrompt = async (prompt: string) => {
+	// `override.widen` applies to THIS call only — it never rewrites the user's
+	// scope chip. Used by "Keep building", which must see the whole timeline even
+	// once it has grown past the chapter-window threshold.
+	const runPrompt = async (prompt: string, override?: { widen?: 'chapter' | 'full' }) => {
 		if (!threadId.value || !doc.value || promptRunning.value) return
 		promptError.value = null
 		lastAnswer.value = null
@@ -1438,7 +1685,7 @@ export const useEditorStore = defineStore('editor', () => {
 				baseStepId: doc.value.historyRef.currentStepId,
 				selectedItemIds: JSON.parse(JSON.stringify(selectedItemIds.value)),
 				playheadSec: playheadSec.value,
-				widen: scopeWiden.value === 'auto' ? undefined : scopeWiden.value
+				widen: override?.widen ?? (scopeWiden.value === 'auto' ? undefined : scopeWiden.value)
 			})
 			if (result?.turnId) activeTurnId.value = result.turnId
 		} catch (error: any) {
@@ -1471,25 +1718,38 @@ export const useEditorStore = defineStore('editor', () => {
 		lastAnswer.value = null
 	}
 
-	// ===== Export actions (M4) =====
+	// ===== Export actions (M4 + background exports) =====
 	const startExport = async (quality: 'original' | 'preview') => {
-		if (!threadId.value || !canExport.value) return
-		// Flush the debounced autosave — main renders from the persisted doc
-		dirty.value = true
-		await persistDoc()
-		renderState.value = { renderId: '', percent: 0, phase: 'rendering' }
+		if (!threadId.value || !canExport.value || !doc.value) return
+		const tid = threadId.value
+		const entry: RenderEntry = {
+			threadId: tid,
+			title: thread.value?.title || 'Export',
+			renderId: '',
+			percent: 0,
+			phase: 'rendering',
+			startedAt: Date.now()
+		}
+		renders.value = { ...renders.value, [tid]: entry }
 		try {
-			const result = await api.exportEditorTimeline({ threadId: threadId.value, quality })
-			if (result?.renderId && renderState.value) {
-				renderState.value = { ...renderState.value, renderId: result.renderId }
+			// Pass an in-memory SNAPSHOT of the live doc: the render detaches
+			// from the editor entirely (keep editing / switch revision / load
+			// another project), and the snapshot is never persisted.
+			const snapshot = JSON.parse(JSON.stringify(doc.value))
+			const result = await api.exportEditorTimeline({ threadId: tid, quality, doc: snapshot })
+			if (result?.renderId && renders.value[tid]) {
+				renders.value = { ...renders.value, [tid]: { ...renders.value[tid], renderId: result.renderId } }
 			}
 		} catch (error: any) {
-			// Pre-flight rejection (missing files, empty timeline, …)
-			renderState.value = {
-				renderId: '',
-				percent: 0,
-				phase: 'error',
-				error: error?.message || 'Export failed to start'
+			// Pre-flight rejection (missing files, missing media, empty timeline…).
+			// Strip Electron's "Error invoking remote method '…': Error:" prefix so
+			// the actionable part is what the user actually reads.
+			renders.value = {
+				...renders.value,
+				[tid]: {
+					...entry, phase: 'error',
+					error: error?.message?.split('Error: ').pop() || 'Export failed to start'
+				}
 			}
 		}
 	}
@@ -1499,8 +1759,13 @@ export const useEditorStore = defineStore('editor', () => {
 		await api.abortEditorRender({ renderId: renderState.value.renderId })
 	}
 
-	const clearRenderState = () => {
-		renderState.value = null
+	/** Dismiss a render entry (defaults to the current project's). */
+	const clearRenderState = (tid?: string) => {
+		const key = tid || threadId.value
+		if (!key || !renders.value[key]) return
+		const next = { ...renders.value }
+		delete next[key]
+		renders.value = next
 	}
 
 	/**
@@ -1714,15 +1979,23 @@ export const useEditorStore = defineStore('editor', () => {
 				phase: 'rendering' | 'stitching' | 'done' | 'error'
 				outputPath?: string; error?: string
 			}) => {
-				if (data.threadId !== threadId.value) return
-				// Ignore stale renders (a fresh export may have started)
-				if (renderState.value?.renderId && data.renderId !== renderState.value.renderId) return
-				renderState.value = {
-					renderId: data.renderId,
-					percent: data.percent,
-					phase: data.phase,
-					outputPath: data.outputPath,
-					error: data.error
+				// Renders are background jobs — track progress for ANY thread,
+				// not just the currently open project.
+				const existing = renders.value[data.threadId]
+				// Ignore stale renders (a fresh export may have started for this thread)
+				if (existing?.renderId && data.renderId !== existing.renderId) return
+				renders.value = {
+					...renders.value,
+					[data.threadId]: {
+						threadId: data.threadId,
+						title: existing?.title || 'Export',
+						startedAt: existing?.startedAt || Date.now(),
+						renderId: data.renderId,
+						percent: data.percent,
+						phase: data.phase,
+						outputPath: data.outputPath,
+						error: data.error
+					}
 				}
 			})
 		}
@@ -1781,6 +2054,8 @@ export const useEditorStore = defineStore('editor', () => {
 		retryAsset,
 		describeAsset,
 		transcribeAsset,
+		repairTranscript,
+		modelLabelFor,
 		clearAssetData,
 		renameProject,
 		redetectScenes,
@@ -1804,11 +2079,14 @@ export const useEditorStore = defineStore('editor', () => {
 		addItemFromAsset,
 		splitAtPlayhead,
 		deleteItems,
+		closeGaps,
+		hasGaps,
 		setItemSpeed,
 		setItemTargetDuration,
 		setItemPreservePitch,
 		toggleItemMuted,
 		setItemGain,
+		setItemFade,
 		nudgeItems,
 		addMarker,
 		removeMarker,
@@ -1856,9 +2134,11 @@ export const useEditorStore = defineStore('editor', () => {
 		dismissResult,
 		// export
 		renderState,
+		renders,
+		backgroundRenders,
 		isRendering,
 		canExport,
-		exportNotice,
+		exportWarnings,
 		startExport,
 		abortExport,
 		clearRenderState

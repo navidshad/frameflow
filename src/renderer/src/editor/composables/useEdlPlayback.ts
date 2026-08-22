@@ -10,7 +10,19 @@ interface EdlSegment {
 	speed: number
 	muted: boolean
 	gain?: number
+	fadeInSec?: number
+	fadeOutSec?: number
 	trackId?: string
+}
+
+/** Linear fade envelope at timeline time t — the preview mirror of the export's `fadeA` builder. */
+const fadeEnvelope = (seg: EdlSegment, t: number): number => {
+	const fadeIn = seg.fadeInSec ?? 0
+	const fadeOut = seg.fadeOutSec ?? 0
+	let env = 1
+	if (fadeIn > 0) env = Math.min(env, (t - seg.tStart) / fadeIn)
+	if (fadeOut > 0) env = Math.min(env, (seg.tEnd - t) / fadeOut)
+	return Math.max(0, Math.min(1, env))
 }
 
 /**
@@ -109,7 +121,8 @@ export function useEdlPlayback(
 				el.dataset.edlSrc = seg.src
 			}
 			el.playbackRate = seg.speed
-			el.volume = Math.max(0, Math.min(1, seg.gain ?? 1))
+			// Gain × fade envelope, re-evaluated every tick so ramps are smooth.
+			el.volume = Math.max(0, Math.min(1, (seg.gain ?? 1) * fadeEnvelope(seg, t)))
 			const target = seg.sourceIn + (t - seg.tStart) * seg.speed
 			if (changed || force || Math.abs(el.currentTime - target) > AUDIO_DRIFT_HARD) {
 				el.currentTime = target

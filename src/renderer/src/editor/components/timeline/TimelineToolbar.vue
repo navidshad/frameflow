@@ -29,6 +29,8 @@
 			<ToolButton icon="tabler--trash" title="Ripple delete selection (⌫)"
 				:disabled="!store.selectedItemIds.length"
 				@click="store.deleteItems(store.selectedItemIds)" />
+			<ToolButton icon="tabler--arrows-join" title="Close gaps — pull every clip left so the timeline runs back to back"
+				:disabled="!store.hasGaps" @click="store.closeGaps()" />
 			<ToolButton icon="tabler--magnet" :title="store.snapEnabled ? 'Snapping on' : 'Snapping off'"
 				:active="store.snapEnabled" @click="store.snapEnabled = !store.snapEnabled" />
 			<div class="w-px h-4 bg-zinc-200 dark:bg-zinc-800 mx-1"></div>

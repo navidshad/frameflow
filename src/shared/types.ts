@@ -21,6 +21,13 @@ export interface VideoMetadata {
 	fps: number
 	format: string
     hasAudio: boolean
+	/**
+	 * When the camera started recording (epoch ms, from the container's
+	 * creation_time tag). This is CAPTURE time — distinct from MediaAsset.createdAt,
+	 * which is when the file was imported. Absent for files whose container
+	 * carries no tag (many exports and re-encodes strip it).
+	 */
+	recordedAt?: number
 }
 
 export interface BackgroundTask {
@@ -214,10 +221,44 @@ export interface MediaAsset {
 	preprocessError?: string
 	clips: Clip[]               // derived from scene detection
 	filmstrip?: FilmstripEntry[]
+	transcriptHealth?: TranscriptHealth  // set by the transcript step
+	descriptionHealth?: DescriptionHealth  // set by the descriptions step
 	createdAt: number
 }
 
+/**
+ * Scene-description coverage for one asset. Mirrors TranscriptHealth: score the
+ * artifact, store the verdict on the asset, surface it in the Inspector — so a
+ * run that only half worked cannot report itself as done.
+ */
+export interface DescriptionHealth {
+	scenes: number              // rows in scenes.json
+	describable: number         // scenes long enough to be worth a frame
+	described: number           // scenes that actually got a description
+	coverage: number            // described / describable — 1 is complete
+	checkedAt: number
+}
+
 export interface FilmstripEntry { time: number; thumbnailPath: string }
+
+/** Speech-to-text quality signal for one asset (see shared/transcript-health.ts). */
+export interface TranscriptHealth {
+	segments: number            // pieces examined
+	spokenSegments: number      // pieces with real text (silence markers excluded)
+	distinctRatio: number       // distinct lines / spoken pieces — 1 is healthy
+	maxRepeatRun: number        // longest run of consecutive identical lines
+	loopedSeconds: number       // source seconds inside runs long enough to be loops
+	repeatedText?: string       // the offending line, truncated
+	looped: boolean             // verdict: speech-to-text repeated one line
+	lastSpeechEndSec?: number   // where the last spoken piece ends
+	durationSec?: number        // asset duration the coverage was measured against
+	coverageRatio?: number      // lastSpeechEndSec / durationSec — 1 is full coverage
+	truncated: boolean          // verdict: transcription stopped well before the end
+	largestGapSec?: number      // longest stretch with no speech
+	gapAtSec?: number           // where that stretch starts, when it counts as a hole
+	hasHole: boolean            // verdict: a window in the MIDDLE came back empty
+	checkedAt: number
+}
 
 export interface Clip {        // a selectable scene piece
 	id: string
@@ -244,6 +285,7 @@ export interface Track {
 	locked: boolean
 	hidden: boolean
 	height: number              // px in the timeline UI
+	gain?: number               // track-level audio gain, composed with item gain at render (default 1.0)
 }
 
 export interface TimelineItem {  // an instance of a clip placed on a track
@@ -260,6 +302,8 @@ export interface TimelineItem {  // an instance of a clip placed on a track
 	duration: number            // ON-TIMELINE duration = (out - in) / speed
 	label?: string
 	gain?: number               // audio gain multiplier (default 1.0)
+	fadeInSec?: number          // audio fade-in length (item-local seconds on the timeline)
+	fadeOutSec?: number         // audio fade-out length (item-local seconds on the timeline)
 	muted?: boolean
 	// ---- Stubs (deferred: effects/transitions/transforms/text) ----
 	transform?: TimelineItemTransform
@@ -379,6 +423,13 @@ export interface PromptTurn {
 	rationale?: string
 	answer?: string             // set when the request was a question, not an edit
 	droppedOps?: string[]       // ops pruned during validation (surfaced on the card)
+	notes?: string[]            // non-failures worth telling the user (clamped ranges, …)
+	build?: {                   // set only for a longform build-from-scratch turn
+		producedSec: number
+		sourceSec: number
+		expectedMinSec: number
+		shortfall: boolean
+	}
 	scopeLabel?: string         // e.g. "Chapter 3 · 12 items"
 	revisionId?: string         // revision created from this turn's applied diff
 	usage?: Usage
@@ -404,6 +455,9 @@ export interface EditorOps {
 		out?: number
 		speed?: number
 		label?: string
+		gain?: number
+		fadeInSec?: number
+		fadeOutSec?: number
 	}>
 	addClips?: Array<{
 		assetId: string
@@ -414,7 +468,41 @@ export interface EditorOps {
 		afterItemId?: string
 		label?: string
 	}>
-	addMarkers?: Array<{ atSec: number; label: string }>
+	/**
+	 * Bulk material add: every piece from `fromScene`..`toScene` of one asset,
+	 * minus `excludeScenes`, coalesced into as few contiguous items as possible.
+	 * Expanded SERVER-SIDE into diff.addItems by opsToDiff — the renderer only
+	 * ever sees the 5 existing TimelineDiff keys.
+	 * Endpoints are CLAMPED to the asset's real piece range, never dropped, so
+	 * they may safely name pieces that were sampled out of the context.
+	 */
+	addSceneRanges?: Array<{
+		assetId: string
+		fromScene: number
+		toScene: number
+		excludeScenes?: number[]
+		speed?: number            // clamped to 0.25-4
+		merge?: boolean           // default TRUE: adjacent kept pieces become one clip
+		atSec?: number            // position of the FIRST run; later runs butt-join
+		afterItemId?: string      // pre-existing item only
+		label?: string
+	}>
+	/**
+	 * Pull every clip left so each track runs back to back with no gaps.
+	 * Removals already close their own gap; this is for holes that are
+	 * already on the timeline.
+	 */
+	closeGaps?: boolean
+	/**
+	 * `atSec` is timeline time; `atScene` anchors to a source piece and is
+	 * resolved AFTER adds are placed (the only way to chapter material you are
+	 * adding in the same response). Exactly one should be set — atSec wins.
+	 */
+	addMarkers?: Array<{
+		atSec?: number
+		atScene?: { assetId: string; sceneIndex: number }
+		label: string
+	}>
 }
 
 export type TimelineDiff = {

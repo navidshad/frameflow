@@ -69,11 +69,17 @@ class SettingsManager {
 		}
 	}
 
-	private saveSettings(): void {
+	private saveSettings(): boolean {
 		try {
+			if (!this.settingsPath) {
+				console.error('Failed to save settings: settingsPath is unset (init() did not run)')
+				return false
+			}
 			writeFileSync(this.settingsPath, JSON.stringify(this.settings, null, 2))
+			return true
 		} catch (error) {
 			console.error('Failed to save settings:', error)
+			return false
 		}
 	}
 
@@ -103,13 +109,23 @@ class SettingsManager {
 		}
 	}
 
-	setTempDir(path: string): void {
+	/**
+	 * Returns false if the new location could not be persisted — in which case
+	 * the previous one is kept. Silently accepting it would leave the running app
+	 * writing projects somewhere it forgets on restart.
+	 */
+	setTempDir(path: string): boolean {
+		const previous = this.settings.tempDir
 		this.settings.tempDir = path
-		this.saveSettings()
+		if (!this.saveSettings()) {
+			this.settings.tempDir = previous
+			return false
+		}
 
 		if (!existsSync(path)) {
 			mkdirSync(path, { recursive: true })
 		}
+		return true
 	}
 
 	resetTempDir(): string {

@@ -38,9 +38,21 @@ export function useTimelineViewport() {
 		clientWidth.value = scrollEl.value.clientWidth
 	}
 
+	// The timeline's width changes without scrolling (panel full-height toggles,
+	// width/height drag handles) — observe the element so clientWidth and the
+	// window-mounting range stay fresh.
+	let resizeObserver: ResizeObserver | null = null
+
 	const setScrollEl = (el: HTMLElement | null) => {
+		resizeObserver?.disconnect()
 		scrollEl.value = el
 		onScroll()
+		if (el && typeof ResizeObserver !== 'undefined') {
+			resizeObserver = new ResizeObserver(() => onScroll())
+			resizeObserver.observe(el)
+		} else {
+			resizeObserver = null
+		}
 	}
 
 	const clampZoom = (v: number) => Math.min(MAX_PX_PER_SEC, Math.max(MIN_PX_PER_SEC, v))

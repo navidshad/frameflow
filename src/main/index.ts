@@ -6,6 +6,8 @@ import { pathToFileURL } from 'url'
 import { Pipeline } from './pipeline'
 import { settingsManager } from './settings'
 import { threadManager } from './threads'
+import type { EditorDocument, TimelineItem } from '@shared/types'
+import { pruneOrphanItems } from '@shared/timeline'
 import * as extraction from './pipeline/phases/extraction'
 import * as generation from './pipeline/phases/generation'
 import * as intent from './pipeline/phases/intent'
@@ -295,13 +297,24 @@ app.whenReady().then(() => {
 		}
 
 		const selectedPath = result.filePaths[0]
-		const newPath = join(selectedPath, 'FrameFlow')
+		// Nest a "FrameFlow" folder inside the chosen directory — UNLESS the user
+		// picked the store itself, which is the natural thing to do when changing
+		// location (the picker opens there). Appending unconditionally produced
+		// FrameFlow/FrameFlow and hid every existing project, because they live
+		// under the old root.
+		const newPath = basename(selectedPath) === 'FrameFlow'
+			? selectedPath
+			: join(selectedPath, 'FrameFlow')
 
 		if (!fs.existsSync(newPath)) {
 			fs.mkdirSync(newPath, { recursive: true })
 		}
 
-		settingsManager.setTempDir(newPath)
+		// Report a failed write instead of leaving the app pointed at a location
+		// it will forget on restart — projects created meanwhile would vanish.
+		if (!settingsManager.setTempDir(newPath)) {
+			throw new Error(`Could not save the storage location to settings. Projects would be lost on restart, so the change was not applied.`)
+		}
 		threadManager.syncWithArtifactDir()
 		return newPath
 	})
@@ -407,7 +420,21 @@ app.whenReady().then(() => {
 
 			const editor = { ...thread.editor }
 			if (patch.tracks) editor.tracks = patch.tracks
-			if (patch.timeline) editor.timeline = patch.timeline
+			if (patch.timeline) {
+				// A renderer that saved before it learned an asset was removed must
+				// not put those clips back on disk. This closes a window the
+				// renderer cannot: its 800ms autosave timer is not cancelled by a
+				// removal, so a queued save can land after main has already purged.
+				// Main always learns about an asset FIRST (createMediaAsset persists
+				// inside the queued mutator and only then resolves the IPC), so an id
+				// missing from editor.media is genuinely gone, never not-yet-known.
+				const state = { tracks: editor.tracks, timeline: patch.timeline as TimelineItem[] }
+				const dropped = pruneOrphanItems(state, new Set(editor.media.map((a) => a.id)))
+				if (dropped.length) {
+					console.warn(`[editor] save: dropped ${dropped.length} timeline item(s) with removed media`)
+				}
+				editor.timeline = state.timeline
+			}
 			if (patch.timelineMeta) editor.timelineMeta = patch.timelineMeta
 			if (patch.selection) editor.selection = patch.selection
 			if (patch.activePersonaId !== undefined) editor.activePersonaId = patch.activePersonaId
@@ -581,10 +608,12 @@ app.whenReady().then(() => {
 
 	// Export / render (M4): fast path via assembleVideo, region path via
 	// segment-then-concat; progress streams over editor-render-progress.
-	ipcMain.handle('export-editor-timeline', (_event, { threadId, quality }: {
-		threadId: string, quality: 'original' | 'preview'
+	ipcMain.handle('export-editor-timeline', (_event, { threadId, quality, doc }: {
+		threadId: string, quality: 'original' | 'preview', doc?: EditorDocument
 	}) => {
-		return editorRender.startEditorRender({ threadId, quality })
+		// `doc` is the renderer's in-memory timeline snapshot at click time —
+		// the render is detached from the live document and never persists it.
+		return editorRender.startEditorRender({ threadId, quality, doc })
 	})
 
 	ipcMain.handle('abort-editor-render', (_event, { renderId }: { renderId: string }) => {

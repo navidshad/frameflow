@@ -2,7 +2,9 @@ import fs from 'fs'
 import path from 'path'
 import { setMaxListeners } from 'events'
 import { v4 as uuidv4 } from 'uuid'
-import type { Clip, MediaAsset, SilenceRegion } from '@shared/types'
+import type { Clip, DescriptionHealth, MediaAsset, SilenceRegion, TranscriptHealth } from '@shared/types'
+import { analyzeTranscriptHealth } from '@shared/transcript-health'
+import { MIN_DESCRIBABLE_DURATION } from '../gemini/scene-descriptions'
 import type { PipelineContext } from '../pipeline'
 import { threadManager } from '../threads'
 import { backgroundTaskManager } from '../tasks'
@@ -28,6 +30,7 @@ import { getAssetDir, patchAsset, patchAssetPreprocessing } from './assets'
 
 export type PreprocessStep =
 	'proxy' | 'scenes' | 'thumbnails' | 'descriptions' | 'audio' | 'transcript' | 'filmstrip' | 'segment'
+	| 'retranscribe'
 
 // Transcript runs UP FRONT (before scenes) so pieces derive from real speech
 // segments; scene detection stays as the fallback piece source for videos
@@ -42,7 +45,11 @@ const AUDIO_STEPS: PreprocessStep[] = ['segment']
 
 // Audio/transcript failures (missing Gemini key, quota) must not brick the
 // import — the chain continues and pieces fall back to scene detection.
-const SOFT_FAIL_STEPS: PreprocessStep[] = ['audio', 'transcript']
+// 'descriptions' is here for a sharper reason: it is an opt-in extra, and
+// flipping preprocessState to 'error' hides the WHOLE Gemini block in the
+// Inspector (Describe and Transcribe), leaving only Retry — which re-runs the
+// default steps and would re-bill a full transcription.
+const SOFT_FAIL_STEPS: PreprocessStep[] = ['audio', 'transcript', 'descriptions']
 
 export const SCENEDETECT_MISSING = 'scenedetect-missing'
 
@@ -466,14 +473,20 @@ async function deriveClipsFromTranscript(threadId: string, assetId: string): Pro
 		}
 	}
 
+	// Clips MUST tile the source: no overlaps, nothing past the end. Transcripts
+	// violate both when speech-to-text loops (overlapping items, timestamps that
+	// run past the file), and overlapping clips put the same audio on the
+	// timeline twice.
+	const limit = duration > 0 ? duration : Number.POSITIVE_INFINITY
 	let previousEnd = 0
 	for (const item of [...items].sort((a, b) => srtToSeconds(a.start) - srtToSeconds(b.start))) {
-		const start = srtToSeconds(item.start)
-		const end = srtToSeconds(item.end)
+		const rawStart = srtToSeconds(item.start)
+		const end = Math.min(srtToSeconds(item.end), limit)
+		const start = Math.max(rawStart, previousEnd)
 		if (!(end > start)) continue
 		if (start - previousEnd > MIN_GAP_SEC) pushGap(previousEnd, start)
 		segments.push({ in: start, out: end, text: item.text })
-		previousEnd = Math.max(previousEnd, end)
+		previousEnd = end
 	}
 	if (duration - previousEnd > MIN_GAP_SEC) pushGap(previousEnd, duration)
 
@@ -509,9 +522,13 @@ async function runThumbnailsStep(threadId: string, assetId: string, signal: Abor
 	const asset = getAsset(threadId, assetId)!
 	// Thumbnails follow the CLIPS (whatever derived them — transcript segments
 	// or scene detection), one midpoint frame per piece.
-	const targets = (asset.clips || []).map((c) => ({ id: c.id, midpoint: c.in + c.duration / 2 }))
+	// Skip pieces that already have a thumbnail on disk, so re-running this after
+	// a re-transcribe only fills the gaps instead of re-extracting every frame.
+	const targets = (asset.clips || [])
+		.filter((c) => !(c.thumbnailPath && fs.existsSync(c.thumbnailPath)))
+		.map((c) => ({ id: c.id, midpoint: c.in + c.duration / 2 }))
 	if (targets.length === 0) {
-		await setTask(threadId, assetId, 'thumbnails', { state: 'completed', status: 'No pieces to thumbnail' })
+		await setTask(threadId, assetId, 'thumbnails', { state: 'completed', progress: 100, status: 'Thumbnails ready' })
 		return
 	}
 
@@ -579,24 +596,120 @@ async function runDescriptionsStep(threadId: string, assetId: string, signal: Ab
 
 	if (signal.aborted) throw new Error('Aborted')
 
-	// Merge generated descriptions back into the asset's clips (by scene index).
-	const descriptionsPath = getAsset(threadId, assetId)?.preprocessing.sceneDescriptionsPath
+	// Merge generated descriptions back into the asset's clips BY TIME OVERLAP.
+	// Never by index: descriptions are 0-based scenedetect scenes, while the
+	// default clip producer (deriveClipsFromTranscript) numbers speech segments,
+	// so an index join lands descriptions on unrelated clips on any project with
+	// speech. Scenes shorter than 1s are skipped upstream, so some have none.
+	const current = getAsset(threadId, assetId)
+	const descriptionsPath = current?.preprocessing.sceneDescriptionsPath
 	if (exists(descriptionsPath)) {
-		const descriptions: { index: number; description: string; framePath: string }[] =
+		const descriptions: { index: number; startTime?: number; description: string; framePath: string }[] =
 			JSON.parse(fs.readFileSync(descriptionsPath!, 'utf-8'))
-		const byIndex = new Map(descriptions.map((d) => [d.index, d]))
 
-		await patchAsset(threadId, assetId, (current) => ({
-			clips: (current.clips || []).map((clip) => {
-				const desc = byIndex.get(clip.index - 1) // descriptions are 0-based scene indices
-				return desc
-					? { ...clip, visual: desc.description, thumbnailPath: clip.thumbnailPath || desc.framePath }
-					: clip
-			})
+		// Scene bounds: prefer scenes.json, fall back to the next description's start.
+		let sceneEnds = new Map<number, number>()
+		if (exists(current?.preprocessing.sceneTimesPath)) {
+			try {
+				const scenes: { startTime: number; endTime: number }[] =
+					JSON.parse(fs.readFileSync(current!.preprocessing.sceneTimesPath!, 'utf-8'))
+				sceneEnds = new Map(scenes.map((s, i) => [i, s.endTime]))
+			} catch { /* fall through to the start-time deltas below */ }
+		}
+		const sorted = [...descriptions]
+			.filter((d) => typeof d.startTime === 'number')
+			.sort((a, b) => a.startTime! - b.startTime!)
+		const spans = sorted.map((d, i) => ({
+			description: d,
+			start: d.startTime!,
+			end: sceneEnds.get(d.index) ?? sorted[i + 1]?.startTime ?? Number.POSITIVE_INFINITY
 		}))
+
+		if (spans.length) {
+			await patchAsset(threadId, assetId, (asset) => ({
+				clips: (asset.clips || []).map((clip) => {
+					let best: (typeof spans)[number] | undefined
+					let bestOverlap = 0
+					for (const span of spans) {
+						if (span.start >= clip.out) break
+						const overlap = Math.min(clip.out, span.end) - Math.max(clip.in, span.start)
+						if (overlap > bestOverlap) {
+							bestOverlap = overlap
+							best = span
+						}
+					}
+					return best
+						? {
+							...clip,
+							visual: best.description.description,
+							thumbnailPath: clip.thumbnailPath || best.description.framePath
+						}
+						: clip
+				})
+			}))
+		}
 	}
 
-	await setTask(threadId, assetId, 'descriptions', { state: 'completed', progress: 100 })
+	const health = await recordDescriptionHealth(threadId, assetId)
+	if (health && health.describable > 0 && health.described === 0) {
+		throw new Error('Scene descriptions failed — no scene could be described.')
+	}
+	await setTask(threadId, assetId, 'descriptions', {
+		state: 'completed',
+		progress: 100,
+		status: health && health.described < health.describable
+			? `${health.described} of ${health.describable} scenes described`
+			: `${health?.described ?? 0} scenes described`
+	})
+}
+
+/**
+ * Score description coverage and store the verdict on the asset.
+ *
+ * Derived from the artifacts rather than plumbed out of the pipeline phase, so
+ * it stays honest for the chat flow too. `describable` uses the SAME threshold
+ * the phase skips on — if the two ever drift, the coverage number lies.
+ */
+async function recordDescriptionHealth(
+	threadId: string,
+	assetId: string
+): Promise<DescriptionHealth | undefined> {
+	const asset = getAsset(threadId, assetId)
+	if (!exists(asset?.preprocessing.sceneTimesPath)) return undefined
+
+	let scenes: { duration: number }[] = []
+	try {
+		scenes = JSON.parse(fs.readFileSync(asset!.preprocessing.sceneTimesPath!, 'utf-8'))
+	} catch {
+		return undefined
+	}
+
+	let described = 0
+	if (exists(asset?.preprocessing.sceneDescriptionsPath)) {
+		try {
+			const rows = JSON.parse(fs.readFileSync(asset!.preprocessing.sceneDescriptionsPath!, 'utf-8'))
+			described = Array.isArray(rows) ? rows.filter((r) => !!r?.description).length : 0
+		} catch { /* unreadable: treated as nothing described */ }
+	}
+
+	const describable = scenes.filter((s) => s.duration >= MIN_DESCRIBABLE_DURATION).length
+	const health: DescriptionHealth = {
+		scenes: scenes.length,
+		describable,
+		described,
+		coverage: describable > 0 ? Math.min(1, described / describable) : 1,
+		checkedAt: Date.now()
+	}
+
+	if (described < describable) {
+		console.warn(
+			`[editor] scene descriptions incomplete for asset ${assetId}: ` +
+			`${described} of ${describable} scenes described`
+		)
+	}
+
+	await patchAsset(threadId, assetId, () => ({ descriptionHealth: health }))
+	return health
 }
 
 async function runAudioStep(threadId: string, assetId: string, signal: AbortSignal) {
@@ -616,8 +729,28 @@ async function runAudioStep(threadId: string, assetId: string, signal: AbortSign
 	await setTask(threadId, assetId, 'audio', { state: 'completed', progress: 100 })
 }
 
-async function runTranscriptStep(threadId: string, assetId: string, signal: AbortSignal) {
+async function runTranscriptStep(
+	threadId: string,
+	assetId: string,
+	signal: AbortSignal,
+	explicit = false
+) {
 	const asset = getAsset(threadId, assetId)!
+
+	// Transcription is the single most expensive step in the app, and the Retry
+	// button re-runs the DEFAULT chain — which includes this one. Without this
+	// guard, one click on Retry after an unrelated failure silently pays for a
+	// full re-transcription of a 45-minute file. Only skip when the work is
+	// visibly complete (artifact on disk AND text on the pieces), and never when
+	// the caller asked for this step by name.
+	if (!explicit && exists(asset.preprocessing.rawTranscriptPath) &&
+		(asset.clips || []).some((c) => !!c.text)) {
+		await setTask(threadId, assetId, 'transcript', {
+			state: 'completed', progress: 100, status: 'Already transcribed'
+		})
+		return
+	}
+
 	if (!exists(asset.preprocessing.audioPath)) {
 		throw new Error('Audio must be extracted before transcription.')
 	}
@@ -654,13 +787,118 @@ async function runTranscriptStep(threadId: string, assetId: string, signal: Abor
 			})
 			return
 		}
+		const health = await recordTranscriptHealth(threadId, assetId)
 		await setTask(threadId, assetId, 'transcript', {
-			state: 'completed', progress: 100, status: `${derived} speech segments`
+			state: 'completed',
+			progress: 100,
+			status: health?.looped
+				? `${derived} segments — transcription looped, text unreliable`
+				: health?.truncated
+					? `${derived} segments — speech stops at ${Math.round((health.lastSpeechEndSec || 0) / 60)}m of ${Math.round((health.durationSec || 0) / 60)}m`
+					: health?.hasHole
+						? `${derived} segments — ${Math.round((health.largestGapSec || 0) / 60)}m with no transcript in the middle`
+						: `${derived} speech segments`
 		})
 		return
 	}
 
+	await recordTranscriptHealth(threadId, assetId)
 	await setTask(threadId, assetId, 'transcript', { state: 'completed', progress: 100 })
+}
+
+/** Score the transcript for repetition loops and store the verdict on the asset. */
+async function recordTranscriptHealth(
+	threadId: string,
+	assetId: string
+): Promise<TranscriptHealth | undefined> {
+	const asset = getAsset(threadId, assetId)
+	const clips = asset?.clips || []
+	if (!clips.length) return undefined
+	const health = analyzeTranscriptHealth(clips, { durationSec: asset?.metadata?.duration })
+	if (health.looped) {
+		console.warn(
+			`[editor] transcript loop in asset ${assetId}: ${health.maxRepeatRun} identical lines, ` +
+			`${Math.round(health.loopedSeconds)}s affected`
+		)
+	}
+	if (health.truncated) {
+		console.warn(
+			`[editor] transcript truncated in asset ${assetId}: speech ends at ` +
+			`${Math.round(health.lastSpeechEndSec || 0)}s of ${Math.round(health.durationSec || 0)}s`
+		)
+	}
+	if (health.hasHole) {
+		console.warn(
+			`[editor] transcript hole in asset ${assetId}: ${Math.round(health.largestGapSec || 0)}s ` +
+			`with no speech starting at ${Math.round(health.gapAtSec || 0)}s`
+		)
+	}
+	await patchAsset(threadId, assetId, () => ({ transcriptHealth: health }))
+	return health
+}
+
+/**
+ * Repair a bad transcript: re-run it through the correction model, which gets
+ * the audio AND the previous attempt, then rebuild the pieces from the result.
+ *
+ * The plain 'transcript' step cannot do this — it merges into existing pieces
+ * whenever the asset has any, so a looped transcript would keep its thousands
+ * of junk pieces and only have their text rewritten.
+ */
+async function runRetranscribeStep(threadId: string, assetId: string, signal: AbortSignal) {
+	const asset = getAsset(threadId, assetId)!
+	if (!exists(asset.preprocessing.audioPath)) {
+		throw new Error('Audio must be extracted before re-transcribing.')
+	}
+	if (!exists(asset.preprocessing.rawTranscriptPath)) {
+		throw new Error('There is no transcript to correct yet — run Transcribe first.')
+	}
+
+	// Pieces that came from the transcript are ours to rebuild; scene-detected
+	// pieces are the user's structure and only get their text refreshed.
+	const clips = asset.clips || []
+	const fromTranscript = clips.length > 0 &&
+		clips.every((c) => c.masterSegmentIndex === undefined && c.text !== undefined)
+
+	await setTask(threadId, assetId, 'retranscribe', {
+		state: 'running', status: 'Re-checking the audio against the transcript…', progress: 10
+	})
+
+	const context = createAssetContext(threadId, assetId, 'retranscribe', signal)
+	await extraction.extractCorrectedTranscript({}, context)
+
+	if (signal.aborted) throw new Error('Aborted')
+
+	await setTask(threadId, assetId, 'retranscribe', {
+		state: 'running', status: 'Rebuilding pieces…', progress: 80
+	})
+
+	if (fromTranscript) {
+		// Do NOT clear the pieces first: derivation takes its bounds from the new
+		// transcript regardless, and it uses the existing pieces to carry over
+		// thumbnails and descriptions for segments that did not move. Wiping them
+		// threw away every thumbnail on the asset.
+		const derived = await deriveClipsFromTranscript(threadId, assetId)
+		if (derived === 0) {
+			throw new Error('The corrected transcript had no usable speech segments.')
+		}
+	} else {
+		await mergeTranscriptIntoClips(threadId, assetId)
+	}
+
+	// Segments that shifted have no thumbnail to inherit — fill those in.
+	await runThumbnailsStep(threadId, assetId, signal)
+
+	const health = await recordTranscriptHealth(threadId, assetId)
+	await setTask(threadId, assetId, 'retranscribe', {
+		state: 'completed',
+		progress: 100,
+		status: health?.looped
+			? 'Still looping — the audio may be unclear in that span'
+			: health?.truncated
+				? 'Still incomplete — speech stops before the end of the file'
+				: 'Transcript repaired'
+	})
 }
 
 // Cap total strip frames per asset so a multi-hour source stays one bounded
@@ -750,8 +988,12 @@ export async function preprocessMediaAsset(
 	if (!asset) return
 	if (isAssetPreprocessing(threadId, assetId)) return // already running
 
-	const steps = options?.steps?.length
-		? options.steps
+	// "Explicit" = the caller named the steps (Transcribe/Describe buttons,
+	// repair flows). The default chain is a resume, so steps whose work already
+	// exists skip themselves rather than re-billing for it.
+	const explicitSteps = !!options?.steps?.length
+	const steps = explicitSteps
+		? options!.steps!
 		: asset.kind === 'audio' ? AUDIO_STEPS : DEFAULT_STEPS
 	const controller = new AbortController()
 	// Every ffmpeg call (one per scene thumbnail) attaches an abort listener to
@@ -785,7 +1027,9 @@ export async function preprocessMediaAsset(
 					case 'thumbnails': await runThumbnailsStep(threadId, assetId, signal); break
 					case 'descriptions': await runDescriptionsStep(threadId, assetId, signal); break
 					case 'audio': await runAudioStep(threadId, assetId, signal); break
-					case 'transcript': await runTranscriptStep(threadId, assetId, signal); break
+					case 'transcript': await runTranscriptStep(threadId, assetId, signal, explicitSteps); break
+				// Explicitly requested repair — surfaces its errors, never soft-fails.
+				case 'retranscribe': await runRetranscribeStep(threadId, assetId, signal); break
 					case 'filmstrip': await runFilmstripStep(threadId, assetId, signal); break
 					case 'segment': await runSegmentStep(threadId, assetId, signal); break
 				}

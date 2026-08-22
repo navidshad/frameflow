@@ -57,6 +57,29 @@
 							Level for this clip in the exported audio mix. 1.0× is unchanged.
 						</p>
 					</div>
+
+					<!-- Audio fades (applied in preview + export) -->
+					<div class="grid grid-cols-2 gap-2">
+						<div>
+							<label class="text-[10px] font-bold uppercase tracking-widest text-zinc-500 block mb-1">
+								Fade in (s)
+							</label>
+							<input type="number" min="0" step="0.1" :value="fadeInValue"
+								class="w-full px-2 py-1.5 rounded-lg border border-zinc-200 dark:border-zinc-700 bg-white dark:bg-zinc-900 text-xs font-mono text-zinc-800 dark:text-zinc-200 input-focus-ring"
+								@change="editorStore.setItemFade(timelineItem!.id, 'in', parseFloat(($event.target as HTMLInputElement).value))" />
+						</div>
+						<div>
+							<label class="text-[10px] font-bold uppercase tracking-widest text-zinc-500 block mb-1">
+								Fade out (s)
+							</label>
+							<input type="number" min="0" step="0.1" :value="fadeOutValue"
+								class="w-full px-2 py-1.5 rounded-lg border border-zinc-200 dark:border-zinc-700 bg-white dark:bg-zinc-900 text-xs font-mono text-zinc-800 dark:text-zinc-200 input-focus-ring"
+								@change="editorStore.setItemFade(timelineItem!.id, 'out', parseFloat(($event.target as HTMLInputElement).value))" />
+						</div>
+						<p class="col-span-2 -mt-1 text-[9px] text-zinc-400 leading-snug">
+							Audio ramps at the clip's edges — heard in preview and applied at export.
+						</p>
+					</div>
 				</div>
 
 				<!-- Actions -->
@@ -146,27 +169,46 @@
 				</dl>
 				<p v-else class="mt-3 text-xs text-zinc-400">Metadata unavailable for this file.</p>
 
-				<!-- Opt-in Gemini descriptions -->
-				<div v-if="asset.preprocessState === 'completed' && asset.clips.length > 0" class="mt-5">
+				<!-- Opt-in Gemini extras. Shown on 'error' too: these are optional,
+				     and an unrelated step failure must not take away the only way to
+				     run them (leaving Retry, which re-runs the default steps). -->
+				<div v-if="(asset.preprocessState === 'completed' || asset.preprocessState === 'error') && asset.clips.length > 0" class="mt-5">
 					<!-- Scene descriptions are visual (thumbnail-derived) — video only -->
 					<template v-if="asset.kind !== 'audio'">
 						<button v-if="!hasDescriptions"
 							class="w-full px-3 py-2 rounded-xl border border-secondary/40 text-secondary text-xs font-bold hover:bg-secondary/10 transition active:scale-95 disabled:opacity-50"
 							:disabled="describing" @click="describe">
 							<span class="iconify tabler--sparkles w-3.5 h-3.5 inline-block align-[-2px] mr-1"></span>
-							{{ describing ? 'Describing scenes…' : 'Describe scenes (uses Gemini)' }}
+							{{ describing ? 'Describing scenes…' : `Describe scenes (${descriptionModel})` }}
 						</button>
 						<p v-if="!hasDescriptions" class="mt-1.5 text-[10px] text-zinc-400 leading-snug">
 							Generates a one-line description per piece for the context view. Costs tokens.
 						</p>
 						<div v-else class="flex items-center justify-between gap-2">
-							<p class="text-[11px] text-accent font-medium">
+							<p v-if="missingDescriptions" class="text-[11px] text-amber-500 font-medium">
+								<span class="iconify tabler--alert-triangle w-3 h-3 inline-block align-[-1px]"></span>
+								Scene descriptions incomplete
+							</p>
+							<p v-else class="text-[11px] text-accent font-medium">
 								<span class="iconify tabler--check w-3 h-3 inline-block align-[-1px]"></span>
 								Scene descriptions ready
 							</p>
 							<button class="text-[10px] font-bold uppercase tracking-widest text-zinc-400 hover:text-red-500 transition"
 								@click="editorStore.clearAssetData(asset.id, 'descriptions')">
 								Remove
+							</button>
+						</div>
+						<div v-if="hasDescriptions && missingDescriptions"
+							class="mt-2 px-2.5 py-2 rounded-lg bg-amber-500/10 border border-amber-500/20">
+							<p class="text-[10px] font-medium text-amber-600 dark:text-amber-400 leading-snug">
+								<span class="font-mono">{{ missingDescriptions }}</span> of
+								<span class="font-mono">{{ descriptionHealth?.describable }}</span> scenes came back with no
+								description. The AI editor has no visual context for those spans.
+							</p>
+							<button
+								class="mt-2 w-full px-3 py-1.5 rounded-lg bg-amber-500/15 text-amber-600 dark:text-amber-400 text-[10px] font-bold uppercase tracking-widest hover:bg-amber-500/25 transition active:scale-95 disabled:opacity-50"
+								:disabled="describing" @click="describe">
+								{{ describing ? 'Describing scenes…' : `Describe remaining (${descriptionModel})` }}
 							</button>
 						</div>
 					</template>
@@ -177,19 +219,56 @@
 							class="w-full px-3 py-2 rounded-xl border border-secondary/40 text-secondary text-xs font-bold hover:bg-secondary/10 transition active:scale-95 disabled:opacity-50"
 							:disabled="transcribing" @click="transcribe">
 							<span class="iconify tabler--file-text w-3.5 h-3.5 inline-block align-[-2px] mr-1"></span>
-							{{ transcribing ? 'Transcribing…' : 'Transcribe (uses Gemini)' }}
+							{{ transcribing ? 'Transcribing…' : `Transcribe (${transcriptModel})` }}
 						</button>
 						<p v-if="!hasTranscript" class="mt-1.5 text-[10px] text-zinc-400 leading-snug">
 							Adds spoken text to each piece and enriches AI editing context. Costs tokens.
 						</p>
 						<div v-else class="flex items-center justify-between gap-2">
-							<p class="text-[11px] text-accent font-medium">
+							<p v-if="badTranscript" class="text-[11px] text-amber-500 font-medium">
+								<span class="iconify tabler--alert-triangle w-3 h-3 inline-block align-[-1px]"></span>
+								{{ badTranscript.looped ? 'Transcript unreliable' : 'Transcript incomplete' }}
+							</p>
+							<p v-else class="text-[11px] text-accent font-medium">
 								<span class="iconify tabler--check w-3 h-3 inline-block align-[-1px]"></span>
 								Transcript ready
 							</p>
 							<button class="text-[10px] font-bold uppercase tracking-widest text-zinc-400 hover:text-red-500 transition"
 								@click="editorStore.clearAssetData(asset.id, 'transcript')">
 								Remove
+							</button>
+						</div>
+						<div v-if="badTranscript"
+							class="mt-2 px-2.5 py-2 rounded-lg bg-amber-500/10 border border-amber-500/20">
+							<p v-if="badTranscript.looped"
+								class="text-[10px] font-medium text-amber-600 dark:text-amber-400 leading-snug">
+								Speech-to-text looped here: one line repeats
+								<span class="font-mono">{{ badTranscript.maxRepeatRun }}</span> times across
+								<span class="font-mono">{{ formatSpan(badTranscript.loopedSeconds) }}</span> of audio.
+								The footage is fine, but the AI editor cannot tell what is said in that span.
+							</p>
+							<p v-else-if="badTranscript.truncated"
+								class="text-[10px] font-medium text-amber-600 dark:text-amber-400 leading-snug">
+								Transcription stopped early: speech ends at
+								<span class="font-mono">{{ formatSpan(badTranscript.lastSpeechEndSec || 0) }}</span> of
+								<span class="font-mono">{{ formatSpan(badTranscript.durationSec || 0) }}</span>.
+								The AI editor sees the rest of this file as silence.
+							</p>
+							<p v-else class="text-[10px] font-medium text-amber-600 dark:text-amber-400 leading-snug">
+								A stretch in the middle has no transcript:
+								<span class="font-mono">{{ formatSpan(badTranscript.largestGapSec || 0) }}</span> with no
+								speech starting at
+								<span class="font-mono">{{ formatSpan(badTranscript.gapAtSec || 0) }}</span>.
+								The AI editor reads that span as dead air and will cut it.
+							</p>
+							<p v-if="badTranscript.looped && badTranscript.repeatedText"
+								class="mt-1 text-[10px] text-zinc-500 italic truncate" :title="badTranscript.repeatedText">
+								“{{ badTranscript.repeatedText }}”
+							</p>
+							<button
+								class="mt-2 w-full px-3 py-1.5 rounded-lg bg-amber-500/15 text-amber-600 dark:text-amber-400 text-[10px] font-bold uppercase tracking-widest hover:bg-amber-500/25 transition active:scale-95 disabled:opacity-50"
+								:disabled="retranscribing" @click="editorStore.repairTranscript(asset.id)">
+								{{ retranscribing ? 'Re-transcribing…' : `Re-transcribe (${correctionModel})` }}
 							</button>
 						</div>
 					</div>
@@ -233,6 +312,8 @@ const trackName = computed(() =>
 )
 
 const gainValue = computed(() => timelineItem.value?.gain ?? 1)
+const fadeInValue = computed(() => timelineItem.value?.fadeInSec ?? 0)
+const fadeOutValue = computed(() => timelineItem.value?.fadeOutSec ?? 0)
 
 const onSpeedInput = (event: Event) => {
 	const value = parseFloat((event.target as HTMLInputElement).value)
@@ -248,13 +329,49 @@ const onDurationInput = (event: Event) => {
 	}
 }
 
+/** Set by the descriptions step: how many scenes actually got described. */
+const descriptionHealth = computed(() => asset.value?.descriptionHealth || null)
+
+// `some` on its own reported "ready" when one batch out of seven survived, and
+// hid the Describe button so the run could not be finished. Fall back to it
+// only for assets described before coverage was recorded.
 const hasDescriptions = computed(() =>
-	(asset.value?.clips || []).some((c) => !!c.visual)
+	descriptionHealth.value
+		? descriptionHealth.value.described > 0
+		: (asset.value?.clips || []).some((c) => !!c.visual)
 )
+
+const missingDescriptions = computed(() => {
+	const health = descriptionHealth.value
+	return health ? Math.max(0, health.describable - health.described) : 0
+})
 
 const hasTranscript = computed(() =>
 	(asset.value?.clips || []).some((c) => !!c.text)
 )
+
+/** Set by the transcript step when speech-to-text looped or stopped early. */
+const badTranscript = computed(() => {
+	const health = asset.value?.transcriptHealth
+	return health && (health.looped || health.truncated || health.hasHole) ? health : null
+})
+
+// Each of these buttons spends tokens, and which model it spends them on is
+// configurable in Settings — so name it rather than just saying "Gemini".
+const transcriptModel = computed(() => editorStore.modelLabelFor('raw-transcript'))
+const correctionModel = computed(() => editorStore.modelLabelFor('corrected-transcript'))
+const descriptionModel = computed(() => editorStore.modelLabelFor('scene-description'))
+
+const retranscribing = computed(() =>
+	!!asset.value && editorStore.assetTasks(asset.value.id)
+		.some((t) => t.id.endsWith(':retranscribe') && t.state === 'running')
+)
+
+const formatSpan = (seconds: number) => {
+	const total = Math.round(seconds)
+	const m = Math.floor(total / 60)
+	return m >= 1 ? `${m}m ${total % 60}s` : `${total}s`
+}
 
 const formatTime = (seconds: number) => {
 	const m = Math.floor(seconds / 60)

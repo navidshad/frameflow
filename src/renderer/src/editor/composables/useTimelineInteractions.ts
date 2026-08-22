@@ -1,7 +1,7 @@
 import { ref } from 'vue'
 import type { TimelineItem } from '@shared/types'
 import type { TimelineState } from '@shared/timeline'
-import { itemEnd, itemDuration, MIN_ITEM_DURATION } from '@shared/timeline'
+import { itemEnd, itemDuration, solveTrim } from '@shared/timeline'
 import { useEditorStore } from '../../stores/editorStore'
 import type { TimelineViewport } from './useTimelineViewport'
 
@@ -38,7 +38,11 @@ export function useTimelineInteractions(viewport: TimelineViewport) {
 	const snapCandidates = (ignoreId?: string): number[] => {
 		const times: number[] = [0, store.playheadSec]
 		for (const m of store.markers) times.push(m.time)
-		for (const other of doc().timeline) {
+		// Snap to the layout as it was at pointerdown. During a ripple the
+		// downstream edges move WITH the drag, so snapping to a live edge makes
+		// the gesture chase itself. Safe for moves too: the only item that
+		// differs from the snapshot mid-move is the one already excluded.
+		for (const other of gestureBefore?.timeline ?? doc().timeline) {
 			if (other.id === ignoreId) continue
 			times.push(other.timelineStart, itemEnd(other))
 		}
@@ -206,56 +210,34 @@ export function useTimelineInteractions(viewport: TimelineViewport) {
 
 	const trimTick = (e: PointerEvent) => {
 		const target = item()
-		if (!target) return
+		if (!target || !gestureBefore) return
+		// Alt is read LIVE: hold or release Option mid-drag and the next move
+		// re-solves from the snapshot, so the ripple turns on and off cleanly.
+		// (Only safe because solveTrim always returns follower positions — with
+		// the delta applied or not — so turning it off puts them back.)
+		trimRipple = e.altKey
+
 		const asset = doc().media.find((a) => a.id === target.sourceAssetId)
-		const sourceDuration = asset?.metadata?.duration ?? Number.POSITIVE_INFINITY
-		const speed = target.speed || 1
 		const t = applySnap(pointerToTime(e), target.id)
-		const before = gestureBefore!.timeline.find((i) => i.id === target.id)!
-		const oldDuration = itemDuration(target)
+		// A rippling head trim pins the head, so nothing lands on the snapped
+		// time — don't draw a guide at a place the user cannot hit.
+		if (trimRipple && trimEdge === 'left') snapGuideSec.value = null
 
-		if (trimEdge === 'left') {
-			// Moving the left edge changes timelineStart AND in together
-			const maxStart = target.timelineStart + itemDuration(target) - MIN_ITEM_DURATION
-			let newStart = Math.min(Math.max(0, t), maxStart)
-			// Clamp against the left neighbor ALWAYS (ripple shifts downstream
-			// items, but the item's own start must never overlap its predecessor)
-			const leftNeighborEnd = doc().timeline
-				.filter((o) => o.id !== target.id && o.trackId === target.trackId && itemEnd(o) <= before.timelineStart + 1e-6)
-				.reduce((max, o) => Math.max(max, itemEnd(o)), 0)
-			newStart = Math.max(newStart, leftNeighborEnd)
-			const newIn = target.in + (newStart - target.timelineStart) * speed
-			if (newIn < 0) return
-			target.in = newIn
-			target.timelineStart = newStart
-			target.duration = (target.out - target.in) / speed
-		} else {
-			// Moving the right edge changes out
-			const minEnd = target.timelineStart + MIN_ITEM_DURATION
-			let newEnd = Math.max(t, minEnd)
-			if (!trimRipple) {
-				const rightNeighborStart = doc().timeline
-					.filter((o) => o.id !== target.id && o.trackId === target.trackId && o.timelineStart >= itemEnd(before) - 1e-6)
-					.reduce((min, o) => Math.min(min, o.timelineStart), Number.POSITIVE_INFINITY)
-				newEnd = Math.min(newEnd, rightNeighborStart)
-			}
-			const newOut = target.in + (newEnd - target.timelineStart) * speed
-			if (newOut > sourceDuration + 0.01) return
-			target.out = newOut
-			target.duration = (target.out - target.in) / speed
-		}
+		const solved = solveTrim(gestureBefore, target.id, trimEdge, t, {
+			ripple: trimRipple,
+			sourceDuration: asset?.metadata?.duration
+		})
+		if (!solved) return
 
-		// Ripple-trim: shift downstream items by the duration delta
-		if (trimRipple) {
-			const delta = itemDuration(target) - oldDuration
-			if (Math.abs(delta) > 1e-9) {
-				for (const other of doc().timeline) {
-					if (other.id !== target.id && other.trackId === target.trackId &&
-						other.timelineStart > before.timelineStart) {
-						other.timelineStart = Math.max(0, other.timelineStart + delta)
-					}
-				}
-			}
+		target.timelineStart = solved.item.timelineStart
+		target.in = solved.item.in
+		target.out = solved.item.out
+		target.duration = solved.item.duration
+
+		const byId = new Map(doc().timeline.map((i) => [i.id, i]))
+		for (const shift of solved.shifts) {
+			const other = byId.get(shift.id)
+			if (other) other.timelineStart = shift.timelineStart
 		}
 	}
 

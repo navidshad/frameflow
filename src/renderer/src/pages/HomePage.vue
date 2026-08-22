@@ -10,45 +10,49 @@
 					<div class="animate-spin rounded-lg h-10 w-10 border-4 border-primary border-t-transparent"></div>
 				</div>
 
-				<EmptyState v-else-if="videoStore.threads.length === 0" @create="router.push('/upload')" />
+				<template v-else>
+					<!-- Intro only. The ways to start are the cards below, in BOTH states —
+					     a separate empty-state action used to offer just one of them. -->
+					<EmptyState v-if="videoStore.threads.length === 0" />
 
-				<div v-else class="grid gap-10 md:grid-cols-2 lg:grid-cols-3 pb-20">
-					<!-- New Video Edit Card -->
-					<NewThreadCard 
-						title="New Video Edit" 
-						description="Transform your video into a concise masterpiece"
-						@click="router.push('/upload')" 
-					/>
+					<div class="grid gap-10 md:grid-cols-2 lg:grid-cols-3 pb-20">
+						<!-- New Video Edit Card -->
+						<NewThreadCard
+							title="New Video Edit"
+							description="Transform your video into a concise masterpiece"
+							@click="router.push('/upload')"
+						/>
 
-					<!-- New Image Edit Card -->
-					<NewThreadCard
-						title="New Image Edit"
-						description="Create stunning visuals from your image collection"
-						@click="handleCreateImageEdit"
-					>
-						<template #icon>
-							<svg xmlns="http://www.w3.org/2000/svg" class="w-6 h-6" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-								<rect x="3" y="3" width="18" height="18" rx="2" ry="2"/><circle cx="8.5" cy="8.5" r="1.5"/><polyline points="21 15 16 10 5 21"/>
-							</svg>
-						</template>
-					</NewThreadCard>
+						<!-- New Image Edit Card -->
+						<NewThreadCard
+							title="New Image Edit"
+							description="Create stunning visuals from your image collection"
+							@click="handleCreateImageEdit"
+						>
+							<template #icon>
+								<svg xmlns="http://www.w3.org/2000/svg" class="w-6 h-6" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+									<rect x="3" y="3" width="18" height="18" rx="2" ry="2"/><circle cx="8.5" cy="8.5" r="1.5"/><polyline points="21 15 16 10 5 21"/>
+								</svg>
+							</template>
+						</NewThreadCard>
 
-					<!-- Video Editor Card -->
-					<NewThreadCard
-						title="Video Editor"
-						description="Cut and arrange clips on a multi-track timeline"
-						@click="handleCreateEditorProject"
-					>
-						<template #icon>
-							<svg xmlns="http://www.w3.org/2000/svg" class="w-6 h-6" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-								<rect x="3" y="5" width="18" height="4" rx="1"/><rect x="3" y="12" width="12" height="4" rx="1"/><line x1="8" y1="3" x2="8" y2="21"/>
-							</svg>
-						</template>
-					</NewThreadCard>
+						<!-- Video Editor Card -->
+						<NewThreadCard
+							title="Video Editor"
+							description="Cut and arrange clips on a multi-track timeline"
+							@click="handleCreateEditorProject"
+						>
+							<template #icon>
+								<svg xmlns="http://www.w3.org/2000/svg" class="w-6 h-6" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+									<rect x="3" y="5" width="18" height="4" rx="1"/><rect x="3" y="12" width="12" height="4" rx="1"/><line x1="8" y1="3" x2="8" y2="21"/>
+								</svg>
+							</template>
+						</NewThreadCard>
 
-					<ThreadCard v-for="(thread, index) in videoStore.threads" :key="thread.id" :thread="thread"
-						@open="openThread" @delete="handleDeleteThread" />
-				</div>
+						<ThreadCard v-for="thread in videoStore.threads" :key="thread.id" :thread="thread"
+							@open="openThread" @delete="handleDeleteThread" />
+					</div>
+				</template>
 			</div>
 		</div>
 	</div>

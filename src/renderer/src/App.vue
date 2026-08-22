@@ -10,6 +10,11 @@
         <IconButton @click="router.push('/settings')" icon="IconSettings" size="sm"/>
         <IconButton @click="toggleTheme" :icon="appStore.theme === 'light' ? 'IconMoon' : 'IconSun'" size="sm"/>
       </div>
+
+      <!-- Background export pills (renders keep running across page/project switches) -->
+      <div class="absolute top-16 right-4 z-50">
+        <GlobalRenderPill />
+      </div>
       
       <!-- Main Content -->
       <div class="relative z-10 h-full w-full">
@@ -25,6 +30,7 @@ import { useAppStore } from 'pilotui/store'
 import { IconButton } from 'pilotui/elements'
 import { onMounted, watch } from 'vue'
 import { useRouter } from 'vue-router'
+import GlobalRenderPill from './components/GlobalRenderPill.vue'
 
 const appStore = useAppStore()
 const router = useRouter()

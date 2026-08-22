@@ -355,7 +355,12 @@ export async function clearAssetData(
 			const clips = a.clips.map((c) =>
 				kind === 'transcript' ? { ...c, text: undefined } : { ...c, visual: undefined }
 			)
-			return { ...a, preprocessing, clips }
+			// Clear the health verdict too, or a cleared asset keeps showing the
+			// last run's "incomplete" banner with nothing behind it.
+			const { transcriptHealth, descriptionHealth, ...rest } = a
+			return kind === 'transcript'
+				? { ...rest, descriptionHealth, preprocessing, clips }
+				: { ...rest, transcriptHealth, preprocessing, clips }
 		})
 		// Drop the step's namespaced task(s) so a re-run reads as fresh.
 		const backgroundTasks = { ...(t.backgroundTasks || {}) }

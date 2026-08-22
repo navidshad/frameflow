@@ -1,15 +1,14 @@
 import { BrowserWindow } from 'electron'
 import { v4 as uuidv4 } from 'uuid'
-import type {
-	EditorDocument, EditorOps, EditorPersona, PromptTurn, Thread, TimelineDiff, TimelineItem
-} from '@shared/types'
-import { computeContentEnd, itemEnd, TIMELINE_DIFF_SCHEMA_VERSION } from '@shared/timeline'
+import type { EditorDocument, EditorOps, EditorPersona, PromptTurn, Thread } from '@shared/types'
+import { applyTimelineDiff, computeContentEnd, itemDuration } from '@shared/timeline'
 import { threadManager } from '../threads'
 import { settingsManager } from '../settings'
 import { GeminiAdapter } from '../gemini/adapter'
 import { GEMINI_MODEL_2_5_FLASH } from '../constants/gemini'
-import { BUILTIN_PERSONAS, DEFAULT_PERSONA_ID } from '../constants/personas'
+import { BUILTIN_PERSONAS, DEFAULT_PERSONA_ID, effectiveMode } from '../constants/personas'
 import { buildPromptContext } from './context'
+import { composeSystemInstruction, EDITOR_OPS_SCHEMA, opsToDiff, type PromptStats } from './ops'
 
 /**
  * AI prompt orchestrator for the timeline editor (PRD §5.7).
@@ -17,227 +16,18 @@ import { buildPromptContext } from './context'
  * contract + windowed context -> EditorOps -> TimelineDiff (opsToDiff).
  * Streams turn state over the dedicated `editor-turn-update` event.
  * The base document is NEVER mutated here — the renderer applies the diff
- * only on user accept (commitStep with origin 'ai').
+ * when the turn completes and records it as a revision.
  */
 
-// ===== Ops schema (constrained on purpose — see EditorOps in shared/types) =====
-export const EDITOR_OPS_SCHEMA = {
-	type: 'object',
-	properties: {
-		answer: {
-			type: 'string',
-			description: 'Only when the request is a question — answer it and propose no operations'
-		},
-		rationale: {
-			type: 'string',
-			description: 'Plain-language explanation of the proposed edit, citing scene descriptions'
-		},
-		removeItemIds: { type: 'array', items: { type: 'string' } },
-		updateItems: {
-			type: 'array',
-			items: {
-				type: 'object',
-				properties: {
-					id: { type: 'string' },
-					timelineStart: { type: 'number' },
-					in: { type: 'number' },
-					out: { type: 'number' },
-					speed: { type: 'number' },
-					label: { type: 'string' }
-				},
-				required: ['id']
-			}
-		},
-		addClips: {
-			type: 'array',
-			items: {
-				type: 'object',
-				properties: {
-					assetId: { type: 'string' },
-					sceneIndex: { type: 'integer', description: "A scene # from that asset's AVAILABLE SCENES list" },
-					in: { type: 'number' },
-					out: { type: 'number' },
-					atSec: { type: 'number' },
-					afterItemId: { type: 'string' },
-					label: { type: 'string' }
-				},
-				required: ['assetId']
-			}
-		},
-		addMarkers: {
-			type: 'array',
-			items: {
-				type: 'object',
-				properties: {
-					atSec: { type: 'number' },
-					label: { type: 'string' }
-				},
-				required: ['atSec', 'label']
-			}
-		}
-	}
-}
+// The ops contract lives in ./ops so it stays free of Electron imports (testable).
+export { EDITOR_OPS_SCHEMA, composeSystemInstruction, opsToDiff }
 
-// ===== System instruction composition =====
-export function composeSystemInstruction(persona: EditorPersona): string {
-	const defaults = persona.defaults || {}
-	const durationLine = defaults.targetDurationSec != null
-		? `Target output duration: about ${defaults.targetDurationSec} seconds. Cut toward this target.`
-		: 'No length target — PRESERVE the full runtime. Make editorial improvements (remove dead air, tighten with retime, reorder, chapter) without shrinking the substantive content.'
-
-	return [
-		persona.systemPrompt,
-		'',
-		'=== EDITOR CONTRACT (always applies) ===',
-		'You are proposing an edit to a video timeline in a non-linear editor. You receive the',
-		"current timeline items (each with a stable id), the project's media assets with their",
-		'detected scenes, and a user request.',
-		'- If the request is a QUESTION about the project, put the answer in `answer` and',
-		'  propose no operations.',
-		'- Otherwise propose ONE coherent edit:',
-		'  - Reference existing timeline items ONLY by their exact `id` from the items list.',
-		'  - Add new material ONLY via `addClips`, referencing an `assetId` plus a scene `#`',
-		"    from that asset's AVAILABLE SCENES list (preferred), or explicit in/out seconds",
-		"    within the asset's duration.",
-		'  - Never invent ids or scene numbers. All times are seconds.',
-		'  - `updateItems` may change timelineStart, in, out, speed (0.25-4.0), label.',
-		'    Never set durations — they are derived from (out - in) / speed.',
-		'  - Only modify items listed in the items section.',
-		'- Always include a short `rationale` describing what you changed and why, citing',
-		'  scene descriptions where available.',
-		'',
-		'=== ACTIVE PERSONA DEFAULTS ===',
-		`Tone: ${persona.tone || 'neutral'}. Pacing: ${defaults.pacing || 'balanced'}.`,
-		durationLine,
-		defaults.aspectRatio ? `Target aspect ratio: ${defaults.aspectRatio}.` : ''
-	].filter(Boolean).join('\n')
-}
-
-// ===== Ops -> TimelineDiff mapping =====
-export function opsToDiff(
-	ops: EditorOps,
-	doc: EditorDocument
-): { diff: TimelineDiff; addMarkers: { time: number; label: string }[]; droppedOps: string[] } {
-	const droppedOps: string[] = []
-	const diff: TimelineDiff = { schemaVersion: TIMELINE_DIFF_SCHEMA_VERSION }
-	const itemIds = new Set(doc.timeline.map((i) => i.id))
-
-	// Removals
-	if (ops.removeItemIds?.length) {
-		const known = ops.removeItemIds.filter((id) => itemIds.has(id))
-		for (const id of ops.removeItemIds) {
-			if (!itemIds.has(id)) droppedOps.push(`remove: unknown item ${id}`)
-		}
-		if (known.length) diff.removeItemIds = known
-	}
-
-	// Updates (whitelist fields; validation happens in applyTimelineDiff)
-	if (ops.updateItems?.length) {
-		const updates: NonNullable<TimelineDiff['updateItems']> = []
-		for (const update of ops.updateItems) {
-			if (!itemIds.has(update.id)) {
-				droppedOps.push(`update: unknown item ${update.id}`)
-				continue
-			}
-			const clean: { id: string } & Partial<TimelineItem> = { id: update.id }
-			if (typeof update.timelineStart === 'number') clean.timelineStart = update.timelineStart
-			if (typeof update.in === 'number') clean.in = update.in
-			if (typeof update.out === 'number') clean.out = update.out
-			if (typeof update.speed === 'number') clean.speed = update.speed
-			if (typeof update.label === 'string') clean.label = update.label
-			if (Object.keys(clean).length > 1) updates.push(clean)
-		}
-		if (updates.length) diff.updateItems = updates
-	}
-
-	// Adds: resolve asset + scene references; ids generated HERE, never by the model
-	if (ops.addClips?.length) {
-		const adds: TimelineItem[] = []
-		// Sequential placement cursor for adds without explicit position
-		let appendCursor = computeContentEnd(doc.timeline)
-		const targetTrack = [...doc.tracks]
-			.sort((a, b) => a.order - b.order)
-			.find((t) => t.kind === 'video' && !t.locked && !t.hidden)
-
-		for (const add of ops.addClips) {
-			const asset = doc.media.find((a) => a.id === add.assetId)
-			if (!asset) {
-				droppedOps.push(`add: unknown asset ${add.assetId}`)
-				continue
-			}
-			if (!targetTrack) {
-				droppedOps.push('add: no unlocked video track available')
-				break
-			}
-
-			let sourceIn: number | undefined
-			let sourceOut: number | undefined
-			let sourceClipId: string | undefined
-			let masterSegmentIndex: number | undefined
-			let label = add.label
-
-			if (typeof add.sceneIndex === 'number') {
-				const clip = asset.clips.find((c) => c.index === add.sceneIndex)
-				if (!clip) {
-					droppedOps.push(`add: unknown scene #${add.sceneIndex} of ${asset.name}`)
-					continue
-				}
-				sourceIn = clip.in
-				sourceOut = clip.out
-				sourceClipId = clip.id
-				masterSegmentIndex = clip.masterSegmentIndex
-				label = label || clip.visual?.slice(0, 40) || `Piece #${clip.index}`
-			} else if (typeof add.in === 'number' && typeof add.out === 'number') {
-				const assetDuration = asset.metadata?.duration ?? Number.POSITIVE_INFINITY
-				if (!(add.in >= 0 && add.out > add.in && add.out <= assetDuration + 0.01)) {
-					droppedOps.push(`add: invalid range ${add.in}-${add.out} for ${asset.name}`)
-					continue
-				}
-				sourceIn = add.in
-				sourceOut = add.out
-				label = label || asset.name
-			} else {
-				droppedOps.push(`add: neither sceneIndex nor in/out given for ${asset.name}`)
-				continue
-			}
-
-			// Placement: explicit atSec > after a known item > append at end
-			let timelineStart: number
-			if (typeof add.atSec === 'number' && add.atSec >= 0) {
-				timelineStart = add.atSec
-			} else if (add.afterItemId && itemIds.has(add.afterItemId)) {
-				const anchor = doc.timeline.find((i) => i.id === add.afterItemId)!
-				timelineStart = itemEnd(anchor)
-			} else {
-				timelineStart = appendCursor
-			}
-
-			const duration = sourceOut! - sourceIn!
-			adds.push({
-				id: uuidv4(),
-				trackId: targetTrack.id,
-				sourceAssetId: asset.id,
-				sourceClipId,
-				masterSegmentIndex,
-				timelineStart,
-				in: sourceIn!,
-				out: sourceOut!,
-				speed: 1.0,
-				preservePitch: true,
-				duration,
-				label
-			})
-			appendCursor = Math.max(appendCursor, timelineStart + duration)
-		}
-		if (adds.length) diff.addItems = adds
-	}
-
-	const addMarkers = (ops.addMarkers || [])
-		.filter((m) => typeof m.atSec === 'number' && m.atSec >= 0 && m.label)
-		.map((m) => ({ time: m.atSec, label: m.label }))
-
-	return { diff, addMarkers, droppedOps }
-}
+/** Reserve enough output for a large assembly; thinking draws from this budget too. */
+const EDITOR_MAX_OUTPUT_TOKENS = 32_768
+/** Below this fraction of the source, a build-from-scratch turn is flagged short. */
+const BUILD_SHORTFALL_RATIO = 0.7
+/** Never nag about shortfall on tiny test clips. */
+const BUILD_MIN_SOURCE_SEC = 600
 
 // ===== Turn lifecycle =====
 const turnControllers = new Map<string, AbortController>()
@@ -325,11 +115,28 @@ export function runEditorPrompt(options: {
 			emitTurnUpdate({ threadId, turn })
 
 			const persona = resolvePersona(doc, personaId)
+			const mode = effectiveMode(persona)
 			const context = buildPromptContext(doc, prompt, {
 				selectedItemIds: options.selectedItemIds,
 				playheadSec: options.playheadSec,
-				widen: options.widen
+				widen: options.widen,
+				mode
 			})
+
+			// What "full length" means for this project. Only in-scope, timed assets
+			// count: quoting a runtime the model cannot see invites it to invent
+			// material, and images have no intrinsic duration.
+			const scopeAssetIds = new Set(context.scope.assetIds)
+			const timedAssets = doc.media.filter(
+				(a) => scopeAssetIds.has(a.id) && (a.kind === 'video' || a.kind === 'audio')
+			)
+			const stats: PromptStats = {
+				timelineItemCount: doc.timeline.length,
+				timelineDurationSec: computeContentEnd(doc.timeline),
+				sourceDurationSec: timedAssets.reduce((sum, a) => sum + (a.metadata?.duration ?? 0), 0),
+				sourceClipCount: timedAssets.reduce((sum, a) => sum + (a.clips?.length ?? 0), 0),
+				mode
+			}
 
 			const modelSettings = settingsManager.getModelSettings()
 			const modelName = modelSettings.selection['editor-edit'] || GEMINI_MODEL_2_5_FLASH
@@ -339,8 +146,13 @@ export function runEditorPrompt(options: {
 				modelName,
 				context.contextText,
 				EDITOR_OPS_SCHEMA,
-				composeSystemInstruction(persona),
-				controller.signal
+				composeSystemInstruction(persona, stats),
+				controller.signal,
+				undefined,
+				// Assembly is bookkeeping, not creative writing: bound the thinking
+				// (it bills at the OUTPUT rate and shares the output budget) and keep
+				// the temperature low so the model does not drift into curating.
+				{ maxOutputTokens: EDITOR_MAX_OUTPUT_TOKENS, thinkingLevel: 'LOW', temperature: 0.2 }
 			)
 
 			// Record usage/cost at project level
@@ -353,7 +165,7 @@ export function runEditorPrompt(options: {
 			// Map ops against a FRESH read (doc may have advanced during the call);
 			// the renderer re-validates against ITS live doc anyway.
 			const freshDoc = threadManager.getThread(threadId)?.editor || doc
-			const { diff, addMarkers, droppedOps } = opsToDiff(ops || {}, freshDoc)
+			const { diff, addMarkers, droppedOps, notes } = opsToDiff(ops || {}, freshDoc)
 
 			const completed: PromptTurn = {
 				...turn,
@@ -362,6 +174,8 @@ export function runEditorPrompt(options: {
 				rationale: ops?.rationale,
 				answer: ops?.answer,
 				droppedOps: droppedOps.length ? droppedOps : undefined,
+				notes: notes.length ? notes : undefined,
+				build: measureBuild(diff, freshDoc, stats),
 				scopeLabel: context.scope.label,
 				usage: record.usage,
 				cost: record.cost
@@ -387,4 +201,38 @@ export function runEditorPrompt(options: {
 	})()
 
 	return { turnId }
+}
+
+/**
+ * How much runtime a build-from-scratch turn actually produced, so a 5-minute
+ * "best of" out of 92 minutes of source is visible instead of silent.
+ * Sums item durations rather than using computeContentEnd: a stray atSec would
+ * otherwise make a short cut look hours long.
+ */
+function measureBuild(
+	diff: PromptTurn['diff'],
+	doc: EditorDocument,
+	stats: PromptStats
+): PromptTurn['build'] {
+	const relevant = stats.mode === 'longform'
+		&& stats.timelineItemCount === 0
+		&& stats.sourceDurationSec >= BUILD_MIN_SOURCE_SEC
+	if (!relevant || !diff) return undefined
+
+	const probe = {
+		tracks: JSON.parse(JSON.stringify(doc.tracks)),
+		timeline: JSON.parse(JSON.stringify(doc.timeline))
+	}
+	// Errors are ignored on purpose: this is a length estimate, and the renderer
+	// runs the authoritative validation against its own live doc.
+	applyTimelineDiff(probe, diff, doc.media)
+	const producedSec = probe.timeline.reduce((sum: number, item: any) => sum + itemDuration(item), 0)
+	const expectedMinSec = BUILD_SHORTFALL_RATIO * stats.sourceDurationSec
+
+	return {
+		producedSec,
+		sourceSec: stats.sourceDurationSec,
+		expectedMinSec,
+		shortfall: producedSec < expectedMinSec
+	}
 }
