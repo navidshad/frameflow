@@ -1,6 +1,6 @@
 {
   "name": "frameflow",
-  "version": "1.1.16",
+  "version": "1.1.17",
   "type": "module",
   "description": "AI-powered multimodal video and image processing platform.",
   "main": "./out/main/index.js",
