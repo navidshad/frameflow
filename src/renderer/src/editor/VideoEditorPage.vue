@@ -160,8 +160,11 @@ const { size: timelineH, resize: resizeTimeline, reset: resetTimeline } =
 	persistedSize('editor.timelineH', 208, 140, () => Math.round(window.innerHeight * 0.6))
 const { size: leftW, resize: resizeLeft, reset: resetLeft } =
 	persistedSize('editor.leftW', 280, 200, () => 440)
+// 560 rather than 480: the revisions tab can now render a graph inline, and the
+// extra width is what lets a second branch column fit. persistedSize clamps on
+// read, so a stored 480 stays valid.
 const { size: chatW, resize: resizeChat, reset: resetChat } =
-	persistedSize('editor.chatW', 300, 240, () => 480)
+	persistedSize('editor.chatW', 300, 240, () => 560)
 const { size: inspectorW, resize: resizeInspector, reset: resetInspector } =
 	persistedSize('editor.inspectorW', 280, 240, () => 480)
 

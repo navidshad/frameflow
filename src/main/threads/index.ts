@@ -3,7 +3,7 @@ import fs from 'fs'
 import path from 'path'
 import { v4 as uuidv4 } from 'uuid'
 import { MessageRole, FileType } from '@shared/types'
-import type { EditorDocument, Message, Thread, Track, Usage, UsageRecord, VideoMetadata } from '@shared/types'
+import type { EditorDocument, Message, Thread, ThreadType, Track, Usage, UsageRecord, VideoMetadata } from '@shared/types'
 import { settingsManager } from '../settings'
 import { getVideoMetadata } from '../ffmpeg'
 import { THREAD_DIRS } from '../constants/paths'
@@ -56,10 +56,21 @@ class ThreadManager {
 	}
 
 	// Create a new thread
-	async createThread(videoPath: string | undefined, videoName: string, imagePaths?: string[]): Promise<Thread> {
+	/**
+	 * @param type What the user said they are MAKING. Both file kinds are accepted
+	 *   in either mode — the type decides which is the subject and which is
+	 *   reference material. Omitting it keeps the old inference, which is what
+	 *   threads written before this parameter existed read back as.
+	 */
+	async createThread(
+		videoPath: string | undefined,
+		videoName: string,
+		imagePaths?: string[],
+		type?: ThreadType
+	): Promise<Thread> {
 		const id = uuidv4()
 		const tempDir = settingsManager.getThreadTempDir(id)
-		const type = videoPath ? 'video' : 'image'
+		const resolvedType: ThreadType = type ?? (videoPath ? 'video' : 'image')
 		
 		let finalVideoPath = videoPath
 		if (videoPath) {
@@ -119,7 +130,7 @@ class ThreadManager {
 		const thread: Thread = {
 			id,
 			title: videoName,
-			type,
+			type: resolvedType,
 			videoPath: finalVideoPath,
 			preprocessing: {
 				sourceImages: sourceImages.length > 0 ? sourceImages : undefined

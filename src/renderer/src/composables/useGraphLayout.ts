@@ -27,6 +27,14 @@ export function useGraphLayout(videoStore: any, graphStore: any) {
     const strandGroups: Array<{ id: string, messageIds: string[], parentId: string, isResult: boolean }> = []
     const processedMessageIds = new Set<string>()
 
+    /**
+     * A "result" gets its own node; everything else joins a conversation strand.
+     */
+    const isResultMessage = (msg: any): boolean => {
+      const hasRealFiles = msg.files && msg.files.filter((f: any) => f.type !== 'original').length > 0
+      return !!(hasRealFiles || (msg.timeline && msg.timeline.length > 0))
+    }
+
     // Recursive strand building
     const buildStrands = (pId: string) => {
       const children = childMap[pId] || []
@@ -35,11 +43,8 @@ export function useGraphLayout(videoStore: any, graphStore: any) {
         if (processedMessageIds.has(cId)) return
 
         const msg = messageLookup[cId]
-        // A "Result" is anything with real files, or timeline. (Pending text stays in conversation)
-        const hasRealFiles = msg.files && msg.files.filter((f: any) => f.type !== 'original').length > 0
-        const isResult = !!(hasRealFiles || (msg.timeline && msg.timeline.length > 0))
 
-        if (isResult) {
+        if (isResultMessage(msg)) {
           // Results are always their own node
           strandGroups.push({ id: cId, messageIds: [cId], parentId: pId, isResult: true })
           processedMessageIds.add(cId)
@@ -55,11 +60,7 @@ export function useGraphLayout(videoStore: any, graphStore: any) {
             if (nextChildren.length !== 1) break
 
             const nextId = nextChildren[0]
-            const nextMsg = messageLookup[nextId]
-            const nextHasRealFiles = nextMsg.files && nextMsg.files.filter((f: any) => f.type !== 'original').length > 0
-            const nextIsResult = !!(nextHasRealFiles || (nextMsg.timeline && nextMsg.timeline.length > 0))
-
-            if (nextIsResult) break
+            if (isResultMessage(messageLookup[nextId])) break
 
             strand.push(nextId)
             processedMessageIds.add(nextId)
@@ -125,12 +126,13 @@ export function useGraphLayout(videoStore: any, graphStore: any) {
       }
     })
 
-    // Root Media Node (Always branching)
-    const isImageThread = videoStore.currentThread?.type === 'image'
-
+    // Root Media Node (Always branching).
+    // Always image-collection: the graph only serves image projects now, and
+    // ImageCollectionNode already shows a reference video as a chip when one
+    // is attached. Video projects open in the timeline editor instead.
     newNodes.push({
       id: 'root-media',
-      type: isImageThread ? 'image-collection' : 'media',
+      type: 'image-collection',
       position: nodePositions['root-media'],
       parentNode: frameIds.has(savedMetadata['root-media']?.parentNode) ? savedMetadata['root-media'].parentNode : undefined,
       data: {
@@ -168,7 +170,7 @@ export function useGraphLayout(videoStore: any, graphStore: any) {
       return h
     }
 
-    const strandHeights: Record<string, number> = { 'root-media': isImageThread ? 300 : 350 }
+    const strandHeights: Record<string, number> = { 'root-media': 300 }
 
     // Layout strands
     strandGroups.forEach((strand) => {
@@ -231,10 +233,9 @@ export function useGraphLayout(videoStore: any, graphStore: any) {
             }
           }
         } else {
-          const type = msg.resultType || ((msg.files && msg.files.length > 0) ? 'video' : 'summary')
+          const type = msg.resultType || ((msg.files && msg.files.length > 0) ? 'image' : 'summary')
           // Normalize nodeType to specialized components
-          if (type === 'video') nodeType = 'video'
-          else if (type === 'thumbnail' || type === 'generate-thumbnail' || type === 'image' || type === 'result-image') nodeType = 'thumbnail'
+          if (type === 'thumbnail' || type === 'generate-thumbnail' || type === 'image' || type === 'result-image') nodeType = 'thumbnail'
           else if (type === 'summary' || type === 'cover') nodeType = 'summary'
           else nodeType = 'summary' // Default fallback
 

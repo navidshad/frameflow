@@ -3,24 +3,43 @@ import type { EditorPersona } from '@shared/types'
 /**
  * Built-in editor personas (video-editor-prd.md §5.8).
  * NEVER persisted to settings.json — merged with the user's saved personas at
- * read time, so prompt improvements ship with app updates. Long-form personas
- * carry `targetDurationSec: null` = length-preserving editorial mode; the
- * summarize group targets a shorter duration.
+ * read time, so prompt improvements ship with app updates.
+ *
+ * A persona describes a STYLE, not a length. Output length comes from what the
+ * user asks for — see outputLengthLines() in editor/ops.ts. Personas used to
+ * carry a `mode` and a `targetDurationSec` that forced the runtime; both are
+ * gone, because "make a 5-minute highlight" should give five minutes whichever
+ * persona is selected.
  */
 
-export const DEFAULT_PERSONA_ID = 'podcast-editor'
+export { DEFAULT_PERSONA_ID } from '@shared/personas'
 
 export const BUILTIN_PERSONAS: EditorPersona[] = [
-	// ===== Long-form (length-preserving editorial) =====
+	{
+		id: 'general-editor',
+		name: 'Video Editor',
+		icon: '🎬',
+		description: 'Does what you ask. Follows your request for style, pacing and length.',
+		builtin: true,
+		tone: 'neutral',
+		defaults: { pacing: 'balanced' },
+		featureSets: [],
+		systemPrompt: [
+			'You are a capable, general-purpose video editor.',
+			'- Do what the user asks, at the length their request implies.',
+			'- Keep chronological order unless asked to reorder.',
+			'- Remove dead air, silence, false starts and duplicated takes by default.',
+			'- Do not impose a house style: the request is the brief.'
+		].join('\n')
+	},
 	{
 		id: 'podcast-editor',
 		name: 'Podcast Editor',
 		icon: '🎙️',
 		description: 'Keeps the full conversation; removes dead air and false starts; tightens rambling stretches.',
 		builtin: true,
-		mode: 'longform',
 		tone: 'neutral',
-		defaults: { targetDurationSec: null, pacing: 'relaxed' },
+		defaults: { pacing: 'relaxed' },
 		featureSets: [],
 		systemPrompt: [
 			'You are a seasoned podcast editor. Your job is to keep the FULL conversation',
@@ -30,8 +49,8 @@ export const BUILTIN_PERSONAS: EditorPersona[] = [
 			'- Where a stretch rambles but its content matters, prefer a gentle speed-up',
 			'  (retime via the speed field, up to about 1.3x) over deletion.',
 			'- Keep chronological order unless the user explicitly asks to reorder.',
-			'- Never cut for length alone: the goal is a cleaner version of the whole',
-			'  episode, not a shorter one.'
+			'- Unless the user asks for something shorter, do not cut for length alone:',
+			'  the default is a cleaner version of the whole episode.'
 		].join('\n')
 	},
 	{
@@ -40,9 +59,8 @@ export const BUILTIN_PERSONAS: EditorPersona[] = [
 		icon: '🎬',
 		description: 'For vlogs, webinars, and streams: removes setup fumbles and dead time, smooths pacing.',
 		builtin: true,
-		mode: 'longform',
 		tone: 'warm',
-		defaults: { targetDurationSec: null, pacing: 'balanced' },
+		defaults: { pacing: 'balanced' },
 		featureSets: [],
 		systemPrompt: [
 			'You are polishing long-form footage (vlogs, webinars, streams, talks).',
@@ -60,9 +78,8 @@ export const BUILTIN_PERSONAS: EditorPersona[] = [
 		icon: '🧹',
 		description: 'Aggressively removes silence, dead air, and empty gaps; keeps all substantive content.',
 		builtin: true,
-		mode: 'longform',
 		tone: 'neutral',
-		defaults: { targetDurationSec: null, pacing: 'tight' },
+		defaults: { pacing: 'tight' },
 		featureSets: [],
 		systemPrompt: [
 			'You specialize in cleaning silence and dead air out of recordings.',
@@ -80,9 +97,8 @@ export const BUILTIN_PERSONAS: EditorPersona[] = [
 		icon: '🗂️',
 		description: 'Keeps full length; segments the piece into labeled chapters at topic boundaries.',
 		builtin: true,
-		mode: 'longform',
 		tone: 'authoritative',
-		defaults: { targetDurationSec: null, pacing: 'relaxed' },
+		defaults: { pacing: 'relaxed' },
 		featureSets: [],
 		systemPrompt: [
 			'You organize long recordings into chapters.',
@@ -100,9 +116,8 @@ export const BUILTIN_PERSONAS: EditorPersona[] = [
 		icon: '🎓',
 		description: 'Retains every scene with distinct instructional content; drops only silence and repetition.',
 		builtin: true,
-		mode: 'longform',
 		tone: 'authoritative',
-		defaults: { targetDurationSec: null, pacing: 'relaxed' },
+		defaults: { pacing: 'relaxed' },
 		featureSets: [],
 		systemPrompt: [
 			'You are preparing lecture footage for studying.',
@@ -110,8 +125,8 @@ export const BUILTIN_PERSONAS: EditorPersona[] = [
 			'  examples, derivations, demonstrations, and summaries.',
 			'- Drop only silence, repetition, administrative asides, and off-topic',
 			'  tangents.',
-			'- Prioritize completeness over brevity and always preserve chronological',
-			'  order.'
+			'- Default to completeness over brevity unless the user asks for a',
+			'  condensed version, and always preserve chronological order.'
 		].join('\n')
 	},
 
@@ -122,9 +137,8 @@ export const BUILTIN_PERSONAS: EditorPersona[] = [
 		icon: '✂️',
 		description: 'Cuts to the essential information; drops redundancy and dead air.',
 		builtin: true,
-		mode: 'summarize',
 		tone: 'neutral',
-		defaults: { targetDurationSec: 60, pacing: 'tight' },
+		defaults: { pacing: 'tight' },
 		featureSets: [],
 		systemPrompt: [
 			'You produce concise summaries of longer footage.',
@@ -141,9 +155,8 @@ export const BUILTIN_PERSONAS: EditorPersona[] = [
 		icon: '⚡',
 		description: 'Selects the most visually striking, high-energy scenes with strong opening and closing beats.',
 		builtin: true,
-		mode: 'summarize',
 		tone: 'energetic',
-		defaults: { targetDurationSec: 30, pacing: 'tight' },
+		defaults: { pacing: 'tight' },
 		featureSets: [],
 		systemPrompt: [
 			'You cut high-energy highlight reels.',
@@ -159,9 +172,8 @@ export const BUILTIN_PERSONAS: EditorPersona[] = [
 		icon: '📖',
 		description: 'Assembles a narrative arc — setup, development, payoff — preserving emotional throughline.',
 		builtin: true,
-		mode: 'summarize',
 		tone: 'warm',
-		defaults: { targetDurationSec: 180, pacing: 'balanced' },
+		defaults: { pacing: 'balanced' },
 		featureSets: [],
 		systemPrompt: [
 			'You are a narrative editor building a story from footage.',
@@ -177,9 +189,8 @@ export const BUILTIN_PERSONAS: EditorPersona[] = [
 		icon: '📱',
 		description: 'Vertical-friendly short: hook in the first seconds, one clear idea, rapid cuts.',
 		builtin: true,
-		mode: 'summarize',
 		tone: 'playful',
-		defaults: { targetDurationSec: 45, aspectRatio: '9:16', pacing: 'tight' },
+		defaults: { pacing: 'tight' },
 		featureSets: [],
 		systemPrompt: [
 			'You cut short-form vertical video for social feeds.',
@@ -195,14 +206,3 @@ export function findBuiltinPersona(id: string): EditorPersona | undefined {
 	return BUILTIN_PERSONAS.find((p) => p.id === id)
 }
 
-/**
- * The single arbiter of "does this persona shrink the runtime?".
- * `mode` and `defaults.targetDurationSec` can disagree — the persona editor
- * lets a user tick "preserve length" on a summarize persona and vice versa —
- * so an explicit length target ALWAYS wins: it means "select a subset",
- * whatever the label says.
- */
-export function effectiveMode(persona: EditorPersona): 'longform' | 'summarize' {
-	if (persona.defaults?.targetDurationSec != null) return 'summarize'
-	return persona.mode ?? 'longform'
-}

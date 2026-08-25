@@ -18,14 +18,7 @@
 				<Input v-model="form.description" placeholder="One line shown in the picker" />
 			</div>
 
-			<div class="grid grid-cols-3 gap-3">
-				<div>
-					<label class="text-[10px] font-bold uppercase tracking-widest text-zinc-500 block mb-1.5">Mode</label>
-					<select v-model="form.mode" class="w-full px-3 py-2 rounded-xl border border-zinc-200 dark:border-zinc-700 bg-white dark:bg-zinc-900 text-sm input-focus-ring">
-						<option value="longform">Long-form</option>
-						<option value="summarize">Summarize</option>
-					</select>
-				</div>
+			<div class="grid grid-cols-2 gap-3">
 				<div>
 					<label class="text-[10px] font-bold uppercase tracking-widest text-zinc-500 block mb-1.5">Tone</label>
 					<Input v-model="form.tone" placeholder="neutral" />
@@ -40,21 +33,6 @@
 				</div>
 			</div>
 
-			<!-- Length target -->
-			<div>
-				<label class="flex items-center gap-2 cursor-pointer mb-2">
-					<input type="checkbox" class="accent-primary" v-model="form.preserveLength" />
-					<span class="text-xs font-medium text-zinc-700 dark:text-zinc-300">
-						No length target — preserve the full runtime
-					</span>
-				</label>
-				<div v-if="!form.preserveLength" class="flex items-center gap-2">
-					<input type="number" min="5" step="5" v-model.number="form.targetDurationSec"
-						class="w-28 px-3 py-2 rounded-xl border border-zinc-200 dark:border-zinc-700 bg-white dark:bg-zinc-900 text-sm font-mono input-focus-ring" />
-					<span class="text-xs text-zinc-500">seconds target</span>
-				</div>
-			</div>
-
 			<div>
 				<label class="text-[10px] font-bold uppercase tracking-widest text-zinc-500 block mb-1.5">System prompt *</label>
 				<TextArea v-model="form.systemPrompt" :rows="7"
@@ -66,8 +44,8 @@
 
 			<!-- Live summary -->
 			<p class="text-[11px] text-zinc-500 dark:text-zinc-400 italic border-l-2 border-primary/40 pl-2">
-				This persona will {{ form.preserveLength ? 'preserve the full runtime' : `cut to ~${form.targetDurationSec || 60}s` }},
 				{{ form.pacing }} pacing{{ form.tone ? `, ${form.tone} tone` : '' }}.
+				Length comes from what you ask for, not from the persona.
 			</p>
 		</div>
 
@@ -122,11 +100,8 @@ const form = reactive({
 	icon: '🎬',
 	name: '',
 	description: '',
-	mode: 'longform' as 'longform' | 'summarize',
 	tone: '',
 	pacing: 'balanced' as 'tight' | 'balanced' | 'relaxed',
-	preserveLength: true,
-	targetDurationSec: 60,
 	systemPrompt: ''
 })
 
@@ -144,11 +119,8 @@ watch(() => props.modelValue, (open) => {
 	form.icon = p?.icon || '🎬'
 	form.name = p?.name || ''
 	form.description = p?.description || ''
-	form.mode = p?.mode || 'longform'
 	form.tone = p?.tone || ''
 	form.pacing = p?.defaults?.pacing || 'balanced'
-	form.preserveLength = p ? (p.defaults?.targetDurationSec == null) : true
-	form.targetDurationSec = p?.defaults?.targetDurationSec ?? 60
 	form.systemPrompt = p?.systemPrompt || ''
 })
 
@@ -161,13 +133,9 @@ const save = async () => {
 		icon: form.icon || '🎬',
 		name: form.name.trim(),
 		description: form.description.trim(),
-		mode: form.mode,
 		tone: form.tone.trim() || undefined,
 		builtin: false,
-		defaults: {
-			targetDurationSec: form.preserveLength ? null : Math.max(5, form.targetDurationSec || 60),
-			pacing: form.pacing
-		},
+		defaults: { pacing: form.pacing },
 		systemPrompt: form.systemPrompt.trim(),
 		featureSets: []
 	}

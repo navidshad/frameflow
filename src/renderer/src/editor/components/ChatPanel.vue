@@ -137,7 +137,15 @@ const opChips = (turn: PromptTurn) => {
 	if (d.addItems?.length) chips.push(`+${d.addItems.length} added`)
 	if (d.removeItemIds?.length) chips.push(`−${d.removeItemIds.length} removed`)
 	if (d.updateItems?.length) chips.push(`${d.updateItems.length} changed`)
+	// Runtime per turn: the result card only shows the newest one, and "the model
+	// has been mis-reading my length for three turns" is only visible in history.
+	if (turn.build?.producedSec) chips.push(`${clock(turn.build.producedSec)} cut`)
 	return chips
+}
+
+const clock = (seconds: number): string => {
+	const total = Math.max(0, Math.round(seconds))
+	return `${Math.floor(total / 60)}:${String(total % 60).padStart(2, '0')}`
 }
 
 const formatTime = (ts: number) => {

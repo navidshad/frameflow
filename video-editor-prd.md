@@ -1,5 +1,16 @@
 # FrameFlow — Timeline Video Editor PRD
 
+> **⚠️ Partly superseded.** This PRD describes the editor as a *second surface*
+> coexisting with an AI video pipeline in the node graph. That pipeline has since
+> been retired: the graph serves images only, and all video output happens here.
+> Specifically outdated: §3(a) Home entry via a "Video Editor" card (Home is now a
+> single composer with a Video/Images purpose), §5.7's reliance on
+> `intent.determineIntent`/`generateTimeline` (the editor has its own prompt path),
+> and §5.8's persona **modes** and `defaults.targetDurationSec` — both deleted, as
+> output length now comes from the user's request. Everything else — the data model,
+> the render engine, the revision tree — is current.
+
+
 FrameFlow today edits video through a single surface: an AI-driven node-graph "chat editor" where the user talks to Gemini, the model writes a timeline blueprint, and FFmpeg assembles a single-source cut. This PRD specifies a **second, coexisting surface** — a traditional CapCut/Premiere/DaVinci-style **timeline video editor** with a media browser, a program monitor, a multi-track timeline, direct manual editing, and a prompt box driven by swappable AI **editor personas**. It reuses FrameFlow's existing scene-detection, per-scene visual-description enrichment, background-task, `media://` playback, and thread-persistence machinery, while introducing a per-media preprocessing model, a timeline document, a persona library, and — the single largest new engineering lift — a multi-source/multi-track FFmpeg render engine that the current single-source `assembleVideo` cannot provide.
 
 | | |

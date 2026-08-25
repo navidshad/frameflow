@@ -3,11 +3,9 @@ import { BrowserWindow, ipcMain } from 'electron'
 import { threadManager } from '../threads'
 import { BackgroundTask, BackgroundTaskState, Thread } from '../../shared/types'
 import { PipelineContext } from '../pipeline'
-import * as extraction from '../pipeline/phases/extraction'
 import * as imageExtraction from '../pipeline/phases/image-extraction'
-import { enrichTranscriptWithScenes, SceneDescription } from '../timeline/enrichment'
-import { TranscriptItem } from '../gemini/utils'
 import * as ffmpegAdapter from '../ffmpeg'
+import { THREAD_DIRS } from '../constants/paths'
 import fs from 'fs'
 import path from 'path'
 
@@ -160,131 +158,21 @@ class BackgroundTaskManager extends EventEmitter {
 		}
 	}
 
-	public async startPreprocessing(threadId: string) {
-		const thread = threadManager.getThread(threadId)
-		if (!thread) return
-
-		const run = this.runTask.bind(this, threadId)
-
-		// Fire off independent chains
-		// Chain 1: Downscale -> Audio -> Transcripts
-		const processingChain = async () => {
-			if (!thread.preprocessing.lowResVideoPath) {
-				await run('downscale', 'Downscaling Video', async (ctx) => {
-					await extraction.ensureLowResolution({}, ctx)
-				})
-			} else {
-				await this.updateTask(threadId, 'downscale', { name: 'Downscaling Video', state: 'completed' })
-			}
-
-			if (!thread.preprocessing.audioPath) {
-				await run('audio', 'Extracting Audio', async (ctx) => {
-					await extraction.convertToAudio({}, ctx)
-				})
-			} else {
-				await this.updateTask(threadId, 'audio', { name: 'Extracting Audio', state: 'completed' })
-			}
-
-			if (!thread.preprocessing.rawTranscriptPath) {
-				await run('rawTranscript', 'Extracting Raw Transcript', async (ctx) => {
-					await extraction.extractRawTranscript({}, ctx)
-				})
-			} else {
-				await this.updateTask(threadId, 'rawTranscript', { name: 'Extracting Raw Transcript', state: 'completed' })
-			}
-
-			if (!thread.preprocessing.correctedTranscriptPath) {
-				await run('correctedTranscript', 'Refining Transcript', async (ctx) => {
-					await extraction.extractCorrectedTranscript({}, ctx)
-				})
-			} else {
-				await this.updateTask(threadId, 'correctedTranscript', { name: 'Refining Transcript', state: 'completed' })
-			}
-		}
-
-		// Chain 2: Scene Detection & Descriptions (depends on Downscale but we'll await downscale)
-		const visualChain = async () => {
-			await this.waitForTask(threadId, 'downscale').catch(() => { })
-
-			if (!thread.preprocessing.sceneTimesPath) {
-				await run('sceneTiming', 'Detecting Scenes', async (ctx) => {
-					await extraction.extractSceneTiming({}, ctx)
-				})
-			} else {
-				await this.updateTask(threadId, 'sceneTiming', { name: 'Detecting Scenes', state: 'completed' })
-			}
-
-			if (!thread.preprocessing.sceneDescriptionsPath) {
-				await run('sceneDescriptions', 'Describing Scenes', async (ctx) => {
-					await extraction.generateSceneDescription({}, ctx)
-				})
-			} else {
-				await this.updateTask(threadId, 'sceneDescriptions', { name: 'Describing Scenes', state: 'completed' })
-			}
-		}
-
-		// Start chains
-		processingChain().catch(e => console.error(`[BACKGROUND] processingChain failed for ${threadId}:`, e))
-		visualChain().catch(e => console.error(`[BACKGROUND] visualChain failed for ${threadId}:`, e))
-
-		// Chain 3: Enrichment (Wait for BOTH)
-		const enrichmentChain = async () => {
-			// A dependency failure must not just abandon this chain. waitForTask
-			// resolves off a task-update EVENT, so anything waiting on 'enrichment'
-			// (generation.waitForEnrichTranscript) would wait on a record that is
-			// now never created — a promise that never settles, and a
-			// generate-timeline request that hangs with no error and no timeout.
-			// Record the failure instead, so waiters reject.
-			try {
-				await Promise.all([
-					this.waitForTask(threadId, 'correctedTranscript'),
-					this.waitForTask(threadId, 'sceneDescriptions')
-				])
-			} catch (error) {
-				const message = error instanceof Error ? error.message : String(error)
-				console.error(`[BACKGROUND] enrichment dependencies failed for ${threadId}:`, message)
-				await this.updateTask(threadId, 'enrichment', {
-					name: 'Unifying Visuals & Text',
-					state: 'error',
-					error: `Cannot unify visuals and text: ${message}`
-				})
-				return
-			}
-
-			const currentThread = threadManager.getThread(threadId)
-			if (!currentThread) return
-
-			if (!currentThread.preprocessing.enrichedTranscriptPath) {
-				await run('enrichment', 'Unifying Visuals & Text', async (ctx) => {
-					const transcriptPath = ctx.preprocessing.correctedTranscriptPath || ctx.preprocessing.rawTranscriptPath
-					const scenesPath = ctx.preprocessing.sceneDescriptionsPath
-
-					if (transcriptPath && scenesPath && fs.existsSync(transcriptPath) && fs.existsSync(scenesPath)) {
-						const transcript = JSON.parse(fs.readFileSync(transcriptPath, 'utf-8')) as TranscriptItem[]
-						const scenes = JSON.parse(fs.readFileSync(scenesPath, 'utf-8')) as SceneDescription[]
-						const duration = await ffmpegAdapter.getVideoDuration(ctx.videoPath)
-
-						const enriched = enrichTranscriptWithScenes(transcript, scenes, duration)
-
-						const enrichedPath = path.join(ctx.tempDir, 'enriched_transcript.json')
-						fs.writeFileSync(enrichedPath, JSON.stringify(enriched, null, 2))
-
-						await ctx.savePreprocessing({ enrichedTranscriptPath: enrichedPath })
-					}
-				})
-			} else {
-				await this.updateTask(threadId, 'enrichment', { name: 'Unifying Visuals & Text', state: 'completed' })
-			}
-		}
-
-		enrichmentChain().catch(e => console.error(`[BACKGROUND] enrichmentChain failed for ${threadId}:`, e))
-	}
-
 	public async startImageProcessing(threadId: string) {
 		const thread = threadManager.getThread(threadId)
 		if (!thread) return
 
 		const run = this.runTask.bind(this, threadId)
+
+		// An image project may carry a video as REFERENCE material. Sample a few
+		// frames from it first so extractImageData has them: that phase already
+		// merges preprocessing['reference-frames'], and supply.ts already pools
+		// them for auto-selection, so nothing downstream needs to change.
+		if (thread.videoPath && !thread.preprocessing['reference-frames']?.length) {
+			await run('referenceFrames', 'Sampling Reference Video', async (ctx) => {
+				await this.extractReferenceFrames(ctx)
+			})
+		}
 
 		// Task: Extract data from images
 		if (!thread.preprocessing.imageTextPath) {
@@ -293,6 +181,41 @@ class BackgroundTaskManager extends EventEmitter {
 			})
 		} else {
 			await this.updateTask(threadId, 'imageExtraction', { name: 'Analyzing Images', state: 'completed' })
+		}
+	}
+
+	/**
+	 * Evenly spaced stills from a reference video, for image projects.
+	 *
+	 * Deliberately cheap: just ffmpeg stills. A reference video does not warrant
+	 * a transcript, scene detection or any Gemini call — it is context for an
+	 * image, not the subject of an edit.
+	 */
+	private async extractReferenceFrames(ctx: PipelineContext) {
+		const videoPath = ctx.videoPath
+		if (!videoPath || !fs.existsSync(videoPath)) return
+
+		const duration = await ffmpegAdapter.getVideoDuration(videoPath)
+		if (!duration || duration <= 0) return
+
+		const framesDir = path.join(ctx.tempDir, THREAD_DIRS.FRAMES)
+		if (!fs.existsSync(framesDir)) fs.mkdirSync(framesDir, { recursive: true })
+
+		const SAMPLE_COUNT = 8
+		const frames: string[] = []
+		for (let i = 0; i < SAMPLE_COUNT; i++) {
+			// Midpoints of equal slices — never 0s (often black) or the exact end.
+			const timestamp = (duration * (i + 0.5)) / SAMPLE_COUNT
+			await ctx.updateStatus(`Sampling reference frames… ${i + 1}/${SAMPLE_COUNT}`)
+			try {
+				frames.push(await ffmpegAdapter.extractFrame(videoPath, timestamp, framesDir))
+			} catch (e) {
+				console.error(`[referenceFrames] frame at ${timestamp}s failed:`, e)
+			}
+		}
+
+		if (frames.length) {
+			await ctx.savePreprocessing({ 'reference-frames': frames })
 		}
 	}
 }

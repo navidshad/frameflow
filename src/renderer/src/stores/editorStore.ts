@@ -12,6 +12,8 @@ import {
 	type TimelineState
 } from '@shared/timeline'
 import { computeScope } from '@shared/ai-scope'
+import { childrenByParent, collectSubtree, hasBranch } from '@shared/revision-tree'
+import { DEFAULT_PERSONA_ID } from '@shared/personas'
 
 /**
  * Store for the timeline video editor (/editor/:id).
@@ -44,6 +46,18 @@ export const useEditorStore = defineStore('editor', () => {
 		ytDlp: true
 	})
 	const loading = ref(false)
+	/**
+	 * The prompt-bar draft, owned by the store rather than PromptBar.
+	 *
+	 * Two reasons. Home hands a project its first prompt through queuePrompt()
+	 * before the editor mounts; and PromptBar is v-if'd away whenever the chat
+	 * rail collapses or toggles full-height, which silently destroyed a
+	 * half-typed prompt.
+	 */
+	const promptDraft = ref('')
+	/** Keyed by thread: /editor/:id reuses the component, so a queued prompt must not leak. */
+	const pendingPrompt = ref<{ threadId: string; text: string } | null>(null)
+
 
 	// ===== Timeline view state (M2) =====
 	const playheadSec = ref(0)
@@ -61,7 +75,6 @@ export const useEditorStore = defineStore('editor', () => {
 
 	// ===== Personas (M3) =====
 	const personas = ref<EditorPersona[]>([]) // built-ins + global user library (from main)
-	const DEFAULT_PERSONA_ID = 'podcast-editor'
 
 	// ===== AI prompt turns (M3, reworked for revisions) =====
 	const activeTurnId = ref<string | null>(null)
@@ -264,9 +277,13 @@ export const useEditorStore = defineStore('editor', () => {
 		null
 	)
 
-	const personasByMode = computed(() => ({
-		longform: personas.value.filter((p) => p.builtin && p.mode === 'longform'),
-		summarize: personas.value.filter((p) => p.builtin && p.mode === 'summarize'),
+	/**
+	 * Built-in vs custom. This used to group by persona mode (Long-form /
+	 * Summarize), which is the taxonomy that no longer exists — a persona is a
+	 * style now, and length comes from the request.
+	 */
+	const personaGroups = computed(() => ({
+		builtin: personas.value.filter((p) => p.builtin),
 		custom: [
 			...personas.value.filter((p) => !p.builtin),
 			...(doc.value?.customPersonas || [])
@@ -333,16 +350,12 @@ export const useEditorStore = defineStore('editor', () => {
 	})
 
 	/** Children grouped by parentId (null key = root), createdAt-sorted. */
-	const revisionChildren = computed<Map<string | null, EditorRevision[]>>(() => {
-		const map = new Map<string | null, EditorRevision[]>()
-		for (const rev of revisions.value) {
-			const list = map.get(rev.parentId) || []
-			list.push(rev)
-			map.set(rev.parentId, list)
-		}
-		for (const list of map.values()) list.sort((a, b) => a.createdAt - b.createdAt)
-		return map
-	})
+	const revisionChildren = computed<Map<string | null, EditorRevision[]>>(
+		() => childrenByParent(revisions.value)
+	)
+
+	/** Does the history fork? Drives whether the revisions panel opens as a graph. */
+	const revisionHasBranch = computed(() => hasBranch(revisions.value))
 
 	// ===== Export computeds (M4) =====
 	const isRendering = computed(() =>
@@ -491,6 +504,11 @@ export const useEditorStore = defineStore('editor', () => {
 			selectedItemIds.value = doc.value?.selection?.itemIds || []
 			playheadSec.value = 0
 			isPlaying.value = false
+
+			// A prompt queued by Home lands in the bar but is NOT run: preprocessing
+			// has not finished, so the AI would see an empty clip tray.
+			promptDraft.value = pendingPrompt.value?.threadId === id ? pendingPrompt.value.text : ''
+			pendingPrompt.value = null
 
 			if (doc.value) {
 				const state: TimelineState = { tracks: doc.value.tracks, timeline: doc.value.timeline }
@@ -966,13 +984,15 @@ export const useEditorStore = defineStore('editor', () => {
 			createdAt: Date.now()
 		}
 
-		// Truncate any redo branch beyond the pointer, then append
+		// Truncate any redo branch beyond the pointer, then append. This part must
+		// be synchronous — undo/redo has to feel instant — and main performs the
+		// same truncation, so the two agree without coordination.
+		//
+		// The ring cap is NOT mirrored here. Main owns it and reports what it
+		// evicted (see the push result below); duplicating the limit meant two
+		// literals across an IPC boundary that silently had to match.
 		const idx = pointerIndex.value
 		historySteps.value = [...historySteps.value.slice(0, idx + 1), step]
-		// Mirror the main-side ring cap (50)
-		if (historySteps.value.length > 50) {
-			historySteps.value = historySteps.value.slice(historySteps.value.length - 50)
-		}
 
 		doc.value.historyRef = { currentStepId: step.id, stepCount: historySteps.value.length }
 		refreshMetaDuration()
@@ -988,8 +1008,16 @@ export const useEditorStore = defineStore('editor', () => {
 			threadId: threadId.value,
 			step: JSON.parse(JSON.stringify(step)),
 			keyframe: keyframe ? JSON.parse(JSON.stringify(keyframe)) : undefined
-		}).then((res: { seq: number } | null) => {
-			if (res?.seq) step.seq = res.seq
+		}).then((res: { seq: number; prunedIds?: string[] } | null) => {
+			if (!res) return
+			// Apply the cap and the assigned seq in ONE reactive write. The previous
+			// version assigned `step.seq` on the raw object, which fires no effect —
+			// and seq is persisted, so in-session and post-reload state disagreed.
+			const pruned = new Set(res.prunedIds || [])
+			historySteps.value = historySteps.value
+				.filter((s) => !pruned.has(s.id))
+				.map((s) => (s.id === step.id ? { ...s, seq: res.seq ?? s.seq } : s))
+			if (doc.value) doc.value.historyRef.stepCount = historySteps.value.length
 		}).catch((error: unknown) => {
 			console.error('[editorStore] pushEditorStep failed:', error)
 		})
@@ -1497,15 +1525,27 @@ export const useEditorStore = defineStore('editor', () => {
 	})
 
 	/** Push to the sidecar and mirror the assigned seq back (awaited — cards need real V numbers). */
+	/**
+	 * Main assigns the real `seq` and may prune the oldest leaf to stay under the
+	 * cap. Both land in ONE reactive assignment: the previous version mutated the
+	 * raw `rev` object rather than the array's proxy, so nothing re-rendered — it
+	 * only appeared to work because createRevision writes currentRevisionId
+	 * immediately afterwards and that forced a re-read.
+	 */
 	const pushRevisionInternal = async (rev: EditorRevision): Promise<EditorRevision> => {
 		revisions.value = [...revisions.value, rev]
+		let stored = rev
 		try {
 			const res = await api.pushEditorRevision({ threadId: threadId.value, revision: deepClone(rev) })
-			if (res?.seq) rev.seq = res.seq
+			const pruned = new Set<string>(res?.prunedIds || [])
+			stored = { ...rev, seq: res?.seq ?? rev.seq }
+			revisions.value = revisions.value
+				.filter((r) => !pruned.has(r.id))
+				.map((r) => (r.id === rev.id ? stored : r))
 		} catch (error) {
 			console.error('[editorStore] pushEditorRevision failed:', error)
 		}
-		return rev
+		return stored
 	}
 
 	/** Lazy root bootstrap: the parent chain is never empty; zero migration. */
@@ -1521,10 +1561,11 @@ export const useEditorStore = defineStore('editor', () => {
 				snapshot: snapshotOfWorkingState(),
 				createdAt: Date.now()
 			}
-			await pushRevisionInternal(root)
-			doc.value.currentRevisionId = root.id
+			// Use the returned object: it carries the seq main assigned.
+			const storedRoot = await pushRevisionInternal(root)
+			doc.value.currentRevisionId = storedRoot.id
 			markDirty()
-			return root
+			return storedRoot
 		}
 		// Revisions exist but the pointer dangles (crash window): re-point at the
 		// newest WITHOUT touching the working doc.
@@ -1557,10 +1598,12 @@ export const useEditorStore = defineStore('editor', () => {
 			snapshot: snapshotOfWorkingState(),
 			createdAt: Date.now()
 		}
-		await pushRevisionInternal(rev)
-		doc.value.currentRevisionId = rev.id
+		// Callers render "V{seq}" off this, so return the stored object — the
+		// local `rev` still has the placeholder seq of 0.
+		const stored = await pushRevisionInternal(rev)
+		doc.value.currentRevisionId = stored.id
 		markDirty()
-		return rev
+		return stored
 	}
 
 	/**
@@ -1636,12 +1679,7 @@ export const useEditorStore = defineStore('editor', () => {
 		if (!target || target.parentId === null) return false // root undeletable
 
 		// Collect the subtree (chat's removeMessageBranch pattern)
-		const ids = new Set<string>()
-		const collect = (revId: string) => {
-			ids.add(revId)
-			for (const child of revisionChildren.value.get(revId) || []) collect(child.id)
-		}
-		collect(id)
+		const ids = collectSubtree(revisions.value, id)
 
 		// If current is inside, land on the subtree root's parent first
 		if (ids.has(doc.value.currentRevisionId || '')) {
@@ -1670,6 +1708,11 @@ export const useEditorStore = defineStore('editor', () => {
 	// `override.widen` applies to THIS call only — it never rewrites the user's
 	// scope chip. Used by "Keep building", which must see the whole timeline even
 	// once it has grown past the chapter-window threshold.
+	/** Hand a not-yet-open project its opening prompt. Cleared once consumed. */
+	const queuePrompt = (id: string, text: string) => {
+		pendingPrompt.value = text.trim() ? { threadId: id, text: text.trim() } : null
+	}
+
 	const runPrompt = async (prompt: string, override?: { widen?: 'chapter' | 'full' }) => {
 		if (!threadId.value || !doc.value || promptRunning.value) return
 		promptError.value = null
@@ -2105,7 +2148,9 @@ export const useEditorStore = defineStore('editor', () => {
 		// personas
 		personas,
 		activePersona,
-		personasByMode,
+		personaGroups,
+		promptDraft,
+		queuePrompt,
 		setActivePersona,
 		savePersona,
 		clonePersona,
@@ -2125,6 +2170,7 @@ export const useEditorStore = defineStore('editor', () => {
 		currentRevision,
 		revisionDirty,
 		revisionChildren,
+		revisionHasBranch,
 		lastResult,
 		ensureRootRevision,
 		createRevision,

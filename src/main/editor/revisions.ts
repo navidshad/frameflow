@@ -2,6 +2,7 @@ import { app } from 'electron'
 import fs from 'fs'
 import path from 'path'
 import type { EditorRevision, EditorRevisionsFile } from '@shared/types'
+import { applyPrune, pruneToCap } from '@shared/revision-tree'
 
 /**
  * Revision-tree sidecar persistence (mirrors editor/history.ts).
@@ -53,23 +54,22 @@ export function loadRevisions(threadId: string): EditorRevisionsFile {
  * (no children) that is neither the root nor the just-pushed revision.
  * Leaf-only pruning guarantees no surviving revision loses an ancestor.
  */
-export function pushRevision(threadId: string, revision: EditorRevision): { seq: number; count: number } {
+export function pushRevision(
+	threadId: string,
+	revision: EditorRevision
+): { seq: number; count: number; prunedIds: string[] } {
 	const file = loadRevisions(threadId)
 	const seq = ++file.revisionCounter
 	const stored: EditorRevision = { ...revision, seq }
 	file.revisions.push(stored)
 
-	while (file.revisions.length > MAX_REVISIONS) {
-		const hasChildren = new Set(file.revisions.map((r) => r.parentId).filter(Boolean))
-		const candidate = file.revisions
-			.filter((r) => r.parentId !== null && r.id !== stored.id && !hasChildren.has(r.id))
-			.sort((a, b) => a.createdAt - b.createdAt)[0]
-		if (!candidate) break // pathological pure chain — allow exceeding the cap
-		file.revisions = file.revisions.filter((r) => r.id !== candidate.id)
-	}
+	// Report what the cap removed. Without this the renderer keeps showing a
+	// revision that no longer exists on disk until the project is reloaded.
+	const prunedIds = pruneToCap(file.revisions, stored.id, MAX_REVISIONS)
+	file.revisions = applyPrune(file.revisions, prunedIds)
 
 	writeRevisions(file)
-	return { seq, count: file.revisions.length }
+	return { seq, count: file.revisions.length, prunedIds }
 }
 
 /** Deletes the given ids (the renderer sends the fully collected subtree). */

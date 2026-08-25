@@ -1,7 +1,7 @@
 import { defineStore } from 'pinia'
 import { ref, computed } from 'vue'
 import { MessageRole, FileType } from '@shared/types'
-import type { Message, Thread } from '@shared/types'
+import type { Message, Thread, ThreadType } from '@shared/types'
 
 
 export const useVideoStore = defineStore('video', () => {
@@ -44,12 +44,21 @@ export const useVideoStore = defineStore('video', () => {
 		threads.value = await (window as any).api.getAllThreads()
 	}
 
-	const createThread = async (videoPath: string | undefined, videoName: string, imagePaths?: string[]) => {
-		const payload = { videoPath, videoName, imagePaths }
+	/**
+	 * Returns the whole thread, not just its id: the Home composer needs
+	 * preprocessing.sourceImages (the COPIED paths) to attach to the first turn.
+	 */
+	const createThread = async (
+		videoPath: string | undefined,
+		videoName: string,
+		imagePaths?: string[],
+		type?: ThreadType
+	): Promise<Thread> => {
+		const payload = { videoPath, videoName, imagePaths, type }
 		const newThread = await (window as any).api.createThread(JSON.parse(JSON.stringify(payload)))
 		threads.value.unshift(newThread)
 		currentThreadId.value = newThread.id
-		return newThread.id
+		return newThread
 	}
 
 	const selectThread = async (id: string) => {
@@ -206,9 +215,6 @@ export const useVideoStore = defineStore('video', () => {
 		}
 	}
 
-	const retryPreprocessing = async (threadId: string) => {
-		return await (window as any).api.retryPreprocessing(threadId)
-	}
 
 	// Setup global listener for background tasks
 	if (typeof window !== 'undefined' && (window as any).api) {
@@ -442,7 +448,6 @@ export const useVideoStore = defineStore('video', () => {
 		updateNodePositions,
 		updateNodeMetadata,
 		deleteFrame,
-		retryPreprocessing,
 		toggleReferenceFrame,
 		improviseMessage
 	}

@@ -5,6 +5,7 @@ import fs from 'fs'
 import { join, basename, extname } from 'path'
 import process from 'node:process'
 import { TimelineSegment, SilenceRegion } from '../../shared/types'
+import { srtToSeconds } from '../../shared/timeline'
 
 const IS_MAC = process.platform === 'darwin'
 
@@ -410,20 +411,8 @@ export async function assembleVideo(
 		throw new Error('FFmpeg video assembly aborted by user before start')
 	}
 
-	// Helper to parse SRT-style time string or simplified HH:MM:SS to seconds
-	const timeToSeconds = (t: string): number => {
-		const [time, milli] = t.split(/[.,]/)
-		const parts = time.split(':').map(Number)
-		let seconds = 0
-		if (parts.length === 3) {
-			seconds = parts[0] * 3600 + parts[1] * 60 + parts[2]
-		} else if (parts.length === 2) {
-			seconds = parts[0] * 60 + parts[1]
-		} else if (parts.length === 1) {
-			seconds = parts[0]
-		}
-		return seconds + (milli ? parseFloat(`0.${milli}`) : 0)
-	}
+	// SRT-style time string or plain seconds -> seconds. See shared/timeline.
+	const timeToSeconds = srtToSeconds
 
 	return new Promise((resolve, reject) => {
 		ffmpeg.ffprobe(videoPath, (err, metadata) => {

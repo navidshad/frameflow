@@ -9,8 +9,17 @@
           <div class="text-[10px] text-zinc-500 uppercase tracking-[0.2em] font-black leading-none mb-1">Source Collection</div>
           <h3 class="text-xs font-bold text-zinc-900 dark:text-zinc-100 truncate max-w-[180px]">{{ data.filename || 'Project Images' }}</h3>
         </div>
-        <div class="px-2 py-1 rounded-lg bg-primary/10 text-primary text-[10px] font-bold border border-primary/20">
-          {{ sourceImages.length }} Files
+        <div class="flex items-center gap-1.5">
+          <!-- An image-purpose thread can carry a reference video. -->
+          <div v-if="referenceVideo"
+            class="px-2 py-1 rounded-lg bg-zinc-500/10 text-zinc-500 dark:text-zinc-400 text-[10px] font-bold border border-zinc-500/20 flex items-center gap-1"
+            :title="referenceVideo">
+            <span class="iconify tabler--movie w-3 h-3"></span>
+            Ref video
+          </div>
+          <div class="px-2 py-1 rounded-lg bg-primary/10 text-primary text-[10px] font-bold border border-primary/20">
+            {{ sourceImages.length }} Files
+          </div>
         </div>
       </div>
 
@@ -97,6 +106,7 @@ const attachedImages = ref<string[]>([])
 const lightboxIdx = ref<number | null>(null)
 
 const sourceImages = computed(() => videoStore.currentThread?.preprocessing?.sourceImages || [])
+const referenceVideo = computed(() => videoStore.currentThread?.videoPath || null)
 const visibleImages = computed(() => sourceImages.value.slice(0, 6))
 
 const activeTasks = computed(() => {

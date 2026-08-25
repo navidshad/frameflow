@@ -37,14 +37,20 @@
       <!-- Row 2: Actions -->
       <div class="flex items-center justify-between gap-2 border-t border-black/5 dark:border-white/5 pt-1.5 mt-1">
         <div class="flex items-center gap-1.5">
-          <!-- Attachment Toggle -->
-          <SlimTooltip text="Add Attachments" :placement="compact ? 'top' : 'bottom'">
-            <IconButton @click="showAttachmentModal = true" icon="IconPlus" :size="compact ? 'sm' : 'md'" rounded="full"
-              variant="ghost" class="text-zinc-400 hover:text-primary transition-all active:scale-95" />
-          </SlimTooltip>
+          <!-- Attachment Toggle.
+               Overridable because AttachmentModal is THREAD-scoped: it lists
+               videoStore.currentThread's sourceImages, and currentThreadId is
+               never cleared on leaving a thread. Anywhere outside a thread
+               (the Home composer) must supply its own attach controls. -->
+          <slot name="attach">
+            <SlimTooltip text="Add Attachments" :placement="compact ? 'top' : 'bottom'">
+              <IconButton @click="showAttachmentModal = true" icon="IconPlus" :size="compact ? 'sm' : 'md'" rounded="full"
+                variant="ghost" class="text-zinc-400 hover:text-primary transition-all active:scale-95" />
+            </SlimTooltip>
+          </slot>
 
           <!-- Auto Use Images Toggle -->
-          <SlimTooltip text="Smart Auto-References: Include project images as context" :placement="compact ? 'top' : 'bottom'">
+          <SlimTooltip v-if="showAutoImages" text="Smart Auto-References: Include project images as context" :placement="compact ? 'top' : 'bottom'">
              <button 
               @click="toggleAutoUseImages"
               type="button"
@@ -62,7 +68,7 @@
 
         <div class="flex items-center gap-1.5">
           <!-- Results Count -->
-          <SlimTooltip text="Number of result variations to generate" :placement="compact ? 'top' : 'bottom'">
+          <SlimTooltip v-if="showSamples" text="Number of result variations to generate" :placement="compact ? 'top' : 'bottom'">
             <div
               class="flex items-center bg-zinc-100 dark:bg-white/5 rounded-xl px-2 py-1 border border-black/5 dark:border-white/10 group/count hover:border-primary/30 transition-colors"
               :class="compact ? 'scale-90 origin-right' : ''">
@@ -76,7 +82,7 @@
           </SlimTooltip>
 
           <!-- Thinking Mode Toggle -->
-          <SlimTooltip text="Thinking Mode (CoT)" :placement="compact ? 'top' : 'bottom'">
+          <SlimTooltip v-if="showThinking" text="Thinking Mode (CoT)" :placement="compact ? 'top' : 'bottom'">
             <button @click="isThinkingMode = !isThinkingMode"
               class="flex items-center justify-center p-2 rounded-xl border transition-all active:scale-95" :class="[
                 isThinkingMode
@@ -87,10 +93,13 @@
             </button>
           </SlimTooltip>
 
-          <SlimTooltip :text="submitIcon === 'IconSend' ? 'Send Message (Enter)' : 'Execute Task'"
+          <SlimTooltip
+            :text="sendDisabled && sendDisabledReason
+              ? sendDisabledReason
+              : (submitIcon === 'IconSend' ? 'Send Message (Enter)' : 'Execute Task')"
             :placement="compact ? 'top' : 'bottom'">
             <IconButton @click="handleSend" :icon="submitIcon" color="primary" :size="compact ? 'xs' : 'sm'" rounded="lg"
-              :disabled="!internalText.trim() && attachedImages.length === 0" />
+              :disabled="sendDisabled || (!allowEmptySend && !internalText.trim() && attachedImages.length === 0)" />
           </SlimTooltip>
         </div>
       </div>
@@ -113,12 +122,27 @@ const props = withDefaults(defineProps<{
   compact?: boolean
   submitIcon?: string
   autoUseImages?: boolean
+  /** Block sending for a caller-specific reason (e.g. no source file chosen). */
+  sendDisabled?: boolean
+  /** Shown on the send tooltip so the block is never a silent no-op. */
+  sendDisabledReason?: string
+  /** Controls that only mean something for the AI-graph pipeline; hidden for the editor path. */
+  showSamples?: boolean
+  showThinking?: boolean
+  showAutoImages?: boolean
+  /** Allow sending with no text — e.g. "just open this file", where the prompt is optional. */
+  allowEmptySend?: boolean
 }>(), {
   placeholder: 'Type a message...',
   attachedImages: () => [],
   compact: false,
   submitIcon: 'IconSend',
-  autoUseImages: false
+  autoUseImages: false,
+  sendDisabled: false,
+  showSamples: true,
+  showThinking: true,
+  showAutoImages: true,
+  allowEmptySend: false
 })
 
 const emit = defineEmits(['update:modelValue', 'update:attachedImages', 'send', 'update:autoUseImages'])
@@ -155,10 +179,13 @@ const adjustTextarea = () => {
 }
 
 const handleEnter = (e: KeyboardEvent) => {
-  if ((e.metaKey || e.ctrlKey) && (internalText.value.trim() || props.attachedImages.length > 0)) {
-    e.preventDefault()
-    handleSend()
-  }
+  if (!(e.metaKey || e.ctrlKey)) return
+  // Mirror the send button's rule, allowEmptySend included — otherwise the
+  // keyboard and the button disagree about whether an empty prompt can send.
+  const hasContent = internalText.value.trim() || props.attachedImages.length > 0
+  if (!hasContent && !props.allowEmptySend) return
+  e.preventDefault()
+  handleSend()
 }
 
 const handleImagesSelected = (images: string[]) => {
@@ -173,7 +200,8 @@ const removeAttachment = (index: number) => {
 }
 
 const handleSend = () => {
-  if (!internalText.value.trim() && props.attachedImages.length === 0) return
+  if (props.sendDisabled) return
+  if (!props.allowEmptySend && !internalText.value.trim() && props.attachedImages.length === 0) return
   emit('send', internalText.value, [...props.attachedImages], resultsCount.value, isThinkingMode.value, props.autoUseImages)
 
   // Clear local state if parent doesn't reset via props (standard pattern)

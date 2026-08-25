@@ -1,4 +1,5 @@
 import { contextBridge, ipcRenderer } from 'electron'
+import type { ThreadType } from '@shared/types'
 
 const api = {
 	selectVideo: () => ipcRenderer.invoke('select-video'),
@@ -19,7 +20,6 @@ const api = {
 		return () => ipcRenderer.removeListener('pipeline-update', listener)
 	},
 	getBackgroundTasks: (threadId: string) => ipcRenderer.invoke('get-background-tasks', threadId),
-	retryPreprocessing: (threadId: string) => ipcRenderer.invoke('retry-preprocessing', threadId),
 	debugLog: (...args: any[]) => ipcRenderer.invoke('debug-log', ...args),
 	onBackgroundTaskUpdate: (callback: (data: any) => void) => {
 		const listener = (_event: any, data: any) => callback(data)
@@ -116,7 +116,7 @@ const api = {
 	deleteEditorRevisions: (data: { threadId: string, ids: string[] }) =>
 		ipcRenderer.invoke('delete-editor-revisions', data),
 	// Thread Management
-	createThread: (data: { videoPath?: string, videoName: string, imagePaths?: string[] }) =>
+	createThread: (data: { videoPath?: string, videoName: string, imagePaths?: string[], type?: ThreadType }) =>
 		ipcRenderer.invoke('create-thread', data),
 	getAllThreads: () => ipcRenderer.invoke('get-all-threads'),
 	getThread: (id: string) => ipcRenderer.invoke('get-thread', id),

@@ -1,30 +1,36 @@
 <template>
-  <div class="h-full group cursor-pointer" @click="$emit('open', thread.id)">
+  <div class="h-full group" :class="isLegacy ? 'cursor-default' : 'cursor-pointer'"
+    @click="!isLegacy && $emit('open', thread.id)">
     <Card
       class="h-full dark:!bg-zinc-900 dark:!border-zinc-800/50 !shadow-sm hover:!shadow-md"
     >
       <div class="p-6 flex flex-col h-full relative z-10">
         <div class="flex items-start justify-between mb-6">
-          <div class="w-12 h-12 rounded-lg bg-primary/10 text-primary p-3">
-            <svg
-              xmlns="http://www.w3.org/2000/svg"
-              class="w-full h-full"
-              viewBox="0 0 24 24"
-              fill="none"
-              stroke="currentColor"
-              stroke-width="2"
-              stroke-linecap="round"
-              stroke-linejoin="round"
-            >
-              <polygon points="23 7 16 12 23 17 23 7" />
-              <rect x="1" y="5" width="15" height="14" rx="2" ry="2" />
-            </svg>
+          <div class="w-12 h-12 rounded-lg bg-primary/10 text-primary p-3 flex items-center justify-center">
+            <span class="iconify w-full h-full" :class="kind.icon"></span>
           </div>
 
-          <div
-            class="text-[10px] font-bold uppercase tracking-widest text-zinc-400/80 bg-zinc-50 dark:bg-zinc-800/50 px-2 py-1 rounded-lg"
-          >
-            {{ formatDate(thread.updatedAt) }}
+          <div class="flex items-center gap-2">
+            <!-- Without this the only way to tell a timeline project from a
+                 video project in a mixed list is to click it. -->
+            <div
+              v-if="isLegacy"
+              class="text-[10px] font-bold uppercase tracking-widest text-amber-700 dark:text-amber-400 bg-amber-500/10 border border-amber-500/20 px-2 py-1 rounded-lg"
+              title="Made by the retired AI video pipeline. Video editing now happens in a timeline project."
+            >
+              Unsupported
+            </div>
+            <div
+              v-else
+              class="text-[10px] font-bold uppercase tracking-widest text-zinc-500 dark:text-zinc-400 bg-zinc-100 dark:bg-zinc-800 px-2 py-1 rounded-lg"
+            >
+              {{ kind.label }}
+            </div>
+            <div
+              class="text-[10px] font-bold uppercase tracking-widest text-zinc-400/80 bg-zinc-50 dark:bg-zinc-800/50 px-2 py-1 rounded-lg"
+            >
+              {{ formatDate(thread.updatedAt) }}
+            </div>
           </div>
         </div>
 
@@ -64,7 +70,7 @@
           </div>
 
           <div
-            v-if="thread.versionCounter"
+            v-if="thread.versionCounter && thread.type !== 'editor'"
             class="flex items-center bg-blue-50/50 dark:bg-blue-500/10 text-blue-600 dark:text-blue-400 px-2.5 py-1.5 rounded-lg border border-blue-100/50 dark:border-blue-500/20"
           >
             <span class="font-bold uppercase tracking-wider text-[9px]"
@@ -119,13 +125,27 @@
 </template>
 
 <script setup lang="ts">
+import { computed } from 'vue'
 import { Card } from 'pilotui/elements'
+import { isLegacyVideoThread } from '@shared/legacy'
 
-defineProps<{
+const props = defineProps<{
   thread: any
 }>()
 
 defineEmits(['open', 'delete'])
+
+/** Threads written before `type` existed read back undefined — those are video. */
+const KINDS = {
+  video: { label: 'Video', icon: 'tabler--movie' },
+  image: { label: 'Images', icon: 'tabler--photo' },
+  editor: { label: 'Timeline', icon: 'tabler--timeline' }
+} as const
+
+const kind = computed(() => KINDS[props.thread.type as keyof typeof KINDS] || KINDS.video)
+
+/** Retired AI-video threads: listed and deletable, but not openable. */
+const isLegacy = computed(() => isLegacyVideoThread(props.thread))
 
 const formatDate = (timestamp: number) => {
   return new Date(timestamp).toLocaleDateString(undefined, {

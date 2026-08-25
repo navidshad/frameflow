@@ -4,6 +4,7 @@ import { setMaxListeners } from 'events'
 import { v4 as uuidv4 } from 'uuid'
 import type { Clip, DescriptionHealth, MediaAsset, SilenceRegion, TranscriptHealth } from '@shared/types'
 import { analyzeTranscriptHealth } from '@shared/transcript-health'
+import { srtToSeconds } from '@shared/timeline'
 import { MIN_DESCRIBABLE_DURATION } from '../gemini/scene-descriptions'
 import type { PipelineContext } from '../pipeline'
 import { threadManager } from '../threads'
@@ -453,7 +454,7 @@ const MAX_GAP_CHUNK_SEC = 15.0
  * (what was said) instead of visual scene cuts. Prior clip props survive by
  * (in,out) epsilon-match.
  */
-async function deriveClipsFromTranscript(threadId: string, assetId: string): Promise<number> {
+export async function deriveClipsFromTranscript(threadId: string, assetId: string): Promise<number> {
 	const asset = getAsset(threadId, assetId)
 	const transcriptPath = asset?.preprocessing.transcriptPath
 	if (!asset || !exists(transcriptPath)) return 0
@@ -933,18 +934,6 @@ async function runFilmstripStep(threadId: string, assetId: string, signal: Abort
 		progress: 100,
 		status: `${filmstrip.length} frames`
 	})
-}
-
-/** `HH:MM:SS,mmm` (or `MM:SS,mmm`) → seconds. Mirrors enrichment.ts timeToSeconds. */
-function srtToSeconds(t: string): number {
-	const clean = t.trim().replace(',', '.')
-	const [timePart, milliPart = '0'] = clean.split('.')
-	const parts = timePart.split(':').map(Number)
-	let seconds = 0
-	if (parts.length === 3) seconds = parts[0] * 3600 + parts[1] * 60 + parts[2]
-	else if (parts.length === 2) seconds = parts[0] * 60 + parts[1]
-	else seconds = parts[0] || 0
-	return seconds + parseFloat(`0.${milliPart}`)
 }
 
 /**

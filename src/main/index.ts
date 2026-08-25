@@ -9,11 +9,7 @@ import { threadManager } from './threads'
 import type { EditorDocument, TimelineItem } from '@shared/types'
 import { pruneOrphanItems } from '@shared/timeline'
 import * as extraction from './pipeline/phases/extraction'
-import * as generation from './pipeline/phases/generation'
-import * as intent from './pipeline/phases/intent'
 import * as supply from './pipeline/phases/supply'
-import * as assembly from './pipeline/phases/assembly'
-import * as thumbnail from './pipeline/phases/thumbnail'
 
 import * as imageIntent from './pipeline/phases/image-intent'
 import * as imageGeneration from './pipeline/phases/image-generation'
@@ -223,38 +219,27 @@ app.whenReady().then(() => {
 		const pipeline = new Pipeline(window, newAiMessageId, threadId, context, baseTimeline, userMsgId, attachedImages, isThinkingMode, autoUseImages)
 
 		// Ensure background processing is running (will resume/retry if tasks are missing/failed)
-		if (thread.type === 'image') {
-			backgroundTaskManager.startImageProcessing(threadId)
-		} else {
-			backgroundTaskManager.startPreprocessing(threadId)
-		}
+		backgroundTaskManager.startImageProcessing(threadId)
 
-		if (thread.type === 'image') {
-			pipeline
-				.register(async (data, ctx) => {
-					await ctx.updateStatus('Waiting for image analysis...')
-					await ctx.waitForTask('imageExtraction')
-					ctx.next(data)
-				})
-				.register(imageIntent.determineImageIntent)
-				.register(supply.supplyController, { skipIf: ctx => ctx.intentResult?.type !== 'generate-image' })
-				.register(imageGeneration.generateOutputImage, { skipIf: ctx => ctx.intentResult?.type !== 'generate-image' })
-		} else {
-			pipeline
-				.register(extraction.waitForEnsureLowResolution)
-				.register(extraction.waitForConvertToAudio)
-				.register(extraction.waitForExtractRawTranscript)
-				.register(extraction.waitForExtractCorrectedTranscript)
-				.register(extraction.waitForExtractSceneTiming)
-				.register(extraction.waitForGenerateSceneDescription)
-				.register(intent.determineIntent)
-				.register(supply.supplyController, { skipIf: ctx => ctx.intentResult?.type === 'text' })
-				// These steps only run if intent is generate-timeline
-				.register(generation.waitForEnrichTranscript, { skipIf: ctx => ctx.intentResult?.type === 'text' || ctx.intentResult?.type === 'generate-thumbnail' })
-				.register(generation.buildShorterTimeline, { skipIf: ctx => ctx.intentResult?.type === 'text' || ctx.intentResult?.type === 'generate-thumbnail' })
-				.register(thumbnail.generateThumbnail, { skipIf: ctx => ctx.intentResult?.type !== 'generate-thumbnail' })
-				.register(assembly.assembleVideoFromTimeline, { skipIf: ctx => ctx.intentResult?.type === 'text' || ctx.intentResult?.type === 'generate-thumbnail' })
-		}
+		// One chain now: the graph produces IMAGES (and thumbnails). Video output
+		// lives in the timeline editor, which has its own AI path (editor/prompt.ts)
+		// and produces an editable timeline rather than a rendered file.
+		//
+		// The inline waiter transitively covers reference-frame sampling too:
+		// startImageProcessing awaits `referenceFrames` BEFORE `imageExtraction`,
+		// sequentially, so a reference video's stills exist by the time this
+		// resolves. Non-obvious and load-bearing.
+		pipeline
+			.register(async (data, ctx) => {
+				await ctx.updateStatus('Waiting for image analysis...')
+				await ctx.waitForTask('imageExtraction')
+				ctx.next(data)
+			})
+			.register(imageIntent.determineImageIntent)
+			// Both generation flavours run the same two phases; generateOutputImage
+			// picks its model, system instruction and resultType from the intent.
+			.register(supply.supplyController, { skipIf: ctx => ctx.intentResult?.type === 'text' })
+			.register(imageGeneration.generateOutputImage, { skipIf: ctx => ctx.intentResult?.type === 'text' })
 
 		console.log(`[DEBUG IPC] pipeline configured. Calling pipeline.start() in background...`)
 		activePipelines.set(newAiMessageId, pipeline)
@@ -365,19 +350,10 @@ app.whenReady().then(() => {
 	})
 
 	// Thread Management
-	ipcMain.handle('create-thread', async (_event, { videoPath, videoName, imagePaths }) => {
-		const newThread = await threadManager.createThread(videoPath, videoName, imagePaths)
-		if (newThread.type === 'image') {
-			backgroundTaskManager.startImageProcessing(newThread.id)
-		} else {
-			backgroundTaskManager.startPreprocessing(newThread.id)
-		}
+	ipcMain.handle('create-thread', async (_event, { videoPath, videoName, imagePaths, type }) => {
+		const newThread = await threadManager.createThread(videoPath, videoName, imagePaths, type)
+		backgroundTaskManager.startImageProcessing(newThread.id)
 		return newThread
-	})
-
-	ipcMain.handle('retry-preprocessing', async (_event, threadId) => {
-		await backgroundTaskManager.startPreprocessing(threadId)
-		return true
 	})
 
 	// ===== Timeline Video Editor =====
@@ -466,7 +442,22 @@ app.whenReady().then(() => {
 	ipcMain.handle('add-media-asset', async (_event, { threadId, filePath, name }: {
 		threadId: string, filePath: string, name?: string
 	}) => {
-		const asset = await editorAssets.createMediaAsset(threadId, { sourcePath: filePath, name, referenceInPlace: true })
+		// Reference the user's own file where it lives (copying a 10-15 GB source
+		// would block the main process), but MOVE a file the app itself just
+		// downloaded — left in place it dangles in a scratch folder outside the
+		// project, where removeAsset never cleans it and path-repair cannot find it.
+		//
+		// Match the download scratch dirs SPECIFICALLY. getTempDir() is the artifact
+		// ROOT and contains every project, so testing against it alone would move
+		// files out of other projects — including a chat thread's own source video.
+		const downloadRoot = join(settingsManager.getTempDir(), 'download-')
+		const isFreshDownload = filePath.startsWith(downloadRoot)
+		const asset = await editorAssets.createMediaAsset(threadId, {
+			sourcePath: filePath,
+			name,
+			referenceInPlace: !isFreshDownload,
+			move: isFreshDownload
+		})
 		if (asset && asset.preprocessState !== 'error') {
 			// Fire-and-forget: progress streams via background-task-update
 			editorPreprocess.preprocessMediaAsset(threadId, asset.id).catch((error) => {
@@ -513,6 +504,8 @@ app.whenReady().then(() => {
 			throw error
 		}
 	})
+
+
 
 	ipcMain.handle('remove-media-asset', async (_event, { threadId, assetId }: {
 		threadId: string, assetId: string

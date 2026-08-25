@@ -1,44 +1,71 @@
 # 🧠 Technical Architecture
 
-Welcome to the technical heart of the **VGTU Video Summarization** project. This document explains how the application turns long videos into concise, AI-edited summaries. It is designed for students, instructors, and developers to understand both the "why" and the "how."
+The technical heart of the **VGTU Video Summarization** project. This document
+explains how the application turns raw footage and images into finished work.
+It is written for students, instructors, and developers.
 
 ---
 
 ## 🌟 Core Concepts
 
-At its simplest, this app acts as an **AI Video Editor**. Unlike traditional editors where you drag clips manually, this system uses a **Pipeline** to automate the process based on your chat instructions.
+The app splits work by **expected outcome**, not by what you upload:
+
+| Outcome | Surface | Why |
+|---|---|---|
+| **Images** (stills, thumbnails, covers) | the **AI node graph** | branching exploration of discrete artifacts — generate several, compare, branch from the good one |
+| **Video / audio** | the **timeline editor** | continuous media arranged in time, with frame-level control |
+
+That is the single most important thing to understand about the codebase. There
+used to be a second, older AI pipeline that produced *video* in the graph; it
+rendered a finished file you could not adjust. It was retired in favour of the
+editor, whose AI produces an **editable timeline** instead — same idea, better
+output, and one implementation rather than two.
 
 ### 🧩 The Three Pillars
-1.  **Vision & Sound (The Input):** We extract audio and frames to "show" the video to the AI.
-2.  **The Brain (Gemini AI):** Google's Gemini models analyze the transcript and visual descriptions to decide which parts of the video are important.
-3.  **The Engine (FFmpeg & PySceneDetect):** These tools handle the heavy lifting—cutting, merging, and detecting natural breaks (scenes) in the video.
+1.  **Vision & Sound (The Input):** audio and frames are extracted so the AI can "see" the material.
+2.  **The Brain (Gemini AI):** Gemini models read the transcript and visual descriptions and decide what matters.
+3.  **The Engine (FFmpeg & PySceneDetect):** the heavy lifting — cutting, merging, and detecting natural scene breaks.
 
 ---
 
-## 🏗 High-Level Workflow
+## 🏗 Two workflows
 
-The application follows a modular, phase-based pipeline. Think of it like an assembly line:
+### A. The node graph — image output
 
 ```mermaid
 graph TD
-    A[Video Upload] --> B["Phase 1: Preparation (Extraction)"]
-    B --> C{"Phase 2: The Brain (Intent Analysis)"}
-    
-    C -- "Just Chatting" --> D[Conversational Response]
+    A[Images and/or a reference video] --> B["Sampling + Analysis (background tasks)"]
+    B --> C{"determineImageIntent"}
+    C -- "Just chatting" --> D[Conversational reply]
     D --> C
-    
-    C -- "Time to Edit!" --> E["Phase 3: Context Enrichment"]
-    E --> F["Phase 4: Timeline Blueprint"]
-    
-    F -- "Edit a Draft" --> G[Refinement Loop]
-    F -- "Start Fresh" --> H[Fresh Generation]
-    
-    G --> I["Phase 5: The Final Merge (Assembly)"]
-    H --> I
-    I --> J[Final Video Preview]
+    C -- "generate-image" --> E["supplyController: pick reference material"]
+    C -- "generate-thumbnail" --> E
+    E --> F["generateOutputImage"]
+    F --> G[Result node on the canvas]
 ```
 
+A reference video is sampled into ~8 stills (`startReferenceFrameExtraction`)
+which join the user's own images in one pool. `generateOutputImage` serves both
+flavours, picking its model slot, system instruction and `resultType` from the
+intent — that is how "make a thumbnail from my video" works.
+
+### B. The timeline editor — video output
+
+Entered from Home's **Video** purpose, or from a blank timeline project. Media is
+imported per asset and preprocessed independently (`src/main/editor/preprocess.ts`:
+proxy → audio → transcript → scenes → thumbnails, every step skip-if-exists).
+The AI path is `src/main/editor/prompt.ts`: one Gemini call per turn producing
+**ops** (`src/main/editor/ops.ts`) which map to a `TimelineDiff` the renderer
+applies. Output length comes from the user's request — personas describe style
+only. Each turn becomes a branchable revision.
+
 ---
+
+## 🚦 Reference: media pre-processing
+
+The phases below are shared: `src/main/pipeline/phases/extraction.ts` still owns
+audio extraction, transcription and scene description, and the **editor** calls
+them per asset.
 
 ## 🚦 Phase 1: Pre-Processing (Preparation)
 Before the AI can "watch" the video, we need to convert it into formats it can understand.
@@ -48,16 +75,6 @@ Before the AI can "watch" the video, we need to convert it into formats it can u
 1.  **Low-Res Proxy:** High-quality 4K video is too "heavy" for fast AI analysis. We create a 480p "proxy" version using **FFmpeg**.
 2.  **Audio Extraction:** We pull the audio (MP3) because it's much faster for the AI to "listen" to a transcript than to process raw video pixels for every second.
 3.  **Raw Transcript:** We use **Gemini 2.5** to generate an initial timestamped script of everything being said.
-
----
-
-## 🧠 Phase 2: User Intent (The Brain)
-When you type a message, the AI needs to decide: *Are you just asking a question, or do you want me to generate a video?*
-
-**Key File:** `src/main/pipeline/phases/intent.ts`
-
--   **State Machine:** The app doesn't just jump into editing. It checks if your request is clear. If you say "Make it cool," the AI might ask, "What part should be cool?"
--   **Context Awareness:** The AI remembers your previous chat messages so it understands follow-ups like "Actually, make it shorter."
 
 ---
 
@@ -75,33 +92,22 @@ This is the most critical step. We give the AI a rich "cheat sheet" of what happ
 
 ---
 
-## 🎞 Phase 4: Timeline Generation (The Blueprint)
-Now, the AI acts as the director. It looks at the enriched context and writes a **Timeline JSON**—a list of start and end times for the final summary.
-
-**Key File:** `src/main/pipeline/phases/generation.ts`
-
--   **Iterative Search:** The AI searches through the scenes to find the most relevant segments that fit your requested duration (e.g., "Give me a 1-minute summary").
--   **Edit Mode:** If you are editing a previous version, the AI only changes the specific parts you mentioned, keeping the rest of your video intact.
-
----
-
-## 🛠 Phase 5: Video Assembly (The Factory)
-The final step is turning that JSON blueprint into a real video file.
-
-**Key File:** `src/main/pipeline/phases/assembly.ts`
-
--   **FFmpeg Engine:** We use a "Complex Filter" command. Instead of making many small files and joining them (which is slow), we tell **FFmpeg** to stream-process the original video, cut the pieces, and stitch them in memory.
--   **Hardware Secrets:** On Mac, we use `h264_videotoolbox` to use the computer's graphics chip, making the export 5-10x faster.
-
----
-
 ## 🎓 Instructor & Student FAQ
 
 ### Why use a proxy video?
 Processing a 1GB 4K file directly for AI descriptions would be slow and expensive. A 480p proxy looks the same to the AI but processes in seconds.
 
 ### How does it handle "Hallucinations"?
-The AI creates a **Blueprint** (JSON) first. The app validates this blueprint against the actual video duration before a single frame is cut.
+The AI never touches media directly. It emits **ops** (JSON) which are validated
+against real clip indices and real source durations before anything is placed —
+out-of-range picks are clamped or dropped and reported on the result card.
 
-### What happens if I edit a summary?
-We use a "Reference Timeline" system. The AI compares your request against the *existing* edit, behaving like a human editor who only changes the clips you pointed out.
+### What happens if I edit an existing cut?
+The AI is given the current timeline as context and edits it in place, like a
+human editor changing only the clips you pointed at. Every turn becomes a
+revision you can switch back to or branch from.
+
+### How does the AI know how long the output should be?
+From your request, and only from your request. Personas describe a *style*, not
+a length. The model states the runtime it inferred, and the result card reports
+what actually came out so you can see whether it read you correctly.

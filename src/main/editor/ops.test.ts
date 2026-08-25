@@ -1,7 +1,10 @@
 import { describe, expect, it } from 'vitest'
 import type { Clip, EditorDocument, EditorPersona, MediaAsset, TimelineItem, Track } from '@shared/types'
-import { repairOverlaps } from '@shared/timeline'
-import { composeSystemInstruction, opsToDiff, type PromptStats } from './ops'
+import { repairOverlaps, TIMELINE_DIFF_SCHEMA_VERSION } from '@shared/timeline'
+import {
+	composeSystemInstruction, EDITOR_OPS_SCHEMA, editorOpsSchema, measureBuild, opsToDiff,
+	type PromptStats
+} from './ops'
 
 // ===== Fixtures =====
 
@@ -484,43 +487,138 @@ describe('opsToDiff / atScene markers', () => {
 	})
 })
 
-// ===== Duration contract =====
+// ===== Output-length contract =====
 
 describe('composeSystemInstruction', () => {
-	const longform: EditorPersona = {
-		id: 'podcast-editor', name: 'Podcast Editor', icon: '🎙️', description: '',
-		systemPrompt: 'You are a seasoned podcast editor.', builtin: true, mode: 'longform',
-		defaults: { targetDurationSec: null }
+	const persona: EditorPersona = {
+		id: 'general-editor', name: 'Video Editor', icon: '🎬', description: '',
+		systemPrompt: 'You are a capable, general-purpose video editor.', builtin: true,
+		defaults: { pacing: 'balanced' }
 	}
+	// A persona whose prose leans short — it must NOT force a short output.
 	const summarizer: EditorPersona = {
 		id: 'concise', name: 'Concise', icon: '✂️', description: '',
-		systemPrompt: 'You summarize.', builtin: true, mode: 'summarize',
-		defaults: { targetDurationSec: 60 }
+		systemPrompt: 'You summarize.', builtin: true,
+		defaults: { pacing: 'tight' }
 	}
 	const stats = (over: Partial<PromptStats>): PromptStats => ({
 		timelineItemCount: 0, timelineDurationSec: 0,
-		sourceDurationSec: 5535, sourceClipCount: 1899, mode: 'longform', ...over
+		sourceDurationSec: 5535, sourceClipCount: 1899, ...over
 	})
 
-	it('tells a longform persona to BUILD when the timeline is empty', () => {
-		const text = composeSystemInstruction(longform, stats({}))
-		expect(text).toContain('BUILD THE FULL-LENGTH cut')
+	it('tells the model to infer the length from the request', () => {
+		const text = composeSystemInstruction(persona, stats({}))
+		expect(text).toContain('=== OUTPUT LENGTH ===')
+		expect(text).toContain('Work out the intended length from the request')
+		expect(text).toContain('targetLengthSec')
+	})
+
+	it('defaults to a full-length build when the timeline is empty', () => {
+		const text = composeSystemInstruction(persona, stats({}))
+		expect(text).toContain('The timeline is EMPTY')
 		expect(text).toContain('92:15')
 		expect(text).toContain('1899 detected pieces')
 		expect(text).toContain('addSceneRanges')
-		expect(text).not.toContain('PRESERVE the full runtime')
+		expect(text).not.toContain('PRESERVE that runtime')
 	})
 
-	it('tells a longform persona to PRESERVE an existing cut', () => {
-		const text = composeSystemInstruction(longform, stats({ timelineItemCount: 28, timelineDurationSec: 339 }))
-		expect(text).toContain('PRESERVE the full runtime of the current cut (28 items, 5:39)')
+	it('defaults to preserving an existing cut', () => {
+		const text = composeSystemInstruction(persona, stats({ timelineItemCount: 28, timelineDurationSec: 339 }))
+		expect(text).toContain('The current cut is 28 items, 5:39')
+		expect(text).toContain('PRESERVE that runtime')
 		// Short cut + lots of unused source => it is told how to extend.
 		expect(text).toContain('APPEND the missing material')
 	})
 
-	it('keeps the summarize target line byte-identical', () => {
-		const text = composeSystemInstruction(summarizer, stats({ mode: 'summarize' }))
-		expect(text).toContain('Target output duration: about 60 seconds. Cut toward this target.')
-		expect(text).not.toContain('BUILD THE FULL-LENGTH')
+	it('says the request wins over the persona\'s habit', () => {
+		expect(composeSystemInstruction(persona, stats({}))).toContain('the request wins')
+	})
+
+	it('still reports tone and pacing', () => {
+		expect(composeSystemInstruction(persona, stats({}))).toContain('Pacing: balanced')
+	})
+
+	// The whole point of deleting modes: no persona shape can preset a runtime.
+	it('never emits a preset duration target, whatever the persona', () => {
+		for (const p of [persona, summarizer]) {
+			const text = composeSystemInstruction(p, stats({}))
+			expect(text).not.toContain('Target output duration')
+			expect(text).not.toContain('Target aspect ratio')
+		}
+	})
+})
+
+describe('measureBuild', () => {
+	// One 92:15 source (makeAsset sets metadata.duration = total + 10).
+	const doc = makeDoc([makeAsset('a', [5525])], [])
+	// One 12-minute item out of a 92-minute source.
+	const diff = {
+		schemaVersion: TIMELINE_DIFF_SCHEMA_VERSION,
+		addItems: [{
+			id: 'i1', trackId: doc.tracks[0].id, sourceAssetId: 'a',
+			timelineStart: 0, in: 0, out: 724, speed: 1, preservePitch: true, duration: 724
+		}]
+	} as any
+	const stats = (over: Partial<PromptStats> = {}): PromptStats => ({
+		timelineItemCount: 0, timelineDurationSec: 0,
+		sourceDurationSec: 5535, sourceClipCount: 1899, ...over
+	})
+
+	it('flags a short build-from-scratch when the model stated no target', () => {
+		const build = measureBuild(diff, doc, stats())
+		expect(build?.producedSec).toBeCloseTo(724, 3)
+		expect(build?.sourceSec).toBe(5535)
+		expect(build?.targetSec).toBeUndefined()
+		expect(build?.shortfall).toBe(true)
+	})
+
+	// The reason targetLengthSec exists: a deliberate short cut must not nag.
+	it('does not flag the same cut when the model asked for that length', () => {
+		const build = measureBuild(diff, doc, stats(), 720)
+		expect(build?.targetSec).toBe(720)
+		expect(build?.shortfall).toBe(false)
+	})
+
+	it('flags a cut that misses the model\'s own stated target', () => {
+		expect(measureBuild(diff, doc, stats(), 3000)?.shortfall).toBe(true)
+	})
+
+	it('does not flag short sources on the source heuristic', () => {
+		// 8 minutes of source: cutting it hard is a normal editorial choice.
+		expect(measureBuild(diff, doc, stats({ sourceDurationSec: 480 }))?.shortfall).toBe(false)
+	})
+
+	it('reports length for an edit to an existing cut without flagging it', () => {
+		const build = measureBuild(diff, doc, stats({ timelineItemCount: 12, timelineDurationSec: 5000 }))
+		expect(build?.producedSec).toBeGreaterThan(0)
+		expect(build?.shortfall).toBe(false)
+	})
+
+	it('returns undefined with no diff or no known source', () => {
+		expect(measureBuild(undefined, doc, stats())).toBeUndefined()
+		expect(measureBuild(diff, doc, stats({ sourceDurationSec: 0 }))).toBeUndefined()
+	})
+})
+
+describe('editorOpsSchema', () => {
+	const props = (hasItems: boolean) => Object.keys(editorOpsSchema(hasItems).properties as any)
+
+	it('offers the item-mutating ops when the timeline has items', () => {
+		expect(props(true)).toEqual(expect.arrayContaining(['updateItems', 'removeItemIds', 'closeGaps']))
+	})
+
+	// The observed failure this guards: on an empty timeline the model emitted
+	// updateItems against invented ids and added nothing at all.
+	it('removes them on an empty timeline, leaving only ways to ADD', () => {
+		const p = props(false)
+		expect(p).not.toContain('updateItems')
+		expect(p).not.toContain('removeItemIds')
+		expect(p).not.toContain('closeGaps')
+		expect(p).toEqual(expect.arrayContaining(['addSceneRanges', 'addClips', 'targetLengthSec']))
+	})
+
+	it('does not mutate the shared schema constant', () => {
+		editorOpsSchema(false)
+		expect(Object.keys(EDITOR_OPS_SCHEMA.properties as any)).toContain('updateItems')
 	})
 })
