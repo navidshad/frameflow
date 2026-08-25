@@ -19,25 +19,32 @@
 
 ## 🚀 The Three Pillars of FrameFlow
 
-FrameFlow is built on three core intelligence layers, designed for creators, researchers, and developers.
+FrameFlow splits work by **what you are making**, not by what you upload. Video and
+audio go to a timeline; images go to a node graph.
 
-### 1. 🎞️ Video to Short Video
-Transform long-form content into concise, meaningful highlights.
-- **Academic Precision**: Condense 2-hour technical lectures into 5-minute study guides.
-- **Meeting Recap**: Rapidly navigate long webinars for specific insights.
-- **Narrative Awareness**: AI understands scene transitions and audio context simultaneously.
+### 1. 🎞️ Video → Video (the timeline editor)
+A real multi-track timeline with an AI editor sitting next to it.
+- **Say what you want, at any length**: *"cut the filler but keep the whole lecture"* and
+  *"make a 2-minute highlight"* are both just prompts — nothing presets a runtime.
+- **Always editable**: the AI proposes a timeline, not a rendered file, so you can drag
+  any edge it got wrong instead of re-prompting.
+- **Branchable history**: every AI turn becomes a revision you can switch to or branch
+  from, viewable as a list or a graph.
+- **Manual tools too**: split, ripple-delete, retime, markers, chapters, silence finder.
 
-### 2. 📸 Video to Thumbnail
-Extract and generate high-fidelity visual assets from any video source.
-- **Auto-Enrichment**: AI analyzes scene quality to extract the most representative frames.
-- **Professional Thumbnails**: Generate YouTube-ready or presentation-grade thumbnails with AI-driven composition.
-- **Batch Processing**: Extract hundreds of scene-indexed images in seconds.
+### 2. 📸 Video → Thumbnail
+Generate a cover image from footage.
+- **Frame-aware**: the video is sampled and analysed, so you can say *"use the moment at
+  the train station"* and it knows which one you mean.
+- **Designed, not just rendered**: composition rules (rule of thirds, contrast, subject
+  consistency) are baked into the generator.
 
-### 3. 🎨 Images to Image
-Leverage multimodal prompts to transform existing images or generate new ones from scratch.
-- **Visual Continuity**: Use existing frames as structural references for new generations.
-- **Prompt-Driven Flow**: Refine images using natural language within a unified chat-graph interface.
-- **Multimodal Fusion**: Combine video context with external image uploads for hybrid creativity.
+### 3. 🎨 Images → Image (the node graph)
+Branching exploration for still images.
+- **Compare, then branch**: generate several variants side by side and continue from the
+  one that worked — which is what a canvas is good at and a linear chat is not.
+- **Multimodal fusion**: combine your own images with frames pulled from a reference video.
+- **Prompt-driven refinement**: iterate in natural language, with every result kept.
 
 ---
 
@@ -46,6 +53,7 @@ Leverage multimodal prompts to transform existing images or generate new ones fr
 FrameFlow handles a wide range of media formats and sources:
 
 - **Video Formats**: Native support for `.mp4`, `.avi`, `.mov`, and `.webm`.
+- **Audio**: `.mp3`, `.wav`, `.m4a`, `.aac`, `.flac`, `.ogg` — audio-only projects work on the timeline too.
 - **Online Sources**: YouTube, Google Drive, and direct media URLs (via `yt-dlp`).
 - **Images**: High-fidelity `.jpg`, `.png`, and `.webp` for structural reference and multimodal generation.
 - **Optimization**: High-res videos are automatically downscaled (480p) to ensure lightning-fast AI analysis without losing metadata.
@@ -56,7 +64,10 @@ FrameFlow handles a wide range of media formats and sources:
 
 FrameFlow isn't just a tool; it's an iterative workspace:
 
-- **Vue Flow Graph Interface**: Manage parallel tasks and version branches visually.
+- **Timeline Editor**: Multi-track editing with a program monitor, filmstrip/context views,
+  clip tray, and an AI prompt bar with swappable editor personas.
+- **Vue Flow Graph Interface**: Branch image generations — and browse your edit history as
+  a revision tree — visually.
 - **Live Metrics**: Monitor AI token usage and processing costs in real-time.
 - **Zero-Config Preprocessing**: Automatic scene detection and transcript extraction.
 - **Ambient Design**: A sleek, dark-mode-first interface with glassmorphism and smooth animations.
@@ -67,7 +78,7 @@ FrameFlow isn't just a tool; it's an iterative workspace:
 
 | Section | Link | Purpose |
 | :--- | :--- | :--- |
-| 🏗 **Architecture** | [**Deep-Dive**](./docs/architecture.md) | Pipeline logic, intent nodes, and iterative generation. |
+| 🏗 **Architecture** | [**Deep-Dive**](./docs/architecture.md) | The two workflows, media pre-processing, and the editor's AI contract. |
 | 🚀 **Installation** | [**Setup Guide**](./docs/setup.md) | Node.js, Gemini API, FFmpeg, and yt-dlp setup. |
 | 🎨 **UI/UX** | [**Design Overview**](./docs/ui_ux.md) | Frontend components and interaction flow. |
 
@@ -79,6 +90,11 @@ FrameFlow isn't just a tool; it's an iterative workspace:
   <img src="./docs/screenshots/01_dark-theme.jpg" alt="FrameFlow Dashboard" />
 </div>
 
+> [!NOTE]
+> These screenshots predate the split described above — they show video being
+> generated inside the node graph, which now happens in the timeline editor.
+> The thumbnail and image flows shown are still accurate.
+
 ---
 
 ## 📜 License & Credits
@@ -88,4 +104,4 @@ FrameFlow is licensed under the **MIT License**. Created by [navidshad](https://
 ---
 
 > [!TIP]
-> **Pro Choice:** Check the **[Architecture Deep-Dive](./docs/architecture.md)** to see how we handle multimodal intent recognition and technical "diffs" for consistency.
+> **Pro Choice:** Check the **[Architecture Deep-Dive](./docs/architecture.md)** to see how the AI proposes edits as validated *ops* rather than touching media directly.
