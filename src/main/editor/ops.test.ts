@@ -3,7 +3,7 @@ import type { Clip, EditorDocument, EditorPersona, MediaAsset, TimelineItem, Tra
 import { repairOverlaps, TIMELINE_DIFF_SCHEMA_VERSION } from '@shared/timeline'
 import {
 	composeSystemInstruction, EDITOR_OPS_SCHEMA, editorOpsSchema, measureBuild, opsToDiff,
-	type PromptStats
+	parseTargetLength, routeSurveyResponse, sumUsage, type PromptStats
 } from './ops'
 
 // ===== Fixtures =====
@@ -510,7 +510,7 @@ describe('composeSystemInstruction', () => {
 		const text = composeSystemInstruction(persona, stats({}))
 		expect(text).toContain('=== OUTPUT LENGTH ===')
 		expect(text).toContain('Work out the intended length from the request')
-		expect(text).toContain('targetLengthSec')
+		expect(text).toContain('targetLength')
 	})
 
 	it('defaults to a full-length build when the timeline is empty', () => {
@@ -572,7 +572,7 @@ describe('measureBuild', () => {
 		expect(build?.shortfall).toBe(true)
 	})
 
-	// The reason targetLengthSec exists: a deliberate short cut must not nag.
+	// The reason targetLength exists: a deliberate short cut must not nag.
 	it('does not flag the same cut when the model asked for that length', () => {
 		const build = measureBuild(diff, doc, stats(), 720)
 		expect(build?.targetSec).toBe(720)
@@ -598,6 +598,17 @@ describe('measureBuild', () => {
 		expect(measureBuild(undefined, doc, stats())).toBeUndefined()
 		expect(measureBuild(diff, doc, stats({ sourceDurationSec: 0 }))).toBeUndefined()
 	})
+
+	// opsToDiff always returns a diff OBJECT, so an answer-only turn used to be
+	// measured as producedSec 0 + shortfall true — an empty warning banner on a
+	// turn that proposed nothing.
+	it('returns undefined for a diff that carries no operations (answer-only turn)', () => {
+		expect(measureBuild({ schemaVersion: TIMELINE_DIFF_SCHEMA_VERSION }, doc, stats())).toBeUndefined()
+		expect(measureBuild(
+			{ schemaVersion: TIMELINE_DIFF_SCHEMA_VERSION, addItems: [], updateItems: [], removeItemIds: [] },
+			doc, stats()
+		)).toBeUndefined()
+	})
 })
 
 describe('editorOpsSchema', () => {
@@ -614,11 +625,161 @@ describe('editorOpsSchema', () => {
 		expect(p).not.toContain('updateItems')
 		expect(p).not.toContain('removeItemIds')
 		expect(p).not.toContain('closeGaps')
-		expect(p).toEqual(expect.arrayContaining(['addSceneRanges', 'addClips', 'targetLengthSec']))
+		expect(p).toEqual(expect.arrayContaining(['addSceneRanges', 'addClips', 'targetLength']))
 	})
 
 	it('does not mutate the shared schema constant', () => {
 		editorOpsSchema(false)
 		expect(Object.keys(EDITOR_OPS_SCHEMA.properties as any)).toContain('updateItems')
+	})
+})
+
+describe('editorOpsSchema / expandRegions offer', () => {
+	const props = (hasItems: boolean, offer: boolean) =>
+		Object.keys(editorOpsSchema(hasItems, offer).properties as any)
+
+	it('is absent unless explicitly offered (pass 2 and small band stay clean)', () => {
+		expect(props(true, false)).not.toContain('expandRegions')
+		expect(props(false, false)).not.toContain('expandRegions')
+		// Default arg — the pre-banding call sites are unchanged.
+		expect(Object.keys(editorOpsSchema(true).properties as any)).not.toContain('expandRegions')
+	})
+
+	it('appears only in the offered call, composing with the empty-timeline cut', () => {
+		expect(props(true, true)).toContain('expandRegions')
+		const empty = props(false, true)
+		expect(empty).toContain('expandRegions')
+		expect(empty).not.toContain('updateItems')
+	})
+
+	it('does not mutate the shared schema constant', () => {
+		editorOpsSchema(false, true)
+		expect(Object.keys(EDITOR_OPS_SCHEMA.properties as any)).not.toContain('expandRegions')
+	})
+})
+
+describe('routeSurveyResponse', () => {
+	const regions = [{ assetId: 'a', fromPiece: 10, toPiece: 40 }]
+
+	it('finalizes when there is nothing to expand', () => {
+		expect(routeSurveyResponse({}, false).kind).toBe('final')
+		expect(routeSurveyResponse(null, true).kind).toBe('final')
+		expect(routeSurveyResponse({ addClips: [{ assetId: 'a', sceneIndex: 1 }] }, false).kind).toBe('final')
+	})
+
+	it('lets an answer win over a region request — a question needs no detail', () => {
+		const route = routeSurveyResponse({ answer: 'It is a podcast.', expandRegions: regions }, false)
+		expect(route.kind).toBe('final')
+		// The skipped read is surfaced, not silent.
+		expect(route.note).toBeTruthy()
+		expect(routeSurveyResponse({ answer: 'Just an answer.' }, false).note).toBeUndefined()
+	})
+
+	it('expands on a clean region request, whatever the timeline state', () => {
+		expect(routeSurveyResponse({ expandRegions: regions }, false).kind).toBe('expand')
+		expect(routeSurveyResponse({ expandRegions: regions }, true).kind).toBe('expand')
+	})
+
+	// The tie-break for a hedged response is keyed on timeline state: an empty
+	// timeline is the blind-coarse-cut hazard, an existing one is the
+	// double-billing hazard.
+	it('lets regions win over hedged ops on an EMPTY timeline, with a note', () => {
+		const route = routeSurveyResponse(
+			{ expandRegions: regions, addSceneRanges: [{ assetId: 'a', fromScene: 1, toScene: 99 }] },
+			false
+		)
+		expect(route.kind).toBe('expand')
+		expect(route.note).toBeTruthy()
+	})
+
+	it('lets real ops win over a region request on an EXISTING timeline, with a note', () => {
+		const route = routeSurveyResponse(
+			{ expandRegions: regions, removeItemIds: ['item-1'] },
+			true
+		)
+		expect(route.kind).toBe('final')
+		expect(route.kind === 'final' && route.ops.removeItemIds).toEqual(['item-1'])
+		expect(route.note).toBeTruthy()
+	})
+})
+
+describe('sumUsage', () => {
+	it('sums field-wise and treats missing thinkingTokens as zero', () => {
+		expect(sumUsage([
+			{ promptTokens: 100, candidatesTokens: 10, thinkingTokens: 5, totalTokens: 115 },
+			{ promptTokens: 200, candidatesTokens: 20, totalTokens: 220 }
+		])).toEqual({ promptTokens: 300, candidatesTokens: 30, thinkingTokens: 5, totalTokens: 335 })
+	})
+})
+
+describe('composeSystemInstruction / survey phases', () => {
+	const persona: EditorPersona = {
+		id: 'general-editor', name: 'Video Editor', icon: '🎬', description: '',
+		systemPrompt: 'You are a capable, general-purpose video editor.', builtin: true,
+		defaults: { pacing: 'balanced' }
+	}
+	const stats: PromptStats = {
+		timelineItemCount: 0, timelineDurationSec: 0,
+		sourceDurationSec: 5535, sourceClipCount: 1899
+	}
+
+	it('says nothing about surveys without a phase — small sources are untouched', () => {
+		const text = composeSystemInstruction(persona, stats)
+		expect(text).not.toContain('CONDENSED SURVEY')
+		expect(text).not.toContain('DETAIL VIEW')
+		expect(text).not.toContain('expandRegions')
+		// The per-piece arithmetic keeps its original wording.
+		expect(text).toContain('Pick them with `addClips`')
+	})
+
+	it('replaces the pick-pieces arithmetic with the expand instruction in the survey pass', () => {
+		const text = composeSystemInstruction(persona, stats, 'survey')
+		expect(text).toContain('CONDENSED SURVEY')
+		expect(text).toContain('expandRegions')
+		// The blind-curation instruction must NOT survive into the survey pass.
+		expect(text).not.toContain('Pick them with `addClips`')
+		// Cleanups keep their one-pass path: silence #s come from the survey rows.
+		expect(text).toContain('excludeScenes')
+	})
+
+	// The addendum's middle bullet must agree with the OUTPUT LENGTH branch: on
+	// an existing cut, "cover the source with addSceneRanges" reads as "rebuild",
+	// which SourceCoverage turns into a no-op or an unwanted append.
+	it('tells an existing-cut survey turn to edit items, not rebuild with ranges', () => {
+		const text = composeSystemInstruction(
+			persona, { ...stats, timelineItemCount: 267, timelineDurationSec: 3600 }, 'survey')
+		expect(text).toContain('EXISTING cut')
+		expect(text).toContain('only to APPEND')
+		expect(text).not.toContain('build it NOW')
+	})
+
+	it('tells the detail pass to commit, with the arithmetic restored', () => {
+		const text = composeSystemInstruction(persona, stats, 'detail')
+		expect(text).toContain('DETAIL VIEW')
+		expect(text).toContain('is not available in this response')
+		expect(text).toContain('Pick them with `addClips`')
+		expect(text).not.toContain('CONDENSED SURVEY')
+	})
+})
+
+describe('parseTargetLength', () => {
+	it('parses plain seconds, decimals, and clock formats', () => {
+		expect(parseTargetLength('120')).toBe(120)
+		expect(parseTargetLength('120.5')).toBe(120.5)
+		expect(parseTargetLength('2:00')).toBe(120)
+		expect(parseTargetLength(' 12:30 ')).toBe(750)
+		expect(parseTargetLength('1:02:03')).toBe(3723)
+	})
+
+	// The digit-run artifact this field's string-typing exists to survive: a
+	// looped value must read as "not reported", never as an absurd target.
+	it('rejects garbage instead of clamping it', () => {
+		expect(parseTargetLength('1200000000000000')).toBeUndefined()
+		expect(parseTargetLength('120.05221111111111111111111111111')).toBe(120.05221111111111)
+		expect(parseTargetLength('0')).toBeUndefined()
+		expect(parseTargetLength('')).toBeUndefined()
+		expect(parseTargetLength('two minutes')).toBeUndefined()
+		expect(parseTargetLength('1:2:3:4')).toBeUndefined()
+		expect(parseTargetLength(undefined)).toBeUndefined()
 	})
 })

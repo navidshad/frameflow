@@ -200,6 +200,12 @@ export class GeminiAdapter {
 			thinkingBudget?: number
 			thinkingLevel?: 'LOW' | 'MEDIUM' | 'HIGH'
 			temperature?: number
+			/**
+			 * Fired as soon as usage is known, BEFORE the JSON parse — a response
+			 * that dies on MAX_TOKENS still billed for its tokens, and callers that
+			 * account per-call (editor turns) must not lose that spend.
+			 */
+			onUsage?: (record: UsageRecord) => void
 		}
 	): Promise<{ data: T, record: UsageRecord }> {
 		const parts: any[] = []
@@ -269,6 +275,7 @@ export class GeminiAdapter {
 		const usage = this.extractUsage(response);
 		const cost = GeminiAdapter.calculateCost(modelName, usage, 0, validImagePaths.length);
 		const text = this.extractResultText(response);
+		options?.onUsage?.({ usage, cost });
 
 		try {
 			return {

@@ -1,11 +1,12 @@
 import { v4 as uuidv4 } from 'uuid'
 import type {
-	Clip, EditorDocument, EditorOps, EditorPersona, PromptTurn, TimelineDiff, TimelineItem
+	Clip, EditorDocument, EditorOps, EditorPersona, PromptTurn, TimelineDiff, TimelineItem, Usage
 } from '@shared/types'
 import {
 	applyTimelineDiff, clampSpeed, closeTimelineGaps, computeContentEnd, itemDuration, itemEnd,
 	rippleTimeline, TIMELINE_DIFF_SCHEMA_VERSION, type RippleChange
 } from '@shared/timeline'
+import { DETAIL_MAX_PIECES, EXPAND_MAX_REGIONS } from './context'
 
 /**
  * The editor's AI contract: the ops schema the model fills in, the system
@@ -16,6 +17,20 @@ import {
  */
 
 // ===== Ops schema (constrained on purpose — see EditorOps in shared/types) =====
+
+/**
+ * Emission order for structured output. Prose first, the short scalar second,
+ * operations after: left to its own devices the model emitted `targetLength`
+ * FIRST and then fused its entire rationale into that string (never closing
+ * the quote, running to MAX_TOKENS). Ordering is filtered per call in
+ * editorOpsSchema — the API rejects entries that name absent properties.
+ */
+const PROPERTY_ORDERING = [
+	'rationale', 'targetLength', 'answer', 'expandRegions',
+	'removeItemIds', 'closeGaps', 'updateItems',
+	'addSceneRanges', 'addClips', 'addMarkers'
+]
+
 export const EDITOR_OPS_SCHEMA = {
 	type: 'object',
 	properties: {
@@ -27,9 +42,15 @@ export const EDITOR_OPS_SCHEMA = {
 			type: 'string',
 			description: 'Plain-language explanation of the proposed edit, citing what is in the pieces'
 		},
-		targetLengthSec: {
-			type: 'number',
-			description: 'The output runtime you inferred from the request, in seconds, BEFORE building the edit'
+		// A STRING on purpose, parsed by parseTargetLength. As a bare number this
+		// field reliably digit-looped under constrained decoding ("targetLengthSec":
+		// 120.05221111111... / 1200000000...) until MAX_TOKENS — observed repeatedly
+		// on gemini-3-flash-preview at temperatures 0.2 AND 0.7. A string terminates
+		// with a quote, and integer-typing is no fix (the grammar then forbids the
+		// intended "120.0" and the model appends digits instead: it answered 12000).
+		targetLength: {
+			type: 'string',
+			description: 'The output runtime you inferred from the request, BEFORE building the edit — minutes:seconds like "2:00", or plain seconds like "120"'
 		},
 		removeItemIds: { type: 'array', items: { type: 'string' } },
 		closeGaps: {
@@ -61,11 +82,11 @@ export const EDITOR_OPS_SCHEMA = {
 				type: 'object',
 				properties: {
 					assetId: { type: 'string' },
-					fromScene: { type: 'integer', description: 'First piece # to include (inclusive)' },
-					toScene: { type: 'integer', description: 'Last piece # to include (inclusive)' },
+					fromScene: { type: 'integer', minimum: 0, maximum: 1000000, description: 'First piece # to include (inclusive)' },
+					toScene: { type: 'integer', minimum: 0, maximum: 1000000, description: 'Last piece # to include (inclusive)' },
 					excludeScenes: {
 						type: 'array',
-						items: { type: 'integer' },
+						items: { type: 'integer', minimum: 0, maximum: 1000000 },
 						description: 'Piece #s inside the span to SKIP (dead air, false starts, retakes)'
 					},
 					speed: { type: 'number', description: 'Playback rate 0.25-4.0 for the whole span (default 1)' },
@@ -84,7 +105,7 @@ export const EDITOR_OPS_SCHEMA = {
 				type: 'object',
 				properties: {
 					assetId: { type: 'string' },
-					sceneIndex: { type: 'integer', description: "A piece # from that asset's AVAILABLE SCENES table" },
+					sceneIndex: { type: 'integer', minimum: 0, maximum: 1000000, description: "A piece # from that asset's AVAILABLE SCENES table" },
 					in: { type: 'number' },
 					out: { type: 'number' },
 					atSec: { type: 'number' },
@@ -105,7 +126,7 @@ export const EDITOR_OPS_SCHEMA = {
 						description: 'Anchor to a source piece instead — resolved to timeline time after your clips are placed. Use this when you are ADDING the material in this same response.',
 						properties: {
 							assetId: { type: 'string' },
-							sceneIndex: { type: 'integer' }
+							sceneIndex: { type: 'integer', minimum: 0, maximum: 1000000 }
 						},
 						required: ['assetId', 'sceneIndex']
 					},
@@ -143,12 +164,12 @@ const clock = (seconds: number): string => {
  * What survives from that guardrail is the reason it existed: models over-cut by
  * default. So the instruction still demands a self-check — but against the
  * length the model itself inferred, not against a constant. It reports that
- * number in `targetLengthSec` so the UI can hold it to its word.
+ * number in `targetLength` so the UI can hold it to its word.
  *
  * The empty-timeline vs existing-cut split stays: that was always keyed on
  * timeline state, never on persona mode.
  */
-function outputLengthLines(stats: PromptStats): string[] {
+function outputLengthLines(stats: PromptStats, phase?: 'survey' | 'detail'): string[] {
 	const haveSource = stats.sourceDurationSec > 0
 
 	const preamble = [
@@ -160,8 +181,11 @@ function outputLengthLines(stats: PromptStats): string[] {
 		'  filler", "clean up the dead air", "add chapters") — that is NOT a request to',
 		'  shorten. Keep the runtime, minus only what was asked for.',
 		'- It says nothing about length — use the default below.',
-		'Report the runtime you settled on in `targetLengthSec`, and open your `rationale`',
-		'with it in minutes and seconds, e.g. "Targeting about 12:00 — a cleanup, not a summary."',
+		// One field, one job. An earlier wording ("...and open your rationale with
+		// it") taught the model to fuse both fields into one unterminated string
+		// ("targetLength": "2:00Targeting about 2:00 — ...") that ran to MAX_TOKENS.
+		'Report the runtime you settled on in `targetLength` — JUST the duration, like "2:00".',
+		'Keep `rationale` to a few sentences.',
 		'Before finishing, add up the runtime you are actually producing and compare it with',
 		'that target. If it is more than ~25% short, you have dropped material you meant to',
 		'keep: go back and include it. Coming in far under the intended length is by far the',
@@ -187,6 +211,35 @@ function outputLengthLines(stats: PromptStats): string[] {
 				'chronological order, removing only dead air, silence, false starts and duplicated takes.'
 			]
 		}
+		// The SHORT bullet must match what the model can actually see: in the
+		// survey pass the gists cannot support picking individual pieces, so the
+		// arithmetic there would be an instruction to curate blind (the critique
+		// bd5e682 earned: contradictory prose loses to the schema every time).
+		const shortBullet = phase === 'survey'
+			? [
+				`- Aiming SHORT (a highlight, teaser, trailer, short): pieces here average about`,
+				`  ${avgPieceSec.toFixed(1)}s, so a T-second target needs roughly T/${avgPieceSec.toFixed(1)} pieces — but do NOT pick`,
+				'  pieces you have not read. Respond with `expandRegions` and no edit operations,',
+				'  naming the strongest spans from the survey; you will then see them one row per',
+				'  piece and make the cut.'
+			]
+			: [
+				`- Aiming SHORT (a highlight, teaser, trailer, short): pieces here average about`,
+				`  ${avgPieceSec.toFixed(1)}s, so a T-second target needs roughly T/${avgPieceSec.toFixed(1)} pieces — do that arithmetic`,
+				'  before you start and add about that many, no more. Pick them with `addClips`, or use a',
+				'  few narrow `addSceneRanges` around the moments you want. Never list more than ~40',
+				'  entries: past that you will hit the response limit mid-answer and the whole edit is lost.'
+			]
+		const longBullet = [
+			'- Aiming LONG (the full thing, a cleanup, a polish): cover the source end to end in',
+			'  chronological order with `addSceneRanges` over whole spans of piece numbers, using',
+			'  `excludeScenes` for what you drop — typically 5-20% of the runtime. Do NOT list kept',
+			'  pieces one by one; you will run out of response length long before the end.',
+			...(phase === 'survey' ? [
+				'  The [sil #idx(secs)] entries and [Silence xN] rows name the dead-air piece numbers —',
+				'  copy them into `excludeScenes`.'
+			] : [])
+		]
 		return [
 			...preamble,
 			'',
@@ -195,15 +248,8 @@ function outputLengthLines(stats: PromptStats): string[] {
 			'There is nothing on the timeline yet, so there is nothing to update, remove or retime:',
 			'`updateItems` and `removeItemIds` CANNOT apply here and will be discarded. Your only job',
 			'this turn is to ADD material, with `addSceneRanges` and/or `addClips`.',
-			`- Aiming SHORT (a highlight, teaser, trailer, short): pieces here average about`,
-			`  ${avgPieceSec.toFixed(1)}s, so a T-second target needs roughly T/${avgPieceSec.toFixed(1)} pieces — do that arithmetic`,
-			'  before you start and add about that many, no more. Pick them with `addClips`, or use a',
-			'  few narrow `addSceneRanges` around the moments you want. Never list more than ~40',
-			'  entries: past that you will hit the response limit mid-answer and the whole edit is lost.',
-			'- Aiming LONG (the full thing, a cleanup, a polish): cover the source end to end in',
-			'  chronological order with `addSceneRanges` over whole spans of piece numbers, using',
-			'  `excludeScenes` for what you drop — typically 5-20% of the runtime. Do NOT list kept',
-			'  pieces one by one; you will run out of response length long before the end.',
+			...shortBullet,
+			...longBullet,
 			'Default when the request does not ask for something shorter: aim LONG.'
 		]
 	}
@@ -228,6 +274,30 @@ function outputLengthLines(stats: PromptStats): string[] {
 }
 
 /**
+ * Offered only in pass 1 of a survey-band turn (see routeSurveyResponse).
+ * The pass-2 schema omits it, so a turn is structurally at most two calls.
+ */
+const EXPAND_REGIONS_SCHEMA = {
+	type: 'array',
+	description:
+		'Spans of pieces to READ one row per piece before you decide. Use this when the edit ' +
+		'hinges on exact wording the survey gists cannot show (a short highlight, a precise trim). ' +
+		`Return up to ${EXPAND_MAX_REGIONS} spans, together at most ~${DETAIL_MAX_PIECES} pieces, ` +
+		'with NO edit operations and no answer — you will be called again with those spans ' +
+		'expanded. rationale and targetLength are welcome alongside.',
+	items: {
+		type: 'object',
+		properties: {
+			assetId: { type: 'string' },
+			fromPiece: { type: 'integer', minimum: 0, maximum: 1000000, description: 'First piece # to read (inclusive, clamped)' },
+			toPiece: { type: 'integer', minimum: 0, maximum: 1000000, description: 'Last piece # to read (inclusive, clamped)' },
+			reason: { type: 'string', description: 'A few words: what you expect to find there' }
+		},
+		required: ['assetId', 'fromPiece', 'toPiece']
+	}
+}
+
+/**
  * The ops schema for one turn.
  *
  * On an EMPTY timeline the item-mutating ops are removed rather than merely
@@ -237,15 +307,169 @@ function outputLengthLines(stats: PromptStats): string[] {
  * as "declare the items of my output". Prose in the contract did not fix it;
  * removing the option does, because there is genuinely nothing to update,
  * remove or close gaps between until something has been added.
+ *
+ * `offerExpandRegions` follows the same removal-beats-prose lesson in the other
+ * direction: the detail-pass escape hatch exists as a schema option only in the
+ * one call that may use it.
  */
-export function editorOpsSchema(hasTimelineItems: boolean) {
-	if (hasTimelineItems) return EDITOR_OPS_SCHEMA
-	const { removeItemIds, closeGaps, updateItems, ...buildOnly } = EDITOR_OPS_SCHEMA.properties as any
-	return { ...EDITOR_OPS_SCHEMA, properties: buildOnly }
+export function editorOpsSchema(hasTimelineItems: boolean, offerExpandRegions = false) {
+	let properties = EDITOR_OPS_SCHEMA.properties as any
+	if (!hasTimelineItems) {
+		const { removeItemIds, closeGaps, updateItems, ...buildOnly } = properties
+		properties = buildOnly
+	}
+	if (offerExpandRegions) {
+		properties = { ...properties, expandRegions: EXPAND_REGIONS_SCHEMA }
+	}
+	return {
+		...EDITOR_OPS_SCHEMA,
+		properties,
+		propertyOrdering: PROPERTY_ORDERING.filter((name) => name in properties)
+	}
 }
 
-export function composeSystemInstruction(persona: EditorPersona, stats: PromptStats): string {
+// ===== Survey-band routing (pass 1 -> final | detail pass) =====
+
+export type SurveyRoute =
+	| { kind: 'final'; ops: EditorOps; note?: string }
+	| { kind: 'expand'; regions: NonNullable<EditorOps['expandRegions']>; note?: string }
+
+/**
+ * Which way pass 1 of a survey-band turn goes. An `answer` always wins — a
+ * question never needs detail it did not read. After that the tie-break for a
+ * hedged response (regions AND ops in one reply) is keyed on timeline state:
+ *
+ * - EMPTY timeline: the region request wins and the ops are set aside. A
+ *   build-from-scratch that commits without reading detail is exactly the
+ *   blind coarse cut the detail pass exists to prevent, so hedging must not
+ *   let it slip through.
+ * - Existing timeline: real ops win and the read is skipped. Discarding a
+ *   completed cleanup to re-run it at detail granularity would double-bill
+ *   the turn for nothing — the edit was already expressible from the survey.
+ */
+export function routeSurveyResponse(
+	ops: EditorOps | null | undefined,
+	hasTimelineItems: boolean
+): SurveyRoute {
+	const response = ops || {}
+	const regions = response.expandRegions || []
+	const hasEditOps = !!(
+		response.removeItemIds?.length || response.updateItems?.length ||
+		response.addClips?.length || response.addSceneRanges?.length ||
+		response.closeGaps || response.addMarkers?.length
+	)
+	if (response.answer?.trim() || !regions.length) {
+		return {
+			kind: 'final',
+			ops: response,
+			note: response.answer?.trim() && regions.length
+				? 'The model answered the question and also asked to read spans in detail — the answer stands.'
+				: undefined
+		}
+	}
+	if (!hasTimelineItems) {
+		return {
+			kind: 'expand',
+			regions,
+			note: hasEditOps
+				? 'Draft operations proposed before reading detail were set aside; the edit was re-decided over the expanded spans.'
+				: undefined
+		}
+	}
+	if (hasEditOps) {
+		return {
+			kind: 'final',
+			ops: response,
+			note: 'The model both edited and asked to read spans in detail — the edit was applied and the extra read skipped.'
+		}
+	}
+	return { kind: 'expand', regions }
+}
+
+/**
+ * "2:00" | "120" | "120.5" | "1:02:03" -> seconds. Anything unparseable,
+ * non-positive, or past 24h (a digit-run artifact like "12000000...") is
+ * treated as not-reported rather than clamped: a fabricated target would make
+ * measureBuild judge the cut against garbage.
+ */
+export function parseTargetLength(value: string | undefined | null): number | undefined {
+	if (typeof value !== 'string') return undefined
+	const text = value.trim()
+	if (!text) return undefined
+	let seconds: number
+	if (text.includes(':')) {
+		const parts = text.split(':')
+		if (parts.length > 3 || parts.some((p) => !/^\d+(\.\d+)?$/.test(p))) return undefined
+		seconds = parts.reduce((total, part) => total * 60 + Number(part), 0)
+	} else {
+		if (!/^\d+(\.\d+)?$/.test(text)) return undefined
+		seconds = Number(text)
+	}
+	if (!Number.isFinite(seconds) || seconds <= 0 || seconds > 86_400) return undefined
+	return seconds
+}
+
+/** Field-wise sum, for a turn that spent more than one model call. */
+export function sumUsage(usages: Usage[]): Usage {
+	const total: Usage = { promptTokens: 0, candidatesTokens: 0, thinkingTokens: 0, totalTokens: 0 }
+	for (const usage of usages) {
+		total.promptTokens += usage.promptTokens || 0
+		total.candidatesTokens += usage.candidatesTokens || 0
+		total.thinkingTokens = (total.thinkingTokens || 0) + (usage.thinkingTokens || 0)
+		total.totalTokens += usage.totalTokens || 0
+	}
+	return total
+}
+
+/**
+ * `phase` is set only on survey-band turns (large sources): 'survey' for the
+ * first call (condensed table, expandRegions offered), 'detail' for the second
+ * (requested spans expanded, expandRegions gone). Omitted on small sources —
+ * the output is then byte-identical to the pre-banding instruction.
+ */
+export function composeSystemInstruction(
+	persona: EditorPersona,
+	stats: PromptStats,
+	phase?: 'survey' | 'detail'
+): string {
 	const defaults = persona.defaults || {}
+
+	const phaseLines = phase === 'survey'
+		? [
+			'',
+			'=== LONG SOURCE: CONDENSED SURVEY (this call) ===',
+			'This project is too large to show every transcript line at once, so AVAILABLE',
+			'SCENES is a condensed survey — its header explains the row format. Decide what',
+			'this turn needs:',
+			'- A question: answer it now in `answer`.',
+			// The middle bullet must agree with the OUTPUT LENGTH branch above it:
+			// "cover the source with addSceneRanges" is build-from-scratch advice,
+			// and on an existing cut it reads as "rebuild", which SourceCoverage
+			// would turn into a no-op or an unwanted append.
+			...(stats.timelineItemCount === 0
+				? [
+					'- A full-length cut, cleanup or reorganization: build it NOW with `addSceneRanges`',
+					'  spans, copying dead-air piece #s from the [sil ...] cells and [Silence xN] rows',
+					'  into `excludeScenes`. You do not need per-piece detail for this.'
+				]
+				: [
+					'- A cleanup, tightening or reorganization of the EXISTING cut: edit the placed',
+					'  items NOW with `updateItems`/`removeItemIds`, as the length rules above say.',
+					'  Use `addSceneRanges` only to APPEND material that is not on the timeline yet.'
+				]),
+			'- A SHORT cut, or any edit that hinges on exact wording the gists cannot show:',
+			'  respond with `expandRegions` and NO edit operations — you will make the edit',
+			'  on the next call. (`rationale` and `targetLength` are still welcome.)'
+		]
+		: phase === 'detail'
+			? [
+				'',
+				'=== DETAIL VIEW (second call) ===',
+				'You asked to read the spans listed under DETAIL VIEW; they now appear one row per',
+				'piece. Build the edit NOW — `expandRegions` is not available in this response.',
+				'Prefer pieces you can read; `addSceneRanges` endpoints may still name any piece #.'
+			]
+			: []
 
 	return [
 		persona.systemPrompt,
@@ -297,7 +521,8 @@ export function composeSystemInstruction(persona: EditorPersona, stats: PromptSt
 		'',
 		'=== ACTIVE PERSONA DEFAULTS ===',
 		`Tone: ${persona.tone || 'neutral'}. Pacing: ${defaults.pacing || 'balanced'}.`,
-		...outputLengthLines(stats)
+		...outputLengthLines(stats, phase),
+		...phaseLines
 	].filter(Boolean).join('\n')
 }
 
@@ -850,6 +1075,13 @@ export function measureBuild(
 	targetSec?: number
 ): PromptTurn['build'] {
 	if (!diff || stats.sourceDurationSec <= 0) return undefined
+	// opsToDiff always returns a diff OBJECT ({schemaVersion}), so truthiness is
+	// not the test: an answer-only turn carries no operations, and measuring it
+	// would report producedSec 0 + shortfall true — an empty warning banner on a
+	// turn that proposed nothing.
+	if (!diff.addItems?.length && !diff.updateItems?.length && !diff.removeItemIds?.length) {
+		return undefined
+	}
 
 	const probe = {
 		tracks: JSON.parse(JSON.stringify(doc.tracks)),
