@@ -30,10 +30,14 @@ The heart of the app is the **node graph** (`src/renderer/src/pages/GraphChatPag
 - **Context-Aware Messages**: The AI remembers the video content and previous summary versions.
 - **Version Tracking**: Every "Generate" command creates a new version of the video. Users can switch between versions to compare results.
 
-### 5. Hand-editing a cut — "Open in Editor"
-Any video node (and the root media node) can be forked into a real timeline project via **`src/main/editor/promote.ts`**. The root node opens the full source with its pieces in the tray; a result node opens with that node's AI cut already laid out on V1. The fork reuses the chat thread's existing proxy, audio, transcript and scene artifacts, so nothing is re-encoded or re-transcribed. A **Manual Edit** node appears in the graph edged from the node it came from, and the editor header shows a breadcrumb back to the source.
+### 5. Editing video — the timeline
+Video work happens in the timeline editor, not the graph. Home's **Video** purpose
+creates a project, imports the file, and leaves your prompt in the editor's prompt
+bar until preprocessing finishes. The editor's AI produces an **editable timeline**
+(see `src/main/editor/prompt.ts` and `ops.ts`), and every turn becomes a revision
+you can switch to or branch from — list or graph view, in the Revisions tab.
 
----
+Output length comes from your request. Personas describe style only.
 
 ## 🧩 Key Components
 
