@@ -11,9 +11,6 @@
         </button>
       </SlimTooltip>
 
-      <!-- Optional provenance chip (editor projects forked from a graph) -->
-      <slot name="breadcrumb" />
-
       <!-- Editable title (editor projects) — click to rename in place -->
       <input v-if="editable && renaming" ref="titleInput" v-model="draft"
         class="text-xl font-bold font-heading text-zinc-900 dark:text-zinc-100 tracking-tight min-w-[200px] max-w-[40%] ml-2 bg-transparent border-b border-primary/50 outline-none"

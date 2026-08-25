@@ -1,5 +1,6 @@
 <template>
-  <div class="h-full group cursor-pointer" @click="$emit('open', thread.id)">
+  <div class="h-full group" :class="isLegacy ? 'cursor-default' : 'cursor-pointer'"
+    @click="!isLegacy && $emit('open', thread.id)">
     <Card
       class="h-full dark:!bg-zinc-900 dark:!border-zinc-800/50 !shadow-sm hover:!shadow-md"
     >
@@ -13,6 +14,14 @@
             <!-- Without this the only way to tell a timeline project from a
                  video project in a mixed list is to click it. -->
             <div
+              v-if="isLegacy"
+              class="text-[10px] font-bold uppercase tracking-widest text-amber-700 dark:text-amber-400 bg-amber-500/10 border border-amber-500/20 px-2 py-1 rounded-lg"
+              title="Made by the retired AI video pipeline. Video editing now happens in a timeline project."
+            >
+              Unsupported
+            </div>
+            <div
+              v-else
               class="text-[10px] font-bold uppercase tracking-widest text-zinc-500 dark:text-zinc-400 bg-zinc-100 dark:bg-zinc-800 px-2 py-1 rounded-lg"
             >
               {{ kind.label }}
@@ -118,6 +127,7 @@
 <script setup lang="ts">
 import { computed } from 'vue'
 import { Card } from 'pilotui/elements'
+import { isLegacyVideoThread } from '@shared/legacy'
 
 const props = defineProps<{
   thread: any
@@ -133,6 +143,9 @@ const KINDS = {
 } as const
 
 const kind = computed(() => KINDS[props.thread.type as keyof typeof KINDS] || KINDS.video)
+
+/** Retired AI-video threads: listed and deletable, but not openable. */
+const isLegacy = computed(() => isLegacyVideoThread(props.thread))
 
 const formatDate = (timestamp: number) => {
   return new Date(timestamp).toLocaleDateString(undefined, {

@@ -58,8 +58,6 @@ export const useEditorStore = defineStore('editor', () => {
 	/** Keyed by thread: /editor/:id reuses the component, so a queued prompt must not leak. */
 	const pendingPrompt = ref<{ threadId: string; text: string } | null>(null)
 
-	/** Set when this project was forked from a chat graph — drives the breadcrumb. */
-	const sourceThread = ref<{ id: string; title: string } | null>(null)
 
 	// ===== Timeline view state (M2) =====
 	const playheadSec = ref(0)
@@ -606,17 +604,6 @@ export const useEditorStore = defineStore('editor', () => {
 					.filter((a) => a.preprocessState === 'running')
 					.map((a) => a.id)
 			)
-
-			// Provenance chip. Non-blocking, and a deleted source simply resolves
-			// to null so the chip does not render.
-			sourceThread.value = null
-			if (loaded.sourceThreadId) {
-				api.getThread(loaded.sourceThreadId)
-					.then((t: Thread | null) => {
-						sourceThread.value = t ? { id: t.id, title: t.title } : null
-					})
-					.catch(() => { sourceThread.value = null })
-			}
 
 			// Fire-and-forget: the scenedetect/yt-dlp binary checks spawn processes
 			// and can take seconds — never block first paint on them.
@@ -2061,7 +2048,6 @@ export const useEditorStore = defineStore('editor', () => {
 		saveInFlight,
 		deps,
 		loading,
-		sourceThread,
 		// timeline view state
 		playheadSec,
 		isPlaying,

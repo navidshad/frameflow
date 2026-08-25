@@ -22,14 +22,20 @@ export const supplyController: PipelineFunction = async (data, context) => {
 		return
 	}
 
-	// Case 2: No attachments, handle auto-selection from video frames or source images
+	// Case 2: No attachments — auto-select from the project's own material.
+	//
+	// One pool now: the user's source images plus any stills sampled from a
+	// reference video. This used to branch on `imageTextPath !== undefined` to
+	// tell image threads from video threads, but only image threads reach this
+	// phase — determineImageIntent throws without imageTextPath, and nothing
+	// else writes it.
 	const referenceFrames = context.preprocessing?.['reference-frames'] || []
 	const sourceImages = context.preprocessing?.['sourceImages'] || []
-	const isImageThread = context.preprocessing?.['imageTextPath'] !== undefined
-	
+	const pool = [...sourceImages, ...referenceFrames]
+
 	const intentResult = context.intentResult
 
-	if (!referenceFrames.length && !sourceImages.length) {
+	if (!pool.length) {
 		console.log('[SUPPLY] No reference material available in project.')
 		context.next({ ...data, selectedReferenceImages: [] })
 		return
@@ -40,40 +46,15 @@ export const supplyController: PipelineFunction = async (data, context) => {
 	
 	if (selectedIndices.length > 0) {
 		console.log(`[SUPPLY] AI selected ${selectedIndices.length} items for reference.`)
-		
-		if (isImageThread) {
-			const allImagesPool = [...sourceImages, ...referenceFrames]
-			const selectedPaths = selectedIndices
-				.map(idx => allImagesPool[idx])
-				.filter(p => p && fs.existsSync(p))
-			console.log(`[SUPPLY] Resolved ${selectedPaths.length} images from pool of ${allImagesPool.length}.`)
-			context.next({ ...data, selectedReferenceImages: selectedPaths })
-			return
-		}
-
-		// Map indices to video frames
-		const sceneDescriptionPath = context.preprocessing.sceneDescriptionsPath
-		if (sceneDescriptionPath && fs.existsSync(sceneDescriptionPath)) {
-			const scenes: any[] = JSON.parse(fs.readFileSync(sceneDescriptionPath, 'utf-8'));
-			const selectedFramePaths: string[] = []
-
-			for (const idx of selectedIndices) {
-				const scene = scenes.find(s => s.index === idx)
-				const frame = scene?.framePath
-				if (frame && fs.existsSync(frame)) {
-					selectedFramePaths.push(frame)
-				}
-			}
-
-			console.log(`[SUPPLY] Resolved ${selectedFramePaths.length} video frames from indices.`)
-			context.next({ ...data, selectedReferenceImages: selectedFramePaths })
-			return
-		}
+		const selectedPaths = selectedIndices
+			.map(idx => pool[idx])
+			.filter(p => p && fs.existsSync(p))
+		console.log(`[SUPPLY] Resolved ${selectedPaths.length} images from pool of ${pool.length}.`)
+		context.next({ ...data, selectedReferenceImages: selectedPaths })
+		return
 	}
 
-	// Fallback Case: No attachments and no indices (or missing metadata)
-	// Pick some representative frames/images
-	const pool = isImageThread ? [...sourceImages, ...referenceFrames] : referenceFrames
+	// Fallback: no indices — pick a few representative items.
 	console.log(`[SUPPLY] No specific selection. Picking representative items from pool of ${pool.length}.`)
 	const fallbackIndices = pool.length <= 5 
 		? pool.map((_, i) => i)

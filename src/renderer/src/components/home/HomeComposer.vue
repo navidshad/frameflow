@@ -161,9 +161,13 @@ const blockedReason = computed<string | null>(() => {
     if (props.ffmpegAvailable === false) return 'FFmpeg is required to process video.'
     return null
   }
-  // extractImageData returns early on an empty list and the first turn then
-  // dies inside determineImageIntent with "Image data not found".
-  if (!imagePaths.value.length) return 'Attach at least one image to get started.'
+  // Images OR a reference video: "make a thumbnail from my video" legitimately
+  // has zero images, and reference-frame sampling gives extractImageData its
+  // input. With neither, the first turn dies in determineImageIntent with
+  // "Image data not found".
+  if (!imagePaths.value.length && !videoPath.value) {
+    return 'Attach images, or a video to work from.'
+  }
   return null
 })
 

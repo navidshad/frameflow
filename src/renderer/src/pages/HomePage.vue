@@ -51,6 +51,7 @@
 import { ref, onMounted } from 'vue'
 import { useRouter } from 'vue-router'
 import { MessageRole, type ThreadType } from '@shared/types'
+import { isLegacyVideoThread } from '@shared/legacy'
 import { useVideoStore } from '../stores/videoStore'
 import { useEditorStore } from '../stores/editorStore'
 import HomeComposer from '../components/home/HomeComposer.vue'
@@ -70,7 +71,8 @@ const composerRef = ref<InstanceType<typeof HomeComposer> | null>(null)
 
 const openThread = (id: string) => {
 	const thread = videoStore.threads.find((t) => t.id === id)
-	router.push(thread?.type === 'editor' ? `/editor/${id}` : `/chat/${id}`)
+	if (!thread || isLegacyVideoThread(thread)) return
+	router.push(thread.type === 'editor' ? `/editor/${id}` : `/chat/${id}`)
 }
 
 const handleCreateEditorProject = async () => {
@@ -85,8 +87,9 @@ const handleLinkSelected = (file: { path: string; name: string }) => {
 	composerRef.value?.setVideo(file.path, file.name)
 }
 
-const titleFor = (imagePaths: string[] = []): string => {
-	const first = imagePaths[0]?.split('/').pop() || 'Image Collection'
+/** An image project can start from a reference video alone — fall back to its name. */
+const titleFor = (imagePaths: string[] = [], videoName?: string): string => {
+	const first = imagePaths[0]?.split('/').pop() || videoName || 'Image Collection'
 	return `Edit: ${first}`
 }
 
@@ -164,7 +167,7 @@ const handleComposerSubmit = async (payload: {
 	try {
 		const thread = await videoStore.createThread(
 			payload.videoPath,
-			titleFor(payload.imagePaths),
+			titleFor(payload.imagePaths, payload.videoName),
 			payload.imagePaths,
 			payload.purpose
 		)

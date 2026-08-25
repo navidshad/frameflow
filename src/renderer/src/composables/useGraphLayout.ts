@@ -29,13 +29,10 @@ export function useGraphLayout(videoStore: any, graphStore: any) {
 
     /**
      * A "result" gets its own node; everything else joins a conversation strand.
-     * Real files or a timeline mean the AI produced something. A manual-edit node
-     * has neither — it only points at a forked editor project — so it needs the
-     * explicit resultType check or it would render as a chat bubble.
      */
     const isResultMessage = (msg: any): boolean => {
       const hasRealFiles = msg.files && msg.files.filter((f: any) => f.type !== 'original').length > 0
-      return !!(hasRealFiles || (msg.timeline && msg.timeline.length > 0) || msg.resultType === 'editor')
+      return !!(hasRealFiles || (msg.timeline && msg.timeline.length > 0))
     }
 
     // Recursive strand building
@@ -129,12 +126,13 @@ export function useGraphLayout(videoStore: any, graphStore: any) {
       }
     })
 
-    // Root Media Node (Always branching)
-    const isImageThread = videoStore.currentThread?.type === 'image'
-
+    // Root Media Node (Always branching).
+    // Always image-collection: the graph only serves image projects now, and
+    // ImageCollectionNode already shows a reference video as a chip when one
+    // is attached. Video projects open in the timeline editor instead.
     newNodes.push({
       id: 'root-media',
-      type: isImageThread ? 'image-collection' : 'media',
+      type: 'image-collection',
       position: nodePositions['root-media'],
       parentNode: frameIds.has(savedMetadata['root-media']?.parentNode) ? savedMetadata['root-media'].parentNode : undefined,
       data: {
@@ -172,7 +170,7 @@ export function useGraphLayout(videoStore: any, graphStore: any) {
       return h
     }
 
-    const strandHeights: Record<string, number> = { 'root-media': isImageThread ? 300 : 350 }
+    const strandHeights: Record<string, number> = { 'root-media': 300 }
 
     // Layout strands
     strandGroups.forEach((strand) => {
@@ -235,13 +233,9 @@ export function useGraphLayout(videoStore: any, graphStore: any) {
             }
           }
         } else {
-          const type = msg.resultType || ((msg.files && msg.files.length > 0) ? 'video' : 'summary')
+          const type = msg.resultType || ((msg.files && msg.files.length > 0) ? 'image' : 'summary')
           // Normalize nodeType to specialized components
-          if (type === 'video') nodeType = 'video'
-          else if (type === 'thumbnail' || type === 'generate-thumbnail' || type === 'image' || type === 'result-image') nodeType = 'thumbnail'
-          // A manual edit: not an AI result at all, but a pointer at a forked
-          // timeline project. Must be checked before the summary fallback.
-          else if (type === 'editor') nodeType = 'editor-project'
+          if (type === 'thumbnail' || type === 'generate-thumbnail' || type === 'image' || type === 'result-image') nodeType = 'thumbnail'
           else if (type === 'summary' || type === 'cover') nodeType = 'summary'
           else nodeType = 'summary' // Default fallback
 
@@ -253,8 +247,6 @@ export function useGraphLayout(videoStore: any, graphStore: any) {
             timeline: msg.timeline,
             version: msg.version,
             cost: msg.cost,
-            editorThreadId: msg.editorThreadId,
-            editRefId: msg.editRefId,
             showDetails: videoStore.currentThread?.nodePositions?.[strand.id]?.showDetails || false,
             onDelete: async () => {
               const result = await (window as any).api.showConfirmation({

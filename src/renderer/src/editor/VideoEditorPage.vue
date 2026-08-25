@@ -9,19 +9,7 @@
 		</div>
 
 		<GraphHeader :title="editorStore.thread?.title || 'Untitled Project'" :total-cost="totalCost" editable
-			@back="router.push('/home')" @rename="editorStore.renameProject($event)">
-			<!-- Where did this project come from? Nesting without a way back is the
-			     single most reliable source of "where am I" confusion. -->
-			<template #breadcrumb>
-				<button v-if="editorStore.sourceThread"
-					class="flex items-center gap-1.5 px-2.5 py-1 rounded-lg bg-zinc-100 dark:bg-zinc-800 text-[11px] font-bold text-zinc-600 dark:text-zinc-300 hover:bg-zinc-200 dark:hover:bg-zinc-700 transition max-w-[200px] shrink-0"
-					:title="`Back to ${editorStore.sourceThread.title}`"
-					@click="router.push(`/chat/${editorStore.sourceThread.id}`)">
-					<span class="iconify tabler--arrow-back-up w-3.5 h-3.5 shrink-0"></span>
-					<span class="truncate">{{ editorStore.sourceThread.title }}</span>
-				</button>
-			</template>
-		</GraphHeader>
+			@back="router.push('/home')" @rename="editorStore.renameProject($event)" />
 
 		<!-- Export lives in the app's fixed top-right cluster so it composes
 		     with the settings/theme buttons instead of colliding with them -->

@@ -20,7 +20,6 @@ const api = {
 		return () => ipcRenderer.removeListener('pipeline-update', listener)
 	},
 	getBackgroundTasks: (threadId: string) => ipcRenderer.invoke('get-background-tasks', threadId),
-	retryPreprocessing: (threadId: string) => ipcRenderer.invoke('retry-preprocessing', threadId),
 	debugLog: (...args: any[]) => ipcRenderer.invoke('debug-log', ...args),
 	onBackgroundTaskUpdate: (callback: (data: any) => void) => {
 		const listener = (_event: any, data: any) => callback(data)
@@ -61,9 +60,6 @@ const api = {
 		ipcRenderer.invoke('import-media-url', data),
 	removeMediaAsset: (data: { threadId: string, assetId: string }) =>
 		ipcRenderer.invoke('remove-media-asset', data),
-	/** Fork a graph node ('root-media' or a Message.id) into a timeline project. */
-	promoteToEditor: (data: { threadId: string, nodeId: string }) =>
-		ipcRenderer.invoke('promote-to-editor', data),
 	preprocessMedia: (data: { threadId: string, assetId: string, steps?: string[], threshold?: number }) =>
 		ipcRenderer.invoke('preprocess-media', data),
 	findSilence: (data: { threadId: string, assetId: string, noiseDb?: number, minDurationSec?: number }) =>

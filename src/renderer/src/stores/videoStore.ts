@@ -215,9 +215,6 @@ export const useVideoStore = defineStore('video', () => {
 		}
 	}
 
-	const retryPreprocessing = async (threadId: string) => {
-		return await (window as any).api.retryPreprocessing(threadId)
-	}
 
 	// Setup global listener for background tasks
 	if (typeof window !== 'undefined' && (window as any).api) {
@@ -451,7 +448,6 @@ export const useVideoStore = defineStore('video', () => {
 		updateNodePositions,
 		updateNodeMetadata,
 		deleteFrame,
-		retryPreprocessing,
 		toggleReferenceFrame,
 		improviseMessage
 	}

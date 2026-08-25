@@ -41,26 +41,14 @@
           <ConversationNode v-bind="props"
             @node-resize-stop="videoStore.updateNodeMetadata(props.id, { width: $event })" />
         </template>
-        <template #node-media="props">
-          <MediaNode v-bind="props" @toggle-details="videoStore.updateNodeMetadata(props.id, { showDetails: $event })" />
-        </template>
         <template #node-task="props">
           <TaskProgressNode v-bind="props" />
-        </template>
-        <template #node-video="props">
-          <VideoNode v-bind="props" @toggle-details="videoStore.updateNodeMetadata(props.id, { showDetails: $event })" />
         </template>
         <template #node-thumbnail="props">
           <ThumbnailNode v-bind="props" @toggle-details="videoStore.updateNodeMetadata(props.id, { showDetails: $event })" />
         </template>
         <template #node-summary="props">
           <SummaryNode v-bind="props" />
-        </template>
-        <template #node-editor-project="props">
-          <EditorProjectNode v-bind="props" />
-        </template>
-        <template #node-input="props">
-          <ChatInputNode v-bind="props" />
         </template>
         <template #node-image-collection="props">
           <ImageCollectionNode v-bind="props" />
@@ -96,15 +84,12 @@ import { useGraphStore } from '../stores/graphStore'
 import { useTaskStore } from '../stores/taskStore'
 import { useVideoStore } from '../stores/videoStore'
 import { useRoute, useRouter } from 'vue-router'
+import { isLegacyVideoThread } from '@shared/legacy'
 
 import ConversationNode from '../components/graph/ConversationNode.vue'
-import MediaNode from '../components/graph/MediaNode.vue'
 import TaskProgressNode from '../components/graph/TaskProgressNode.vue'
-import VideoNode from '../components/graph/VideoNode.vue'
 import ThumbnailNode from '../components/graph/ThumbnailNode.vue'
 import SummaryNode from '../components/graph/SummaryNode.vue'
-import EditorProjectNode from '../components/graph/EditorProjectNode.vue'
-import ChatInputNode from '../components/graph/ChatInputNode.vue'
 import ImageCollectionNode from '../components/graph/ImageCollectionNode.vue'
 import FrameNode from '../components/graph/FrameNode.vue'
 
@@ -358,6 +343,15 @@ onMounted(async () => {
 
   if (videoId !== 'default') {
     await videoStore.selectThread(videoId)
+
+    // Deep link to a thread from the retired AI video pipeline: this page can no
+    // longer render it (its root node and result nodes are gone). Bounce rather
+    // than draw an empty canvas.
+    const thread = videoStore.currentThread
+    if (thread && isLegacyVideoThread(thread)) {
+      router.replace('/home')
+      return
+    }
   }
 
   window.addEventListener('keydown', handleKeyDown)

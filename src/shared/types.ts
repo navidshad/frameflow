@@ -60,15 +60,11 @@ export interface UsageRecord {
 	messageId?: string;
 }
 
-/**
- * What kind of result a message node renders as.
- * `'editor'` is never produced by the pipeline — it marks a "manual edit" node
- * pointing at a forked timeline-editor project (see Message.editorThreadId).
- */
-export type MessageResultType = 'video' | 'thumbnail' | 'summary' | 'image' | 'editor'
+/** What kind of result a message node renders as. */
+export type MessageResultType = 'video' | 'thumbnail' | 'summary' | 'image'
 
-/** What a pipeline phase may produce — 'editor' nodes are written locally, never by a phase. */
-export type PipelineResultType = Exclude<MessageResultType, 'editor'>
+/** Alias kept so phase signatures read as intent, not as a structural repeat. */
+export type PipelineResultType = MessageResultType
 
 export interface Message {
 	id: string;
@@ -84,11 +80,14 @@ export interface Message {
 	version?: number;
 	editRefId?: string;
 	resultType?: MessageResultType;
-	/** Set on a "manual edit" node: the editor Thread this node opens. */
-	editorThreadId?: string;
 	createdAt: number;
 }
 
+/**
+ * `'video'` is LEGACY only — the AI graph no longer produces video, and no new
+ * thread is created with it. Existing records keep the value so they can still
+ * be listed and deleted; see isLegacyVideoThread in shared/legacy.ts.
+ */
 export type ThreadType = 'video' | 'image' | 'editor'
 
 export interface Thread {
@@ -181,22 +180,15 @@ export interface Thread {
 	missing?: boolean
 	/** Present only when type === 'editor' — the timeline editor document. */
 	editor?: EditorDocument
-	/**
-	 * Editor projects only: the chat thread this project was forked from via
-	 * "Open in Editor". Drives the breadcrumb back to the source graph.
-	 * Absent on projects started from a blank timeline.
-	 */
-	sourceThreadId?: string
-	/** Which graph node it was forked from: 'root-media' or a Message.id. */
-	sourceNodeId?: string
 	createdAt: number
 	updatedAt: number
 }
 
 // ============================================================
 // Timeline Video Editor (see video-editor-prd.md §6)
-// Canonical time unit is SECONDS. SRT strings only appear at the
-// boundary with legacy generateTimeline/assembleVideo.
+// Canonical time unit is SECONDS. SRT strings appear only at the boundary
+// with assembleVideo (the ffmpeg renderer) — see srtToSeconds in
+// shared/timeline.ts, the one parser.
 // ============================================================
 
 export interface EditorDocument {
