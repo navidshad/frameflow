@@ -1,7 +1,10 @@
 import { describe, expect, it } from 'vitest'
 import type { Clip, EditorDocument, EditorPersona, MediaAsset, TimelineItem, Track } from '@shared/types'
 import { repairOverlaps, TIMELINE_DIFF_SCHEMA_VERSION } from '@shared/timeline'
-import { composeSystemInstruction, measureBuild, opsToDiff, type PromptStats } from './ops'
+import {
+	composeSystemInstruction, EDITOR_OPS_SCHEMA, editorOpsSchema, measureBuild, opsToDiff,
+	type PromptStats
+} from './ops'
 
 // ===== Fixtures =====
 
@@ -594,5 +597,28 @@ describe('measureBuild', () => {
 	it('returns undefined with no diff or no known source', () => {
 		expect(measureBuild(undefined, doc, stats())).toBeUndefined()
 		expect(measureBuild(diff, doc, stats({ sourceDurationSec: 0 }))).toBeUndefined()
+	})
+})
+
+describe('editorOpsSchema', () => {
+	const props = (hasItems: boolean) => Object.keys(editorOpsSchema(hasItems).properties as any)
+
+	it('offers the item-mutating ops when the timeline has items', () => {
+		expect(props(true)).toEqual(expect.arrayContaining(['updateItems', 'removeItemIds', 'closeGaps']))
+	})
+
+	// The observed failure this guards: on an empty timeline the model emitted
+	// updateItems against invented ids and added nothing at all.
+	it('removes them on an empty timeline, leaving only ways to ADD', () => {
+		const p = props(false)
+		expect(p).not.toContain('updateItems')
+		expect(p).not.toContain('removeItemIds')
+		expect(p).not.toContain('closeGaps')
+		expect(p).toEqual(expect.arrayContaining(['addSceneRanges', 'addClips', 'targetLengthSec']))
+	})
+
+	it('does not mutate the shared schema constant', () => {
+		editorOpsSchema(false)
+		expect(Object.keys(EDITOR_OPS_SCHEMA.properties as any)).toContain('updateItems')
 	})
 })

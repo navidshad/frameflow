@@ -172,6 +172,12 @@ function outputLengthLines(stats: PromptStats): string[] {
 
 	// Empty timeline: there is no runtime to preserve — it has to be BUILT.
 	if (stats.timelineItemCount === 0) {
+		// Giving the model the actual piece length lets it size a short cut by
+		// arithmetic instead of guessing. Guessing cost a MAX_TOKENS failure: asked
+		// for 2 minutes it listed hundreds of addClips entries and truncated.
+		const avgPieceSec = stats.sourceClipCount > 0
+			? stats.sourceDurationSec / stats.sourceClipCount
+			: 0
 		if (!haveSource) {
 			return [
 				...preamble,
@@ -186,12 +192,19 @@ function outputLengthLines(stats: PromptStats): string[] {
 			'',
 			`The timeline is EMPTY, so you are building this cut from scratch out of about`,
 			`${clock(stats.sourceDurationSec)} of footage across ${stats.sourceClipCount} detected pieces.`,
-			'Default when the request does not ask for something shorter: cover the source end to end',
-			'in chronological order, removing only dead air, silence, false starts and duplicated',
-			'takes — typically 5-20% of the runtime.',
-			'For ANY output longer than a couple of minutes, build it with `addSceneRanges` over whole',
-			'spans of piece numbers, using `excludeScenes` for the pieces you drop. Do NOT list kept',
-			'pieces one by one — you will run out of response length long before the end of the footage.'
+			'There is nothing on the timeline yet, so there is nothing to update, remove or retime:',
+			'`updateItems` and `removeItemIds` CANNOT apply here and will be discarded. Your only job',
+			'this turn is to ADD material, with `addSceneRanges` and/or `addClips`.',
+			`- Aiming SHORT (a highlight, teaser, trailer, short): pieces here average about`,
+			`  ${avgPieceSec.toFixed(1)}s, so a T-second target needs roughly T/${avgPieceSec.toFixed(1)} pieces — do that arithmetic`,
+			'  before you start and add about that many, no more. Pick them with `addClips`, or use a',
+			'  few narrow `addSceneRanges` around the moments you want. Never list more than ~40',
+			'  entries: past that you will hit the response limit mid-answer and the whole edit is lost.',
+			'- Aiming LONG (the full thing, a cleanup, a polish): cover the source end to end in',
+			'  chronological order with `addSceneRanges` over whole spans of piece numbers, using',
+			'  `excludeScenes` for what you drop — typically 5-20% of the runtime. Do NOT list kept',
+			'  pieces one by one; you will run out of response length long before the end.',
+			'Default when the request does not ask for something shorter: aim LONG.'
 		]
 	}
 
@@ -212,6 +225,23 @@ function outputLengthLines(stats: PromptStats): string[] {
 		)
 	}
 	return lines
+}
+
+/**
+ * The ops schema for one turn.
+ *
+ * On an EMPTY timeline the item-mutating ops are removed rather than merely
+ * discouraged. Observed failure: asked for a 2-minute highlight of a 92-minute
+ * source with nothing on the timeline, the model emitted `updateItems` against
+ * invented ids ("highlight_1", "v1_0") and added nothing — it read updateItems
+ * as "declare the items of my output". Prose in the contract did not fix it;
+ * removing the option does, because there is genuinely nothing to update,
+ * remove or close gaps between until something has been added.
+ */
+export function editorOpsSchema(hasTimelineItems: boolean) {
+	if (hasTimelineItems) return EDITOR_OPS_SCHEMA
+	const { removeItemIds, closeGaps, updateItems, ...buildOnly } = EDITOR_OPS_SCHEMA.properties as any
+	return { ...EDITOR_OPS_SCHEMA, properties: buildOnly }
 }
 
 export function composeSystemInstruction(persona: EditorPersona, stats: PromptStats): string {

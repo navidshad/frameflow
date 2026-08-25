@@ -9,7 +9,8 @@ import { GEMINI_MODEL_2_5_FLASH } from '../constants/gemini'
 import { BUILTIN_PERSONAS, DEFAULT_PERSONA_ID } from '../constants/personas'
 import { buildPromptContext } from './context'
 import {
-	composeSystemInstruction, EDITOR_OPS_SCHEMA, measureBuild, opsToDiff, type PromptStats
+	composeSystemInstruction, EDITOR_OPS_SCHEMA, editorOpsSchema, measureBuild, opsToDiff,
+	type PromptStats
 } from './ops'
 
 /**
@@ -24,8 +25,14 @@ import {
 // The ops contract lives in ./ops so it stays free of Electron imports (testable).
 export { EDITOR_OPS_SCHEMA, composeSystemInstruction, opsToDiff }
 
-/** Reserve enough output for a large assembly; thinking draws from this budget too. */
-const EDITOR_MAX_OUTPUT_TOKENS = 32_768
+/**
+ * Output budget for one turn. Thinking draws from this too, which is what makes
+ * the number matter: at 32_768 a build-from-scratch turn over a 92-minute source
+ * truncated mid-JSON with finishReason MAX_TOKENS while the emitted JSON was
+ * only ~10k tokens — thinking had taken the rest. The context ladder now shows
+ * the model every piece of a long source, so give it room to reason about them.
+ */
+const EDITOR_MAX_OUTPUT_TOKENS = 65_536
 
 // ===== Turn lifecycle =====
 const turnControllers = new Map<string, AbortController>()
@@ -140,7 +147,7 @@ export function runEditorPrompt(options: {
 			const { data: ops, record } = await adapter.generateStructuredText<EditorOps>(
 				modelName,
 				context.contextText,
-				EDITOR_OPS_SCHEMA,
+				editorOpsSchema(stats.timelineItemCount > 0),
 				composeSystemInstruction(persona, stats),
 				controller.signal,
 				undefined,
