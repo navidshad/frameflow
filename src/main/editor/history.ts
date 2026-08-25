@@ -3,6 +3,7 @@ import fs from 'fs'
 import path from 'path'
 import type { EditorHistoryFile, EditorHistoryStep, TimelineSnapshot } from '@shared/types'
 import { threadManager } from '../threads'
+import { applyStepCap } from '@shared/editor-history'
 
 /**
  * Undo/redo sidecar persistence for the timeline editor (PRD §6).
@@ -61,7 +62,7 @@ export async function pushStep(
 	threadId: string,
 	step: EditorHistoryStep,
 	keyframe?: TimelineSnapshot
-): Promise<{ seq: number; stepCount: number }> {
+): Promise<{ seq: number; stepCount: number; prunedIds: string[] }> {
 	const file = loadHistory(threadId)
 
 	// Kill the redo branch beyond the current pointer
@@ -86,21 +87,20 @@ export async function pushStep(
 
 	// Ring cap: evict oldest steps; keep the newest keyframe at-or-before the
 	// new oldest step as the replay baseline, drop older ones.
-	if (file.steps.length > MAX_STEPS) {
-		file.steps = file.steps.slice(file.steps.length - MAX_STEPS)
-		const oldestSeq = file.steps[0].seq
-		const validIds = new Set(file.steps.map((s) => s.id))
-		const baseline = file.keyframes
-			.filter((k) => !validIds.has(k.stepId))
-			.pop() // newest evicted keyframe becomes the baseline
-		file.keyframes = file.keyframes.filter((k) => validIds.has(k.stepId))
-		if (baseline) file.keyframes.unshift(baseline)
-		void oldestSeq
-	}
+	//
+	// The evicted ids are REPORTED rather than left for the renderer to work out.
+	// It used to re-implement this cap with its own literal 50 — two numbers on
+	// opposite sides of an IPC boundary that had to agree, with nothing linking
+	// them. Main owns the cap; the renderer applies what main says it dropped,
+	// which is how the revisions sidecar already works.
+	const capped = applyStepCap(file.steps, file.keyframes, MAX_STEPS)
+	file.steps = capped.steps
+	file.keyframes = capped.keyframes
+	const prunedIds = capped.prunedIds
 
 	file.currentStepId = stored.id
 	writeHistory(file)
-	return { seq, stepCount: file.steps.length }
+	return { seq, stepCount: file.steps.length, prunedIds }
 }
 
 export function setPointer(threadId: string, currentStepId: string): boolean {

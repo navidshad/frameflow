@@ -984,13 +984,15 @@ export const useEditorStore = defineStore('editor', () => {
 			createdAt: Date.now()
 		}
 
-		// Truncate any redo branch beyond the pointer, then append
+		// Truncate any redo branch beyond the pointer, then append. This part must
+		// be synchronous — undo/redo has to feel instant — and main performs the
+		// same truncation, so the two agree without coordination.
+		//
+		// The ring cap is NOT mirrored here. Main owns it and reports what it
+		// evicted (see the push result below); duplicating the limit meant two
+		// literals across an IPC boundary that silently had to match.
 		const idx = pointerIndex.value
 		historySteps.value = [...historySteps.value.slice(0, idx + 1), step]
-		// Mirror the main-side ring cap (50)
-		if (historySteps.value.length > 50) {
-			historySteps.value = historySteps.value.slice(historySteps.value.length - 50)
-		}
 
 		doc.value.historyRef = { currentStepId: step.id, stepCount: historySteps.value.length }
 		refreshMetaDuration()
@@ -1006,8 +1008,16 @@ export const useEditorStore = defineStore('editor', () => {
 			threadId: threadId.value,
 			step: JSON.parse(JSON.stringify(step)),
 			keyframe: keyframe ? JSON.parse(JSON.stringify(keyframe)) : undefined
-		}).then((res: { seq: number } | null) => {
-			if (res?.seq) step.seq = res.seq
+		}).then((res: { seq: number; prunedIds?: string[] } | null) => {
+			if (!res) return
+			// Apply the cap and the assigned seq in ONE reactive write. The previous
+			// version assigned `step.seq` on the raw object, which fires no effect —
+			// and seq is persisted, so in-session and post-reload state disagreed.
+			const pruned = new Set(res.prunedIds || [])
+			historySteps.value = historySteps.value
+				.filter((s) => !pruned.has(s.id))
+				.map((s) => (s.id === step.id ? { ...s, seq: res.seq ?? s.seq } : s))
+			if (doc.value) doc.value.historyRef.stepCount = historySteps.value.length
 		}).catch((error: unknown) => {
 			console.error('[editorStore] pushEditorStep failed:', error)
 		})
