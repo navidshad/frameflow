@@ -1,6 +1,6 @@
   # 🌊 FrameFlow
 
-<img src="./docs/screenshots/01_light-theme.jpg" width="100%" alt="FrameFlow Banner" />
+<img src="./docs/screenshots/03_timeline.jpg" width="100%" alt="The FrameFlow timeline editor: media panel, source monitor, inspector, multi-track timeline, and an AI chat column showing revisions" />
 
 ---
 
@@ -86,14 +86,18 @@ FrameFlow isn't just a tool; it's an iterative workspace:
 
 ## 📸 Interface Preview
 
+**Starting a project** — one composer. Say what you want, attach files, go.
+
 <div align="center">
-  <img src="./docs/screenshots/01_dark-theme.jpg" alt="FrameFlow Dashboard" />
+  <img src="./docs/screenshots/02_home.jpg" width="100%" alt="The FrameFlow home composer: a Video/Images purpose toggle, a prompt box, and attach buttons" />
 </div>
 
-> [!NOTE]
-> These screenshots predate the split described above — they show video being
-> generated inside the node graph, which now happens in the timeline editor.
-> The thumbnail and image flows shown are still accurate.
+**The node graph** — branching image generation, where each result keeps the reference
+images it was built from, so you can compare variants and continue from the one that worked.
+
+<div align="center">
+  <img src="./docs/screenshots/04_graph.jpg" width="80%" alt="The FrameFlow node graph: a thumbnail conversation branching into a generated result with its reference frames, model feedback, and upscaling options" />
+</div>
 
 ---
 
