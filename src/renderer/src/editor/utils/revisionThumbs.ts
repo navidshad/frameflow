@@ -1,4 +1,4 @@
-import type { EditorDocument, EditorRevision } from '@shared/types'
+import type { EditorDocument, EditorRevision, RevisionOrigin } from '@shared/types'
 
 /**
  * Resolves up to `count` thumbnail URLs for a revision card by mapping the
@@ -28,4 +28,27 @@ export function relativeTime(timestamp: number): string {
 	if (hours < 24) return `${hours}h ago`
 	const days = Math.floor(hours / 24)
 	return `${days}d ago`
+}
+
+/**
+ * Icon + tooltip for a revision's origin. Extracted because the list and the
+ * graph rendered this mapping verbatim in two places, and only the list ever
+ * had the tooltip.
+ *
+ * `ai` returns no icon — the caller supplies the persona's, which it looks up
+ * from the store.
+ */
+export function originMeta(origin: RevisionOrigin): {
+	icon: string | null
+	iconClass: string
+	title: string
+} {
+	switch (origin) {
+		case 'ai':
+			return { icon: null, iconClass: 'text-xs', title: 'AI edit' }
+		case 'manual':
+			return { icon: 'tabler--bookmark', iconClass: 'text-secondary', title: 'Manual checkpoint' }
+		default:
+			return { icon: 'tabler--flag', iconClass: 'text-zinc-400', title: 'Original' }
+	}
 }

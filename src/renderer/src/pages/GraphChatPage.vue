@@ -56,6 +56,9 @@
         <template #node-summary="props">
           <SummaryNode v-bind="props" />
         </template>
+        <template #node-editor-project="props">
+          <EditorProjectNode v-bind="props" />
+        </template>
         <template #node-input="props">
           <ChatInputNode v-bind="props" />
         </template>
@@ -86,9 +89,8 @@ import { onMounted, onUnmounted, computed, ref } from 'vue'
 import { VueFlow, useVueFlow } from '@vue-flow/core'
 import { Background } from '@vue-flow/background'
 import { Controls } from '@vue-flow/controls'
-import '@vue-flow/core/dist/style.css'
-import '@vue-flow/core/dist/theme-default.css'
-import '@vue-flow/controls/dist/style.css'
+// Vue Flow CSS is imported once in main.ts — it is shared with the editor's
+// revision graph, which has no import of its own.
 
 import { useGraphStore } from '../stores/graphStore'
 import { useTaskStore } from '../stores/taskStore'
@@ -101,6 +103,7 @@ import TaskProgressNode from '../components/graph/TaskProgressNode.vue'
 import VideoNode from '../components/graph/VideoNode.vue'
 import ThumbnailNode from '../components/graph/ThumbnailNode.vue'
 import SummaryNode from '../components/graph/SummaryNode.vue'
+import EditorProjectNode from '../components/graph/EditorProjectNode.vue'
 import ChatInputNode from '../components/graph/ChatInputNode.vue'
 import ImageCollectionNode from '../components/graph/ImageCollectionNode.vue'
 import FrameNode from '../components/graph/FrameNode.vue'

@@ -9,7 +9,19 @@
 		</div>
 
 		<GraphHeader :title="editorStore.thread?.title || 'Untitled Project'" :total-cost="totalCost" editable
-			@back="router.push('/home')" @rename="editorStore.renameProject($event)" />
+			@back="router.push('/home')" @rename="editorStore.renameProject($event)">
+			<!-- Where did this project come from? Nesting without a way back is the
+			     single most reliable source of "where am I" confusion. -->
+			<template #breadcrumb>
+				<button v-if="editorStore.sourceThread"
+					class="flex items-center gap-1.5 px-2.5 py-1 rounded-lg bg-zinc-100 dark:bg-zinc-800 text-[11px] font-bold text-zinc-600 dark:text-zinc-300 hover:bg-zinc-200 dark:hover:bg-zinc-700 transition max-w-[200px] shrink-0"
+					:title="`Back to ${editorStore.sourceThread.title}`"
+					@click="router.push(`/chat/${editorStore.sourceThread.id}`)">
+					<span class="iconify tabler--arrow-back-up w-3.5 h-3.5 shrink-0"></span>
+					<span class="truncate">{{ editorStore.sourceThread.title }}</span>
+				</button>
+			</template>
+		</GraphHeader>
 
 		<!-- Export lives in the app's fixed top-right cluster so it composes
 		     with the settings/theme buttons instead of colliding with them -->
@@ -160,8 +172,11 @@ const { size: timelineH, resize: resizeTimeline, reset: resetTimeline } =
 	persistedSize('editor.timelineH', 208, 140, () => Math.round(window.innerHeight * 0.6))
 const { size: leftW, resize: resizeLeft, reset: resetLeft } =
 	persistedSize('editor.leftW', 280, 200, () => 440)
+// 560 rather than 480: the revisions tab can now render a graph inline, and the
+// extra width is what lets a second branch column fit. persistedSize clamps on
+// read, so a stored 480 stays valid.
 const { size: chatW, resize: resizeChat, reset: resetChat } =
-	persistedSize('editor.chatW', 300, 240, () => 480)
+	persistedSize('editor.chatW', 300, 240, () => 560)
 const { size: inspectorW, resize: resizeInspector, reset: resetInspector } =
 	persistedSize('editor.inspectorW', 280, 240, () => 480)
 

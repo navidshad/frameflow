@@ -15,18 +15,23 @@ The front-end is built to feel premium, responsive, and data-rich, guiding the u
 ### 1. Project Initialization
 Users start by providing a **Gemini API Key** in the redesigned Settings. This is stored locally and used for all multimodal requests.
 
-### 2. Video Management (Home)
-The Home view (`HomePage.vue`) displays a grid of existing video projects using **Thread Cards**. Users can start a new analysis or resume previous sessions.
+### 2. Starting a project (Home)
+The Home view (`HomePage.vue`) is a single **composer**: pick a purpose (Video or Images), attach files, type a prompt, send. The purpose is explicit rather than inferred — it decides which attachments are the *subject* and which are *reference material*, and it sets `Thread.type`. Below the composer sits the list of **Thread Cards** for existing projects, each badged with its kind (Video / Images / Timeline). A secondary link starts a blank timeline project.
 
-### 3. Upload & Exploration
-Upon uploading a video, the app enters the analysis phase.
+Videos can also come from a link: **`VideoLinkModal.vue`** carries the yt-dlp setup and download flow. **`SystemRequirementsBanner.vue`** surfaces missing FFmpeg/scenedetect and unsafe-storage warnings above the composer, before any file is committed.
+
+### 3. Analysis
+Sending the first turn creates the thread and starts the pipeline in one action, so users land on the graph with work already running.
 - **Real-time Logs**: Users see exactly what the pipeline is doing (Extractions, Scene Detection).
 - **Video Preview**: A low-res preview is generated for immediate playback.
 
 ### 4. Interactive Chat & Refinement
-The heart of the app is the **Chat Interface** (`src/renderer/src/pages/ChatPage.vue`).
+The heart of the app is the **node graph** (`src/renderer/src/pages/GraphChatPage.vue`).
 - **Context-Aware Messages**: The AI remembers the video content and previous summary versions.
 - **Version Tracking**: Every "Generate" command creates a new version of the video. Users can switch between versions to compare results.
+
+### 5. Hand-editing a cut — "Open in Editor"
+Any video node (and the root media node) can be forked into a real timeline project via **`src/main/editor/promote.ts`**. The root node opens the full source with its pieces in the tray; a result node opens with that node's AI cut already laid out on V1. The fork reuses the chat thread's existing proxy, audio, transcript and scene artifacts, so nothing is re-encoded or re-transcribed. A **Manual Edit** node appears in the graph edged from the node it came from, and the editor header shows a breadcrumb back to the source.
 
 ---
 

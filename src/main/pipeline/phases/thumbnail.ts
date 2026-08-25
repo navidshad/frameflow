@@ -71,6 +71,11 @@ CRITICAL RULES:
 	)
 }
 
+/**
+ * Deliberately NOT shared/timeline's srtToSeconds: this one validates MODEL
+ * OUTPUT, so it strips `[HH:MM:SS]` brackets and returns NaN on anything
+ * malformed rather than coercing to 0. Callers below rely on the NaN.
+ */
 function timeToSeconds(t: string | any): number {
 	if (typeof t !== 'string') return NaN
 

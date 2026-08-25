@@ -74,13 +74,18 @@
 </template>
 
 <script setup lang="ts">
-import { computed, onMounted, onUnmounted, ref } from 'vue'
+import { computed, nextTick, onMounted, onUnmounted, ref, watch } from 'vue'
 import { useEditorStore } from '../../stores/editorStore'
 import PersonaPicker from './PersonaPicker.vue'
 
 const store = useEditorStore()
 
-const text = ref('')
+// The draft lives in the store: Home pre-fills it before this mounts, and this
+// component is v-if'd away when the rail collapses.
+const text = computed({
+	get: () => store.promptDraft,
+	set: (v: string) => { store.promptDraft = v }
+})
 const lastPrompt = ref('')
 const scopeMenuOpen = ref(false)
 const inputRef = ref<HTMLTextAreaElement | null>(null)
@@ -133,6 +138,15 @@ const submit = () => {
 const retry = () => {
 	if (lastPrompt.value) store.runPrompt(lastPrompt.value)
 }
+
+/**
+ * A queued prompt arrives before mount, and the textarea is rows="1" that only
+ * grows on @input — so a multi-line prefill would render clipped to one line.
+ */
+onMounted(() => nextTick(autoGrow))
+watch(() => store.hasReadyMedia, (ready) => {
+	if (ready && text.value.trim()) nextTick(() => inputRef.value?.focus())
+})
 
 const onDocClick = (e: MouseEvent) => {
 	if (scopeMenuOpen.value && scopeRef.value && !scopeRef.value.contains(e.target as Node)) {

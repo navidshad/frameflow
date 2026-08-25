@@ -21,6 +21,12 @@
             <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path d="M8 17H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h10a2 2 0 0 1 2 2v3m-1 7l-4 4-4-4m4 4V10" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg>
           </button>
         </SlimTooltip>
+        <SlimTooltip key="open-editor" text="Open this cut in the timeline editor" placement="left">
+          <button @click="openInEditor(data.id)" :disabled="editorBusy"
+            class="p-1.5 bg-black/50 backdrop-blur-md rounded-lg hover:bg-black/80 text-white transition-all shadow-lg disabled:opacity-40">
+            <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="6" cy="6" r="3"/><circle cx="6" cy="18" r="3"/><line x1="20" y1="4" x2="8.12" y2="15.88"/><line x1="14.47" y1="14.48" x2="20" y2="20"/><line x1="8.12" y1="8.12" x2="12" y2="12"/></svg>
+          </button>
+        </SlimTooltip>
         <SlimTooltip key="delete" text="Delete node and branches" placement="left">
           <button @click="data.onDelete" class="p-1.5 bg-black/50 backdrop-blur-md rounded-lg hover:bg-red-500/80 text-white transition-all shadow-lg">
             <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16"></path></svg>
@@ -161,10 +167,12 @@ import { Handle, Position } from '@vue-flow/core'
 import SlimTooltip from '../SlimTooltip.vue'
 import { useVideoStore } from '../../stores/videoStore'
 import BaseMessageInput from '../chat/BaseMessageInput.vue'
+import { useOpenInEditor } from '../../composables/useOpenInEditor'
 
 const props = defineProps<{ data: any }>()
 const emit = defineEmits(['toggle-details'])
 const videoStore = useVideoStore()
+const { openInEditor, busy: editorBusy } = useOpenInEditor()
 const videoRef = ref<HTMLVideoElement | null>(null)
 const isPlaying = ref(false)
 const isFullScreen = ref(false)

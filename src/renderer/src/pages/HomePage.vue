@@ -1,75 +1,72 @@
 <template>
 	<div class="h-screen flex flex-col bg-transparent transition-colors duration-300 overflow-hidden relative">
 		<div class="container mx-auto px-6 py-12 max-w-7xl flex flex-col h-full z-10 relative">
-			<!-- Header -->
-			<PageHeader title="Your Videos" subtitle="Manage your video summaries and chats." />
+			<PageHeader title="FrameFlow" subtitle="Describe what you want to make, attach your files, and go." />
 
 			<div class="flex-1 overflow-y-auto -mx-6 px-6 pb-8 custom-scrollbar">
-				<!-- Thread List -->
-				<div v-if="loading" class="flex justify-center py-20">
-					<div class="animate-spin rounded-lg h-10 w-10 border-4 border-primary border-t-transparent"></div>
+				<!-- Dependency warnings must be seen BEFORE a file is committed -->
+				<SystemRequirementsBanner @ffmpeg-available="ffmpegAvailable = $event" />
+
+				<HomeComposer ref="composerRef" :ffmpeg-available="ffmpegAvailable" :busy="isCreating"
+					@submit="handleComposerSubmit" @pick-link="showLinkModal = true" />
+
+				<!-- Always visible, not empty-state-only: a blank multi-source timeline
+				     is otherwise unreachable without first making an AI thread. -->
+				<div class="w-full max-w-3xl mx-auto mt-3 flex justify-end">
+					<button @click="handleCreateEditorProject"
+						class="text-xs font-bold text-zinc-500 dark:text-zinc-400 hover:text-primary transition flex items-center gap-1.5">
+						or start a blank timeline project
+						<span class="iconify tabler--arrow-right w-3.5 h-3.5"></span>
+					</button>
 				</div>
 
-				<template v-else>
-					<!-- Intro only. The ways to start are the cards below, in BOTH states —
-					     a separate empty-state action used to offer just one of them. -->
-					<EmptyState v-if="videoStore.threads.length === 0" />
+				<!-- Recent projects -->
+				<div class="mt-14">
+					<h2 class="text-[10px] font-black uppercase tracking-[0.2em] text-zinc-400 dark:text-zinc-500 mb-6">
+						Recent projects
+					</h2>
 
-					<div class="grid gap-10 md:grid-cols-2 lg:grid-cols-3 pb-20">
-						<!-- New Video Edit Card -->
-						<NewThreadCard
-							title="New Video Edit"
-							description="Transform your video into a concise masterpiece"
-							@click="router.push('/upload')"
-						/>
+					<div v-if="loading" class="flex justify-center py-20">
+						<div class="animate-spin rounded-lg h-10 w-10 border-4 border-primary border-t-transparent"></div>
+					</div>
 
-						<!-- New Image Edit Card -->
-						<NewThreadCard
-							title="New Image Edit"
-							description="Create stunning visuals from your image collection"
-							@click="handleCreateImageEdit"
-						>
-							<template #icon>
-								<svg xmlns="http://www.w3.org/2000/svg" class="w-6 h-6" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-									<rect x="3" y="3" width="18" height="18" rx="2" ry="2"/><circle cx="8.5" cy="8.5" r="1.5"/><polyline points="21 15 16 10 5 21"/>
-								</svg>
-							</template>
-						</NewThreadCard>
+					<p v-else-if="videoStore.threads.length === 0"
+						class="text-sm text-zinc-500 dark:text-zinc-400 py-8">
+						Nothing here yet — your projects will show up in this list.
+					</p>
 
-						<!-- Video Editor Card -->
-						<NewThreadCard
-							title="Video Editor"
-							description="Cut and arrange clips on a multi-track timeline"
-							@click="handleCreateEditorProject"
-						>
-							<template #icon>
-								<svg xmlns="http://www.w3.org/2000/svg" class="w-6 h-6" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-									<rect x="3" y="5" width="18" height="4" rx="1"/><rect x="3" y="12" width="12" height="4" rx="1"/><line x1="8" y1="3" x2="8" y2="21"/>
-								</svg>
-							</template>
-						</NewThreadCard>
-
+					<div v-else class="grid gap-10 md:grid-cols-2 lg:grid-cols-3 pb-20">
 						<ThreadCard v-for="thread in videoStore.threads" :key="thread.id" :thread="thread"
 							@open="openThread" @delete="handleDeleteThread" />
 					</div>
-				</template>
+				</div>
 			</div>
 		</div>
+
+		<VideoLinkModal v-model="showLinkModal" @select="handleLinkSelected" />
 	</div>
 </template>
 
 <script setup lang="ts">
 import { ref, onMounted } from 'vue'
 import { useRouter } from 'vue-router'
+import { MessageRole, type ThreadType } from '@shared/types'
 import { useVideoStore } from '../stores/videoStore'
-import EmptyState from '../components/home/EmptyState.vue'
-import NewThreadCard from '../components/home/NewThreadCard.vue'
+import { useEditorStore } from '../stores/editorStore'
+import HomeComposer from '../components/home/HomeComposer.vue'
+import SystemRequirementsBanner from '../components/home/SystemRequirementsBanner.vue'
+import VideoLinkModal from '../components/home/VideoLinkModal.vue'
 import ThreadCard from '../components/home/ThreadCard.vue'
 import PageHeader from '../components/PageHeader.vue'
 
 const router = useRouter()
 const videoStore = useVideoStore()
+const editorStore = useEditorStore()
 const loading = ref(true)
+const isCreating = ref(false)
+const ffmpegAvailable = ref(true)
+const showLinkModal = ref(false)
+const composerRef = ref<InstanceType<typeof HomeComposer> | null>(null)
 
 const openThread = (id: string) => {
 	const thread = videoStore.threads.find((t) => t.id === id)
@@ -84,22 +81,125 @@ const handleCreateEditorProject = async () => {
 	}
 }
 
-const handleCreateImageEdit = async () => {
-	const result = await (window as any).api.showOpenDialog({
-		title: 'Select Images for your collection',
-		properties: ['openFile', 'multiSelections'],
-		filters: [{ name: 'Images', extensions: ['jpg', 'jpeg', 'png', 'webp'] }]
-	})
+const handleLinkSelected = (file: { path: string; name: string }) => {
+	composerRef.value?.setVideo(file.path, file.name)
+}
 
-	if (result && !result.canceled && result.filePaths.length > 0) {
-		const firstFile = result.filePaths[0].split('/').pop() || 'Image Collection'
-		const threadId = await videoStore.createThread(undefined, `Edit: ${firstFile}`, result.filePaths)
-		router.push(`/chat/${threadId}`)
+const titleFor = (imagePaths: string[] = []): string => {
+	const first = imagePaths[0]?.split('/').pop() || 'Image Collection'
+	return `Edit: ${first}`
+}
+
+/**
+ * Video: create an editor project, import the file, hand the prompt over — and
+ * deliberately DO NOT run it. Preprocessing has not started, so runEditorPrompt
+ * would fail its media guard and surface as a red error turn; PromptBar enables
+ * itself once hasReadyMedia flips.
+ */
+const createVideoProject = async (payload: { videoPath?: string; videoName?: string; prompt: string }) => {
+	// The literal 'Untitled Project' is what makes createMediaAsset derive a
+	// clean title from the filename (Lecture_3.mp4 -> "Lecture 3").
+	const thread = await (window as any).api.createEditorProject('Untitled Project')
+	if (!thread) {
+		isCreating.value = false
+		await (window as any).api.showConfirmation({
+			title: 'Could not create the project',
+			message: 'The timeline project could not be created.',
+			type: 'error', buttons: ['OK'], defaultId: 0, cancelId: 0
+		})
+		return
+	}
+	videoStore.threads.unshift(thread)
+
+	try {
+		// Awaited: it is one ffprobe, and it means an unreadable file is reported
+		// here rather than dumping the user into a blank editor.
+		if (payload.videoPath) {
+			await (window as any).api.addMediaAsset({
+				threadId: thread.id, filePath: payload.videoPath, name: payload.videoName
+			})
+		}
+	} catch (e: any) {
+		// The project exists and is in Recent now — still navigate. Stranding the
+		// user on Home beside a phantom entry is worse than an empty media panel.
+		await (window as any).api.showConfirmation({
+			title: 'Could not read that video',
+			message: e?.message || 'The file could not be imported. You can add it again from the editor.',
+			type: 'warning', buttons: ['OK'], defaultId: 0, cancelId: 0
+		})
+	}
+
+	editorStore.queuePrompt(thread.id, payload.prompt)
+	router.push(`/editor/${thread.id}`)
+}
+
+/**
+ * Two paths, because the two outcomes live on different surfaces:
+ *   Images -> an AI graph thread, first turn fired here (see below)
+ *   Video  -> a timeline editor project, prompt QUEUED not run (see createVideoProject)
+ */
+const handleComposerSubmit = async (payload: {
+	purpose: ThreadType
+	videoPath?: string
+	videoName?: string
+	imagePaths: string[]
+	prompt: string
+	count: number
+	isThinkingMode: boolean
+	autoUseImages: boolean
+}) => {
+	if (isCreating.value) return
+	isCreating.value = true
+
+	if (payload.purpose === 'video') {
+		await createVideoProject(payload)
+		return
+	}
+
+	// ----- Images: AI graph thread -----
+	// The order below is load-bearing: addMessage bails silently without
+	// currentThreadId and startProcessing bails without currentThread, and both
+	// are only satisfied because createThread set them. Navigating first races
+	// GraphChatPage's onMounted -> selectThread against a half-loaded store.
+	try {
+		const thread = await videoStore.createThread(
+			payload.videoPath,
+			titleFor(payload.imagePaths),
+			payload.imagePaths,
+			payload.purpose
+		)
+
+		// Attach the COPIED paths, not the user's originals — createThread copies
+		// every image into <tempDir>/images/ and records them in input order.
+		const refs = thread.preprocessing?.sourceImages ?? []
+
+		const userMsgId = await videoStore.addMessage(
+			payload.prompt, MessageRole.User, undefined, refs, payload.autoUseImages
+		)
+
+		if (userMsgId) {
+			await videoStore.startProcessing(
+				thread.id, userMsgId, payload.count, payload.isThinkingMode, payload.autoUseImages
+			)
+		}
+
+		router.push(`/chat/${thread.id}`)
+	} catch (e: any) {
+		// Only reset on failure — on success we navigate away.
+		isCreating.value = false
+		await (window as any).api.showConfirmation({
+			title: 'Could not create the project',
+			message: e?.message || 'Something went wrong while setting up your project.',
+			type: 'error',
+			buttons: ['OK'],
+			defaultId: 0,
+			cancelId: 0
+		})
 	}
 }
 
 const handleDeleteThread = async (id: string) => {
-	if (confirm('Are you sure you want to delete this video summary and all its messages?')) {
+	if (confirm('Are you sure you want to delete this project and all its messages?')) {
 		await videoStore.deleteThread(id)
 	}
 }

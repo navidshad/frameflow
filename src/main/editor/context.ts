@@ -13,16 +13,18 @@ import { itemDuration } from '@shared/timeline'
  * drops a single scene number. Summarize keeps the original ladder.
  */
 
-export type ContextMode = 'longform' | 'summarize'
-
-export const MAX_SCENES_PER_ASSET = 60      // summarize ladder: 60 -> 30 -> 12
 export const VISUAL_MAX_CHARS = 160
 export const TEXT_MAX_CHARS = 120
 export const BOTH_FIELDS_MAX_CLIPS = 400    // emit text AND visual only for small assets
 export const SECONDARY_MAX_CHARS = 60
 export const ITEM_SUMMARY_MAX_CHARS = 200   // per-item coverage summary (merged range items)
-export const CONTEXT_CHAR_BUDGET = 120_000  // ~30k tokens
-export const CONTEXT_CHAR_BUDGET_LONGFORM = 420_000 // ~130k tokens = 13% of a 1M window
+/**
+ * ~130k tokens = 13% of a 1M window. This is a CEILING, not a floor: a short
+ * project produces a short context either way, so the only case it changes is
+ * long source + short intended output — and there the old 120k summarize budget
+ * was actively harmful, see buildLadder.
+ */
+export const CONTEXT_CHAR_BUDGET = 420_000
 export const OUTLINE_GIST_COUNT = 2
 
 /** Gap-filler text produced by deriveClipsFromTranscript for dead air. */
@@ -77,24 +79,17 @@ interface Rung {
 
 const rung = (over: Partial<Rung>, base: Rung): Rung => ({ ...base, ...over })
 
-function buildLadder(mode: ContextMode): Rung[] {
-	if (mode === 'summarize') {
-		const base: Rung = {
-			scenesCap: MAX_SCENES_PER_ASSET,
-			contentCap: VISUAL_MAX_CHARS,
-			bothFields: true,
-			dropNeighborVisuals: false,
-			dropUnusedAssetScenes: false
-		}
-		return [
-			base,
-			rung({ scenesCap: 30 }, base),
-			rung({ scenesCap: 12 }, base),
-			rung({ scenesCap: 12, dropNeighborVisuals: true }, base),
-			rung({ scenesCap: 12, dropNeighborVisuals: true, dropUnusedAssetScenes: true }, base)
-		]
-	}
-	// Longform: content shrinks first, scene numbers last.
+/**
+ * One ladder, shrinking CONTENT first and scene numbers last.
+ *
+ * There used to be a second, summarize-only ladder that dropped straight to 12
+ * scenes per asset. That could not survive the removal of modes, and should not
+ * have existed anyway: `addClips.sceneIndex` and `excludeScenes` must name real
+ * numbers from the AVAILABLE SCENES table, so capping a 92-minute lecture at
+ * twelve addressable moments makes a good short cut impossible — you cannot pick
+ * the best 30 seconds out of footage you cannot name.
+ */
+function buildLadder(): Rung[] {
 	const base: Rung = {
 		scenesCap: 4000,
 		contentCap: TEXT_MAX_CHARS,
@@ -134,10 +129,8 @@ export function buildPromptContext(
 		selectedItemIds: string[]
 		playheadSec: number
 		widen?: 'chapter' | 'full'
-		mode?: ContextMode
 	}
 ): PromptContextResult {
-	const mode: ContextMode = opts.mode || 'longform'
 
 	const scope = computeScope({
 		timeline: doc.timeline,
@@ -191,8 +184,13 @@ export function buildPromptContext(
 		const silence = clip.text === SILENCE_TEXT && !clip.visual
 		if (silence) return SILENCE_TEXT
 		if (contentCap <= 0) return ''
-		const primary = mode === 'longform' ? clip.text : clip.visual
-		const secondary = mode === 'longform' ? clip.visual : clip.text
+		// Transcript first, description second. deriveClipsFromTranscript is the
+		// DEFAULT clip producer while `visual` needs the opt-in descriptions step,
+		// so visual-primary would leave blank cells on the common path. Nothing is
+		// lost for b-roll: the `primary || secondary` fallback below still shows
+		// descriptions when there is no transcript.
+		const primary = clip.text
+		const secondary = clip.visual
 		const main = cell(primary || secondary, contentCap)
 		if (!bothFields || !primary || !secondary) return main
 		const extra = cell(secondary, Math.min(contentCap, SECONDARY_MAX_CHARS))
@@ -227,8 +225,8 @@ export function buildPromptContext(
 		a.clips.some((c) => !!c.visual || (!!c.text && c.text !== SILENCE_TEXT))
 	)
 
-	const ladder = buildLadder(mode)
-	const budget = mode === 'longform' ? CONTEXT_CHAR_BUDGET_LONGFORM : CONTEXT_CHAR_BUDGET
+	const ladder = buildLadder()
+	const budget = CONTEXT_CHAR_BUDGET
 	let truncated = false
 
 	const usedAssetIds = new Set(inScopeItems.map((i) => i.sourceAssetId))

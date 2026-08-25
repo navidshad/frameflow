@@ -6,9 +6,11 @@ import { threadManager } from '../threads'
 import { settingsManager } from '../settings'
 import { GeminiAdapter } from '../gemini/adapter'
 import { GEMINI_MODEL_2_5_FLASH } from '../constants/gemini'
-import { BUILTIN_PERSONAS, DEFAULT_PERSONA_ID, effectiveMode } from '../constants/personas'
+import { BUILTIN_PERSONAS, DEFAULT_PERSONA_ID } from '../constants/personas'
 import { buildPromptContext } from './context'
-import { composeSystemInstruction, EDITOR_OPS_SCHEMA, opsToDiff, type PromptStats } from './ops'
+import {
+	composeSystemInstruction, EDITOR_OPS_SCHEMA, measureBuild, opsToDiff, type PromptStats
+} from './ops'
 
 /**
  * AI prompt orchestrator for the timeline editor (PRD §5.7).
@@ -24,10 +26,6 @@ export { EDITOR_OPS_SCHEMA, composeSystemInstruction, opsToDiff }
 
 /** Reserve enough output for a large assembly; thinking draws from this budget too. */
 const EDITOR_MAX_OUTPUT_TOKENS = 32_768
-/** Below this fraction of the source, a build-from-scratch turn is flagged short. */
-const BUILD_SHORTFALL_RATIO = 0.7
-/** Never nag about shortfall on tiny test clips. */
-const BUILD_MIN_SOURCE_SEC = 600
 
 // ===== Turn lifecycle =====
 const turnControllers = new Map<string, AbortController>()
@@ -115,12 +113,10 @@ export function runEditorPrompt(options: {
 			emitTurnUpdate({ threadId, turn })
 
 			const persona = resolvePersona(doc, personaId)
-			const mode = effectiveMode(persona)
 			const context = buildPromptContext(doc, prompt, {
 				selectedItemIds: options.selectedItemIds,
 				playheadSec: options.playheadSec,
-				widen: options.widen,
-				mode
+				widen: options.widen
 			})
 
 			// What "full length" means for this project. Only in-scope, timed assets
@@ -134,8 +130,7 @@ export function runEditorPrompt(options: {
 				timelineItemCount: doc.timeline.length,
 				timelineDurationSec: computeContentEnd(doc.timeline),
 				sourceDurationSec: timedAssets.reduce((sum, a) => sum + (a.metadata?.duration ?? 0), 0),
-				sourceClipCount: timedAssets.reduce((sum, a) => sum + (a.clips?.length ?? 0), 0),
-				mode
+				sourceClipCount: timedAssets.reduce((sum, a) => sum + (a.clips?.length ?? 0), 0)
 			}
 
 			const modelSettings = settingsManager.getModelSettings()
@@ -172,10 +167,11 @@ export function runEditorPrompt(options: {
 				status: 'completed',
 				diff,
 				rationale: ops?.rationale,
+				targetLengthSec: ops?.targetLengthSec,
 				answer: ops?.answer,
 				droppedOps: droppedOps.length ? droppedOps : undefined,
 				notes: notes.length ? notes : undefined,
-				build: measureBuild(diff, freshDoc, stats),
+				build: measureBuild(diff, freshDoc, stats, ops?.targetLengthSec),
 				scopeLabel: context.scope.label,
 				usage: record.usage,
 				cost: record.cost
@@ -203,36 +199,3 @@ export function runEditorPrompt(options: {
 	return { turnId }
 }
 
-/**
- * How much runtime a build-from-scratch turn actually produced, so a 5-minute
- * "best of" out of 92 minutes of source is visible instead of silent.
- * Sums item durations rather than using computeContentEnd: a stray atSec would
- * otherwise make a short cut look hours long.
- */
-function measureBuild(
-	diff: PromptTurn['diff'],
-	doc: EditorDocument,
-	stats: PromptStats
-): PromptTurn['build'] {
-	const relevant = stats.mode === 'longform'
-		&& stats.timelineItemCount === 0
-		&& stats.sourceDurationSec >= BUILD_MIN_SOURCE_SEC
-	if (!relevant || !diff) return undefined
-
-	const probe = {
-		tracks: JSON.parse(JSON.stringify(doc.tracks)),
-		timeline: JSON.parse(JSON.stringify(doc.timeline))
-	}
-	// Errors are ignored on purpose: this is a length estimate, and the renderer
-	// runs the authoritative validation against its own live doc.
-	applyTimelineDiff(probe, diff, doc.media)
-	const producedSec = probe.timeline.reduce((sum: number, item: any) => sum + itemDuration(item), 0)
-	const expectedMinSec = BUILD_SHORTFALL_RATIO * stats.sourceDurationSec
-
-	return {
-		producedSec,
-		sourceSec: stats.sourceDurationSec,
-		expectedMinSec,
-		shortfall: producedSec < expectedMinSec
-	}
-}

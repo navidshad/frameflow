@@ -27,6 +27,17 @@ export function useGraphLayout(videoStore: any, graphStore: any) {
     const strandGroups: Array<{ id: string, messageIds: string[], parentId: string, isResult: boolean }> = []
     const processedMessageIds = new Set<string>()
 
+    /**
+     * A "result" gets its own node; everything else joins a conversation strand.
+     * Real files or a timeline mean the AI produced something. A manual-edit node
+     * has neither — it only points at a forked editor project — so it needs the
+     * explicit resultType check or it would render as a chat bubble.
+     */
+    const isResultMessage = (msg: any): boolean => {
+      const hasRealFiles = msg.files && msg.files.filter((f: any) => f.type !== 'original').length > 0
+      return !!(hasRealFiles || (msg.timeline && msg.timeline.length > 0) || msg.resultType === 'editor')
+    }
+
     // Recursive strand building
     const buildStrands = (pId: string) => {
       const children = childMap[pId] || []
@@ -35,11 +46,8 @@ export function useGraphLayout(videoStore: any, graphStore: any) {
         if (processedMessageIds.has(cId)) return
 
         const msg = messageLookup[cId]
-        // A "Result" is anything with real files, or timeline. (Pending text stays in conversation)
-        const hasRealFiles = msg.files && msg.files.filter((f: any) => f.type !== 'original').length > 0
-        const isResult = !!(hasRealFiles || (msg.timeline && msg.timeline.length > 0))
 
-        if (isResult) {
+        if (isResultMessage(msg)) {
           // Results are always their own node
           strandGroups.push({ id: cId, messageIds: [cId], parentId: pId, isResult: true })
           processedMessageIds.add(cId)
@@ -55,11 +63,7 @@ export function useGraphLayout(videoStore: any, graphStore: any) {
             if (nextChildren.length !== 1) break
 
             const nextId = nextChildren[0]
-            const nextMsg = messageLookup[nextId]
-            const nextHasRealFiles = nextMsg.files && nextMsg.files.filter((f: any) => f.type !== 'original').length > 0
-            const nextIsResult = !!(nextHasRealFiles || (nextMsg.timeline && nextMsg.timeline.length > 0))
-
-            if (nextIsResult) break
+            if (isResultMessage(messageLookup[nextId])) break
 
             strand.push(nextId)
             processedMessageIds.add(nextId)
@@ -235,6 +239,9 @@ export function useGraphLayout(videoStore: any, graphStore: any) {
           // Normalize nodeType to specialized components
           if (type === 'video') nodeType = 'video'
           else if (type === 'thumbnail' || type === 'generate-thumbnail' || type === 'image' || type === 'result-image') nodeType = 'thumbnail'
+          // A manual edit: not an AI result at all, but a pointer at a forked
+          // timeline project. Must be checked before the summary fallback.
+          else if (type === 'editor') nodeType = 'editor-project'
           else if (type === 'summary' || type === 'cover') nodeType = 'summary'
           else nodeType = 'summary' // Default fallback
 
@@ -246,6 +253,8 @@ export function useGraphLayout(videoStore: any, graphStore: any) {
             timeline: msg.timeline,
             version: msg.version,
             cost: msg.cost,
+            editorThreadId: msg.editorThreadId,
+            editRefId: msg.editRefId,
             showDetails: videoStore.currentThread?.nodePositions?.[strand.id]?.showDetails || false,
             onDelete: async () => {
               const result = await (window as any).api.showConfirmation({

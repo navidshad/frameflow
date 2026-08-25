@@ -1,4 +1,6 @@
-import type { Clip, MediaAsset, TimelineDiff, TimelineItem, Track } from './types'
+import type {
+	Clip, EnrichedTimelineSegment, MediaAsset, TimelineDiff, TimelineItem, Track
+} from './types'
 
 /**
  * Pure timeline helpers shared by renderer (manual editing, undo/redo) and
@@ -72,6 +74,127 @@ export function clipToItem(clip: Clip, trackId: string, timelineStart: number): 
 		duration: clip.duration,
 		label: clip.visual?.slice(0, 40) || `Piece #${clip.index}`
 	}
+}
+
+// ===== Boundary: SRT strings <-> seconds =====
+//
+// The chat/graph flow speaks SRT timestamps (EnrichedTimelineSegment.start/end);
+// the editor speaks seconds. These three functions are the only crossing, and
+// they are what "Open in Editor" uses to seed a project from an AI cut.
+
+/** The sentinel enrichment.ts writes when no scene description covers a segment. */
+const NO_VISUAL = 'No visual description available.'
+
+/** Clips whose endpoints agree within this are considered the same range. */
+const RANGE_EPSILON = 0.05
+
+/**
+ * `HH:MM:SS,mmm` | `MM:SS.mmm` | `12.500` | `7` → seconds.
+ * The one parser — main-process copies were folded into this.
+ */
+export function srtToSeconds(t: string): number {
+	const clean = t.trim().replace(',', '.')
+	const [timePart, milliPart = '0'] = clean.split('.')
+	const parts = timePart.split(':').map(Number)
+	let seconds = 0
+	if (parts.length === 3) seconds = parts[0] * 3600 + parts[1] * 60 + parts[2]
+	else if (parts.length === 2) seconds = parts[0] * 60 + parts[1]
+	else seconds = parts[0] || 0
+	return seconds + parseFloat(`0.${milliPart}`)
+}
+
+/**
+ * The chat flow's enriched master timeline → the editor's clip tray.
+ *
+ * `makeId` is injected so this module keeps its no-dependency rule (main passes
+ * uuidv4). `masterSegmentIndex` is deliberately left undefined: runRetranscribe
+ * uses `every(c => c.masterSegmentIndex === undefined && c.text !== undefined)`
+ * as its "these pieces are mine to rebuild" marker, and setting it here would
+ * silently downgrade Re-transcribe to a text-only refresh.
+ */
+export function clipsFromSegments(
+	segments: readonly EnrichedTimelineSegment[],
+	assetId: string,
+	makeId: () => string,
+	opts?: { durationLimit?: number }
+): Clip[] {
+	const limit = opts?.durationLimit && opts.durationLimit > 0
+		? opts.durationLimit
+		: Number.POSITIVE_INFINITY
+
+	const clips: Clip[] = []
+	for (const seg of segments) {
+		const start = Math.max(0, srtToSeconds(seg.start))
+		const end = Math.min(srtToSeconds(seg.end), limit)
+		if (!(end > start)) continue // zero-length or past the end of the source
+
+		clips.push({
+			id: makeId(),
+			sourceAssetId: assetId,
+			index: clips.length + 1,
+			in: start,
+			out: end,
+			duration: end - start,
+			text: seg.text,
+			visual: seg.visual && seg.visual !== NO_VISUAL ? seg.visual : undefined,
+			selected: false
+		})
+	}
+	return clips
+}
+
+/**
+ * An AI cut → back-to-back TimelineItems on one track.
+ *
+ * Segments are matched to existing clips by TIME, never by `seg.index` — the
+ * generation phase falls back through several transcript files, so the index
+ * basis isn't guaranteed, whereas time always is. A match donates its clip id
+ * (so the tray highlights in step with the timeline); a miss still produces a
+ * valid item straight from the segment's own range.
+ */
+export function segmentsToItems(
+	segments: readonly EnrichedTimelineSegment[],
+	trackId: string,
+	opts?: { clips?: readonly Clip[]; assetId?: string; startAt?: number; epsilon?: number }
+): TimelineItem[] {
+	const clips = opts?.clips ?? []
+	const epsilon = opts?.epsilon ?? RANGE_EPSILON
+	let cursor = opts?.startAt ?? 0
+
+	const items: TimelineItem[] = []
+	for (const seg of segments) {
+		const start = Math.max(0, srtToSeconds(seg.start))
+		const end = srtToSeconds(seg.end)
+		if (!(end > start)) continue
+
+		const match = clips.find(
+			(c) => Math.abs(c.in - start) <= epsilon && Math.abs(c.out - end) <= epsilon
+		)
+
+		if (match) {
+			items.push(clipToItem(match, trackId, cursor))
+			cursor += match.duration
+			continue
+		}
+
+		const assetId = opts?.assetId ?? clips[0]?.sourceAssetId
+		if (!assetId) continue // nothing to point the item at
+
+		items.push({
+			id: uid(),
+			trackId,
+			sourceAssetId: assetId,
+			timelineStart: cursor,
+			in: start,
+			out: end,
+			speed: 1.0,
+			preservePitch: true,
+			duration: end - start,
+			label: (seg.visual && seg.visual !== NO_VISUAL ? seg.visual : seg.text)?.slice(0, 40)
+		})
+		cursor += end - start
+	}
+	return items
 }
 
 // Fields compared per-entity when diffing (id is the key, not a field).

@@ -52,6 +52,12 @@
 			<span class="iconify tabler--info-circle w-3 h-3 inline-block align-[-1px] mr-1"></span>
 			Long project — the AI saw a summarized view of out-of-scope material.
 		</p>
+		<!-- Always on: with no persona-set target, the runtime is the only way to
+		     see at a glance whether the model read your request the way you meant. -->
+		<p v-if="lengthNote" class="mt-2 text-[10px] text-zinc-400 leading-snug">
+			<span class="iconify tabler--clock w-3 h-3 inline-block align-[-1px] mr-1"></span>
+			{{ lengthNote }}
+		</p>
 		<div v-if="turn?.notes?.length" class="mt-2 px-2.5 py-1.5 rounded-lg bg-zinc-500/5 border border-zinc-500/10">
 			<p v-for="(note, i) in turn.notes" :key="i"
 				class="text-[10px] font-medium text-zinc-500 leading-snug">
@@ -63,7 +69,7 @@
 			class="mt-2 px-2.5 py-1.5 rounded-lg bg-secondary/10 border border-secondary/20 flex items-center justify-between gap-2">
 			<p class="text-[10px] font-medium text-secondary leading-snug">
 				<span class="iconify tabler--player-track-next w-3 h-3 inline-block align-[-1px] mr-1"></span>
-				Built {{ clock(turn.build.producedSec) }} of ~{{ clock(turn.build.sourceSec) }} of source.
+				{{ shortfallNote }}
 			</p>
 			<button
 				class="px-2 py-1 rounded-lg bg-secondary/10 text-secondary text-[9px] font-bold uppercase tracking-widest hover:bg-secondary/20 transition shrink-0 disabled:opacity-40"
@@ -119,6 +125,31 @@ const clock = (seconds: number): string => {
 	const total = Math.max(0, Math.round(seconds))
 	return `${Math.floor(total / 60)}:${String(total % 60).padStart(2, '0')}`
 }
+
+/** Neutral statement of what came out, shown on every turn that produced a cut. */
+const lengthNote = computed(() => {
+	const build = turn.value?.build
+	if (!build || !build.producedSec) return null
+	if (build.targetSec) {
+		return `This cut is ${clock(build.producedSec)}. You asked for about ${clock(build.targetSec)}.`
+	}
+	const pct = build.sourceSec > 0 ? Math.round((build.producedSec / build.sourceSec) * 100) : null
+	return pct === null
+		? `This cut is ${clock(build.producedSec)}.`
+		: `This cut is ${clock(build.producedSec)} — ${pct}% of your ${clock(build.sourceSec)} of source.`
+})
+
+/**
+ * Phrased as an offer rather than an error: without a stated target we fall back
+ * to a source-ratio heuristic, which a DELIBERATE short cut will also trip.
+ */
+const shortfallNote = computed(() => {
+	const build = turn.value?.build
+	if (!build) return ''
+	return build.targetSec
+		? `Came out ${clock(build.producedSec)}, shorter than the ${clock(build.targetSec)} it aimed for.`
+		: `Built ${clock(build.producedSec)} of ~${clock(build.sourceSec)} of source — shorter than this request implied.`
+})
 
 // A fresh turn, so it lands as its own revision and stays undoable in one step.
 // widen: 'full' is required — by now the timeline may be long enough that the

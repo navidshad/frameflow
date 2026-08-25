@@ -1,4 +1,5 @@
 import { TimelineSegment, EnrichedTimelineSegment, UsageRecord } from '../../shared/types'
+import { srtToSeconds } from '../../shared/timeline'
 import { TranscriptItem } from '../gemini/utils'
 import { GeminiAdapter } from '../gemini/adapter'
 
@@ -314,24 +315,7 @@ Task: Pick the next 3 segments to add to the timeline.
 }
 
 function calculateDuration(start: string, end: string): number {
-    const parseSeconds = (t: string) => {
-        const clean = t.trim().replace(',', '.')
-        const [timePart, milliPart = '0'] = clean.split('.')
-        const parts = timePart.split(':').map(Number)
-
-        let seconds = 0
-        if (parts.length === 3) {
-            seconds = parts[0] * 3600 + parts[1] * 60 + parts[2]
-        } else if (parts.length === 2) {
-            seconds = parts[0] * 60 + parts[1]
-        } else if (parts.length === 1) {
-            seconds = parts[0]
-        }
-
-        return seconds + parseFloat(`0.${milliPart}`)
-    }
-
-    return parseSeconds(end) - parseSeconds(start)
+    return srtToSeconds(end) - srtToSeconds(start)
 }
 
 function calculateTotalDuration(segments: TimelineSegment[]): number {

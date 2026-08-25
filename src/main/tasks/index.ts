@@ -8,6 +8,7 @@ import * as imageExtraction from '../pipeline/phases/image-extraction'
 import { enrichTranscriptWithScenes, SceneDescription } from '../timeline/enrichment'
 import { TranscriptItem } from '../gemini/utils'
 import * as ffmpegAdapter from '../ffmpeg'
+import { THREAD_DIRS } from '../constants/paths'
 import fs from 'fs'
 import path from 'path'
 
@@ -286,6 +287,16 @@ class BackgroundTaskManager extends EventEmitter {
 
 		const run = this.runTask.bind(this, threadId)
 
+		// An image project may carry a video as REFERENCE material. Sample a few
+		// frames from it first so extractImageData has them: that phase already
+		// merges preprocessing['reference-frames'], and supply.ts already pools
+		// them for auto-selection, so nothing downstream needs to change.
+		if (thread.videoPath && !thread.preprocessing['reference-frames']?.length) {
+			await run('referenceFrames', 'Sampling Reference Video', async (ctx) => {
+				await this.extractReferenceFrames(ctx)
+			})
+		}
+
 		// Task: Extract data from images
 		if (!thread.preprocessing.imageTextPath) {
 			await run('imageExtraction', 'Analyzing Images', async (ctx) => {
@@ -293,6 +304,41 @@ class BackgroundTaskManager extends EventEmitter {
 			})
 		} else {
 			await this.updateTask(threadId, 'imageExtraction', { name: 'Analyzing Images', state: 'completed' })
+		}
+	}
+
+	/**
+	 * Evenly spaced stills from a reference video, for image projects.
+	 *
+	 * Deliberately NOT startPreprocessing: that runs the whole transcript +
+	 * scenedetect chain, costs Gemini calls, and needs scenedetect installed —
+	 * none of which a reference video warrants.
+	 */
+	private async extractReferenceFrames(ctx: PipelineContext) {
+		const videoPath = ctx.videoPath
+		if (!videoPath || !fs.existsSync(videoPath)) return
+
+		const duration = await ffmpegAdapter.getVideoDuration(videoPath)
+		if (!duration || duration <= 0) return
+
+		const framesDir = path.join(ctx.tempDir, THREAD_DIRS.FRAMES)
+		if (!fs.existsSync(framesDir)) fs.mkdirSync(framesDir, { recursive: true })
+
+		const SAMPLE_COUNT = 8
+		const frames: string[] = []
+		for (let i = 0; i < SAMPLE_COUNT; i++) {
+			// Midpoints of equal slices — never 0s (often black) or the exact end.
+			const timestamp = (duration * (i + 0.5)) / SAMPLE_COUNT
+			await ctx.updateStatus(`Sampling reference frames… ${i + 1}/${SAMPLE_COUNT}`)
+			try {
+				frames.push(await ffmpegAdapter.extractFrame(videoPath, timestamp, framesDir))
+			} catch (e) {
+				console.error(`[referenceFrames] frame at ${timestamp}s failed:`, e)
+			}
+		}
+
+		if (frames.length) {
+			await ctx.savePreprocessing({ 'reference-frames': frames })
 		}
 	}
 }

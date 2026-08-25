@@ -30,6 +30,12 @@
             <svg class="w-4 h-4 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 8V4m0 0h4M4 4l5 5m11-1V4m0 0h-4m4 0l-5 5M4 16v4m0 0h4m-4 0l5-5m11 5l-5-5m5 5v-4m0 4h-4"></path></svg>
           </button>
         </SlimTooltip>
+        <SlimTooltip key="open-editor" text="Open the full source in the timeline editor" placement="left">
+          <button @click="openInEditor('root-media')" :disabled="editorBusy"
+            class="p-1.5 bg-black/50 backdrop-blur-md rounded-lg hover:bg-black/80 text-white transition-all shadow-lg disabled:opacity-40">
+            <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="6" cy="6" r="3"/><circle cx="6" cy="18" r="3"/><line x1="20" y1="4" x2="8.12" y2="15.88"/><line x1="14.47" y1="14.48" x2="20" y2="20"/><line x1="8.12" y1="8.12" x2="12" y2="12"/></svg>
+          </button>
+        </SlimTooltip>
         <SlimTooltip key="metadata" text="Toggle Metadata" placement="left">
           <button 
             @click="toggleDetails" 
@@ -43,7 +49,15 @@
 
       <div class="absolute bottom-0 left-0 right-0 p-3 bg-gradient-to-t from-black/80 to-transparent">
         <div class="text-xs font-bold text-white truncate">{{ data.filename || 'Original Video' }}</div>
-        <div class="text-[9px] text-zinc-400 uppercase tracking-widest font-black mt-0.5">Source Media</div>
+        <div class="flex items-center gap-2 mt-0.5">
+          <span class="text-[9px] text-zinc-400 uppercase tracking-widest font-black">Source Media</span>
+          <!-- A video-purpose thread can also carry reference images; without
+               this chip they are invisible on the canvas. -->
+          <span v-if="referenceImageCount"
+            class="text-[9px] font-black uppercase tracking-widest text-white/80 bg-white/15 rounded px-1.5 py-0.5">
+            +{{ referenceImageCount }} ref {{ referenceImageCount === 1 ? 'image' : 'images' }}
+          </span>
+        </div>
       </div>
     </div>
 
@@ -121,10 +135,16 @@ import { Handle, Position } from '@vue-flow/core'
 import SlimTooltip from '../SlimTooltip.vue'
 import { useVideoStore } from '../../stores/videoStore'
 import BaseMessageInput from '../chat/BaseMessageInput.vue'
+import { useOpenInEditor } from '../../composables/useOpenInEditor'
 
 const props = defineProps<{ data: any }>()
 const emit = defineEmits(['toggle-details'])
 const videoStore = useVideoStore()
+const { openInEditor, busy: editorBusy } = useOpenInEditor()
+
+const referenceImageCount = computed(
+  () => videoStore.currentThread?.preprocessing?.sourceImages?.length || 0
+)
 const input = ref('')
 const isFullScreen = ref(false)
 const isPlaying = ref(false)

@@ -30,6 +30,7 @@ import * as editorHistory from './editor/history'
 import * as editorPrompt from './editor/prompt'
 import * as editorRender from './editor/render'
 import * as editorRevisions from './editor/revisions'
+import { promoteToEditor } from './editor/promote'
 import { BUILTIN_PERSONAS } from './constants/personas'
 import { v4 as uuidv4 } from 'uuid'
 import { THREAD_DIRS } from './constants/paths'
@@ -365,8 +366,8 @@ app.whenReady().then(() => {
 	})
 
 	// Thread Management
-	ipcMain.handle('create-thread', async (_event, { videoPath, videoName, imagePaths }) => {
-		const newThread = await threadManager.createThread(videoPath, videoName, imagePaths)
+	ipcMain.handle('create-thread', async (_event, { videoPath, videoName, imagePaths, type }) => {
+		const newThread = await threadManager.createThread(videoPath, videoName, imagePaths, type)
 		if (newThread.type === 'image') {
 			backgroundTaskManager.startImageProcessing(newThread.id)
 		} else {
@@ -466,7 +467,22 @@ app.whenReady().then(() => {
 	ipcMain.handle('add-media-asset', async (_event, { threadId, filePath, name }: {
 		threadId: string, filePath: string, name?: string
 	}) => {
-		const asset = await editorAssets.createMediaAsset(threadId, { sourcePath: filePath, name, referenceInPlace: true })
+		// Reference the user's own file where it lives (copying a 10-15 GB source
+		// would block the main process), but MOVE a file the app itself just
+		// downloaded — left in place it dangles in a scratch folder outside the
+		// project, where removeAsset never cleans it and path-repair cannot find it.
+		//
+		// Match the download scratch dirs SPECIFICALLY. getTempDir() is the artifact
+		// ROOT and contains every project, so testing against it alone would move
+		// files out of other projects — including a chat thread's own source video.
+		const downloadRoot = join(settingsManager.getTempDir(), 'download-')
+		const isFreshDownload = filePath.startsWith(downloadRoot)
+		const asset = await editorAssets.createMediaAsset(threadId, {
+			sourcePath: filePath,
+			name,
+			referenceInPlace: !isFreshDownload,
+			move: isFreshDownload
+		})
 		if (asset && asset.preprocessState !== 'error') {
 			// Fire-and-forget: progress streams via background-task-update
 			editorPreprocess.preprocessMediaAsset(threadId, asset.id).catch((error) => {
@@ -512,6 +528,15 @@ app.whenReady().then(() => {
 			} catch { /* best effort */ }
 			throw error
 		}
+	})
+
+	// "Open in Editor": fork a graph node into a timeline project, reusing the
+	// chat thread's already-computed artifacts. Throws a user-facing message on
+	// a guard failure (missing source, empty timeline) — same as import-media-url.
+	ipcMain.handle('promote-to-editor', async (_event, { threadId, nodeId }: {
+		threadId: string, nodeId: string
+	}) => {
+		return await promoteToEditor({ threadId, nodeId })
 	})
 
 	ipcMain.handle('remove-media-asset', async (_event, { threadId, assetId }: {

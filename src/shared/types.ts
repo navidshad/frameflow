@@ -60,6 +60,16 @@ export interface UsageRecord {
 	messageId?: string;
 }
 
+/**
+ * What kind of result a message node renders as.
+ * `'editor'` is never produced by the pipeline — it marks a "manual edit" node
+ * pointing at a forked timeline-editor project (see Message.editorThreadId).
+ */
+export type MessageResultType = 'video' | 'thumbnail' | 'summary' | 'image' | 'editor'
+
+/** What a pipeline phase may produce — 'editor' nodes are written locally, never by a phase. */
+export type PipelineResultType = Exclude<MessageResultType, 'editor'>
+
 export interface Message {
 	id: string;
 	role: MessageRole;
@@ -73,7 +83,9 @@ export interface Message {
 	cost?: number;
 	version?: number;
 	editRefId?: string;
-	resultType?: 'video' | 'thumbnail' | 'summary' | 'image';
+	resultType?: MessageResultType;
+	/** Set on a "manual edit" node: the editor Thread this node opens. */
+	editorThreadId?: string;
 	createdAt: number;
 }
 
@@ -169,6 +181,14 @@ export interface Thread {
 	missing?: boolean
 	/** Present only when type === 'editor' — the timeline editor document. */
 	editor?: EditorDocument
+	/**
+	 * Editor projects only: the chat thread this project was forked from via
+	 * "Open in Editor". Drives the breadcrumb back to the source graph.
+	 * Absent on projects started from a blank timeline.
+	 */
+	sourceThreadId?: string
+	/** Which graph node it was forked from: 'root-media' or a Message.id. */
+	sourceNodeId?: string
 	createdAt: number
 	updatedAt: number
 }
@@ -325,8 +345,14 @@ export interface EditorPersona {
 	systemPrompt: string        // the whole backing for v1
 	builtin: boolean            // seeded personas can't be deleted, only cloned
 	tone?: string
-	mode?: 'longform' | 'summarize'
-	defaults?: { targetDurationSec?: number | null; aspectRatio?: string; pacing?: 'tight' | 'balanced' | 'relaxed' }
+	/**
+	 * Style only. `mode` and `targetDurationSec` used to live here and forced the
+	 * output runtime; both are gone — length now comes from the user's request
+	 * (see outputLengthLines in editor/ops.ts). `aspectRatio` went with them: no
+	 * op could act on it and render.ts derives resolution from source metadata,
+	 * so it only ever told the model something untrue.
+	 */
+	defaults?: { pacing?: 'tight' | 'balanced' | 'relaxed' }
 	featureSets?: FeatureSetRef[]  // deferred; always [] in v1
 }
 
@@ -421,14 +447,22 @@ export interface PromptTurn {
 	error?: string
 	diff?: TimelineDiff
 	rationale?: string
+	/** The runtime the model said it was aiming for — measureBuild judges against it. */
+	targetLengthSec?: number
 	answer?: string             // set when the request was a question, not an edit
 	droppedOps?: string[]       // ops pruned during validation (surfaced on the card)
 	notes?: string[]            // non-failures worth telling the user (clamped ranges, …)
-	build?: {                   // set only for a longform build-from-scratch turn
+	/**
+	 * How long the result actually came out. Computed for EVERY turn with a diff,
+	 * not just build-from-scratch ones: with no persona-set target the only way to
+	 * tell a deliberate 30-second cut from an accidental one is what the model
+	 * said it was aiming for.
+	 */
+	build?: {
 		producedSec: number
 		sourceSec: number
-		expectedMinSec: number
-		shortfall: boolean
+		targetSec?: number      // the model's own stated target, when it gave one
+		shortfall: boolean      // "this looks unintentional" — drives the action button
 	}
 	scopeLabel?: string         // e.g. "Chapter 3 · 12 items"
 	revisionId?: string         // revision created from this turn's applied diff
@@ -447,6 +481,8 @@ export interface PromptTurn {
 export interface EditorOps {
 	answer?: string
 	rationale?: string
+	/** The runtime the model inferred from the request — what measureBuild judges it against. */
+	targetLengthSec?: number
 	removeItemIds?: string[]
 	updateItems?: Array<{
 		id: string

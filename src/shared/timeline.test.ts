@@ -1,16 +1,21 @@
 import { describe, expect, it } from 'vitest'
-import type { MediaAsset, TimelineDiff, TimelineItem, Track } from './types'
+import type {
+	Clip, EnrichedTimelineSegment, MediaAsset, TimelineDiff, TimelineItem, Track
+} from './types'
 import {
 	MIN_ITEM_DURATION,
 	TIMELINE_DIFF_SCHEMA_VERSION,
 	applyTimelineDiff,
+	clipsFromSegments,
 	closeTimelineGaps,
 	diffTimelines,
 	findOverlaps,
 	pruneOrphanItems,
 	rippleAfterRemoval,
 	rippleTimeline,
-	solveTrim
+	segmentsToItems,
+	solveTrim,
+	srtToSeconds
 } from './timeline'
 
 const track = (id: string): Track => ({
@@ -479,5 +484,183 @@ describe('findOverlaps', () => {
 	it('does not compare across tracks', () => {
 		const timeline = [...items([[0, 10]], 'v1'), ...items([[5, 10]], 'a1')]
 		expect(findOverlaps({ tracks: [track('v1'), track('a1')], timeline })).toEqual([])
+	})
+})
+
+// ===== Boundary: SRT strings <-> seconds =====
+
+/** An EnrichedTimelineSegment from SRT endpoints. */
+const seg = (
+	index: number, start: string, end: string,
+	extra?: Partial<EnrichedTimelineSegment>
+): EnrichedTimelineSegment => ({
+	index, start, end, text: `line ${index}`, duration: 0, visual: `visual ${index}`, ...extra
+})
+
+const clip = (id: string, inSec: number, outSec: number, assetId = 'a'): Clip => ({
+	id, sourceAssetId: assetId, index: 1, in: inSec, out: outSec,
+	duration: outSec - inSec, selected: false
+})
+
+describe('srtToSeconds', () => {
+	it('parses SRT comma-milliseconds', () => {
+		expect(srtToSeconds('00:01:02,500')).toBeCloseTo(62.5, 6)
+	})
+
+	it('parses MM:SS.mmm without an hours field', () => {
+		expect(srtToSeconds('01:02.250')).toBeCloseTo(62.25, 6)
+	})
+
+	it('parses plain decimal seconds — the toFixed(3) form the editor export emits', () => {
+		expect(srtToSeconds('12.500')).toBeCloseTo(12.5, 6)
+	})
+
+	it('parses bare integer seconds', () => {
+		expect(srtToSeconds('7')).toBe(7)
+	})
+
+	it('parses a whole-hour timestamp', () => {
+		expect(srtToSeconds('1:00:00')).toBe(3600)
+	})
+
+	it('tolerates surrounding whitespace', () => {
+		expect(srtToSeconds(' 00:00:00,000 ')).toBe(0)
+	})
+})
+
+describe('clipsFromSegments', () => {
+	let n = 0
+	const makeId = () => `c${n++}`
+	const reset = () => { n = 0 }
+
+	it('numbers clips 1..N positionally and converts endpoints to seconds', () => {
+		reset()
+		const clips = clipsFromSegments(
+			[seg(1, '00:00:00,000', '00:00:10,000'), seg(2, '00:00:10,000', '00:00:25,500')],
+			'asset-1', makeId
+		)
+		expect(clips.map((c) => c.index)).toEqual([1, 2])
+		expect(clips[1].in).toBeCloseTo(10, 6)
+		expect(clips[1].out).toBeCloseTo(25.5, 6)
+		expect(clips[1].duration).toBeCloseTo(15.5, 6)
+		expect(clips.every((c) => c.sourceAssetId === 'asset-1')).toBe(true)
+		expect(clips.every((c) => c.selected === false)).toBe(true)
+	})
+
+	// runRetranscribeStep uses `every(c => c.masterSegmentIndex === undefined && c.text)`
+	// as its "these pieces are mine to rebuild" marker. Setting it here would
+	// silently downgrade Re-transcribe to a text-only refresh.
+	it('leaves masterSegmentIndex undefined on every clip', () => {
+		reset()
+		const clips = clipsFromSegments(
+			[seg(1, '0', '5'), seg(2, '5', '9')], 'asset-1', makeId
+		)
+		expect(clips.length).toBe(2)
+		expect(clips.every((c) => c.masterSegmentIndex === undefined)).toBe(true)
+	})
+
+	it('clamps out to durationLimit and drops segments that start past it', () => {
+		reset()
+		const clips = clipsFromSegments(
+			[seg(1, '0', '10'), seg(2, '10', '30'), seg(3, '40', '50')],
+			'asset-1', makeId, { durationLimit: 20 }
+		)
+		expect(clips.length).toBe(2)
+		expect(clips[1].out).toBe(20)
+	})
+
+	it('drops zero-length and inverted segments', () => {
+		reset()
+		const clips = clipsFromSegments(
+			[seg(1, '5', '5'), seg(2, '9', '4'), seg(3, '0', '3')], 'asset-1', makeId
+		)
+		expect(clips.length).toBe(1)
+		expect(clips[0].in).toBe(0)
+	})
+
+	it('drops the "no visual description" sentinel rather than storing it', () => {
+		reset()
+		const clips = clipsFromSegments(
+			[seg(1, '0', '5', { visual: 'No visual description available.' }),
+			 seg(2, '5', '9', { visual: 'a person at a whiteboard' })],
+			'asset-1', makeId
+		)
+		expect(clips[0].visual).toBeUndefined()
+		expect(clips[1].visual).toBe('a person at a whiteboard')
+	})
+
+	it('carries the transcript text through', () => {
+		reset()
+		const clips = clipsFromSegments([seg(1, '0', '5', { text: 'hello there' })], 'a', makeId)
+		expect(clips[0].text).toBe('hello there')
+	})
+})
+
+describe('segmentsToItems', () => {
+	it('lays items back-to-back from zero with no gaps and no overlaps', () => {
+		const items = segmentsToItems(
+			[seg(1, '10', '20'), seg(2, '55', '60'), seg(3, '90', '99')],
+			'v1', { assetId: 'a' }
+		)
+		expect(items.map((i) => i.timelineStart)).toEqual([0, 10, 15])
+		expect(items.map((i) => i.duration)).toEqual([10, 5, 9])
+		expect(findOverlaps({ tracks: [track('v1')], timeline: items })).toEqual([])
+	})
+
+	it('preserves source in/out while re-basing timelineStart', () => {
+		const items = segmentsToItems([seg(1, '55', '60')], 'v1', { assetId: 'a' })
+		expect(items[0].in).toBe(55)
+		expect(items[0].out).toBe(60)
+		expect(items[0].timelineStart).toBe(0)
+	})
+
+	it('donates sourceClipId when a clip matches the range', () => {
+		const clips = [clip('clip-x', 10, 20), clip('clip-y', 55, 60)]
+		const items = segmentsToItems([seg(1, '55', '60')], 'v1', { clips })
+		expect(items[0].sourceClipId).toBe('clip-y')
+		expect(items[0].sourceAssetId).toBe('a')
+	})
+
+	it('matches within epsilon, not exactly', () => {
+		const clips = [clip('clip-x', 55.03, 60.02)]
+		const items = segmentsToItems([seg(1, '55', '60')], 'v1', { clips })
+		expect(items[0].sourceClipId).toBe('clip-x')
+	})
+
+	it('still yields a valid item when no clip matches', () => {
+		const clips = [clip('clip-x', 0, 5)]
+		const items = segmentsToItems([seg(1, '55', '60')], 'v1', { clips })
+		expect(items.length).toBe(1)
+		expect(items[0].sourceClipId).toBeUndefined()
+		expect(items[0].in).toBe(55)
+		expect(items[0].out).toBe(60)
+		expect(items[0].speed).toBe(1)
+		expect(items[0].preservePitch).toBe(true)
+	})
+
+	it('honours startAt', () => {
+		const items = segmentsToItems([seg(1, '0', '5'), seg(2, '10', '13')], 'v1', {
+			assetId: 'a', startAt: 100
+		})
+		expect(items.map((i) => i.timelineStart)).toEqual([100, 105])
+	})
+
+	it('skips segments with no asset to point at', () => {
+		expect(segmentsToItems([seg(1, '0', '5')], 'v1')).toEqual([])
+	})
+
+	// The seeded timeline must clear the SAME validation the AI diff path must.
+	it('produces items applyTimelineDiff accepts', () => {
+		const items = segmentsToItems(
+			[seg(1, '10', '20'), seg(2, '55', '60')], 'v1', { assetId: 'a' }
+		)
+		const target = { tracks: [track('v1')], timeline: [] as TimelineItem[] }
+		const diff: TimelineDiff = {
+			schemaVersion: TIMELINE_DIFF_SCHEMA_VERSION,
+			addItems: items
+		}
+		const result = applyTimelineDiff(target, diff, [asset('a', 120)])
+		expect(result).toEqual({ ok: true, errors: [] })
+		expect(target.timeline.length).toBe(2)
 	})
 })

@@ -79,9 +79,8 @@ const editing = ref<EditorPersona | null>(null)
 const rootRef = ref<HTMLElement | null>(null)
 
 const groups = computed(() => [
-	{ key: 'longform', label: 'Long-form', items: store.personasByMode.longform },
-	{ key: 'summarize', label: 'Summarize', items: store.personasByMode.summarize },
-	{ key: 'custom', label: 'Custom', items: store.personasByMode.custom }
+	{ key: 'builtin', label: 'Built-in', items: store.personaGroups.builtin },
+	{ key: 'custom', label: 'Custom', items: store.personaGroups.custom }
 ])
 
 const pick = (id: string) => {

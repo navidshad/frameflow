@@ -1,4 +1,5 @@
 import { contextBridge, ipcRenderer } from 'electron'
+import type { ThreadType } from '@shared/types'
 
 const api = {
 	selectVideo: () => ipcRenderer.invoke('select-video'),
@@ -60,6 +61,9 @@ const api = {
 		ipcRenderer.invoke('import-media-url', data),
 	removeMediaAsset: (data: { threadId: string, assetId: string }) =>
 		ipcRenderer.invoke('remove-media-asset', data),
+	/** Fork a graph node ('root-media' or a Message.id) into a timeline project. */
+	promoteToEditor: (data: { threadId: string, nodeId: string }) =>
+		ipcRenderer.invoke('promote-to-editor', data),
 	preprocessMedia: (data: { threadId: string, assetId: string, steps?: string[], threshold?: number }) =>
 		ipcRenderer.invoke('preprocess-media', data),
 	findSilence: (data: { threadId: string, assetId: string, noiseDb?: number, minDurationSec?: number }) =>
@@ -116,7 +120,7 @@ const api = {
 	deleteEditorRevisions: (data: { threadId: string, ids: string[] }) =>
 		ipcRenderer.invoke('delete-editor-revisions', data),
 	// Thread Management
-	createThread: (data: { videoPath?: string, videoName: string, imagePaths?: string[] }) =>
+	createThread: (data: { videoPath?: string, videoName: string, imagePaths?: string[], type?: ThreadType }) =>
 		ipcRenderer.invoke('create-thread', data),
 	getAllThreads: () => ipcRenderer.invoke('get-all-threads'),
 	getThread: (id: string) => ipcRenderer.invoke('get-thread', id),

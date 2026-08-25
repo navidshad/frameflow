@@ -1,7 +1,9 @@
 import { v4 as uuidv4 } from 'uuid'
-import type { Clip, EditorDocument, EditorOps, EditorPersona, TimelineDiff, TimelineItem } from '@shared/types'
+import type {
+	Clip, EditorDocument, EditorOps, EditorPersona, PromptTurn, TimelineDiff, TimelineItem
+} from '@shared/types'
 import {
-	clampSpeed, closeTimelineGaps, computeContentEnd, itemDuration, itemEnd,
+	applyTimelineDiff, clampSpeed, closeTimelineGaps, computeContentEnd, itemDuration, itemEnd,
 	rippleTimeline, TIMELINE_DIFF_SCHEMA_VERSION, type RippleChange
 } from '@shared/timeline'
 
@@ -24,6 +26,10 @@ export const EDITOR_OPS_SCHEMA = {
 		rationale: {
 			type: 'string',
 			description: 'Plain-language explanation of the proposed edit, citing what is in the pieces'
+		},
+		targetLengthSec: {
+			type: 'number',
+			description: 'The output runtime you inferred from the request, in seconds, BEFORE building the edit'
 		},
 		removeItemIds: { type: 'array', items: { type: 'string' } },
 		closeGaps: {
@@ -119,7 +125,6 @@ export interface PromptStats {
 	timelineDurationSec: number
 	sourceDurationSec: number   // 0 when unknown
 	sourceClipCount: number
-	mode: 'longform' | 'summarize'
 }
 
 const clock = (seconds: number): string => {
@@ -127,48 +132,77 @@ const clock = (seconds: number): string => {
 	return `${Math.floor(total / 60)}:${String(total % 60).padStart(2, '0')}`
 }
 
-function durationLines(stats: PromptStats, persona: EditorPersona): string[] {
-	const target = persona.defaults?.targetDurationSec
+/**
+ * Tell the model to work out the intended runtime from the REQUEST.
+ *
+ * This replaces a persona-driven `targetDurationSec`. The old summarize branch
+ * hard-set a number, and the old longform branch hard-forbade shortening ("if
+ * your cut comes to less than 70% you have cut too much"). Both fought the user
+ * whenever the request disagreed with the persona.
+ *
+ * What survives from that guardrail is the reason it existed: models over-cut by
+ * default. So the instruction still demands a self-check — but against the
+ * length the model itself inferred, not against a constant. It reports that
+ * number in `targetLengthSec` so the UI can hold it to its word.
+ *
+ * The empty-timeline vs existing-cut split stays: that was always keyed on
+ * timeline state, never on persona mode.
+ */
+function outputLengthLines(stats: PromptStats): string[] {
 	const haveSource = stats.sourceDurationSec > 0
 
-	// Summarize: keep the original line byte-identical, add source context only.
-	if (target != null) {
-		const lines = [`Target output duration: about ${target} seconds. Cut toward this target.`]
-		if (haveSource) {
-			lines.push(`Source available: ${clock(stats.sourceDurationSec)} across ${stats.sourceClipCount} pieces — select from it; you are not expected to cover all of it.`)
-		}
-		return lines
-	}
+	const preamble = [
+		'=== OUTPUT LENGTH ===',
+		'Nothing here presets a runtime. Work out the intended length from the request:',
+		'- It names a length, or a format with a conventional length ("cut this to 2 minutes",',
+		'  "a 30-second teaser", "a short for socials") — hit it.',
+		'- It is about CLEANING, TIGHTENING, FIXING, ORGANIZING or CHAPTERING ("remove the',
+		'  filler", "clean up the dead air", "add chapters") — that is NOT a request to',
+		'  shorten. Keep the runtime, minus only what was asked for.',
+		'- It says nothing about length — use the default below.',
+		'Report the runtime you settled on in `targetLengthSec`, and open your `rationale`',
+		'with it in minutes and seconds, e.g. "Targeting about 12:00 — a cleanup, not a summary."',
+		'Before finishing, add up the runtime you are actually producing and compare it with',
+		'that target. If it is more than ~25% short, you have dropped material you meant to',
+		'keep: go back and include it. Coming in far under the intended length is by far the',
+		'most common failure — when in doubt, include more.',
+		'The persona above describes a STYLE. Where the request implies a different length',
+		'than the persona\'s usual habit, the request wins.'
+	]
 
-	// Longform, empty timeline: there is no runtime to "preserve" — it must be BUILT.
+	// Empty timeline: there is no runtime to preserve — it has to be BUILT.
 	if (stats.timelineItemCount === 0) {
 		if (!haveSource) {
 			return [
-				'No length target. The timeline is EMPTY, so BUILD a full-length cut that covers the',
-				'available source material end to end in chronological order, removing only dead air,',
-				'silence, false starts and duplicated takes. Do not produce a highlights selection.'
+				...preamble,
+				'',
+				'The timeline is EMPTY, so you are building this cut from scratch. Default when the',
+				'request does not ask for something shorter: cover the available source end to end in',
+				'chronological order, removing only dead air, silence, false starts and duplicated takes.'
 			]
 		}
 		return [
-			`No length target. The timeline is EMPTY, so your job is to BUILD THE FULL-LENGTH cut from`,
-			`the source: about ${clock(stats.sourceDurationSec)} of footage across ${stats.sourceClipCount} detected pieces.`,
-			'- Cover the source end to end in chronological order. The result should be roughly as long',
-			'  as the source, minus only what you deliberately remove.',
-			'- Removing dead air, silence, false starts and duplicated takes should take out a MINORITY',
-			`  of the runtime — typically 5-20%. If your cut comes to less than 70% of ${clock(stats.sourceDurationSec)}, you have`,
-			'  cut too much: go back and include the material you skipped.',
-			'- Build it with `addSceneRanges` over whole spans of piece numbers, using `excludeScenes`',
-			'  for the pieces you are dropping. Do NOT list kept pieces one by one — you will run out of',
-			'  response length long before the end of the footage.'
+			...preamble,
+			'',
+			`The timeline is EMPTY, so you are building this cut from scratch out of about`,
+			`${clock(stats.sourceDurationSec)} of footage across ${stats.sourceClipCount} detected pieces.`,
+			'Default when the request does not ask for something shorter: cover the source end to end',
+			'in chronological order, removing only dead air, silence, false starts and duplicated',
+			'takes — typically 5-20% of the runtime.',
+			'For ANY output longer than a couple of minutes, build it with `addSceneRanges` over whole',
+			'spans of piece numbers, using `excludeScenes` for the pieces you drop. Do NOT list kept',
+			'pieces one by one — you will run out of response length long before the end of the footage.'
 		]
 	}
 
-	// Longform, existing cut: preserve what is there.
+	// Existing cut: default is to keep its runtime.
 	const lines = [
-		`No length target — PRESERVE the full runtime of the current cut (${stats.timelineItemCount} items, ${clock(stats.timelineDurationSec)}).`,
-		'Make editorial improvements (remove dead air, tighten with retime, reorder, chapter) without',
-		'shrinking the substantive content. Edit the items that are already there; do not rebuild the',
-		'timeline from scratch.'
+		...preamble,
+		'',
+		`The current cut is ${stats.timelineItemCount} items, ${clock(stats.timelineDurationSec)}. Default when the request does not`,
+		'ask for a different length: PRESERVE that runtime. Make editorial improvements (remove dead',
+		'air, tighten with retime, reorder, chapter) without shrinking the substantive content. Edit',
+		'the items that are already there; do not rebuild the timeline from scratch.'
 	]
 	if (haveSource && stats.timelineDurationSec < 0.7 * stats.sourceDurationSec) {
 		lines.push(
@@ -233,8 +267,7 @@ export function composeSystemInstruction(persona: EditorPersona, stats: PromptSt
 		'',
 		'=== ACTIVE PERSONA DEFAULTS ===',
 		`Tone: ${persona.tone || 'neutral'}. Pacing: ${defaults.pacing || 'balanced'}.`,
-		...durationLines(stats, persona),
-		defaults.aspectRatio ? `Target aspect ratio: ${defaults.aspectRatio}.` : ''
+		...outputLengthLines(stats)
 	].filter(Boolean).join('\n')
 }
 
@@ -755,4 +788,53 @@ export function opsToDiff(ops: EditorOps, doc: EditorDocument): OpsToDiffResult 
 	}
 
 	return { diff, addMarkers, droppedOps, notes }
+}
+
+
+// ===== Post-hoc length check =====
+
+/** Below this fraction of the SOURCE, a build-from-scratch turn looks unintentional. */
+const BUILD_SHORTFALL_RATIO = 0.7
+/** Short sources are legitimately cut hard; only flag long ones on the source heuristic. */
+const BUILD_MIN_SOURCE_SEC = 600
+/** Below this fraction of the model's OWN stated target, it missed what it aimed for. */
+const TARGET_SHORTFALL_RATIO = 0.75
+
+/**
+ * How long the result actually came out, so a 5-minute "best of" from 92 minutes
+ * of source is visible instead of silent.
+ *
+ * Runs for every turn with a diff — the old version only fired for longform
+ * build-from-scratch turns, which is meaningless now that there is no mode.
+ * When the model stated a `targetSec` we judge it against that, which is the
+ * only way to tell a deliberate short cut from an accidental one. Without a
+ * target we fall back to the old source-ratio heuristic.
+ *
+ * Sums item durations rather than using computeContentEnd: a stray atSec would
+ * otherwise make a short cut look hours long.
+ */
+export function measureBuild(
+	diff: PromptTurn['diff'],
+	doc: EditorDocument,
+	stats: PromptStats,
+	targetSec?: number
+): PromptTurn['build'] {
+	if (!diff || stats.sourceDurationSec <= 0) return undefined
+
+	const probe = {
+		tracks: JSON.parse(JSON.stringify(doc.tracks)),
+		timeline: JSON.parse(JSON.stringify(doc.timeline))
+	}
+	// Errors are ignored on purpose: this is a length estimate, and the renderer
+	// runs the authoritative validation against its own live doc.
+	applyTimelineDiff(probe, diff, doc.media)
+	const producedSec = probe.timeline.reduce((sum: number, item: any) => sum + itemDuration(item), 0)
+
+	const shortfall = targetSec != null && targetSec > 0
+		? producedSec < TARGET_SHORTFALL_RATIO * targetSec
+		: stats.timelineItemCount === 0
+			&& stats.sourceDurationSec >= BUILD_MIN_SOURCE_SEC
+			&& producedSec < BUILD_SHORTFALL_RATIO * stats.sourceDurationSec
+
+	return { producedSec, sourceSec: stats.sourceDurationSec, targetSec, shortfall }
 }
