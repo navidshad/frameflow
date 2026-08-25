@@ -473,8 +473,13 @@ export interface PromptTurn {
 export interface EditorOps {
 	answer?: string
 	rationale?: string
-	/** The runtime the model inferred from the request — what measureBuild judges it against. */
-	targetLengthSec?: number
+	/**
+	 * The runtime the model inferred from the request, as "MM:SS" or plain
+	 * seconds — a STRING because a bare number field digit-looped under
+	 * constrained decoding (see ops.ts). parseTargetLength turns it into the
+	 * seconds that measureBuild judges against.
+	 */
+	targetLength?: string
 	removeItemIds?: string[]
 	updateItems?: Array<{
 		id: string
@@ -530,6 +535,18 @@ export interface EditorOps {
 		atSec?: number
 		atScene?: { assetId: string; sceneIndex: number }
 		label: string
+	}>
+	/**
+	 * Survey-band pass 1 only: spans the model wants shown one row per piece
+	 * before it commits to an edit. Never reaches opsToDiff — the turn runner
+	 * routes it into a second buildPromptContext + model call instead (the
+	 * pass-2 schema omits it, so a turn is at most two calls).
+	 */
+	expandRegions?: Array<{
+		assetId: string
+		fromPiece: number
+		toPiece: number
+		reason?: string
 	}>
 }
 
