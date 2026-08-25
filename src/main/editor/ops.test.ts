@@ -598,6 +598,17 @@ describe('measureBuild', () => {
 		expect(measureBuild(undefined, doc, stats())).toBeUndefined()
 		expect(measureBuild(diff, doc, stats({ sourceDurationSec: 0 }))).toBeUndefined()
 	})
+
+	// opsToDiff always returns a diff OBJECT, so an answer-only turn used to be
+	// measured as producedSec 0 + shortfall true — an empty warning banner on a
+	// turn that proposed nothing.
+	it('returns undefined for a diff that carries no operations (answer-only turn)', () => {
+		expect(measureBuild({ schemaVersion: TIMELINE_DIFF_SCHEMA_VERSION }, doc, stats())).toBeUndefined()
+		expect(measureBuild(
+			{ schemaVersion: TIMELINE_DIFF_SCHEMA_VERSION, addItems: [], updateItems: [], removeItemIds: [] },
+			doc, stats()
+		)).toBeUndefined()
+	})
 })
 
 describe('editorOpsSchema', () => {

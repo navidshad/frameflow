@@ -1075,6 +1075,13 @@ export function measureBuild(
 	targetSec?: number
 ): PromptTurn['build'] {
 	if (!diff || stats.sourceDurationSec <= 0) return undefined
+	// opsToDiff always returns a diff OBJECT ({schemaVersion}), so truthiness is
+	// not the test: an answer-only turn carries no operations, and measuring it
+	// would report producedSec 0 + shortfall true — an empty warning banner on a
+	// turn that proposed nothing.
+	if (!diff.addItems?.length && !diff.updateItems?.length && !diff.removeItemIds?.length) {
+		return undefined
+	}
 
 	const probe = {
 		tracks: JSON.parse(JSON.stringify(doc.tracks)),
