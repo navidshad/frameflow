@@ -70,7 +70,7 @@ const api = {
 		ipcRenderer.invoke('merge-clips', data),
 	splitClip: (data: { threadId: string, assetId: string, clipId: string, atSec?: number }) =>
 		ipcRenderer.invoke('split-clip', data),
-	onEditorImportProgress: (callback: (data: { threadId: string, assetId: string, url?: string, percent: number }) => void) => {
+	onEditorImportProgress: (callback: (data: { threadId: string, assetId: string, url?: string, percent: number, phase?: 'updating-ytdlp' | 'retrying' }) => void) => {
 		const listener = (_event: any, data: any) => callback(data)
 		ipcRenderer.on('editor-import-progress', listener)
 		return () => ipcRenderer.removeListener('editor-import-progress', listener)

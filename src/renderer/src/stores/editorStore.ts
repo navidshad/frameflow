@@ -36,7 +36,12 @@ export const useEditorStore = defineStore('editor', () => {
 	const backgroundTasks = ref<Record<string, BackgroundTask>>({})
 	const selectedAssetId = ref<string | null>(null)
 	const selectedClipId = ref<string | null>(null)
-	const urlImports = ref<Record<string, { url: string; percent: number }>>({})
+	// `phase` marks yt-dlp self-heal detours (auto-update + retry) mid-import
+	const urlImports = ref<Record<string, {
+		url: string
+		percent: number
+		phase?: 'updating-ytdlp' | 'retrying'
+	}>>({})
 	const interruptedAssets = ref<Set<string>>(new Set())
 	const dirty = ref(false)
 	const saveInFlight = ref(false)
@@ -1993,11 +1998,18 @@ export const useEditorStore = defineStore('editor', () => {
 		})
 
 		if (api.onEditorImportProgress) {
-			api.onEditorImportProgress((data: { threadId: string; assetId: string; url?: string; percent: number }) => {
+			api.onEditorImportProgress((data: {
+				threadId: string
+				assetId: string
+				url?: string
+				percent: number
+				phase?: 'updating-ytdlp' | 'retrying'
+			}) => {
 				if (data.threadId !== threadId.value) return
+				// A plain progress event (no phase) clears any recovery phase
 				urlImports.value = {
 					...urlImports.value,
-					[data.assetId]: { url: data.url || '', percent: data.percent }
+					[data.assetId]: { url: data.url || '', percent: data.percent, phase: data.phase }
 				}
 			})
 		}

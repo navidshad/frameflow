@@ -20,6 +20,7 @@ import { checkFFmpegAvailability, getVideoMetadata, detectSilence } from './ffmp
 import { checkScenedetectAvailability } from './scenedetect'
 import { checkYtDlpAvailability, downloadVideo, getVideoFormats } from './ytdlp'
 import { dependencyManager } from './dependencies/manager'
+import { checkYtDlpFreshness } from './dependencies/ytdlp-updater'
 import * as editorAssets from './editor/assets'
 import * as editorPreprocess from './editor/preprocess'
 import * as editorHistory from './editor/history'
@@ -113,6 +114,12 @@ app.whenReady().then(() => {
 	})
 
 	createWindow()
+
+	// Proactive weekly yt-dlp freshness check (throttled to ~7 days inside via
+	// a marker file). Fire-and-forget: must never block or crash startup.
+	checkYtDlpFreshness().catch((error) => {
+		console.warn('[main] yt-dlp freshness check failed:', error)
+	})
 
 	ipcMain.handle('select-video', async () => {
 		const result = await dialog.showOpenDialog({
@@ -480,10 +487,22 @@ app.whenReady().then(() => {
 		const sourceDir = join(thread.tempDir, 'media', assetId, 'source')
 		fs.mkdirSync(sourceDir, { recursive: true })
 
+		// `phase` marks self-heal detours (yt-dlp auto-update + retry) so the
+		// import cards can say what is happening instead of a stuck bar.
+		const sendProgress = (percent: number, phase?: 'updating-ytdlp' | 'retrying') => {
+			if (!event.sender.isDestroyed()) {
+				event.sender.send('editor-import-progress', { threadId, assetId, url, percent, phase })
+			}
+		}
+
 		try {
-			const result = await downloadVideo(url, sourceDir, resolution, (percent) => {
-				event.sender.send('editor-import-progress', { threadId, assetId, url, percent })
-			})
+			const result = await downloadVideo(
+				url,
+				sourceDir,
+				resolution,
+				(percent) => sendProgress(percent),
+				(phase) => sendProgress(0, phase)
+			)
 
 			const asset = await editorAssets.createMediaAsset(threadId, {
 				sourcePath: result.path,

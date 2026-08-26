@@ -43,7 +43,7 @@ export async function downloadFileWithProgress(
         resolve()
       })
 
-      response.on('error', (err) => {
+      response.on('error', (err: Error) => {
         fileStream.close()
         if (fs.existsSync(destPath)) {
           try {

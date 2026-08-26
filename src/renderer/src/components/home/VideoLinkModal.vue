@@ -21,23 +21,15 @@
           </div>
 
           <div class="flex-1 min-w-0">
-            <h4 class="font-bold text-base">
-              {{ ytDlpStatus?.status === 'downloading'
-                ? 'Setting up downloader…'
-                : (ytDlpStatus?.status === 'error' ? 'Installation failed' : 'yt-dlp required') }}
-            </h4>
-            <p class="text-sm opacity-80 mt-1 leading-relaxed">
-              {{ ytDlpStatus?.status === 'downloading'
-                ? 'Please wait while we set up the video processing engine.'
-                : 'Downloading videos from links requires additional components.' }}
-            </p>
+            <h4 class="font-bold text-base">{{ bannerTitle }}</h4>
+            <p class="text-sm opacity-80 mt-1 leading-relaxed">{{ bannerBody }}</p>
 
             <div v-if="ytDlpStatus?.status === 'downloading'" class="mt-4 space-y-2">
               <div class="h-2 w-full bg-blue-500/20 rounded-full overflow-hidden">
                 <div class="h-full bg-blue-500 transition-all duration-300"
-                  :style="{ width: `${ytDlpStatus?.percent || 0}%` }"></div>
+                  :style="{ width: `${ytDlpStatus?.progress || 0}%` }"></div>
               </div>
-              <p class="text-[11px] font-mono opacity-70">{{ ytDlpStatus?.percent || 0 }}%</p>
+              <p class="text-[11px] font-mono opacity-70">{{ ytDlpStatus?.progress || 0 }}%</p>
             </div>
 
             <button v-else @click="installYtDlp"
@@ -46,6 +38,13 @@
             </button>
           </div>
         </div>
+      </div>
+
+      <!-- Self-heal succeeded: the original request is being retried -->
+      <div v-else-if="retryingAfterUpdate"
+        class="w-full p-3 rounded-xl border bg-emerald-500/10 border-emerald-500/20 text-emerald-900 dark:text-emerald-400 flex items-center gap-2 text-sm font-medium">
+        <span class="iconify tabler--refresh w-4 h-4 animate-spin shrink-0"></span>
+        Downloader updated — retrying your link…
       </div>
 
       <!-- URL input -->
@@ -91,7 +90,7 @@
 </template>
 
 <script setup lang="ts">
-import { ref, computed, onMounted } from 'vue'
+import { ref, computed, onMounted, watch } from 'vue'
 import { Modal } from 'pilotui/complex'
 
 /**
@@ -120,10 +119,31 @@ const ytDlpStatus = ref<any>(null)
 
 const api = () => (window as any).api
 
+// Self-heal state: an auto-recovery update started while a request was busy,
+// and (once it lands) the pending "we're retrying your link" note.
+const autoRecovering = ref(false)
+const retryingAfterUpdate = ref(false)
+
 const isBusy = computed(() => isAnalyzing.value || isDownloading.value)
 const isYtDlpMissing = computed(() =>
   ytDlpStatus.value?.status === 'missing' || !ytDlpStatus.value ||
   (!ytDlpAvailable.value && ytDlpStatus.value?.status !== 'downloading'))
+
+const isAutoRecovery = computed(() => ytDlpStatus.value?.reason === 'auto-recovery')
+
+const bannerTitle = computed(() => {
+  if (ytDlpStatus.value?.status === 'downloading')
+    return isAutoRecovery.value ? 'Updating downloader…' : 'Setting up downloader…'
+  return ytDlpStatus.value?.status === 'error' ? 'Installation failed' : 'yt-dlp required'
+})
+
+const bannerBody = computed(() => {
+  if (ytDlpStatus.value?.status === 'downloading')
+    return isAutoRecovery.value
+      ? 'The site blocked the current downloader version. FrameFlow is updating it and will retry your link automatically.'
+      : 'Please wait while we set up the video processing engine.'
+  return 'Downloading videos from links requires additional components.'
+})
 
 const canStep = computed(() =>
   !!videoUrl.value.trim() && ytDlpAvailable.value && !isBusy.value)
@@ -151,8 +171,23 @@ onMounted(async () => {
     if (status.name === 'yt-dlp') {
       ytDlpStatus.value = status
       if (status.status === 'ready') ytDlpAvailable.value = true
+
+      // Track the self-heal cycle: update started → landed → note the retry
+      if (status.status === 'downloading' && status.reason === 'auto-recovery') {
+        autoRecovering.value = true
+      } else if (status.status === 'ready' && autoRecovering.value) {
+        autoRecovering.value = false
+        if (isBusy.value) retryingAfterUpdate.value = true
+      } else if (status.status === 'error') {
+        autoRecovering.value = false
+      }
     }
   })
+})
+
+// The retry note lives only while the retried request is still in flight
+watch(isBusy, (busy) => {
+  if (!busy) retryingAfterUpdate.value = false
 })
 
 const installYtDlp = async () => {
