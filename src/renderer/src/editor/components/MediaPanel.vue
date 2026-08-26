@@ -72,10 +72,14 @@
 					class="mb-2 p-3 rounded-xl border border-zinc-200 dark:border-zinc-800 bg-white/50 dark:bg-zinc-900/50">
 					<p class="text-xs font-medium text-zinc-600 dark:text-zinc-300 truncate">{{ imp.url || 'Downloading…' }}</p>
 					<div class="mt-2 h-1.5 rounded-full bg-zinc-200 dark:bg-zinc-800 overflow-hidden">
-						<div class="h-full bg-primary rounded-full transition-all duration-300"
-							:style="{ width: `${imp.percent}%` }"></div>
+						<div class="h-full rounded-full transition-all duration-300"
+							:class="imp.phase === 'updating-ytdlp' ? 'bg-amber-500 animate-pulse w-full' : 'bg-primary'"
+							:style="imp.phase === 'updating-ytdlp' ? undefined : { width: `${imp.percent}%` }"></div>
 					</div>
-					<p class="mt-1 text-[10px] font-mono text-zinc-400">{{ Math.round(imp.percent) }}%</p>
+					<p class="mt-1 text-[10px] font-mono"
+						:class="imp.phase ? 'text-amber-500' : 'text-zinc-400'">
+						{{ importStatusLabel(imp) }}
+					</p>
 				</div>
 
 				<AssetRow v-for="asset in editorStore.assets" :key="asset.id" :asset="asset"
@@ -106,4 +110,10 @@ const editorStore = useEditorStore()
 const showImportModal = ref(false)
 
 const hasActiveImports = computed(() => Object.keys(editorStore.urlImports).length > 0)
+
+const importStatusLabel = (imp: { percent: number; phase?: string }): string => {
+	if (imp.phase === 'updating-ytdlp') return 'Updating downloader…'
+	if (imp.phase === 'retrying') return 'Downloader updated — retrying…'
+	return `${Math.round(imp.percent)}%`
+}
 </script>

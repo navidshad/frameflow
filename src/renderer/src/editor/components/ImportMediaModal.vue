@@ -25,11 +25,13 @@
 			<!-- Progress -->
 			<div v-if="importing">
 				<div class="h-1.5 rounded-full bg-zinc-200 dark:bg-zinc-800 overflow-hidden">
-					<div class="h-full bg-primary rounded-full transition-all duration-300"
-						:style="{ width: `${progress}%` }"></div>
+					<div class="h-full rounded-full transition-all duration-300"
+						:class="phase === 'updating-ytdlp' ? 'bg-amber-500 animate-pulse w-full' : 'bg-primary'"
+						:style="phase === 'updating-ytdlp' ? undefined : { width: `${progress}%` }"></div>
 				</div>
-				<p class="mt-1.5 text-[10px] font-mono text-zinc-400 text-center">
-					{{ progress > 0 ? `${Math.round(progress)}%` : 'Starting download…' }}
+				<p class="mt-1.5 text-[10px] font-mono text-center"
+					:class="phase ? 'text-amber-500' : 'text-zinc-400'">
+					{{ progressLabel }}
 				</p>
 			</div>
 
@@ -77,13 +79,20 @@ const importing = ref(false)
 const error = ref('')
 const activeImportId = ref<string | null>(null)
 
-const progress = computed(() => {
-	if (!activeImportId.value) {
-		// Fall back to any in-flight import for this session
-		const entries = Object.values(editorStore.urlImports)
-		return entries.length > 0 ? entries[0].percent : 0
-	}
-	return editorStore.urlImports[activeImportId.value]?.percent ?? 0
+const activeImport = computed(() => {
+	if (activeImportId.value) return editorStore.urlImports[activeImportId.value]
+	// Fall back to any in-flight import for this session
+	const entries = Object.values(editorStore.urlImports)
+	return entries.length > 0 ? entries[0] : undefined
+})
+
+const progress = computed(() => activeImport.value?.percent ?? 0)
+const phase = computed(() => activeImport.value?.phase)
+
+const progressLabel = computed(() => {
+	if (phase.value === 'updating-ytdlp') return 'Site blocked the old downloader — updating it…'
+	if (phase.value === 'retrying') return 'Downloader updated — retrying download…'
+	return progress.value > 0 ? `${Math.round(progress.value)}%` : 'Starting download…'
 })
 
 watch(() => props.modelValue, (open) => {
