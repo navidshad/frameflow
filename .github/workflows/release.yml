@@ -13,6 +13,11 @@ on:
   push:
     tags:
       - 'v*'
+    # TEMPORARY - removed in the very next commit. workflow_dispatch cannot be
+    # used until release.yml exists on the default branch, so this is the only
+    # way to prove the Windows and Linux legs before merging.
+    branches:
+      - claude/electron-update-planning-e11bb9
   workflow_dispatch:
 
 concurrency:
