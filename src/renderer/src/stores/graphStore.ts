@@ -1,10 +1,14 @@
 import { defineStore } from 'pinia'
-import { ref } from 'vue'
+import { ref, type Ref } from 'vue'
 import type { Node, Edge } from '@vue-flow/core'
 
 export const useGraphStore = defineStore('graph', () => {
-  const nodes = ref<Node[]>([])
-  const edges = ref<Edge[]>([])
+  // `ref([]) as Ref<T[]>`, not `ref<T[]>([])`: Vue's UnwrapRef recursion over
+  // vue-flow's Node/Edge types exceeds TypeScript's instantiation depth
+  // (TS2589) from Vue 3.5.42 on. The cast short-circuits the type computation;
+  // runtime behaviour is an ordinary deep ref, unchanged.
+  const nodes = ref([]) as Ref<Node[]>
+  const edges = ref([]) as Ref<Edge[]>
 
   const addNode = (node: Node) => {
     nodes.value.push(node)
