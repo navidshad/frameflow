@@ -4,8 +4,9 @@
   "type": "module",
   "description": "AI-powered multimodal video and image processing platform.",
   "main": "./out/main/index.js",
-  "author": "Antigravity",
-  "license": "MIT",
+  "author": "Navid Shad",
+  "private": true,
+  "license": "UNLICENSED",
   "scripts": {
     "format": "prettier --write .",
     "lint": "eslint . --ext .js,.jsx,.cjs,.mjs,.ts,.tsx,.cts,.mts --fix --ignore-path .gitignore",
@@ -80,7 +81,7 @@
       {
         "provider": "github",
         "owner": "navidshad",
-        "repo": "frameflow"
+        "repo": "frameflow-pro"
       }
     ]
   }

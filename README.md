@@ -101,9 +101,18 @@ images it was built from, so you can compare variants and continue from the one 
 
 ---
 
-## 📜 License & Credits
+## 📜 License
 
-FrameFlow is licensed under the **MIT License**. Created by [navidshad](https://github.com/navidshad) and his classmates as part of a high-fidelity AI engineering initiative at Vilnius Gediminas Technical University (VGTU).
+**FrameFlow Pro is proprietary software.** Copyright (c) 2026 Navid Shad. All rights reserved.
+This repository is private and is not open source — see [LICENSE](./LICENSE).
+
+It derives from the original [FrameFlow](https://github.com/navidshad/frameflow) project,
+which was released under the MIT License and remains available under those terms. The MIT
+notice and all other third-party attributions are reproduced in
+[THIRD-PARTY-NOTICES.md](./THIRD-PARTY-NOTICES.md), which must ship with every binary.
+
+Original project created by [navidshad](https://github.com/navidshad), Somayeh Roohani and
+Esat Can Karabag at Vilnius Gediminas Technical University (VGTU).
 
 ---
 
