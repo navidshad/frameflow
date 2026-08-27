@@ -87,18 +87,52 @@ jobs:
           npm_config_arch: ${{ matrix.arch }}
         run: npm ci
 
-      # electron-builder wants APPLE_API_KEY to be a path to the .p8, not the
-      # key itself. Absent secret -> no file -> notarization skips itself.
-      - name: Stage the App Store Connect key
+      # Every macOS signing variable is exported HERE rather than in the build
+      # step's `env:`, because an env block cannot conditionally omit a name:
+      # a missing secret becomes an empty string, and an empty CSC_LINK is not
+      # the same as an absent one. electron-builder reads the variable's
+      # presence as "sign with this", resolves "" to the working directory and
+      # dies with "<cwd> not a file". So export nothing unless there is
+      # something to export.
+      - name: Stage macOS signing credentials
         if: runner.os == 'macOS'
         env:
+          MAC_CSC_LINK: ${{ secrets.MAC_CSC_LINK }}
+          MAC_CSC_KEY_PASSWORD: ${{ secrets.MAC_CSC_KEY_PASSWORD }}
           APPLE_API_KEY_CONTENT: ${{ secrets.APPLE_API_KEY_CONTENT }}
+          APPLE_API_KEY_ID: ${{ secrets.APPLE_API_KEY_ID }}
+          APPLE_API_ISSUER: ${{ secrets.APPLE_API_ISSUER }}
         run: |
+          if [ -n "$MAC_CSC_LINK" ]; then
+            # Heredoc form: a base64 .p12 may be wrapped across lines, which
+            # the plain KEY=value form cannot carry.
+            {
+              echo "CSC_LINK<<__CSC_EOF__"
+              echo "$MAC_CSC_LINK"
+              echo "__CSC_EOF__"
+              echo "CSC_KEY_PASSWORD<<__PW_EOF__"
+              echo "$MAC_CSC_KEY_PASSWORD"
+              echo "__PW_EOF__"
+            } >> "$GITHUB_ENV"
+            echo "Signing certificate staged."
+          else
+            # Stops electron-builder hunting for an identity in an empty keychain.
+            echo "CSC_IDENTITY_AUTO_DISCOVERY=false" >> "$GITHUB_ENV"
+            echo "No signing certificate - building UNSIGNED."
+          fi
+
+          # electron-builder wants APPLE_API_KEY to be a path to the .p8, not
+          # the key itself. No file -> notarization skips itself.
           if [ -n "$APPLE_API_KEY_CONTENT" ]; then
             echo "$APPLE_API_KEY_CONTENT" > "$RUNNER_TEMP/authkey.p8"
-            echo "APPLE_API_KEY=$RUNNER_TEMP/authkey.p8" >> "$GITHUB_ENV"
+            {
+              echo "APPLE_API_KEY=$RUNNER_TEMP/authkey.p8"
+              echo "APPLE_API_KEY_ID=$APPLE_API_KEY_ID"
+              echo "APPLE_API_ISSUER=$APPLE_API_ISSUER"
+            } >> "$GITHUB_ENV"
+            echo "Notarization credentials staged."
           else
-            echo "No APPLE_API_KEY_CONTENT secret set - notarization will be skipped."
+            echo "No App Store Connect key - notarization will be skipped."
           fi
 
       - name: Build and package
@@ -108,16 +142,8 @@ jobs:
           PUBLISH: ${{ startsWith(github.ref, 'refs/tags/v') && 'always' || 'never' }}
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
-          # --- macOS signing -------------------------------------------------
-          # Every one of these is optional. With no certificate the build still
-          # succeeds and produces an UNSIGNED app: CSC_IDENTITY_AUTO_DISCOVERY
-          # resolves to 'false', which stops electron-builder failing when it
-          # cannot find an identity in the (empty) runner keychain.
-          CSC_LINK: ${{ secrets.MAC_CSC_LINK }}
-          CSC_KEY_PASSWORD: ${{ secrets.MAC_CSC_KEY_PASSWORD }}
-          CSC_IDENTITY_AUTO_DISCOVERY: ${{ secrets.MAC_CSC_LINK != '' }}
-          APPLE_API_KEY_ID: ${{ secrets.APPLE_API_KEY_ID }}
-          APPLE_API_ISSUER: ${{ secrets.APPLE_API_ISSUER }}
+          # macOS signing variables are exported by the staging step above, not
+          # here -- see the comment on that step for why.
 
           # --- Windows signing -----------------------------------------------
           # Deliberately absent. Windows artefacts are unsigned and SmartScreen
