@@ -275,6 +275,7 @@
   </div>
 </template>
 <script setup lang="ts">
+import { fromMediaUrl, toMediaUrl } from '@shared/media-url'
 import { ref, watch } from 'vue'
 import { Handle, Position, useVueFlow } from '@vue-flow/core'
 import { useVideoStore } from '../../stores/videoStore'
@@ -453,14 +454,11 @@ const submit = (text: string, images: string[], count: number, isThinkingMode: b
   }
 }
 
-const mediaUrl = (url: string) => {
-  if (!url) return ''
-  return url.startsWith('media://') ? url : `media://${url}`
-}
+const mediaUrl = (url: string) => toMediaUrl(url)
 
 const handleSave = async (url: string) => {
   if (url && (window as any).api) {
-    const cleanPath = url.replace('media://', '')
+    const cleanPath = fromMediaUrl(url)
     await (window as any).api.saveVideo(cleanPath)
   }
 }

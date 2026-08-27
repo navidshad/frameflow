@@ -82,6 +82,7 @@ FrameFlow isn't just a tool; it's an iterative workspace:
 | 🏗 **Architecture** | [**Deep-Dive**](./docs/architecture.md) | The two workflows, media pre-processing, and the editor's AI contract. |
 | 🚀 **Installation** | [**Setup Guide**](./docs/setup.md) | Node.js, Gemini API, FFmpeg, and yt-dlp setup. |
 | 🎨 **UI/UX** | [**Design Overview**](./docs/ui_ux.md) | Frontend components and interaction flow. |
+| 📦 **Releasing** | [**Build & Signing**](./docs/releasing.md) | Cutting a release, code signing, and notarisation. |
 
 ---
 

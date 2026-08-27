@@ -7,6 +7,7 @@ import type { EditorDocument, Message, Thread, ThreadType, Track, Usage, UsageRe
 import { settingsManager } from '../settings'
 import { getVideoMetadata } from '../ffmpeg'
 import { THREAD_DIRS } from '../constants/paths'
+import { fromMediaUrl } from '@shared/media-url'
 
 // Re-export needed types for consumers (if any, though shared is better)
 export { MessageRole, FileType }
@@ -459,7 +460,7 @@ class ThreadManager {
 
 	private deleteFile(filePath: string) {
 		if (!filePath) return
-		const cleanPath = filePath.replace('file://', '')
+		const cleanPath = fromMediaUrl(filePath.replace('file://', ''))
 		if (fs.existsSync(cleanPath)) {
 			try {
 				fs.unlinkSync(cleanPath)
@@ -735,7 +736,7 @@ class ThreadManager {
 			if (msg && msg.files) {
 				for (const file of msg.files) {
 					if (file.type !== FileType.Original) {
-						const cleanPath = file.url.replace('file://', '').replace('media://', '')
+						const cleanPath = fromMediaUrl(file.url.replace('file://', ''))
 						
 						// Only allow deletion if it belongs to generated directories
 						const isGenerated = cleanPath.includes(`/${THREAD_DIRS.GENERATED_IMAGES}/`) || 
@@ -770,7 +771,7 @@ class ThreadManager {
 		if (msg.files) {
 			for (const file of msg.files) {
 				if (file.type !== FileType.Original) {
-					const cleanPath = file.url.replace('file://', '').replace('media://', '')
+					const cleanPath = fromMediaUrl(file.url.replace('file://', ''))
 					
 					// Only allow deletion if it belongs to generated directories
 					const isGenerated = cleanPath.includes(`/${THREAD_DIRS.GENERATED_IMAGES}/`) || 

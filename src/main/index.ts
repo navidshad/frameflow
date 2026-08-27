@@ -1,7 +1,7 @@
 import { app, shell, BrowserWindow, ipcMain, dialog, protocol } from 'electron'
 import { net } from 'electron'
 import * as fs from 'fs'
-import { basename, extname, join } from 'path'
+import { basename, dirname, extname, join } from 'path'
 import { pathToFileURL } from 'url'
 import { Pipeline } from './pipeline'
 import { settingsManager } from './settings'
@@ -31,8 +31,19 @@ import { v4 as uuidv4 } from 'uuid'
 import { THREAD_DIRS } from './constants/paths'
 import { GEMINI_MODEL_2_5_FLASH, MODEL_METADATA } from './constants/gemini'
 import { electronApp, optimizer, is } from '@electron-toolkit/utils'
+import { registerMediaProtocol } from './media-protocol'
 
 const activePipelines = new Map<string, Pipeline>()
+
+// Electron 43 made every dialog open in Downloads when `defaultPath` is absent,
+// and stopped the OS remembering where the user was last. Importing a second
+// clip from the same shoot used to land you back in that folder; without this
+// it lands you in Downloads every time. Remembered for the session only.
+let lastBrowsedDir: string | undefined
+
+const rememberBrowsedDir = (filePath: string | undefined): void => {
+	if (filePath) lastBrowsedDir = dirname(filePath)
+}
 
 protocol.registerSchemesAsPrivileged([
 	{
@@ -92,25 +103,7 @@ app.whenReady().then(() => {
 	})
 
 	// Register custom protocol for local media
-	protocol.registerFileProtocol('media', (request, callback) => {
-		try {
-			const url = new URL(request.url)
-			// Consolidate hostname and pathname (handles both media://var/... and media:///var/...)
-			let rawPath = decodeURIComponent(url.hostname + url.pathname)
-
-			// If path already contained file:// prefix, clean it up
-			let filePath = rawPath.replace(/^file:\/+/i, '/')
-
-			if (process.platform !== 'win32' && !filePath.startsWith('/')) {
-				filePath = '/' + filePath
-			}
-
-			callback({ path: filePath })
-		} catch (error) {
-			console.error('Media protocol error:', error)
-			callback({ error: -6 })
-		}
-	})
+	registerMediaProtocol()
 
 	createWindow()
 
@@ -122,6 +115,7 @@ app.whenReady().then(() => {
 
 	ipcMain.handle('select-video', async () => {
 		const result = await dialog.showOpenDialog({
+			defaultPath: lastBrowsedDir,
 			properties: ['openFile'],
 			filters: [
 				{ name: 'Media', extensions: ['mp4', 'avi', 'mov', 'webm', 'mp3', 'wav', 'm4a', 'aac', 'flac', 'ogg', 'opus', 'wma'] },
@@ -134,6 +128,7 @@ app.whenReady().then(() => {
 			return null
 		}
 
+		rememberBrowsedDir(result.filePaths[0])
 		return {
 			path: result.filePaths[0],
 			name: result.filePaths[0].split('/').pop() || ''
@@ -141,7 +136,9 @@ app.whenReady().then(() => {
 	})
 
 	ipcMain.handle('show-open-dialog', async (_event, options) => {
-		return await dialog.showOpenDialog(options)
+		const result = await dialog.showOpenDialog({ defaultPath: lastBrowsedDir, ...options })
+		if (!result.canceled) rememberBrowsedDir(result.filePaths[0])
+		return result
 	})
 
 	ipcMain.handle('check-system-requirements', async () => {
@@ -277,7 +274,11 @@ app.whenReady().then(() => {
 	})
 
 	ipcMain.handle('set-temp-dir', async () => {
+		// Opening at the CURRENT store is what the nesting rule below assumes: the
+		// user is expected to be able to pick the store itself. Since Electron 43
+		// an absent defaultPath means Downloads, where that choice is impossible.
 		const result = await dialog.showOpenDialog({
+			defaultPath: settingsManager.getTempDir(),
 			properties: ['openDirectory', 'createDirectory']
 		})
 
@@ -754,8 +755,11 @@ app.whenReady().then(() => {
 		const extension = extname(sourcePath)
 		const fileName = basename(sourcePath)
 
+		// A bare filename resolves against whatever the dialog's directory is, so
+		// state the directory rather than inheriting it: Downloads is the right
+		// destination for an export, and now it is chosen instead of defaulted.
 		const result = await dialog.showSaveDialog({
-			defaultPath: fileName,
+			defaultPath: join(app.getPath('downloads'), fileName),
 			filters: [{ name: 'Videos', extensions: [extension.replace('.', '')] }]
 		})
 

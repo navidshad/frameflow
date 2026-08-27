@@ -93,6 +93,7 @@
 </template>
 
 <script setup lang="ts">
+import { toMediaUrl } from '@shared/media-url'
 import { ref, computed } from 'vue'
 import { Handle, Position } from '@vue-flow/core'
 import SlimTooltip from '../SlimTooltip.vue'
@@ -115,10 +116,7 @@ const activeTasks = computed(() => {
 })
 
 
-const mediaUrl = (url: string) => {
-  if (!url) return ''
-  return url.startsWith('media://') ? url : `media://${url}`
-}
+const mediaUrl = (url: string) => toMediaUrl(url)
 
 const submit = (text: string, images: string[], count: number, isThinkingMode: boolean, autoUseImages: boolean) => {
   if ((text.trim() || images.length > 0) && props.data.onSubmit) {

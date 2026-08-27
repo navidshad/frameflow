@@ -125,7 +125,7 @@
 			<!-- Clip mode -->
 			<template v-else-if="clip">
 				<div class="rounded-xl overflow-hidden mb-3 bg-zinc-200 dark:bg-zinc-800">
-					<img v-if="clip.thumbnailPath" :src="`media://${clip.thumbnailPath}`" class="w-full object-cover" />
+					<img v-if="clip.thumbnailPath" :src="toMediaUrl(clip.thumbnailPath)" class="w-full object-cover" />
 				</div>
 				<h3 class="text-sm font-bold text-zinc-800 dark:text-zinc-200 font-heading">Piece #{{ clip.index }}</h3>
 
@@ -288,6 +288,7 @@
 </template>
 
 <script setup lang="ts">
+import { toMediaUrl } from '@shared/media-url'
 import { computed, h, ref } from 'vue'
 import type { FunctionalComponent } from 'vue'
 import { useEditorStore } from '../../stores/editorStore'

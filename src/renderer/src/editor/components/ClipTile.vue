@@ -10,7 +10,7 @@
 				: active
 					? 'border-secondary/60'
 					: 'border-transparent group-hover:border-zinc-300 dark:group-hover:border-zinc-600'">
-			<img v-if="clip.thumbnailPath" :src="`media://${clip.thumbnailPath}`"
+			<img v-if="clip.thumbnailPath" :src="toMediaUrl(clip.thumbnailPath)"
 				class="w-full h-full object-cover" loading="lazy" />
 			<div v-else class="w-full h-full flex items-center justify-center">
 				<span class="iconify w-4 h-4 text-zinc-400"
@@ -38,6 +38,7 @@
 </template>
 
 <script setup lang="ts">
+import { toMediaUrl } from '@shared/media-url'
 import { computed } from 'vue'
 import type { Clip } from '@shared/types'
 import { useEditorStore } from '../../stores/editorStore'

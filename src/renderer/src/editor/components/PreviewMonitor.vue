@@ -99,6 +99,7 @@
 </template>
 
 <script setup lang="ts">
+import { toMediaUrl } from '@shared/media-url'
 import { computed, onMounted, ref, watch } from 'vue'
 import { useEditorStore } from '../../stores/editorStore'
 import { useEdlPlayback } from '../composables/useEdlPlayback'
@@ -142,7 +143,7 @@ const sourceSrc = computed(() => {
 		: store.selectedAsset
 	if (!asset) return null
 	const path = asset.proxyPath || asset.originalPath
-	return path ? `media://${path}` : null
+	return path ? toMediaUrl(path) : null
 })
 
 const format = (seconds: number) => {

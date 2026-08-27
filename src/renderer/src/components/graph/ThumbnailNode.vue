@@ -213,6 +213,7 @@
 </template>
 
 <script setup lang="ts">
+import { fromMediaUrl, toMediaUrl } from '@shared/media-url'
 import { ref, computed, watch, nextTick } from 'vue'
 import { Handle, Position } from '@vue-flow/core'
 import SlimTooltip from '../SlimTooltip.vue'
@@ -251,10 +252,7 @@ const files = computed(() => props.data.files || [])
 const actualFile = computed(() => files.value.find((f: any) => f.type === 'actual'))
 const referenceFrames = computed(() => files.value.filter((f: any) => f.type === 'preview'))
 
-const mediaUrl = (url?: string) => {
-  if (!url) return ''
-  return url.startsWith('media://') ? url : `media://${url}`
-}
+const mediaUrl = (url?: string) => toMediaUrl(url || '')
 
 const mediaContentUrl = computed(() => {
   if (previewUrl.value) return previewUrl.value
@@ -305,13 +303,13 @@ const isAvailableForAttachment = computed(() => {
   const path = actualFile.value?.url
   if (!path) return false
   const currentRefs = videoStore.currentThread?.preprocessing?.['reference-frames'] || []
-  return currentRefs.includes(path) || currentRefs.includes(path.replace('media://', ''))
+  return currentRefs.includes(fromMediaUrl(path))
 })
 
 const toggleAttachment = async () => {
   const path = actualFile.value?.url
   if (!path) return
-  await videoStore.toggleReferenceFrame(path.replace('media://', ''))
+  await videoStore.toggleReferenceFrame(fromMediaUrl(path))
 }
 
 const addReferencesToInput = async () => {
@@ -337,7 +335,7 @@ const fetchMetadata = async () => {
   if (!mediaContentUrl.value || metadata.value || isMetadataLoading.value) return
   isMetadataLoading.value = true
   try {
-    const rawPath = mediaContentUrl.value.replace('media://', '')
+    const rawPath = fromMediaUrl(mediaContentUrl.value)
     metadata.value = await (window as any).api.getVideoMetadata(rawPath)
   } catch (e) {
     console.error('Failed to fetch image metadata:', e)
@@ -362,12 +360,12 @@ watch(showDetails, (newVal) => {
 const handleSave = async (specificUrl?: string) => {
   const url = specificUrl || mediaContentUrl.value
   if (url && (window as any).api) {
-    await (window as any).api.saveVideo(url.replace('media://', ''))
+    await (window as any).api.saveVideo(fromMediaUrl(url))
   }
 }
 
 const handleUpscale = async (factor: string) => {
-  const currentPath = mediaContentUrl.value.replace('media://', '')
+  const currentPath = fromMediaUrl(mediaContentUrl.value)
   if (!currentPath) return
 
   isUpscaling.value = factor
@@ -383,7 +381,7 @@ const handleUpscale = async (factor: string) => {
     })
     
     if (resultPath) {
-      previewUrl.value = `media://${resultPath}`
+      previewUrl.value = toMediaUrl(resultPath)
       // Clear metadata and re-fetch to show new resolution
       metadata.value = null
       await fetchMetadata()

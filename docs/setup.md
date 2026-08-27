@@ -8,7 +8,7 @@ How to set up the environment and run **FrameFlow Pro** locally.
 
 ### Prerequisites
 
-- **Node.js** v20 LTS (v18 is the minimum; CI builds on 20)
+- **Node.js** v24 (v22.12 is the minimum — Electron 44 and Vite 7 both require it; CI builds on 24)
 - **Google Gemini API Key** ([Google AI Studio](https://aistudio.google.com/app/apikey)) — entered in the app's settings, never committed
 
 That is the whole list.
@@ -66,6 +66,13 @@ nothing to install with Homebrew, Chocolatey, or pip:
 | `npm run typecheck` | Typecheck main, preload, shared and renderer |
 | `npm run build` | Build renderer + main into `out/` |
 | `npm run build:mac` / `build:win` / `build:linux` | Package an installer for one platform |
+| `npm run build:unpack` | Package to a directory without building an installer — fastest way to test a packaged app |
 
 `npm run typecheck` and `npm test` are what CI gates on, so run both before
 opening a pull request.
+
+> Since Electron 42 the `electron` binary is no longer fetched by `npm install`;
+> it downloads the first time you run the app. The first `npm run dev` after a
+> clean install therefore pauses once while it fetches.
+
+For cutting a release and for code signing, see [releasing.md](./releasing.md).

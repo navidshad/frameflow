@@ -1,4 +1,5 @@
 import type { EditorDocument, EditorRevision, RevisionOrigin } from '@shared/types'
+import { toMediaUrl } from '@shared/media-url'
 
 /**
  * Resolves up to `count` thumbnail URLs for a revision card by mapping the
@@ -14,7 +15,7 @@ export function revisionThumbs(revision: EditorRevision, doc: EditorDocument | n
 		if (thumbs.length >= count) break
 		const asset = doc.media.find((a) => a.id === item.sourceAssetId)
 		const clip = asset?.clips.find((c) => c.id === item.sourceClipId)
-		if (clip?.thumbnailPath) thumbs.push(`media://${clip.thumbnailPath}`)
+		if (clip?.thumbnailPath) thumbs.push(toMediaUrl(clip.thumbnailPath))
 	}
 	return thumbs
 }

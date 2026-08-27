@@ -1,0 +1,98 @@
+appId: com.frameflow.app
+productName: FrameFlow
+
+directories:
+  output: dist
+  buildResources: build
+
+# The bundled binaries are spawned as child processes, so they have to sit on
+# the real filesystem rather than inside the asar — main rewrites `app.asar` to
+# `app.asar.unpacked` in the paths these packages report (src/main/ffmpeg/index.ts,
+# src/main/ytdlp.ts). Both globs here were previously wrong in ways that no build
+# had ever exercised, because no installer had ever been produced:
+#
+#   - ffmpeg-static names its binary `ffmpeg.exe` on Windows, so a glob ending
+#     in `ffmpeg` unpacked nothing at all there.
+#   - ffprobe-static keeps its binary at bin/<platform>/<arch>/ffprobe, not at
+#     the package root, so `ffprobe-static/ffprobe*` matched nothing on ANY
+#     platform and ffprobe stayed sealed inside the archive.
+asarUnpack:
+  - '**/node_modules/ytdlp-nodejs/bin/*'
+  - '**/node_modules/ffmpeg-static/ffmpeg*'
+  - '**/node_modules/ffprobe-static/bin/**'
+
+mac:
+  category: public.app-category.video
+  # No `arch:` here on purpose. An arch list in the target block OVERRIDES the
+  # CLI flag, so `electron-builder --mac --arm64` would quietly build x64 too —
+  # and on CI that x64 app would carry whichever ffmpeg-static binary the arm64
+  # runner installed. Leaving it out lets --x64/--arm64 mean what they say, and
+  # defaults a bare `npm run build:mac` to the host arch.
+  target:
+    - dmg
+    # zip alongside dmg: Squirrel.Mac — and so electron-updater, when the
+    # roadmap reaches auto-update — can only consume the zip.
+    - zip
+  # Electron 44 dropped macOS 12; Chromium no longer supports it.
+  minimumSystemVersion: 13.0.0
+  hardenedRuntime: true
+  gatekeeperAssess: false
+  entitlements: build/entitlements.mac.plist
+  entitlementsInherit: build/entitlements.mac.plist
+  # ffprobe-static ships every platform AND every arch — ~60MB of the wrong
+  # ffprobe per build. `${arch}` is expanded in file patterns, so keep only the
+  # one binary this build can actually execute.
+  files:
+    - '!**/node_modules/ffprobe-static/bin/{win32,linux}/**'
+    - '!**/node_modules/ffprobe-static/bin/darwin/!(${arch})/**'
+
+win:
+  # Electron 44 no longer publishes 32-bit Windows binaries, so x64 is the only
+  # option; the arch still comes from the CLI flag (see the note under `mac`).
+  target:
+    - nsis
+  files:
+    - '!**/node_modules/ffprobe-static/bin/{darwin,linux}/**'
+    - '!**/node_modules/ffprobe-static/bin/win32/!(${arch})/**'
+  #
+  # NOT SIGNED YET — deliberately deferred. Windows builds trip SmartScreen
+  # with an "unrecognised app" wall until this is filled in. The intended route
+  # is Azure Trusted Signing, which slots in right here as:
+  #
+  #   azureSignOptions:
+  #     publisherName: '...'          # as given on the identity validation form
+  #     endpoint: 'https://<region>.codesigning.azure.net'
+  #     codeSigningAccountName: '...'
+  #     certificateProfileName: '...'
+  #
+  # No other change is needed. Note that electron-builder 27 replaces both
+  # `azureSignOptions` and `signtoolOptions` with a unified `win.sign` object,
+  # so expect this shape to move on the next major.
+
+nsis:
+  oneClick: false
+  allowToChangeInstallationDirectory: true
+  perMachine: false
+
+linux:
+  target:
+    - AppImage
+    - deb
+  category: AudioVideo
+  synopsis: AI-powered multimodal video and image processing platform
+  # deb requires a maintainer in `Name <email>` form and package.json's `author`
+  # carries no address. Swap for a project address before the first public
+  # release if a personal one should not ship in package metadata.
+  maintainer: Navid Shad <navidshad72@gmail.com>
+  files:
+    - '!**/node_modules/ffprobe-static/bin/{darwin,win32}/**'
+    - '!**/node_modules/ffprobe-static/bin/linux/!(${arch})/**'
+
+# NOTE: this repo is private, so releases published here are not downloadable
+# without a token — and electron-updater cannot read it at all without embedding
+# one in the app. A separate public releases-only repo is needed before the
+# first installer is actually distributable.
+publish:
+  - provider: github
+    owner: navidshad
+    repo: frameflow-pro

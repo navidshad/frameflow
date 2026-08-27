@@ -110,6 +110,7 @@
 </template>
 
 <script setup lang="ts">
+import { toMediaUrl } from '@shared/media-url'
 import { ref, watch, onMounted } from 'vue'
 import { Icon, IconButton } from 'pilotui/elements'
 import SlimTooltip from '../SlimTooltip.vue'
@@ -162,10 +163,7 @@ watch(internalText, (newVal) => {
   emit('update:modelValue', newVal)
 })
 
-const normalizeUrl = (url: string) => {
-  if (!url) return ''
-  return url.startsWith('media://') ? url : `media://${url}`
-}
+const normalizeUrl = (url: string) => toMediaUrl(url)
 
 const toggleAutoUseImages = () => {
   emit('update:autoUseImages', !props.autoUseImages)

@@ -31,7 +31,7 @@
       <!-- Image thumbnails (image purpose only — the editor's prompt is text-only) -->
       <div v-for="(img, idx) in visibleImages" v-show="purpose === 'image'" :key="img"
         class="relative w-16 h-16 rounded-xl group shadow-md border border-zinc-200 dark:border-zinc-800 transition-all hover:scale-105">
-        <img :src="`media://${img}`" class="w-full h-full object-cover rounded-xl" />
+        <img :src="toMediaUrl(img)" class="w-full h-full object-cover rounded-xl" />
         <div class="absolute -top-1 -right-1 opacity-0 group-hover:opacity-100 transition-all z-30">
           <button @click.stop="removeImage(idx)"
             class="flex items-center justify-center w-4 h-4 bg-red-500 text-white rounded-full shadow-lg hover:bg-red-600 active:scale-90 transition-all">
@@ -90,6 +90,7 @@
 </template>
 
 <script setup lang="ts">
+import { toMediaUrl } from '@shared/media-url'
 import { ref, computed, watch } from 'vue'
 import type { ThreadType } from '@shared/types'
 import BaseMessageInput from '../chat/BaseMessageInput.vue'

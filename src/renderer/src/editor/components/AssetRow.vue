@@ -87,6 +87,7 @@
 </template>
 
 <script setup lang="ts">
+import { toMediaUrl } from '@shared/media-url'
 import { computed } from 'vue'
 import type { BackgroundTask, MediaAsset } from '@shared/types'
 import { useEditorStore } from '../../stores/editorStore'
@@ -106,7 +107,7 @@ const runningTasks = computed<BackgroundTask[]>(() => editorStore.assetTasks(pro
 
 const thumbSrc = computed(() => {
 	const thumb = props.asset.clips.find((c) => c.thumbnailPath)?.thumbnailPath
-	return thumb ? `media://${thumb}` : null
+	return thumb ? toMediaUrl(thumb) : null
 })
 
 // Only a probed asset with a real duration can be dropped as a whole-file item.

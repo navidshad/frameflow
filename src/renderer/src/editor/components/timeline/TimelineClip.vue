@@ -66,6 +66,7 @@
 </template>
 
 <script setup lang="ts">
+import { toMediaUrl } from '@shared/media-url'
 import { computed, inject, ref } from 'vue'
 import type { TimelineItem } from '@shared/types'
 import { itemEnd } from '@shared/timeline'
@@ -92,7 +93,7 @@ const sourceClip = computed(() => {
 })
 
 const thumbSrc = computed(() =>
-	sourceClip.value?.thumbnailPath ? `media://${sourceClip.value.thumbnailPath}` : null
+	sourceClip.value?.thumbnailPath ? toMediaUrl(sourceClip.value.thumbnailPath) : null
 )
 
 // Dense filmstrip (§5.5): pick the nearest batched-strip frame for each
@@ -114,7 +115,7 @@ const stripFrames = computed<string[]>(() => {
 			if (Math.abs(e.time - t) < Math.abs(best.time - t)) best = e
 			if (e.time > t) break
 		}
-		frames.push(`media://${best.thumbnailPath}`)
+		frames.push(toMediaUrl(best.thumbnailPath))
 	}
 	return frames
 })

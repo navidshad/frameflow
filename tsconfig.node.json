@@ -2,7 +2,10 @@
   "compilerOptions": {
     "target": "ESNext",
     "module": "ESNext",
-    "moduleResolution": "Node",
+    // "Bundler", not "Node": main and preload are processed by electron-vite,
+    // and the node10 algorithm cannot read the `exports` maps that the current
+    // build toolchain (@vitejs/plugin-vue 6, vite 7) ships its types behind.
+    "moduleResolution": "Bundler",
     "strict": true,
     "esModuleInterop": true,
     "skipLibCheck": true,

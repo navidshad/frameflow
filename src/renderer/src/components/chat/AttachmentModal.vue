@@ -72,6 +72,7 @@
 </template>
 
 <script setup lang="ts">
+import { toMediaUrl } from '@shared/media-url'
 import { ref, computed } from 'vue'
 import { useVideoStore } from '../../stores/videoStore'
 import { Modal } from 'pilotui/complex'
@@ -100,10 +101,7 @@ const allProjectImages = computed(() => {
 
 const selectedCount = computed(() => tempSelected.value.length)
 
-const normalizeUrl = (url: string) => {
-  if (!url) return ''
-  return url.startsWith('media://') ? url : `media://${url}`
-}
+const normalizeUrl = (url: string) => toMediaUrl(url)
 
 const isSelected = (url: string) => tempSelected.value.includes(url)
 
