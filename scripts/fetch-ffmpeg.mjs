@@ -41,6 +41,7 @@
  */
 import { createHash } from 'node:crypto'
 import { spawnSync } from 'node:child_process'
+import zlib from 'node:zlib'
 import fs from 'node:fs'
 import path from 'node:path'
 import os from 'node:os'
@@ -175,19 +176,104 @@ async function download(url, dest) {
 }
 
 /**
- * One extractor for three archive shapes. `tar -xf` reads zip as well as
- * tar.xz: bsdtar (macOS, Windows 10+) handles zip natively, and the only
- * tar.xz target is Linux, where GNU tar handles it. That is why nothing here
- * needs `unzip`, which is not installed by default on Windows.
+ * Reads one member out of a zip, using only node builtins.
+ *
+ * Not `tar -xf`, even though bsdtar reads zip quite happily. bsdtar is what
+ * macOS and Windows 10+ ship, but Linux ships GNU tar, which does not read zip
+ * at all -- it fails with "This does not look like a tar archive". That only
+ * shows up when a Linux host fetches a macOS or Windows target, which the
+ * release matrix never does (each leg builds on its own OS) but the
+ * all-targets licence check does, on every run. `unzip` would fix Linux and
+ * break Windows, which has no such command. Sixty lines of zip reader is the
+ * price of one extractor that behaves the same everywhere.
+ *
+ * Only what these archives actually use: stored and deflate, no zip64. Reads
+ * by offset rather than slurping the file, because ffmpeg.exe arrives inside a
+ * 161MB archive.
+ */
+function readZipMember(archive, member) {
+	const fd = fs.openSync(archive, 'r')
+	try {
+		const size = fs.fstatSync(fd).size
+
+		// End-of-central-directory record, last in the file after an optional
+		// comment of up to 64KB.
+		const tailLen = Math.min(size, 66 * 1024)
+		const tail = Buffer.alloc(tailLen)
+		fs.readSync(fd, tail, 0, tailLen, size - tailLen)
+		let eocd = -1
+		for (let i = tail.length - 22; i >= 0; i--) {
+			if (tail.readUInt32LE(i) === 0x06054b50) {
+				eocd = i
+				break
+			}
+		}
+		if (eocd === -1) throw new Error(`${path.basename(archive)}: not a zip archive`)
+
+		const cdSize = tail.readUInt32LE(eocd + 12)
+		const cdOffset = tail.readUInt32LE(eocd + 16)
+		if (cdOffset === 0xffffffff || cdSize === 0xffffffff) {
+			throw new Error(`${path.basename(archive)}: zip64 archives are not supported`)
+		}
+		const cd = Buffer.alloc(cdSize)
+		fs.readSync(fd, cd, 0, cdSize, cdOffset)
+
+		let p = 0
+		while (p + 46 <= cd.length && cd.readUInt32LE(p) === 0x02014b50) {
+			const method = cd.readUInt16LE(p + 10)
+			const compSize = cd.readUInt32LE(p + 20)
+			const nameLen = cd.readUInt16LE(p + 28)
+			const extraLen = cd.readUInt16LE(p + 30)
+			const commentLen = cd.readUInt16LE(p + 32)
+			const localOffset = cd.readUInt32LE(p + 42)
+			const name = cd.subarray(p + 46, p + 46 + nameLen).toString('utf8')
+
+			if (name === member) {
+				// The local header repeats the name and extra fields, and its extra
+				// length may differ from the central directory's -- so the data
+				// offset has to come from the local header, not this one.
+				const lh = Buffer.alloc(30)
+				fs.readSync(fd, lh, 0, 30, localOffset)
+				if (lh.readUInt32LE(0) !== 0x04034b50) {
+					throw new Error(`${path.basename(archive)}: corrupt local header for ${member}`)
+				}
+				const dataOffset = localOffset + 30 + lh.readUInt16LE(26) + lh.readUInt16LE(28)
+				const raw = Buffer.alloc(compSize)
+				fs.readSync(fd, raw, 0, compSize, dataOffset)
+				if (method === 0) return raw
+				if (method === 8) return zlib.inflateRawSync(raw)
+				throw new Error(`${path.basename(archive)}: unsupported compression method ${method}`)
+			}
+			p += 46 + nameLen + extraLen + commentLen
+		}
+		return null
+	} finally {
+		fs.closeSync(fd)
+	}
+}
+
+/**
+ * Pulls one member out of an archive and drops it at `dest`, executable.
+ * zip is handled in-process (see above); tar.xz goes through `tar`, which is
+ * only ever the Linux target, where GNU tar handles .xz natively.
  */
 function extractMember(archive, member, dest) {
+	fs.mkdirSync(path.dirname(dest), { recursive: true })
+
+	if (archive.endsWith('.zip')) {
+		const buf = readZipMember(archive, member)
+		if (!buf) die(`${member} not found inside ${path.basename(archive)}`)
+		fs.writeFileSync(dest, buf)
+		fs.chmodSync(dest, 0o755)
+		return
+	}
+
 	const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'ffmpeg-extract-'))
 	try {
 		const r = spawnSync('tar', ['-xf', archive, '-C', tmp, member], { encoding: 'utf8' })
 		if (r.status !== 0) die(`extracting ${member} failed: ${r.stderr || r.stdout}`)
 		const from = path.join(tmp, member)
 		if (!fs.existsSync(from)) die(`${member} not found inside ${path.basename(archive)}`)
-		fs.mkdirSync(path.dirname(dest), { recursive: true })
 		fs.copyFileSync(from, dest)
 		fs.chmodSync(dest, 0o755)
 	} finally {
