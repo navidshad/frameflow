@@ -81,11 +81,6 @@
 					@click.stop="editorStore.retryAsset(asset.id)">
 					Retry
 				</button>
-				<button v-if="isScenedetectMissing"
-					class="px-2 py-1 rounded-lg bg-amber-500/10 text-amber-600 dark:text-amber-400 text-[10px] font-bold uppercase tracking-widest hover:bg-amber-500/20 transition"
-					@click.stop="installScenedetect">
-					Install scene detection
-				</button>
 			</div>
 		</div>
 	</div>
@@ -113,10 +108,6 @@ const thumbSrc = computed(() => {
 	const thumb = props.asset.clips.find((c) => c.thumbnailPath)?.thumbnailPath
 	return thumb ? `media://${thumb}` : null
 })
-
-const isScenedetectMissing = computed(() =>
-	(props.asset.preprocessError || '').includes('scenedetect-missing') || !editorStore.deps.scenedetect
-)
 
 // Only a probed asset with a real duration can be dropped as a whole-file item.
 const canPlace = computed(() => (props.asset.metadata?.duration || 0) > 0)
@@ -156,11 +147,4 @@ const formatDuration = (seconds: number) => {
 	return `${m}:${String(s).padStart(2, '0')}`
 }
 
-const installScenedetect = async () => {
-	try {
-		await (window as any).api.installDependency('scenedetect')
-	} catch (error) {
-		console.error('Failed to start scenedetect install:', error)
-	}
-}
 </script>

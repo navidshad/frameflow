@@ -45,9 +45,8 @@ export const useEditorStore = defineStore('editor', () => {
 	const interruptedAssets = ref<Set<string>>(new Set())
 	const dirty = ref(false)
 	const saveInFlight = ref(false)
-	const deps = ref<{ ffmpeg: boolean; scenedetect: boolean; ytDlp: boolean }>({
+	const deps = ref<{ ffmpeg: boolean; ytDlp: boolean }>({
 		ffmpeg: true,
-		scenedetect: true,
 		ytDlp: true
 	})
 	const loading = ref(false)
@@ -610,13 +609,12 @@ export const useEditorStore = defineStore('editor', () => {
 					.map((a) => a.id)
 			)
 
-			// Fire-and-forget: the scenedetect/yt-dlp binary checks spawn processes
+			// Fire-and-forget: the ffmpeg/yt-dlp binary checks spawn processes
 			// and can take seconds — never block first paint on them.
 			api.checkSystemRequirements()
 				.then((reqs: any) => {
 					deps.value = {
 						ffmpeg: reqs?.ffmpegAvailable !== false,
-						scenedetect: reqs?.scenedetectAvailable !== false,
 						ytDlp: reqs?.ytDlpAvailable !== false
 					}
 				})
@@ -816,14 +814,14 @@ export const useEditorStore = defineStore('editor', () => {
 	}
 	watch(() => doc.value?.media.map((a) => a.id).join(','), () => ensureThumbnails())
 
-	/** Re-run scene detection with a custom threshold (lower = more pieces). */
-	const redetectScenes = async (assetId: string, threshold: number) => {
+	/** Re-run scene detection at a custom sensitivity (higher = more pieces). */
+	const redetectScenes = async (assetId: string, sensitivity: number) => {
 		if (!threadId.value) return
 		await api.preprocessMedia({
 			threadId: threadId.value,
 			assetId,
 			steps: ['scenes', 'thumbnails'],
-			threshold
+			sensitivity
 		})
 	}
 
@@ -2160,6 +2158,7 @@ export const useEditorStore = defineStore('editor', () => {
 		// personas
 		personas,
 		activePersona,
+		findPersona,
 		personaGroups,
 		promptDraft,
 		queuePrompt,

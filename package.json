@@ -8,11 +8,9 @@
   "private": true,
   "license": "UNLICENSED",
   "scripts": {
-    "format": "prettier --write .",
-    "lint": "eslint . --ext .js,.jsx,.cjs,.mjs,.ts,.tsx,.cts,.mts --fix --ignore-path .gitignore",
     "typecheck:node": "tsc -p tsconfig.node.json --noEmit",
-    "typecheck:web": "vue-tsc -p tsconfig.web.json --noEmit",
-    "typecheck": "npm run typecheck:node && npm run typecheck:web || true",
+    "typecheck:web": "node scripts/typecheck-web.mjs",
+    "typecheck": "npm run typecheck:node && npm run typecheck:web",
     "test": "vitest run",
     "start": "electron-vite preview",
     "start:debug": "electron-vite build && electron out/main/index.js --remote-debugging-port=9222",
@@ -69,9 +67,6 @@
     "directories": {
       "output": "dist"
     },
-    "extraResources": [
-      "resources/**"
-    ],
     "asarUnpack": [
       "**/node_modules/ytdlp-nodejs/bin/*",
       "**/node_modules/ffmpeg-static/ffmpeg",

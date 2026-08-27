@@ -32,8 +32,8 @@
         :selection-key-code="graphMode === 'select' ? true : null" 
         :pan-on-scroll="true"
         :zoom-on-scroll="true"
-        :pan-on-scroll-mode="'all'"
-        :selection-mode="'partial'">
+        :pan-on-scroll-mode="PanOnScrollMode.Free"
+        :selection-mode="SelectionMode.Partial">
         <Background pattern-color="#888" :gap="20" />
         <Controls />
 
@@ -74,7 +74,7 @@
 
 <script setup lang="ts">
 import { onMounted, onUnmounted, computed, ref } from 'vue'
-import { VueFlow, useVueFlow } from '@vue-flow/core'
+import { VueFlow, useVueFlow, PanOnScrollMode, SelectionMode } from '@vue-flow/core'
 import { Background } from '@vue-flow/background'
 import { Controls } from '@vue-flow/controls'
 // Vue Flow CSS is imported once in main.ts — it is shared with the editor's
@@ -263,18 +263,7 @@ const onPaneMouseUp = async (event: MouseEvent) => {
       width,
       height,
       title: 'New Group',
-      isFrame: true,
-      onDelete: async () => {
-        const result = await (window as any).api.showConfirmation({
-          title: 'Delete Frame',
-          message: 'Are you sure you want to delete this frame?',
-          detail: 'Children nodes will be ungrouped but NOT deleted.',
-          type: 'warning'
-        })
-        if (result.response === 1) {
-          await videoStore.deleteFrame(frameId)
-        }
-      }
+      isFrame: true
     })
 
     // 2. Identify nodes inside and group them

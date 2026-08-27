@@ -60,7 +60,7 @@ const api = {
 		ipcRenderer.invoke('import-media-url', data),
 	removeMediaAsset: (data: { threadId: string, assetId: string }) =>
 		ipcRenderer.invoke('remove-media-asset', data),
-	preprocessMedia: (data: { threadId: string, assetId: string, steps?: string[], threshold?: number }) =>
+	preprocessMedia: (data: { threadId: string, assetId: string, steps?: string[], sensitivity?: number }) =>
 		ipcRenderer.invoke('preprocess-media', data),
 	findSilence: (data: { threadId: string, assetId: string, noiseDb?: number, minDurationSec?: number }) =>
 		ipcRenderer.invoke('find-silence', data),

@@ -10,7 +10,7 @@ import type { PipelineContext } from '../pipeline'
 import { threadManager } from '../threads'
 import { backgroundTaskManager } from '../tasks'
 import * as ffmpegAdapter from '../ffmpeg'
-import { SceneDetector, checkScenedetectAvailability, type Scene } from '../scenedetect'
+import { SceneDetector, type Scene } from '../scenedetect'
 import * as extraction from '../pipeline/phases/extraction'
 import { ASSET_DIRS } from '../constants/paths'
 import { getAssetDir, patchAsset, patchAssetPreprocessing } from './assets'
@@ -52,9 +52,7 @@ const AUDIO_STEPS: PreprocessStep[] = ['segment']
 // default steps and would re-bill a full transcription.
 const SOFT_FAIL_STEPS: PreprocessStep[] = ['audio', 'transcript', 'descriptions']
 
-export const SCENEDETECT_MISSING = 'scenedetect-missing'
-
-// ===== Concurrency cap (K=3) for ffmpeg/scenedetect-heavy work =====
+// ===== Concurrency cap (K=3) for ffmpeg-heavy work =====
 const MAX_CONCURRENT_HEAVY = 3
 let heavyRunning = 0
 const heavyQueue: Array<() => void> = []
@@ -241,10 +239,10 @@ async function runScenesStep(
 	threadId: string,
 	assetId: string,
 	signal: AbortSignal,
-	threshold?: number
+	sensitivity?: number
 ) {
 	const asset = getAsset(threadId, assetId)!
-	const forceRerun = threshold !== undefined
+	const forceRerun = sensitivity !== undefined
 
 	if (!forceRerun && exists(asset.preprocessing.sceneTimesPath)) {
 		await setTask(threadId, assetId, 'scenes', { state: 'completed', progress: 100 })
@@ -254,11 +252,6 @@ async function runScenesStep(
 	await setTask(threadId, assetId, 'scenes', { state: 'running', status: 'Detecting scenes…', progress: 0 })
 	const reportScenes = makeProgressReporter(threadId, assetId, 'scenes')
 
-	const available = await checkScenedetectAvailability()
-	if (!available) {
-		throw new Error(SCENEDETECT_MISSING)
-	}
-
 	const thread = threadManager.getThread(threadId)!
 	const analysisDir = path.join(getAssetDir(thread, assetId), ASSET_DIRS.ANALYSIS)
 	if (!fs.existsSync(analysisDir)) fs.mkdirSync(analysisDir, { recursive: true })
@@ -267,11 +260,11 @@ async function runScenesStep(
 	const detector = new SceneDetector()
 	const videoPath = asset.proxyPath || asset.originalPath
 	let scenes = await withHeavySlot(() =>
-		detector.detectScenes(videoPath, signal, threshold, (p) => reportScenes(p))
+		detector.detectScenes(videoPath, signal, sensitivity, (p) => reportScenes(p))
 	)
 
-	// A cut-less video (talking head, screen recording) can yield zero rows —
-	// fall back to a single whole-video scene so there is always one piece.
+	// detectScenes already spans a cut-less video with one scene; this only fires
+	// when the duration probe came back empty, so there is always one piece.
 	if (scenes.length === 0 && asset.metadata?.duration) {
 		scenes = [{ startTime: 0, endTime: asset.metadata.duration, duration: asset.metadata.duration }]
 	}
@@ -971,7 +964,7 @@ async function mergeTranscriptIntoClips(threadId: string, assetId: string) {
 export async function preprocessMediaAsset(
 	threadId: string,
 	assetId: string,
-	options?: { steps?: PreprocessStep[]; threshold?: number }
+	options?: { steps?: PreprocessStep[]; sensitivity?: number }
 ): Promise<void> {
 	const asset = getAsset(threadId, assetId)
 	if (!asset) return
@@ -1001,8 +994,8 @@ export async function preprocessMediaAsset(
 
 	let currentStep: PreprocessStep | null = null
 	try {
-		// A threshold re-run must re-detect scenes even if outputs exist
-		if (options?.threshold !== undefined) {
+		// A sensitivity re-run must re-detect scenes even if outputs exist
+		if (options?.sensitivity !== undefined) {
 			await patchAssetPreprocessing(threadId, assetId, { sceneTimesPath: undefined })
 		}
 
@@ -1012,7 +1005,7 @@ export async function preprocessMediaAsset(
 			try {
 				switch (step) {
 					case 'proxy': await runProxyStep(threadId, assetId, signal); break
-					case 'scenes': await runScenesStep(threadId, assetId, signal, options?.threshold); break
+					case 'scenes': await runScenesStep(threadId, assetId, signal, options?.sensitivity); break
 					case 'thumbnails': await runThumbnailsStep(threadId, assetId, signal); break
 					case 'descriptions': await runDescriptionsStep(threadId, assetId, signal); break
 					case 'audio': await runAudioStep(threadId, assetId, signal); break
@@ -1053,9 +1046,7 @@ export async function preprocessMediaAsset(
 		}
 		await patchAsset(threadId, assetId, {
 			preprocessState: 'error',
-			preprocessError: message === SCENEDETECT_MISSING
-				? `${SCENEDETECT_MISSING}: PySceneDetect is not installed — scene splitting is unavailable.`
-				: message
+			preprocessError: message
 		})
 	} finally {
 		abortControllers.delete(abortKey(threadId, assetId))

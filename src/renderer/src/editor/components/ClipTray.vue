@@ -33,14 +33,14 @@
 		<!-- Detector sensitivity (§5.2) — re-runs scene detection -->
 		<div v-if="showDetector && !isAudio" class="mb-2 p-2 rounded-lg bg-zinc-100/70 dark:bg-zinc-900/50">
 			<div class="flex items-center gap-2">
-				<span class="text-[9px] font-bold uppercase tracking-widest text-zinc-400 shrink-0">Threshold</span>
-				<input type="range" min="5" max="60" step="1" v-model.number="threshold"
+				<span class="text-[9px] font-bold uppercase tracking-widest text-zinc-400 shrink-0">Sensitivity</span>
+				<input type="range" :min="SCENE_SENSITIVITY_MIN" :max="SCENE_SENSITIVITY_MAX" step="1" v-model.number="sensitivity"
 					class="flex-1 accent-primary min-w-0" />
-				<span class="font-mono text-[11px] text-zinc-600 dark:text-zinc-300 w-6 text-right">{{ threshold }}</span>
+				<span class="font-mono text-[11px] text-zinc-600 dark:text-zinc-300 w-6 text-right">{{ sensitivity }}</span>
 			</div>
 			<div class="mt-1.5 flex items-center justify-between gap-2">
 				<p class="text-[9px] text-zinc-400 leading-snug">
-					Lower finds more pieces. Re-detecting rebuilds the tray (manual merges/splits are lost).
+					Higher finds more pieces. Re-detecting rebuilds the tray (manual merges/splits are lost).
 				</p>
 				<button
 					class="shrink-0 px-2 py-1 rounded-lg border border-primary/40 text-primary text-[10px] font-bold hover:bg-primary/10 transition active:scale-95 disabled:opacity-50"
@@ -79,6 +79,7 @@
 <script setup lang="ts">
 import { computed, ref, watch } from 'vue'
 import { useEditorStore } from '../../stores/editorStore'
+import { SCENE_SENSITIVITY_MIN, SCENE_SENSITIVITY_MAX, SCENE_SENSITIVITY_DEFAULT } from '@shared/scene-sensitivity'
 import ClipTile from './ClipTile.vue'
 
 const editorStore = useEditorStore()
@@ -90,7 +91,7 @@ const selectedCount = computed(() => clips.value.filter((c) => c.selected).lengt
 const isProcessing = computed(() => asset.value?.preprocessState === 'running')
 
 const showDetector = ref(false)
-const threshold = ref(27) // PySceneDetect detect-content default
+const sensitivity = ref(SCENE_SENSITIVITY_DEFAULT)
 const trayError = ref<string | null>(null)
 
 watch(() => asset.value?.id, () => { trayError.value = null })
@@ -98,7 +99,7 @@ watch(() => asset.value?.id, () => { trayError.value = null })
 const onRedetect = () => {
 	if (!asset.value) return
 	trayError.value = null
-	editorStore.redetectScenes(asset.value.id, threshold.value)
+	editorStore.redetectScenes(asset.value.id, sensitivity.value)
 }
 
 const onMerge = async () => {
