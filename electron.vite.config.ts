@@ -5,8 +5,9 @@ import { resolve } from 'path'
 // `externalizeDeps` replaces the `externalizeDepsPlugin` deprecated in
 // electron-vite 5. It defaults to true for main and preload; it is written out
 // here so the diff that dropped the plugin cannot be misread as dropping
-// externalization — bundling ffmpeg-static or ytdlp-nodejs into the main chunk
-// would detach their binaries from the asarUnpack paths main rewrites at runtime.
+// externalization — bundling ytdlp-nodejs into the main chunk would detach its
+// binary from the asarUnpack path main rewrites at runtime. (FFmpeg is no longer
+// an npm dependency; see scripts/fetch-ffmpeg.mjs.)
 export default defineConfig({
   main: {
     resolve: {

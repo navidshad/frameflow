@@ -1,0 +1,91 @@
+{
+	"_comment": [
+		"Pinned, hash-verified FFmpeg/FFprobe binaries. Read scripts/fetch-ffmpeg.mjs first.",
+		"",
+		"Every URL here is an immutable, versioned address -- never a 'latest' redirect --",
+		"so a build made today and a build made next year fetch the identical bytes.",
+		"",
+		"Two builders, chosen per platform rather than per vendor, because LICENSING VARIES",
+		"BY PLATFORM WITHIN A SINGLE BUILDER. martin-riedl's macOS builds are clean GPL but",
+		"its Linux builds set --enable-nonfree; BtbN ships no macOS at all. That is why the",
+		"fetch script re-verifies the configure line of every binary it extracts instead of",
+		"trusting the source. Do not 'simplify' this to one builder without re-verifying.",
+		"",
+		"To bump: change the URLs, run `node scripts/fetch-ffmpeg.mjs --print-hashes` for",
+		"each target, paste the hashes back here, and update THIRD-PARTY-NOTICES.md section 2."
+	],
+
+	"ffmpegVersion": "9.0.1",
+	"license": "GPL-3.0-or-later",
+	"licenseUrl": "https://www.gnu.org/licenses/gpl-3.0.txt",
+	"sourceUrl": "https://git.ffmpeg.org/gitweb/ffmpeg.git/shortlog/refs/tags/n9.0.1",
+
+	"requiredFlags": ["--enable-gpl"],
+	"forbiddenFlags": ["--enable-nonfree"],
+
+	"targets": {
+		"darwin-arm64": {
+			"builder": "martin-riedl.de",
+			"builderUrl": "https://ffmpeg.martin-riedl.de/",
+			"archives": [
+				{
+					"url": "https://ffmpeg.martin-riedl.de/download/macos/arm64/1787073674_9.0.1/ffmpeg.zip",
+					"sha256": "8287a1b2229e05eb41859f073e18e6c52c60a778f2f5e6881070fe51b79407fe",
+					"members": { "ffmpeg": "ffmpeg" }
+				},
+				{
+					"url": "https://ffmpeg.martin-riedl.de/download/macos/arm64/1787073674_9.0.1/ffprobe.zip",
+					"sha256": "102a26b8940a053298d9929bfaae71e4b6ef65ba5f19a99a88c433108560741a",
+					"members": { "ffprobe": "ffprobe" }
+				}
+			]
+		},
+
+		"darwin-x64": {
+			"builder": "martin-riedl.de",
+			"builderUrl": "https://ffmpeg.martin-riedl.de/",
+			"archives": [
+				{
+					"url": "https://ffmpeg.martin-riedl.de/download/macos/amd64/1787081194_9.0.1/ffmpeg.zip",
+					"sha256": "5bdead62ff504ab9b447cc72b212c4fb481e3f7de5877d427a51bee8136dda40",
+					"members": { "ffmpeg": "ffmpeg" }
+				},
+				{
+					"url": "https://ffmpeg.martin-riedl.de/download/macos/amd64/1787081194_9.0.1/ffprobe.zip",
+					"sha256": "34511bbcf1988ad2886023bf5ace4f44cf62e6defeb3d194d6f7619e5b061f7f",
+					"members": { "ffprobe": "ffprobe" }
+				}
+			]
+		},
+
+		"win32-x64": {
+			"builder": "BtbN/FFmpeg-Builds",
+			"builderUrl": "https://github.com/BtbN/FFmpeg-Builds",
+			"archives": [
+				{
+					"url": "https://github.com/BtbN/FFmpeg-Builds/releases/download/autobuild-2026-08-26-13-06/ffmpeg-n9.0.1-8-g16dfae5c88-win64-gpl-9.0.zip",
+					"sha256": "32fa73f4695ca11bd422e288292970157e2cd3694dec00d51315667297c873f1",
+					"members": {
+						"ffmpeg.exe": "ffmpeg-n9.0.1-8-g16dfae5c88-win64-gpl-9.0/bin/ffmpeg.exe",
+						"ffprobe.exe": "ffmpeg-n9.0.1-8-g16dfae5c88-win64-gpl-9.0/bin/ffprobe.exe"
+					}
+				}
+			]
+		},
+
+		"linux-x64": {
+			"builder": "BtbN/FFmpeg-Builds",
+			"builderUrl": "https://github.com/BtbN/FFmpeg-Builds",
+			"archives": [
+				{
+					"url": "https://github.com/BtbN/FFmpeg-Builds/releases/download/autobuild-2026-08-26-13-06/ffmpeg-n9.0.1-8-g16dfae5c88-linux64-gpl-9.0.tar.xz",
+					"sha256": "7648eac8acab5c1be8d064c1055cc0429663a7462b4ddcd591134ae4a3a6110e",
+					"members": {
+						"ffmpeg": "ffmpeg-n9.0.1-8-g16dfae5c88-linux64-gpl-9.0/bin/ffmpeg",
+						"ffprobe": "ffmpeg-n9.0.1-8-g16dfae5c88-linux64-gpl-9.0/bin/ffprobe"
+					}
+				}
+			]
+		}
+	}
+}

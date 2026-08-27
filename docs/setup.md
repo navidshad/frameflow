@@ -20,7 +20,7 @@ nothing to install with Homebrew, Chocolatey, or pip:
 
 | Tool | How it ships |
 |---|---|
-| **FFmpeg / FFprobe** | bundled via `ffmpeg-static` / `ffprobe-static`, unpacked from the asar at build time |
+| **FFmpeg / FFprobe** | GPL-3.0 builds fetched and licence-checked at install time by `scripts/fetch-ffmpeg.mjs`, shipped in the app's resources |
 | **Scene detection** | FFmpeg's native `scdet` filter — no separate binary |
 | **yt-dlp** | bundled via `ytdlp-nodejs`, with a self-healing update when a stale binary fails |
 

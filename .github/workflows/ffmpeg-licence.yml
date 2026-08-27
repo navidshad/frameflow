@@ -1,0 +1,74 @@
+name: FFmpeg licence
+
+# Every FFmpeg/FFprobe binary this project ships is pinned by sha256 in
+# scripts/ffmpeg-manifest.json, so the bytes cannot change unless that file
+# changes. This workflow therefore runs only when the pins or the fetch logic
+# move — and when they do, it checks ALL FOUR targets rather than just the one
+# the runner happens to need.
+#
+# That matters because licensing varies by platform within a single builder:
+# martin-riedl's macOS builds are clean GPL while its Linux builds are
+# --enable-nonfree, and ffmpeg-static shipped a nonfree darwin-arm64 alongside
+# three clean platforms. A gate that only checked the host would have passed
+# every time and still let a non-redistributable binary through.
+
+on:
+  pull_request:
+    paths:
+      - 'scripts/ffmpeg-manifest.json'
+      - 'scripts/fetch-ffmpeg.mjs'
+      - '.github/workflows/ffmpeg-licence.yml'
+  push:
+    branches:
+      - main
+    paths:
+      - 'scripts/ffmpeg-manifest.json'
+      - 'scripts/fetch-ffmpeg.mjs'
+  workflow_dispatch:
+
+concurrency:
+  group: ffmpeg-licence-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  verify:
+    name: ${{ matrix.platform }}-${{ matrix.arch }}
+    runs-on: ubuntu-latest
+
+    # Every target is fetched on Linux. Nothing here executes the binaries --
+    # the licence check reads the configure line out of the file — so one cheap
+    # runner can verify the macOS and Windows builds too.
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - platform: darwin
+            arch: arm64
+          - platform: darwin
+            arch: x64
+          - platform: win32
+            arch: x64
+          - platform: linux
+            arch: x64
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 24
+
+      # Not `npm ci`: this job needs the fetch script and its manifest, nothing
+      # else. The script uses only node builtins and `tar`.
+      - name: Fetch and verify ${{ matrix.platform }}-${{ matrix.arch }}
+        env:
+          npm_config_platform: ${{ matrix.platform }}
+          npm_config_arch: ${{ matrix.arch }}
+        run: |
+          node scripts/fetch-ffmpeg.mjs
+          node scripts/fetch-ffmpeg.mjs --verify-only
+
+      - name: Show provenance
+        run: cat vendor/ffmpeg/PROVENANCE.txt

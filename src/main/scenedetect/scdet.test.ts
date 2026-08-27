@@ -4,7 +4,7 @@ import { promises as fs } from 'fs'
 import { tmpdir } from 'os'
 import { join } from 'path'
 import { promisify } from 'util'
-import ffmpegStatic from 'ffmpeg-static'
+import { getFFmpegBinaryPath } from '../ffmpeg/binaries'
 import { toScenes, SceneDetector } from './index'
 import {
 	clampSensitivity,
@@ -123,7 +123,7 @@ describe('SceneDetector against the bundled FFmpeg', () => {
 	const dir = join(tmpdir(), 'frameflow-scdet-test')
 	const cutsPath = join(dir, 'cuts.mp4')
 	const flatPath = join(dir, 'flat.mp4')
-	const ffmpegPath = (ffmpegStatic as unknown as string) || 'ffmpeg'
+	const ffmpegPath = getFFmpegBinaryPath()
 
 	beforeAll(async () => {
 		await fs.mkdir(dir, { recursive: true })

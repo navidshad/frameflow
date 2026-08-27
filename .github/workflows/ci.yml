@@ -26,10 +26,17 @@ jobs:
           cache: npm
 
       # Plain `npm ci` on purpose: it runs the same postinstall the app needs
-      # (electron-builder install-app-deps, ffmpeg-static binary fetch), so CI
+      # (scripts/fetch-ffmpeg.mjs, electron-builder install-app-deps), so CI
       # installs exactly what a developer gets.
       - name: Install dependencies
         run: npm ci
+
+      # The postinstall already refuses a non-redistributable build, but this
+      # states the guarantee in the log rather than leaving it implicit in an
+      # install step. Covers this runner's target (linux-x64); the other three
+      # are covered per-leg in release.yml and wholesale in ffmpeg-licence.yml.
+      - name: Verify FFmpeg licence
+        run: npm run verify:ffmpeg
 
       - name: Typecheck
         run: npm run typecheck

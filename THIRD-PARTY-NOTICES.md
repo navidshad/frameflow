@@ -47,25 +47,51 @@ FrameFlow Pro bundles the FFmpeg and FFprobe executables and invokes them as
 separate processes. FFmpeg is not linked into this application; the two are
 distributed as an aggregate.
 
-> ### ⚠️ ACTION REQUIRED BEFORE ANY DISTRIBUTION
->
-> The build currently resolved by `ffmpeg-static@5.3.0` is configured with
-> **both `--enable-gpl` and `--enable-nonfree`**. Per FFmpeg's own licensing
-> terms, a `--enable-nonfree` build **cannot be redistributed at all**.
->
-> Before shipping any binary — free or paid — pin a GPL-but-not-nonfree build
-> (e.g. BtbN/FFmpeg-Builds) or an LGPL build via the `FFMPEG_BINARIES_URL`
-> environment variable, and verify the `configure` line of the binary for
-> **each** target platform. Then replace this box with the confirmed license.
+**Version:** FFmpeg 9.0.1, on every platform.
 
-Once repinned to a GPL build, the following applies:
+**License:** GNU General Public License, **version 3 or later**. Every bundled
+build is configured `--enable-gpl --enable-version3`; the `--enable-version3`
+flag is what makes this v3 rather than v2-or-later, so GPL-3.0 terms govern.
+None is configured `--enable-nonfree`.
 
-- FFmpeg is licensed under the GNU General Public License, version 2 or later.
-- The full GPL text is distributed alongside the binary.
+The full licence text ships next to the executables it covers, as
+`LICENSE.txt` in the app's `ffmpeg` resources directory.
+
+### Builds
+
+Binaries are pinned by URL and SHA-256 in `scripts/ffmpeg-manifest.json` and
+fetched at install time by `scripts/fetch-ffmpeg.mjs`.
+
+| Target | Builder |
+|---|---|
+| macOS arm64 | [martin-riedl.de](https://ffmpeg.martin-riedl.de/) |
+| macOS x64 | [martin-riedl.de](https://ffmpeg.martin-riedl.de/) |
+| Windows x64 | [BtbN/FFmpeg-Builds](https://github.com/BtbN/FFmpeg-Builds) |
+| Linux x64 | [BtbN/FFmpeg-Builds](https://github.com/BtbN/FFmpeg-Builds) |
+
+Two builders rather than one because **licensing varies by platform within a
+single builder** — martin-riedl's macOS builds are clean GPL while its Linux
+builds are `--enable-nonfree`, and BtbN publishes no macOS build at all. Each
+shipped binary records the archive it came from, that archive's SHA-256, and
+its full `configure` line in `PROVENANCE.txt`, alongside `LICENSE.txt`.
+
+The build that ships is never trusted on the strength of its source. The fetch
+script reads the `configure` line out of each executable on every install and
+refuses to install one carrying `--enable-nonfree`; the release workflow
+re-runs that check before packaging, and `.github/workflows/ffmpeg-licence.yml`
+re-checks all four targets whenever the pins change. This replaced
+`ffmpeg-static`, whose darwin-arm64 build was `--enable-nonfree` while its
+other three platforms were clean — a split nothing in the toolchain surfaced.
+
+### Corresponding source
+
+- FFmpeg homepage: https://ffmpeg.org
+- Upstream source for this version:
+  https://git.ffmpeg.org/gitweb/ffmpeg.git/shortlog/refs/tags/n9.0.1
+- Build recipes: the builders' own published scripts, linked in the table above.
 - **Written offer:** the complete corresponding source code for the bundled
   FFmpeg build is available on request for a period of three years, at no
   charge beyond the cost of distribution. Contact: <navidshad72@gmail.com>.
-- FFmpeg homepage: https://ffmpeg.org — source: https://git.ffmpeg.org/ffmpeg.git
 
 ---
 
