@@ -121,9 +121,7 @@ const turns = computed<PromptTurn[]>(() =>
 	[...(store.doc?.turns || [])].sort((a, b) => a.createdAt - b.createdAt)
 )
 
-const personaIcon = (personaId: string) => store.findPersona?.(personaId)?.icon
-	|| store.personas.find((p) => p.id === personaId)?.icon
-	|| '🤖'
+const personaIcon = (personaId: string) => store.findPersona(personaId)?.icon || '🤖'
 
 const revisionSeq = (turn: PromptTurn) => {
 	if (!turn.revisionId) return null

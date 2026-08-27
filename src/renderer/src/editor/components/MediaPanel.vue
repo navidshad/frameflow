@@ -28,15 +28,6 @@
 			</div>
 		</div>
 
-		<!-- Dependency banner -->
-		<div v-if="!editorStore.deps.scenedetect"
-			class="mx-3 mb-2 px-3 py-2 rounded-xl bg-amber-500/10 border border-amber-500/20 shrink-0">
-			<p class="text-[11px] font-medium text-amber-600 dark:text-amber-400 leading-snug">
-				<span class="iconify tabler--alert-triangle w-3 h-3 inline-block align-[-1px] mr-1"></span>
-				Scene detection needs PySceneDetect. Media can still be imported and previewed.
-			</p>
-		</div>
-
 		<!-- Asset list -->
 		<div class="flex-1 min-h-0 overflow-y-auto custom-scrollbar px-3 pb-2">
 			<!-- Empty state -->

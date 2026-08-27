@@ -319,7 +319,7 @@ const addReferencesToInput = async () => {
   
   const urlsToAdd = []
   if (actualFile.value?.url) urlsToAdd.push(mediaUrl(actualFile.value.url))
-  referenceFrames.value.forEach(f => {
+  referenceFrames.value.forEach((f: any) => {
     if (f.url) urlsToAdd.push(mediaUrl(f.url))
   })
 

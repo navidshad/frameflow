@@ -80,14 +80,17 @@ reviewed before any store submission.
 
 ---
 
-## 4. PySceneDetect
+## 4. PySceneDetect — removed
 
-Invoked as an external process for scene detection when present on the host.
-Licensed under the BSD 3-Clause License.
-Copyright (c) 2014-2024 Brandon Castellano. https://www.scenedetect.com
+No longer a dependency. Scene detection now uses FFmpeg's native `scdet` filter
+(see section 2), which removed the Python runtime requirement and the last
+obstacle to a self-contained installer.
 
-Note: scheduled for removal in favour of FFmpeg's native `scdet` filter, which
-eliminates this dependency and its Python runtime requirement entirely.
+This section is retained as a record: releases up to and including v1.1.23
+invoked the PySceneDetect CLI as an external process when it was present on the
+host. It is licensed under the BSD 3-Clause License,
+Copyright (c) 2014-2024 Brandon Castellano, https://www.scenedetect.com — and it
+was never bundled or redistributed, only called if the user had installed it.
 
 ---
 

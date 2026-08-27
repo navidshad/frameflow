@@ -1,66 +1,71 @@
 # 🛠 Installation & Setup Guide
 
-This guide provides detailed instructions on how to set up the environment and run the **FrameFlow** application.
+How to set up the environment and run **FrameFlow Pro** locally.
 
 ---
 
 ## 🚀 Getting Started
 
 ### Prerequisites
-- **Node.js** (v18 or higher)
-- **Google Gemini API Key** ([Google AI Studio](https://aistudio.google.com/app/apikey)) — *Ask us if you need an API key to test this project.*
 
-### 🛠 External Tool Setup
-The application relies on **FFmpeg** for video processing and **PySceneDetect** for scene analysis.
+- **Node.js** v20 LTS (v18 is the minimum; CI builds on 20)
+- **Google Gemini API Key** ([Google AI Studio](https://aistudio.google.com/app/apikey)) — entered in the app's settings, never committed
 
-#### 🍏 macOS
-1. **FFmpeg**: Install via [Homebrew](https://brew.sh/):
-   ```bash
-   brew install ffmpeg
-   ```
-2. **PySceneDetect**: Install via pip (requires Python):
-   ```bash
-   pip install scenedetect
-   ```
+That is the whole list.
 
-#### 🪟 Windows
-1. **Chocolatey**: Ensure [Chocolatey](https://chocolatey.org/install) is installed to manage packages.
-2. **FFmpeg**: Install via terminal (Run as Administrator):
-   ```bash
-   choco install ffmpeg
-   ```
-3. **PySceneDetect**:
-   There are two options to install PySceneDetect:
-   1. **(Python Package Option)**: 
-      - Ensure [Python](https://www.python.org/) is installed and added to PATH. 
-      - Install via terminal:
-        ```bash
-        pip install scenedetect
-        ``` 
-   2. **PySceneDetect (Windows Installer)**: 
-      - Download the installer from [PySceneDetect Download](https://www.scenedetect.com/download).
-      - Run the installer and follow the instructions.
-      - You might need to install open-cv as well:
-        ```bash
-        pip install opencv-python
-        ```
+### 📦 No external tools required
+
+FrameFlow Pro ships every media binary it needs inside the app bundle. There is
+nothing to install with Homebrew, Chocolatey, or pip:
+
+| Tool | How it ships |
+|---|---|
+| **FFmpeg / FFprobe** | bundled via `ffmpeg-static` / `ffprobe-static`, unpacked from the asar at build time |
+| **Scene detection** | FFmpeg's native `scdet` filter — no separate binary |
+| **yt-dlp** | bundled via `ytdlp-nodejs`, with a self-healing update when a stale binary fails |
+
+> Earlier versions of this guide asked you to `brew install ffmpeg` and
+> `pip install scenedetect`. Both are obsolete: FFmpeg was always bundled, and the
+> Python scene detector was replaced by `scdet`. If you installed either for
+> FrameFlow, you can remove them.
 
 ---
 
 ## 💻 Installation
 
-1. **Clone the repository**:
+1. **Clone the repository**
+
    ```bash
-   git clone https://github.com/navidshad/frameflow.git
-   cd frameflow
+   git clone https://github.com/navidshad/frameflow-pro.git
    ```
 
-2. **Install dependencies**:
+2. **Install dependencies**
+
    ```bash
-   yarn install
+   npm install
    ```
 
-3. **Start the application**:
+3. **Start the app**
+
    ```bash
-   yarn dev
+   npm run dev
    ```
+
+> Use **npm**, not yarn. `package-lock.json` is the maintained lockfile; the
+> `yarn.lock` still in the tree is stale and will install a different dependency
+> set.
+
+---
+
+## 🧪 Development scripts
+
+| Command | What it does |
+|---|---|
+| `npm run dev` | Run the app with hot reload |
+| `npm test` | Run the vitest suite |
+| `npm run typecheck` | Typecheck main, preload, shared and renderer |
+| `npm run build` | Build renderer + main into `out/` |
+| `npm run build:mac` / `build:win` / `build:linux` | Package an installer for one platform |
+
+`npm run typecheck` and `npm test` are what CI gates on, so run both before
+opening a pull request.

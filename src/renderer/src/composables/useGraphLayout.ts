@@ -13,7 +13,7 @@ export function useGraphLayout(videoStore: any, graphStore: any) {
     const childMap: Record<string, string[]> = { 'root-media': [] }
     const messageLookup: Record<string, any> = {}
 
-    messages.forEach(m => {
+    messages.forEach((m: any) => {
       messageLookup[m.id] = m
       const pId = m.editRefId || 'root-media'
       if (!childMap[pId]) childMap[pId] = []

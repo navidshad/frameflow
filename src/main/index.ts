@@ -17,7 +17,6 @@ import { backgroundTaskManager } from './tasks'
 import { GeminiAdapter } from './gemini/adapter'
 
 import { checkFFmpegAvailability, getVideoMetadata, detectSilence } from './ffmpeg'
-import { checkScenedetectAvailability } from './scenedetect'
 import { checkYtDlpAvailability, downloadVideo, getVideoFormats } from './ytdlp'
 import { dependencyManager } from './dependencies/manager'
 import { checkYtDlpFreshness } from './dependencies/ytdlp-updater'
@@ -146,14 +145,12 @@ app.whenReady().then(() => {
 	})
 
 	ipcMain.handle('check-system-requirements', async () => {
-		const [ffmpegAvailable, scenedetectAvailable, ytDlpAvailable] = await Promise.all([
+		const [ffmpegAvailable, ytDlpAvailable] = await Promise.all([
 			checkFFmpegAvailability(),
-			checkScenedetectAvailability(),
 			checkYtDlpAvailability()
 		])
 		return {
 			ffmpegAvailable,
-			scenedetectAvailable,
 			ytDlpAvailable,
 			ytDlpStatus: dependencyManager.getStatus('yt-dlp'),
 			isTempDirUnsafe: settingsManager.isTempDirUnsafe()
@@ -533,12 +530,12 @@ app.whenReady().then(() => {
 	})
 
 	// Retry / re-run / opt-in steps (e.g. ['descriptions']) for one asset.
-	ipcMain.handle('preprocess-media', async (_event, { threadId, assetId, steps, threshold }: {
-		threadId: string, assetId: string, steps?: string[], threshold?: number
+	ipcMain.handle('preprocess-media', async (_event, { threadId, assetId, steps, sensitivity }: {
+		threadId: string, assetId: string, steps?: string[], sensitivity?: number
 	}) => {
 		editorPreprocess.preprocessMediaAsset(threadId, assetId, {
 			steps: steps as any,
-			threshold
+			sensitivity
 		}).catch((error) => {
 			console.error(`[editor] preprocess retry failed for ${assetId}:`, error)
 		})
