@@ -112,10 +112,10 @@ export function useEdlPlayback(
 			}
 			anyActive = true
 			const changed = activeAudioSeg.get(trackId) !== seg.itemId
-			// Compare against the src we LAST SET (raw), never el.src — reading
-			// el.src back returns a normalized/encoded URL (media:///Users →
-			// media://users, %20 for spaces) that never equals seg.src, which
-			// would reset .src every frame and reload the element into silence.
+			// Compare against the src we LAST SET, never el.src — reading el.src
+			// back returns the URL as the parser re-serialised it, which need not
+			// be string-equal to what was assigned. A mismatch here would reset
+			// .src every frame and reload the element into silence.
 			if (el.dataset.edlSrc !== seg.src) {
 				el.src = seg.src
 				el.dataset.edlSrc = seg.src

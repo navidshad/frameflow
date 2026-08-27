@@ -5,16 +5,17 @@ import path from 'path'
 import fs from 'fs'
 import { FileType, PipelineResultType } from '../../../shared/types'
 import { THREAD_DIRS } from '../../constants/paths'
+import { fromMediaUrl, toMediaUrl } from '@shared/media-url'
 
 /**
  * Image output for the AI graph, in two flavours.
  *
  * These were two phases — generateOutputImage and generateThumbnail — that
  * differed in exactly five constants and duplicated everything else. The
- * duplication was already costing something: only one of them stripped
- * `media://` prefixes, and adapter.generateImage silently SKIPS reference paths
- * that fail existsSync, so thumbnails generated with fewer references than the
- * user had selected. Merging fixes that.
+ * duplication was already costing something: only one of them converted
+ * `media://` URLs back to paths, and adapter.generateImage silently SKIPS
+ * reference paths that fail existsSync, so thumbnails generated with fewer
+ * references than the user had selected. Merging fixes that.
  *
  * Both keep their own model slot, so they stay independently configurable in
  * Settings.
@@ -87,11 +88,11 @@ export const generateOutputImage: PipelineFunction = async (data, context) => {
 	const modelName = settingsManager.getModelSettings().selection[mode.modelKey]
 	const intentPrompt = context.intentResult?.content || DEFAULT_PROMPT
 
-	// Normalize (drop media://) and dedupe. generateImage skips paths failing
+	// Back to filesystem paths and dedupe. generateImage skips paths failing
 	// existsSync, so a stray prefix silently costs a reference image.
 	const rawPaths = data.selectedReferenceImages || data.selectedImagePaths || []
 	const allReferenceImages: string[] = Array.from(new Set(
-		rawPaths.map((p: string) => p.replace(/^media:\/+/i, '/').replace(/\//g, path.sep))
+		rawPaths.map((p: string) => fromMediaUrl(p))
 	))
 
 	if (allReferenceImages.length === 0) {
@@ -129,7 +130,7 @@ export const generateOutputImage: PipelineFunction = async (data, context) => {
 					...allReferenceImages
 						.filter((p) => p !== savedPath)
 						.map((p) => ({
-							url: p.startsWith('media://') ? p : `media://${p}`,
+							url: toMediaUrl(p),
 							type: FileType.Preview
 						}))
 				]

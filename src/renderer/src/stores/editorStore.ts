@@ -14,6 +14,7 @@ import {
 import { computeScope } from '@shared/ai-scope'
 import { childrenByParent, collectSubtree, hasBranch } from '@shared/revision-tree'
 import { DEFAULT_PERSONA_ID } from '@shared/personas'
+import { toMediaUrl } from '@shared/media-url'
 
 /**
  * Store for the timeline video editor (/editor/:id).
@@ -211,7 +212,7 @@ export const useEditorStore = defineStore('editor', () => {
 					itemId: item.id,
 					tStart: item.timelineStart,
 					tEnd: itemEnd(item),
-					src: `media://${src}`,
+					src: toMediaUrl(src),
 					sourceIn: item.in,
 					speed: item.speed || 1,
 					muted: !!item.muted || !!trackMuted.get(item.trackId)
@@ -243,7 +244,7 @@ export const useEditorStore = defineStore('editor', () => {
 					trackId: item.trackId,
 					tStart: item.timelineStart,
 					tEnd: itemEnd(item),
-					src: `media://${src}`,
+					src: toMediaUrl(src),
 					sourceIn: item.in,
 					speed: item.speed || 1,
 					muted: !!item.muted || !!trackMuted.get(item.trackId),
