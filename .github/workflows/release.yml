@@ -71,16 +71,25 @@ jobs:
             exit 1
           fi
 
-      # npm_config_arch is what makes cross-arch builds honest: ffmpeg-static
-      # downloads a single binary at install time and picks it from this. The
-      # macOS x64 leg runs on an arm64 runner, so without it the x64 app would
-      # ship an arm64 ffmpeg that cannot execute. (ffprobe-static ships every
-      # arch and is filtered at package time instead — see electron-builder.yml.)
+      # npm_config_arch is what makes cross-arch builds honest: the postinstall
+      # (scripts/fetch-ffmpeg.mjs) fetches ONE ffmpeg/ffprobe pair and picks the
+      # target from this. The macOS x64 leg runs on an arm64 runner, so without
+      # it the x64 app would ship an arm64 ffmpeg that cannot execute.
       - name: Install dependencies
         shell: bash
         env:
           npm_config_arch: ${{ matrix.arch }}
         run: npm ci
+
+      # The gate that guards what actually ships. An --enable-nonfree FFmpeg
+      # cannot be redistributed at all, so this runs BEFORE packaging: a bad
+      # pin fails the leg instead of being attached to a public release. Same
+      # npm_config_arch, so it checks the binary this leg will really bundle.
+      - name: Verify FFmpeg licence
+        shell: bash
+        env:
+          npm_config_arch: ${{ matrix.arch }}
+        run: npm run verify:ffmpeg
 
       # Every macOS signing variable is exported HERE rather than in the build
       # step's `env:`, because an env block cannot conditionally omit a name:

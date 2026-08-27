@@ -50,3 +50,6 @@ release
 .playwright-mcp/page-2026-07-18T21-06-51-089Z.yml
 .playwright-mcp/page-2026-07-18T21-07-01-786Z.yml
 .playwright-mcp/page-2026-07-18T21-07-06-202Z.yml
+
+# Vendored FFmpeg binaries (fetched by scripts/fetch-ffmpeg.mjs)
+vendor

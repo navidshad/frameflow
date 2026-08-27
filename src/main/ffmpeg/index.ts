@@ -1,6 +1,5 @@
 import ffmpeg from 'fluent-ffmpeg'
-import ffmpegPath from 'ffmpeg-static'
-import ffprobePath from 'ffprobe-static'
+import { getFFmpegBinaryPath, getFFprobeBinaryPath } from './binaries'
 import fs from 'fs'
 import { join, basename, extname } from 'path'
 import process from 'node:process'
@@ -11,22 +10,13 @@ const IS_MAC = process.platform === 'darwin'
 
 
 
-/**
- * Returns the absolute path to the unpacked ffmpeg binary.
- */
-export function getFFmpegBinaryPath(): string {
-	const p = typeof ffmpegPath === 'string' ? ffmpegPath : (ffmpegPath as any).path
-	return p.replace('app.asar', 'app.asar.unpacked')
-}
+// Re-exported because callers (src/main/ytdlp.ts) import it from this module.
+export { getFFmpegBinaryPath, getFFprobeBinaryPath } from './binaries'
 
-// Initializing ffmpeg and ffprobe paths
-if (ffmpegPath) {
-	ffmpeg.setFfmpegPath(getFFmpegBinaryPath())
-}
-if (ffprobePath) {
-	const p = typeof ffprobePath === 'string' ? ffprobePath : (ffprobePath as any).path
-	ffmpeg.setFfprobePath(p.replace('app.asar', 'app.asar.unpacked'))
-}
+// No app.asar -> app.asar.unpacked rewriting any more: extraResources puts
+// these binaries outside the archive entirely, so the path is already real.
+ffmpeg.setFfmpegPath(getFFmpegBinaryPath())
+ffmpeg.setFfprobePath(getFFprobeBinaryPath())
 
 /**
  * Checks whether ffmpeg is available and functional.

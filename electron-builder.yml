@@ -5,29 +5,52 @@ directories:
   output: dist
   buildResources: build
 
-# The bundled binaries are spawned as child processes, so they have to sit on
-# the real filesystem rather than inside the asar — main rewrites `app.asar` to
-# `app.asar.unpacked` in the paths these packages report (src/main/ffmpeg/index.ts,
-# src/main/ytdlp.ts). Both globs here were previously wrong in ways that no build
-# had ever exercised, because no installer had ever been produced:
+# yt-dlp is spawned as a child process, so it has to sit on the real filesystem
+# rather than inside the asar — src/main/ytdlp.ts rewrites `app.asar` to
+# `app.asar.unpacked` in the path the package reports.
 #
-#   - ffmpeg-static names its binary `ffmpeg.exe` on Windows, so a glob ending
-#     in `ffmpeg` unpacked nothing at all there.
-#   - ffprobe-static keeps its binary at bin/<platform>/<arch>/ffprobe, not at
-#     the package root, so `ffprobe-static/ffprobe*` matched nothing on ANY
-#     platform and ffprobe stayed sealed inside the archive.
+# FFmpeg and FFprobe are deliberately NOT here any more. They stopped being npm
+# packages when ffmpeg-static's darwin-arm64 build turned out to be
+# --enable-nonfree and therefore not redistributable. A postinstall now fetches
+# licence-verified builds into vendor/ffmpeg (scripts/fetch-ffmpeg.mjs) and
+# `extraResources` copies that directory in whole — which puts the binaries
+# outside the archive to begin with, so there is nothing to unpack, no path to
+# rewrite, and no per-arch pruning to get wrong.
 asarUnpack:
   - '**/node_modules/ytdlp-nodejs/bin/*'
-  - '**/node_modules/ffmpeg-static/ffmpeg*'
-  - '**/node_modules/ffprobe-static/bin/**'
+
+# vendor/ffmpeg holds exactly one target's binaries: the fetch script resolves
+# npm_config_platform/npm_config_arch, so a cross-arch CI leg populates it with
+# that leg's build and this copies whatever is there. It lands at
+# Contents/Resources/ffmpeg on macOS and resources/ffmpeg elsewhere, which is
+# where getFFmpegDir() looks (src/main/ffmpeg/binaries.ts).
+#
+# LICENSE.txt and PROVENANCE.txt ship on purpose: GPL-3.0 requires the licence
+# text to travel with the binary it covers, and PROVENANCE records the exact
+# upstream archive, its sha256 and its configure line. `.target` is build
+# bookkeeping and stays behind.
+extraResources:
+  - from: vendor/ffmpeg
+    to: ffmpeg
+    filter:
+      - '**/*'
+      - '!.target'
+
+# electron-builder excludes an extraResources SOURCE from the app package, but
+# not its siblings — so vendor/.cache (the downloaded upstream archives, kept
+# so a reinstall does not refetch ~150MB) was landing inside app.asar and
+# inflating it by the size of every archive ever fetched. Exclude the whole
+# vendor tree: everything under it that ships, ships via extraResources above.
+files:
+  - '!vendor'
 
 mac:
   category: public.app-category.video
   # No `arch:` here on purpose. An arch list in the target block OVERRIDES the
   # CLI flag, so `electron-builder --mac --arm64` would quietly build x64 too —
-  # and on CI that x64 app would carry whichever ffmpeg-static binary the arm64
-  # runner installed. Leaving it out lets --x64/--arm64 mean what they say, and
-  # defaults a bare `npm run build:mac` to the host arch.
+  # and that x64 app would carry whichever ffmpeg the runner's npm_config_arch
+  # fetched. Leaving it out lets --x64/--arm64 mean what they say, and defaults
+  # a bare `npm run build:mac` to the host arch.
   target:
     - dmg
     # zip alongside dmg: Squirrel.Mac — and so electron-updater, when the
@@ -39,21 +62,12 @@ mac:
   gatekeeperAssess: false
   entitlements: build/entitlements.mac.plist
   entitlementsInherit: build/entitlements.mac.plist
-  # ffprobe-static ships every platform AND every arch — ~60MB of the wrong
-  # ffprobe per build. `${arch}` is expanded in file patterns, so keep only the
-  # one binary this build can actually execute.
-  files:
-    - '!**/node_modules/ffprobe-static/bin/{win32,linux}/**'
-    - '!**/node_modules/ffprobe-static/bin/darwin/!(${arch})/**'
 
 win:
   # Electron 44 no longer publishes 32-bit Windows binaries, so x64 is the only
   # option; the arch still comes from the CLI flag (see the note under `mac`).
   target:
     - nsis
-  files:
-    - '!**/node_modules/ffprobe-static/bin/{darwin,linux}/**'
-    - '!**/node_modules/ffprobe-static/bin/win32/!(${arch})/**'
   #
   # NOT SIGNED YET — deliberately deferred. Windows builds trip SmartScreen
   # with an "unrecognised app" wall until this is filled in. The intended route
@@ -84,9 +98,6 @@ linux:
   # carries no address. Swap for a project address before the first public
   # release if a personal one should not ship in package metadata.
   maintainer: Navid Shad <navidshad72@gmail.com>
-  files:
-    - '!**/node_modules/ffprobe-static/bin/{darwin,win32}/**'
-    - '!**/node_modules/ffprobe-static/bin/linux/!(${arch})/**'
 
 # NOTE: this repo is private, so releases published here are not downloadable
 # without a token — and electron-updater cannot read it at all without embedding
