@@ -217,9 +217,19 @@ export function useEdlPlayback(
 			for (const el of [videoA.value, videoB.value]) {
 				if (!el) continue
 				if (el.volume !== 1) el.volume = 1
+				const leftWindow = !!el.dataset.edlWindow
 				delete el.dataset.edlWindow
 				const seg = segments.value.find((sg) => sg.itemId === el.dataset.edlItem)
-				if (seg && el.muted !== seg.muted) el.muted = seg.muted
+				if (!seg) continue
+				if (el.muted !== seg.muted) el.muted = seg.muted
+				// One-time handover: align the element that is about to become the
+				// clock to where the playhead actually is. Through the window the
+				// playhead ran on the wall clock while the element ran on its own,
+				// so they have drifted, and the next frame reads the element.
+				if (leftWindow && el === activeEl()) {
+					const target = sourceTime(t, seg)
+					if (Math.abs(el.currentTime - target) > 0.08) el.currentTime = target
+				}
 			}
 			const cached = videoT.value
 			if (cached && !cached.paused) cached.pause()
@@ -404,8 +414,11 @@ export function useEdlPlayback(
 			// Inside a transition the window drives both elements; the ordinary
 			// one-element swap would pause the outgoing clip mid-blend.
 			if (applyWindow(store.playheadSec)) {
+				// Wall clock, not media time: inside a window neither element is
+				// authoritative, and there is nothing to preload — `bufferEl()` is
+				// the OUTGOING clip mid-blend, and priming it would seek and pause
+				// the very picture being shown.
 				store.playheadSec = Math.min(store.contentEnd, store.playheadSec + dt)
-				maybePreload(store.playheadSec)
 				return
 			}
 			if (currentSegmentId.value !== seg.itemId) {
@@ -414,8 +427,13 @@ export function useEdlPlayback(
 			}
 			if (el.paused) el.play().catch(() => { })
 			if (!suppressRafRead) {
-				// Derive the playhead from real media time (drift-free)
-				store.playheadSec = seg.tStart + (el.currentTime - seg.sourceIn) / seg.speed
+				// Derive the playhead from real media time (drift-free). Never let it
+				// run BACKWARDS: a decoder that is momentarily behind would otherwise
+				// pull the playhead back inside a window we just left, which re-enters
+				// it, advances to the end again, and loops there forever — holding the
+				// last frame and replaying the same fragment of sound.
+				const derived = seg.tStart + (el.currentTime - seg.sourceIn) / seg.speed
+				if (derived > store.playheadSec) store.playheadSec = derived
 			}
 			suppressRafRead = false
 			// Crossed the segment end?
