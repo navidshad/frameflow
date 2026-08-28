@@ -1,4 +1,4 @@
-import type { TimelineItem, Track } from '@shared/types'
+import type { TimelineItem, Track, TransitionRef } from '@shared/types'
 
 /**
  * Handler-based filter builders (PRD §7 — "Render engine is handler-based").
@@ -20,11 +20,39 @@ export interface SourceSlice {
 	srcPath: string
 	in: number                  // source seconds mapped to this region
 	out: number
+	/**
+	 * Region-local seconds at which this slice's content begins. 0 for every
+	 * slice on a transition-free timeline, because regions are cut at every item
+	 * edge — non-zero only when a transition window swallowed the cut that would
+	 * otherwise have started this slice's own region.
+	 */
+	offset: number
+	/**
+	 * On-timeline seconds this slice occupies, INCLUDING repeated frames.
+	 * Invariants the walker asserts:
+	 *   freezeHead + (out - in) / speed + freezeTail === duration
+	 *   offset + duration <= region.duration
+	 */
+	duration: number
+	/** Seconds of the FIRST source frame repeated before `in` (incoming side). */
+	freezeHead: number
+	/** Seconds of the LAST source frame repeated after `out` (outgoing side). */
+	freezeTail: number
 	item: TimelineItem
 	track: Track
 }
 
-export interface Region {
+/**
+ * A region is either an ordinary partition cell or a transition window. This is
+ * a UNION rather than an optional field on one shape so that every consumer is
+ * forced by the compiler to handle the overlap case — an optional field would
+ * let `renderRegion` keep compiling while silently ignoring the transition,
+ * which is precisely the class of silent wrongness this model exists to prevent.
+ */
+export type Region = CutRegion | OverlapRegion
+
+export interface CutRegion {
+	kind: 'cut'
 	duration: number
 	/**
 	 * Covering video-track items, TOP-most first — [0] is the visible layer.
@@ -35,17 +63,59 @@ export interface Region {
 	audioSources: SourceSlice[] // empty → silence of `duration`
 }
 
+/**
+ * One transition window, rendered atomically — an `xfade` cannot start mid-ramp,
+ * so this span must never be split by another cut.
+ *
+ * Deliberately has NO `videoLayers`: on today's renderer a bystander in
+ * `videoLayers[0]` would be drawn INSTEAD of the transition. Leaving the field
+ * out makes that state unrepresentable rather than merely unlikely.
+ */
+export interface OverlapRegion {
+	kind: 'overlap'
+	duration: number
+	transition: TransitionRef
+	from: SourceSlice           // outgoing clip, spanning the whole window
+	to: SourceSlice             // incoming clip, spanning the whole window
+	cutAt: number               // region-local seconds of the original cut (=== front)
+	fromAudioActive: boolean    // whether each side's OWN audio joins the crossfade
+	toAudioActive: boolean
+	/**
+	 * Audio-TRACK bystanders only. The pair's own audio is deliberately absent:
+	 * it rides on from/to and must be blended with `acrossfade`, never `amix` —
+	 * mixing both sides at full level is audible double-talk.
+	 */
+	audioSources: SourceSlice[]
+}
+
 export interface RegionPlan {
 	regions: Region[]
 	width: number
 	height: number
 	fps: number
+	/** Total timeline seconds; asserted equal to the sum of region durations. */
+	duration: number
+	/** Derived from the walker's own output, so it cannot drift from it. */
+	hasOverlap: boolean
 }
 
 export interface BuildCtx {
 	slice: SourceSlice
-	regionDur: number
 	plan: { width: number; height: number; fps: number }
+}
+
+/**
+ * Every slice a region carries, exhaustive over `kind` so a new region shape or
+ * a new slice-bearing field is a COMPILE error rather than a slice that quietly
+ * escapes the export pre-flight's missing-file check.
+ */
+export function allSlices(region: Region): SourceSlice[] {
+	switch (region.kind) {
+		case 'cut': return [...region.videoLayers, ...region.audioSources]
+		case 'overlap': return [region.from, region.to, ...region.audioSources]
+	}
+	const unreachable: never = region
+	return unreachable
 }
 
 export interface FilterBuilder {
@@ -133,7 +203,7 @@ const gainA: FilterBuilder = {
  */
 const fadeA: FilterBuilder = {
 	id: 'fade', stream: 'audio',
-	build: ({ slice, regionDur }) => {
+	build: ({ slice }) => {
 		const item = slice.item
 		const fadeIn = Math.max(0, item.fadeInSec ?? 0)
 		const fadeOut = Math.max(0, item.fadeOutSec ?? 0)
@@ -145,7 +215,10 @@ const fadeA: FilterBuilder = {
 		if (fadeIn > 0 && localStart < fadeIn) {
 			terms.push(`(t+${fmt(localStart)})/${fmt(fadeIn)}`)
 		}
-		if (fadeOut > 0 && localStart + regionDur > itemDur - fadeOut) {
+		// `slice.duration`, NOT the region's: once a transition window can swallow a
+		// cut, a slice may be shorter than the region it sits in, and measuring the
+		// ramp against the region would place the fade-out in the wrong place.
+		if (fadeOut > 0 && localStart + slice.duration > itemDur - fadeOut) {
 			terms.push(`(${fmt(itemDur - localStart)}-t)/${fmt(fadeOut)}`)
 		}
 		if (terms.length === 0) return '' // slice lies fully outside both ramps

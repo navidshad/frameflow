@@ -205,6 +205,20 @@ const ITEM_FIELDS: (keyof TimelineItem)[] = [
 ]
 const TRACK_FIELDS: (keyof Track)[] = ['kind', 'name', 'order', 'muted', 'locked', 'hidden', 'height', 'gain']
 
+/**
+ * `transition` is the only OBJECT-valued field we diff, and `changedFields`
+ * compares with `!==`, which would report every re-render as a change. Compare
+ * by value instead. Writers must treat the value as IMMUTABLE — replace the
+ * object, never mutate it — or the before/after snapshots alias and no edit is
+ * ever recorded.
+ */
+const sameTransition = (a: TimelineItem['transition'], b: TimelineItem['transition']): boolean => {
+	if (a === b) return true
+	const sameRef = (x?: { kind: string; duration: number }, y?: { kind: string; duration: number }) =>
+		x === y || (!!x && !!y && x.kind === y.kind && x.duration === y.duration)
+	return sameRef(a?.in, b?.in) && sameRef(a?.out, b?.out)
+}
+
 function changedFields<T extends { id: string }>(before: T, after: T, fields: (keyof T)[]): Partial<T> | null {
 	let changed: Partial<T> | null = null
 	for (const field of fields) {
@@ -246,8 +260,16 @@ export function diffTimelines(
 			;(inverse.removeItemIds ||= []).push(id)
 			dirty = true
 		} else {
+			// `transition` is diffed here rather than through ITEM_FIELDS: the generic
+			// comparator is shared with TRACK_FIELDS and compares by identity, which
+			// is wrong for an object. Without this, applying a transition is invisible
+			// to undo and to revisions.
 			const fwd = changedFields(beforeItem, afterItem, ITEM_FIELDS)
+				?? (sameTransition(beforeItem.transition, afterItem.transition) ? null : {})
 			if (fwd) {
+				if (!sameTransition(beforeItem.transition, afterItem.transition)) {
+					fwd.transition = afterItem.transition
+				}
 				const keys = Object.keys(fwd) as (keyof TimelineItem)[]
 				;(forward.updateItems ||= []).push({ id, ...fwd })
 				;(inverse.updateItems ||= []).push({ id, ...pickFields(beforeItem, keys) })
