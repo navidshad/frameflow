@@ -24,6 +24,7 @@ import * as editorAssets from './editor/assets'
 import * as editorPreprocess from './editor/preprocess'
 import * as editorHistory from './editor/history'
 import * as editorPrompt from './editor/prompt'
+import * as editorPreview from './editor/preview'
 import * as editorRender from './editor/render'
 import * as editorRevisions from './editor/revisions'
 import { BUILTIN_PERSONAS } from './constants/personas'
@@ -625,6 +626,13 @@ app.whenReady().then(() => {
 		// the render is detached from the live document and never persists it.
 		return editorRender.startEditorRender({ threadId, quality, doc })
 	})
+
+	ipcMain.handle('ensure-transition-preview', (_event, data: {
+		threadId: string
+		doc: EditorDocument
+		outgoingId: string
+		incomingId: string
+	}) => editorPreview.ensureTransitionPreview(data))
 
 	ipcMain.handle('abort-editor-render', (_event, { renderId }: { renderId: string }) => {
 		editorRender.abortEditorRender(renderId)

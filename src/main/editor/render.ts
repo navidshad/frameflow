@@ -396,7 +396,7 @@ export function isFastPathEligible(items: TimelineItem[], track: Track, hasAudio
 
 // Uniform intermediates: identical codec/res/fps/rate/layout is REQUIRED for
 // concat -c copy. Forced h264+aac mp4 on all platforms (incl. webm sources).
-const intermediateOpts = (): string[] => [
+export const intermediateOpts = (): string[] => [
 	...(IS_MAC
 		? ['-c:v', 'h264_videotoolbox', '-b:v', '8M', '-realtime', 'true']
 		: ['-c:v', 'libx264', '-preset', 'veryfast', '-crf', '18']),
@@ -405,7 +405,7 @@ const intermediateOpts = (): string[] => [
 	'-threads', '0'
 ]
 
-function runCommand(
+export function runCommand(
 	command: ffmpeg.FfmpegCommand,
 	outputPath: string,
 	signal: AbortSignal,

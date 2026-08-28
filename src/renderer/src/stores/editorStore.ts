@@ -16,6 +16,7 @@ import { childrenByParent, collectSubtree, hasBranch } from '@shared/revision-tr
 import { DEFAULT_PERSONA_ID } from '@shared/personas'
 import { toMediaUrl } from '@shared/media-url'
 import { isTransitionKind, transitionLabel } from '@shared/transitionPresets'
+import { seamFingerprint, type PreviewEntry } from '@shared/previewFrame'
 import {
 	MAX_TRANSITION_SEC, MIN_TRANSITION_SEC, planTransitions, seamAt, sourceDurationsFrom,
 	type Seam
@@ -226,6 +227,67 @@ export const useEditorStore = defineStore('editor', () => {
 		selectedSeamId.value = id
 		if (id) clearItemSelection()
 	}
+
+	/**
+	 * Cached exact previews of each transition window, junction id -> state.
+	 *
+	 * The monitor stacks two <video> elements, so unaided it can only cross-fade
+	 * — a wipe or a slide would preview as a dissolve. Instead the main process
+	 * renders each window with the real filter and the monitor plays that file;
+	 * the cross-fade is only the stand-in until it lands.
+	 *
+	 * Ephemeral and never persisted: the files live in the thread's temp dir.
+	 */
+	const transitionPreviews = ref<Map<string, PreviewEntry>>(new Map())
+
+	const setPreview = (junctionId: string, entry: PreviewEntry) => {
+		const next = new Map(transitionPreviews.value)
+		next.set(junctionId, entry)
+		transitionPreviews.value = next
+	}
+
+	/** Items the EDL can actually play. `seams` keeps clips whose media is gone;
+	 *  blending against one that will never load would just show black. */
+	const playableItemIds = computed(() => new Set(videoSegments.value.map((s) => s.itemId)))
+
+	let previewTimer: ReturnType<typeof setTimeout> | null = null
+
+	/** Ask main for any window we do not have yet. Debounced, because dragging the
+	 *  duration slider would otherwise queue an encode per step. */
+	const requestTransitionPreviews = () => {
+		if (previewTimer) clearTimeout(previewTimer)
+		previewTimer = setTimeout(async () => {
+			if (!doc.value || !threadId.value) return
+			const wanted = seams.value.filter((s) => s.window)
+			if (!wanted.length) return
+			const snapshot = JSON.parse(JSON.stringify(doc.value))
+			for (const seam of wanted) {
+				const id = seam.junction.id
+				if (transitionPreviews.value.get(id)?.status === 'rendering') continue
+				setPreview(id, { status: 'rendering' })
+				try {
+					const result = await api.ensureTransitionPreview({
+						threadId: threadId.value,
+						doc: snapshot,
+						outgoingId: seam.junction.outgoing.id,
+						incomingId: seam.junction.incoming.id
+					})
+					setPreview(id, { status: 'ready', src: toMediaUrl(result.path) })
+				} catch (error) {
+					console.warn('[preview] transition render failed:', error)
+					setPreview(id, { status: 'error' })
+				}
+			}
+		}, 400)
+	}
+
+	// Re-render whenever a window's GEOMETRY changes — not on every doc edit,
+	// which `seams` rebuilds for regardless.
+	watch(() => seamFingerprint(seams.value), (next, previous) => {
+		if (next === previous) return
+		transitionPreviews.value = new Map()
+		if (next) requestTransitionPreviews()
+	})
 
 	/** The preset kind currently being dragged, so lanes know to reveal seams. */
 	const draggingTransitionKind = ref<string | null>(null)
@@ -2226,6 +2288,9 @@ export const useEditorStore = defineStore('editor', () => {
 		selectSeam,
 		draggingTransitionKind,
 		seamNear,
+		transitionPreviews,
+		playableItemIds,
+		requestTransitionPreviews,
 		nudgeItems,
 		addMarker,
 		removeMarker,

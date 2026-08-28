@@ -87,6 +87,9 @@ const api = {
 		ipcRenderer.invoke('export-editor-timeline', data),
 	abortEditorRender: (data: { renderId: string }) =>
 		ipcRenderer.invoke('abort-editor-render', data),
+	ensureTransitionPreview: (data: {
+		threadId: string; doc: unknown; outgoingId: string; incomingId: string
+	}) => ipcRenderer.invoke('ensure-transition-preview', data),
 	onEditorRenderProgress: (callback: (data: any) => void) => {
 		const listener = (_event: any, data: any) => callback(data)
 		ipcRenderer.on('editor-render-progress', listener)

@@ -62,12 +62,28 @@
 			</div>
 			<template v-else>
 				<div class="flex-1 min-h-0 bg-black relative">
-					<video ref="videoARef" class="absolute inset-0 w-full h-full object-contain transition-opacity"
-						:class="edl.activeIsA.value && !edl.inGap.value ? 'opacity-100' : 'opacity-0'"
+					<!-- Opacity is a NUMBER written every tick, not a CSS transition:
+					     inside a transition the blend has to hold its exact frame
+					     when you pause or scrub, which a CSS ramp cannot do. -->
+					<video ref="videoARef" class="absolute inset-0 w-full h-full object-contain"
+						:style="{ opacity: edl.inGap.value ? 0 : edl.opacityA.value }"
 						preload="auto"></video>
-					<video ref="videoBRef" class="absolute inset-0 w-full h-full object-contain transition-opacity"
-						:class="!edl.activeIsA.value && !edl.inGap.value ? 'opacity-100' : 'opacity-0'"
+					<video ref="videoBRef" class="absolute inset-0 w-full h-full object-contain"
+						:style="{ opacity: edl.inGap.value ? 0 : edl.opacityB.value }"
 						preload="auto"></video>
+					<!-- The exact transition, pre-rendered by the main process with the
+					     real filter. Covers A/B whenever it is ready. -->
+					<video ref="videoTRef" class="absolute inset-0 w-full h-full object-contain"
+						:style="{ opacity: edl.showCached.value ? 1 : 0 }"
+						preload="auto" muted></video>
+					<div v-if="edl.previewPending.value"
+						class="absolute bottom-2 left-1/2 -translate-x-1/2 flex items-center gap-1.5 px-2 py-1
+						       rounded-md bg-black/60 backdrop-blur-sm pointer-events-none">
+						<span class="iconify tabler--loader-2 w-3 h-3 text-white/70 animate-spin"></span>
+						<span class="text-[9px] font-mono uppercase tracking-widest text-white/60">
+							preparing transition
+						</span>
+					</div>
 					<!-- Audio tracks play through an element pool in the composable
 					     (one per track), heard in parallel with the video. -->
 					<div v-if="edl.inGap.value"
@@ -111,7 +127,8 @@ const mode = ref<'source' | 'timeline'>('source')
 // ===== EDL (timeline) mode =====
 const videoARef = ref<HTMLVideoElement | null>(null)
 const videoBRef = ref<HTMLVideoElement | null>(null)
-const edl = useEdlPlayback(videoARef, videoBRef)
+const videoTRef = ref<HTMLVideoElement | null>(null)
+const edl = useEdlPlayback(videoARef, videoBRef, videoTRef)
 
 onMounted(() => edl.start())
 

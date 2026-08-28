@@ -1,5 +1,6 @@
 import { computed, onUnmounted, ref, watch, type Ref } from 'vue'
 import { useEditorStore } from '../../stores/editorStore'
+import { resolvePreviewFrame, seamFingerprint } from '@shared/previewFrame'
 
 interface EdlSegment {
 	itemId: string
@@ -39,12 +40,22 @@ const fadeEnvelope = (seg: EdlSegment, t: number): number => {
  */
 export function useEdlPlayback(
 	videoA: Ref<HTMLVideoElement | null>,
-	videoB: Ref<HTMLVideoElement | null>
+	videoB: Ref<HTMLVideoElement | null>,
+	/** Plays the pre-rendered transition window, when one is cached. */
+	videoT: Ref<HTMLVideoElement | null>
 ) {
 	const store = useEditorStore()
 
 	const activeIsA = ref(true)
 	const inGap = ref(false)
+	/** 0..1 per element, written every tick. NOT a CSS transition: pausing inside
+	 *  a window has to hold a correctly blended frame, and a CSS ramp cannot. */
+	const opacityA = ref(1)
+	const opacityB = ref(0)
+	/** True while the cached window is on screen and A/B are hidden. */
+	const showCached = ref(false)
+	/** A window is blending with the stand-in because its render has not landed. */
+	const previewPending = ref(false)
 	const currentSegmentId = ref<string | null>(null)
 	const audioActive = ref(false)
 
@@ -164,6 +175,7 @@ export function useEdlPlayback(
 
 	const applySegmentToEl = (el: HTMLVideoElement, seg: EdlSegment, t: number) => {
 		const wantedSrc = seg.src
+		el.dataset.edlItem = seg.itemId
 		if (el.src !== wantedSrc) {
 			el.src = wantedSrc
 			preloadedFor = null
@@ -176,10 +188,104 @@ export function useEdlPlayback(
 		}
 	}
 
+	// ===== Transition windows =====
+
+	/**
+	 * Apply the transition state for time `t` to the elements.
+	 *
+	 * Called from the rAF loop AND from every seek/pause path, because `tick`
+	 * returns early while paused — a window has to hold its blended frame when
+	 * you stop inside it, not snap back to one clip.
+	 */
+	const applyWindow = (t: number): boolean => {
+		const frame = resolvePreviewFrame(
+			store.seams, store.transitionPreviews, t, store.playableItemIds
+		)
+		previewPending.value = frame.pending
+
+		if (frame.mode === 'single') {
+			showCached.value = false
+			opacityA.value = activeIsA.value ? 1 : 0
+			opacityB.value = activeIsA.value ? 0 : 1
+			const cached = videoT.value
+			if (cached && !cached.paused) cached.pause()
+			return false
+		}
+
+		if (frame.mode === 'cached') {
+			showCached.value = true
+			opacityA.value = 0
+			opacityB.value = 0
+			const cached = videoT.value
+			if (cached) {
+				if (cached.dataset.edlSrc !== frame.cachedSrc) {
+					cached.src = frame.cachedSrc!
+					cached.dataset.edlSrc = frame.cachedSrc!
+				}
+				// The cached file IS the window, so its zero is window.start.
+				const target = frame.cachedTime ?? 0
+				if (Math.abs(cached.currentTime - target) > 0.08) cached.currentTime = target
+				if (store.isPlaying) { if (cached.paused) cached.play().catch(() => { }) }
+				else if (!cached.paused) cached.pause()
+			}
+			// Both sources keep running underneath so the handover after the window
+			// is seamless, but they are silent and invisible.
+			activeEl()?.pause()
+			bufferEl()?.pause()
+			return true
+		}
+
+		// Stand-in: cross-fade the two source elements. Both must be PLAYING —
+		// the normal EDL swap pauses the outgoing one at the cut, which is exactly
+		// what a window must not do.
+		showCached.value = false
+		const cached = videoT.value
+		if (cached && !cached.paused) cached.pause()
+
+		const w = frame.window!
+		const elFor = (itemId: string) =>
+			[videoA.value, videoB.value].find((el) => el?.dataset.edlItem === itemId) || null
+		let outEl = elFor(w.outgoing.item.id)
+		let inEl = elFor(w.incoming.item.id)
+		const other = (el: HTMLVideoElement | null) => (el === videoA.value ? videoB.value : videoA.value)
+		if (!outEl && !inEl) { outEl = activeEl(); inEl = bufferEl() }
+		else if (!inEl) inEl = other(outEl)
+		else if (!outEl) outEl = other(inEl)
+		if (!outEl || !inEl || outEl === inEl) return true
+
+		// Each side's `in` is its SOURCE time at the window's start, already
+		// speed-corrected and already reaching into the handle where there is one.
+		const place = (el: HTMLVideoElement, side: typeof w.outgoing) => {
+			const seg = segments.value.find((sg) => sg.itemId === side.item.id)
+			if (!seg) return
+			el.dataset.edlItem = side.item.id
+			if (el.src !== seg.src) { el.src = seg.src; el.dataset.edlSrc = seg.src }
+			el.playbackRate = seg.speed
+			el.muted = seg.muted
+			const target = Math.min(side.out, side.in + (t - w.start) * seg.speed)
+			if (Math.abs(el.currentTime - target) > 0.12) el.currentTime = Math.max(0, target)
+			if (store.isPlaying) { if (el.paused) el.play().catch(() => { }) }
+			else if (!el.paused) el.pause()
+		}
+		place(outEl, w.outgoing)
+		place(inEl, w.incoming)
+
+		const aIsOutgoing = outEl === videoA.value
+		opacityA.value = aIsOutgoing ? 1 - frame.progress : frame.progress
+		opacityB.value = aIsOutgoing ? frame.progress : 1 - frame.progress
+		// The window owns the handover, so leave activeIsA pointing at whichever
+		// element carries the INCOMING clip — that is what plays on after the end.
+		activeIsA.value = !aIsOutgoing
+		currentSegmentId.value = w.incoming.item.id
+		return true
+	}
+
 	/** Activate the segment covering time t on the active element. */
 	const activateAt = (t: number) => {
 		const seg = segmentAt(t)
 		inGap.value = !seg
+		// Seeking into a window has to set up BOTH elements, not one.
+		if (seg && applyWindow(t)) return
 		if (!seg) {
 			currentSegmentId.value = null
 			activeEl()?.pause()
@@ -207,19 +313,33 @@ export function useEdlPlayback(
 		if (store.isPlaying && el.paused) el.play().catch(() => { })
 	}
 
-	/** Prime the buffer element with the next segment's source. */
+	/**
+	 * Prime the buffer element with the next segment's source.
+	 *
+	 * The lead has to clear the longest window: a transition starts BEFORE the
+	 * cut, so a 5s one needs the incoming clip ready 2.5s early — the old flat
+	 * 1.5s meant a long window began against an unprimed element. And when a
+	 * window is coming, the buffer seeks into the incoming clip's HEAD HANDLE
+	 * (earlier than its in-point), which is the footage the blend actually shows.
+	 */
 	const maybePreload = (t: number) => {
 		const seg = segmentAt(t)
 		if (!seg) return
-		if (seg.tEnd - t > 1.5) return
+		const upcoming = store.seams.find((s) => s.window && s.window.start > t && s.window.start - t < 6)
+		const lead = Math.max(1.5, (upcoming?.window?.duration ?? 0) / 2 + 1)
+		if (seg.tEnd - t > lead) return
 		const next = nextSegmentAfter(seg.tEnd)
 		if (!next || next.itemId === seg.itemId || preloadedFor === next.itemId) return
 		const buf = bufferEl()
 		if (!buf) return
+		const window = upcoming?.window
+		const startsEarlyAt = window && window.incoming.item.id === next.itemId
+			? window.incoming.in
+			: next.sourceIn
 		buf.src = next.src
 		buf.playbackRate = next.speed
 		buf.muted = next.muted
-		buf.currentTime = next.sourceIn
+		buf.currentTime = Math.max(0, startsEarlyAt)
 		buf.pause()
 		preloadedFor = next.itemId
 	}
@@ -236,6 +356,13 @@ export function useEdlPlayback(
 			inGap.value = false
 			const el = activeEl()
 			if (!el) return
+			// Inside a transition the window drives both elements; the ordinary
+			// one-element swap would pause the outgoing clip mid-blend.
+			if (applyWindow(store.playheadSec)) {
+				store.playheadSec = Math.min(store.contentEnd, store.playheadSec + dt)
+				maybePreload(store.playheadSec)
+				return
+			}
 			if (currentSegmentId.value !== seg.itemId) {
 				activateAt(store.playheadSec)
 				return
@@ -275,7 +402,20 @@ export function useEdlPlayback(
 	// Audio elements free-run during playback: a plain playhead advance must NOT
 	// re-seek them (that stutters the decoder). Only align on segment entry or a
 	// real drift — handled inside syncAudio with force=false.
-	watch(() => store.playheadSec, (t) => syncAudio(t, false))
+	watch(() => store.playheadSec, (t) => {
+		syncAudio(t, false)
+		// `tick` returns early while paused, so scrubbing through a window would
+		// otherwise freeze on whatever blend the last playing frame left behind.
+		if (!store.isPlaying) applyWindow(t)
+	})
+
+	// A transition is invisible to the segment fingerprint below — the EDL carries
+	// nothing about them — so watch the resolved windows separately or dropping one
+	// in would never reach the monitor until some unrelated edit forced a re-resolve.
+	watch(() => seamFingerprint(store.seams), () => {
+		applyWindow(store.playheadSec)
+		if (!store.isPlaying) activateAt(store.playheadSec)
+	})
 
 	watch(() => store.isPlaying, (playing) => {
 		if (playing) {
@@ -286,7 +426,12 @@ export function useEdlPlayback(
 			activateAt(store.playheadSec)
 		} else {
 			activeEl()?.pause()
+			// A window has BOTH source elements running, plus possibly the cached
+			// one — pausing only the active element would leave the others rolling.
+			bufferEl()?.pause()
+			videoT.value?.pause()
 		}
+		applyWindow(store.playheadSec)
 		// Force-anchor audio to the playhead on play/pause transitions.
 		syncAudio(store.playheadSec, true)
 	})
@@ -316,6 +461,7 @@ export function useEdlPlayback(
 
 	onUnmounted(() => {
 		if (rafId !== null) cancelAnimationFrame(rafId)
+		videoT.value?.pause()
 		for (const el of audioEls.values()) {
 			el.pause()
 			el.src = ''
@@ -330,6 +476,10 @@ export function useEdlPlayback(
 		audioActive,
 		hasContent,
 		currentSegmentId,
+		opacityA,
+		opacityB,
+		showCached,
+		previewPending,
 		start
 	}
 }
