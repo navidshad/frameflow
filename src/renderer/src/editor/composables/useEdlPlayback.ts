@@ -176,8 +176,12 @@ export function useEdlPlayback(
 	const applySegmentToEl = (el: HTMLVideoElement, seg: EdlSegment, t: number) => {
 		const wantedSrc = seg.src
 		el.dataset.edlItem = seg.itemId
-		if (el.src !== wantedSrc) {
+		// Compare the url we LAST SET, never el.src — reading it back returns the
+		// parser's re-serialisation, which need not be string-equal, so comparing
+		// against it can reload the element on every call.
+		if (el.dataset.edlSrc !== wantedSrc) {
 			el.src = wantedSrc
+			el.dataset.edlSrc = wantedSrc
 			preloadedFor = null
 		}
 		el.playbackRate = seg.speed
@@ -207,43 +211,25 @@ export function useEdlPlayback(
 			showCached.value = false
 			opacityA.value = activeIsA.value ? 1 : 0
 			opacityB.value = activeIsA.value ? 0 : 1
-			// Undo the window's equal-power ramp, or a clip stays quiet after it.
-			for (const el of [videoA.value, videoB.value]) if (el && el.volume !== 1) el.volume = 1
+			// Undo what the window did to these elements. Leaving the ramp or the
+			// mute in place means the clip AFTER a transition plays quiet or silent;
+			// leaving the window marker means re-entering it never re-seeks.
+			for (const el of [videoA.value, videoB.value]) {
+				if (!el) continue
+				if (el.volume !== 1) el.volume = 1
+				delete el.dataset.edlWindow
+				const seg = segments.value.find((sg) => sg.itemId === el.dataset.edlItem)
+				if (seg && el.muted !== seg.muted) el.muted = seg.muted
+			}
 			const cached = videoT.value
 			if (cached && !cached.paused) cached.pause()
 			return false
 		}
 
-		if (frame.mode === 'cached') {
-			showCached.value = true
-			opacityA.value = 0
-			opacityB.value = 0
-			const cached = videoT.value
-			if (cached) {
-				if (cached.dataset.edlSrc !== frame.cachedSrc) {
-					cached.src = frame.cachedSrc!
-					cached.dataset.edlSrc = frame.cachedSrc!
-				}
-				// The cached file IS the window, so its zero is window.start.
-				const target = frame.cachedTime ?? 0
-				if (Math.abs(cached.currentTime - target) > 0.08) cached.currentTime = target
-				if (store.isPlaying) { if (cached.paused) cached.play().catch(() => { }) }
-				else if (!cached.paused) cached.pause()
-			}
-			// Both sources keep running underneath so the handover after the window
-			// is seamless, but they are silent and invisible.
-			activeEl()?.pause()
-			bufferEl()?.pause()
-			return true
-		}
-
-		// Stand-in: cross-fade the two source elements. Both must be PLAYING —
-		// the normal EDL swap pauses the outgoing one at the cut, which is exactly
-		// what a window must not do.
-		showCached.value = false
-		const cached = videoT.value
-		if (cached && !cached.paused) cached.pause()
-
+		// Both source elements are positioned and rolling for EITHER mode. The
+		// cached file just covers them — keeping them live underneath means
+		// leaving the window is a handover, not a seek, which is what made the
+		// exit stutter.
 		const w = frame.window!
 		const elFor = (itemId: string) =>
 			[videoA.value, videoB.value].find((el) => el?.dataset.edlItem === itemId) || null
@@ -255,23 +241,36 @@ export function useEdlPlayback(
 		else if (!outEl) outEl = other(inEl)
 		if (!outEl || !inEl || outEl === inEl) return true
 
-		// Each side's `in` is its SOURCE time at the window's start, already
-		// speed-corrected and already reaching into the handle where there is one.
+		const cachedShowing = frame.mode === 'cached'
+
+		/** Each side's `in` is its SOURCE time at the window's start, already
+		 *  speed-corrected and already reaching into the handle where there is one. */
 		const place = (el: HTMLVideoElement, side: typeof w.outgoing) => {
 			const seg = segments.value.find((sg) => sg.itemId === side.item.id)
 			if (!seg) return
+			const entering = el.dataset.edlWindow !== w.junctionId
 			el.dataset.edlItem = side.item.id
-			if (el.src !== seg.src) { el.src = seg.src; el.dataset.edlSrc = seg.src }
+			el.dataset.edlWindow = w.junctionId
+			if (el.dataset.edlSrc !== seg.src) { el.src = seg.src; el.dataset.edlSrc = seg.src }
 			el.playbackRate = seg.speed
-			el.muted = seg.muted
 			const target = Math.min(side.out, side.in + (t - w.start) * seg.speed)
-			if (Math.abs(el.currentTime - target) > 0.12) el.currentTime = Math.max(0, target)
-			// Equal power, mirroring the acrossfade the export uses: both clips at
-			// full level through the window is audible double-talk.
-			const ramp = side.item.id === w.outgoing.item.id
-				? Math.cos((frame.progress * Math.PI) / 2)
-				: Math.sin((frame.progress * Math.PI) / 2)
-			el.volume = Math.max(0, Math.min(1, ramp))
+			// Hard-seek only on ENTRY, then let it free-run. Re-seeking a playing
+			// element every time it drifts a frame is itself the judder — the audio
+			// pool learned the same lesson and only corrects on a large gap.
+			if (entering || Math.abs(el.currentTime - target) > 0.5) {
+				el.currentTime = Math.max(0, target)
+			}
+			// The cached file carries the crossfaded audio, so silence the sources
+			// under it. Otherwise they are the audio, at equal power.
+			if (cachedShowing || seg.muted) {
+				el.muted = true
+			} else {
+				el.muted = false
+				const ramp = side.item.id === w.outgoing.item.id
+					? Math.cos((frame.progress * Math.PI) / 2)
+					: Math.sin((frame.progress * Math.PI) / 2)
+				el.volume = Math.max(0, Math.min(1, ramp))
+			}
 			if (store.isPlaying) { if (el.paused) el.play().catch(() => { }) }
 			else if (!el.paused) el.pause()
 		}
@@ -279,8 +278,29 @@ export function useEdlPlayback(
 		place(inEl, w.incoming)
 
 		const aIsOutgoing = outEl === videoA.value
-		opacityA.value = aIsOutgoing ? 1 - frame.progress : frame.progress
-		opacityB.value = aIsOutgoing ? frame.progress : 1 - frame.progress
+		if (cachedShowing) {
+			showCached.value = true
+			opacityA.value = 0
+			opacityB.value = 0
+			const cached = videoT.value
+			if (cached) {
+				if (cached.dataset.edlSrc !== frame.cachedSrc) {
+					cached.src = frame.cachedSrc!
+					cached.dataset.edlSrc = frame.cachedSrc!
+				}
+				const target = frame.cachedTime ?? 0
+				if (Math.abs(cached.currentTime - target) > 0.3) cached.currentTime = Math.max(0, target)
+				if (store.isPlaying) { if (cached.paused) cached.play().catch(() => { }) }
+				else if (!cached.paused) cached.pause()
+			}
+		} else {
+			showCached.value = false
+			const cached = videoT.value
+			if (cached && !cached.paused) cached.pause()
+			opacityA.value = aIsOutgoing ? 1 - frame.progress : frame.progress
+			opacityB.value = aIsOutgoing ? frame.progress : 1 - frame.progress
+		}
+
 		// The window owns the handover, so leave activeIsA pointing at whichever
 		// element carries the INCOMING clip — that is what plays on after the end.
 		activeIsA.value = !aIsOutgoing
@@ -344,12 +364,29 @@ export function useEdlPlayback(
 		const startsEarlyAt = window && window.incoming.item.id === next.itemId
 			? window.incoming.in
 			: next.sourceIn
-		buf.src = next.src
+		// Only touch `src` when it actually changes. Reassigning the SAME url tears
+		// the decoder down and reloads the file — and a timeline cut from one long
+		// source hits that on every single switch, which is most of the stutter.
+		if (buf.dataset.edlSrc !== next.src) {
+			buf.src = next.src
+			buf.dataset.edlSrc = next.src
+		}
 		buf.playbackRate = next.speed
 		buf.muted = next.muted
 		buf.currentTime = Math.max(0, startsEarlyAt)
 		buf.pause()
 		preloadedFor = next.itemId
+
+		// Prime the cached transition too, so entering the window is not the first
+		// time that file is fetched and decoded.
+		const cached = videoT.value
+		const ready = upcoming && store.transitionPreviews.get(upcoming.junction.id)
+		if (cached && ready?.status === 'ready' && ready.src && cached.dataset.edlSrc !== ready.src) {
+			cached.src = ready.src
+			cached.dataset.edlSrc = ready.src
+			cached.currentTime = 0
+			cached.pause()
+		}
 	}
 
 	// ---------- rAF loop ----------
