@@ -10,10 +10,14 @@
 		<!-- Windowed clip rendering -->
 		<TimelineClip v-for="item in visibleItems" :key="item.id" :item="item" />
 
-		<!-- Placed transitions. Above the clips so the block stays clickable, but
-		     inset so each clip's outer trim handle is still grabbable. -->
+		<!-- Placed transitions, as a RIBBON along the top of the lane.
+		     Not a full-height block: the two clips meet at the cut, so their trim
+		     handles sit in the middle of the window. A full-height block both
+		     painted over them and — because it is a sibling, so crossing onto it
+		     fires the clip's pointerleave — unmounted them outright. The lower
+		     two thirds of the lane stays clip, where the handles live. -->
 		<div v-for="seam in placedSeams" :key="`t-${seam.junction.id}`"
-			class="absolute top-1.5 bottom-1.5 z-20 rounded-md border overflow-hidden cursor-pointer transition-shadow"
+			class="absolute top-1.5 h-3 z-20 rounded border overflow-hidden cursor-pointer transition-shadow"
 			:class="seam.junction.id === store.selectedSeamId
 				? 'border-secondary ring-2 ring-secondary/40 bg-secondary/30'
 				: 'border-secondary/70 bg-secondary/20 hover:bg-secondary/30'"
@@ -30,13 +34,13 @@
 		<!-- A transition that no longer fits. Struck through rather than vanishing,
 		     so trimming a clip too short never silently drops the user's edit. -->
 		<div v-for="seam in strandedSeams" :key="`s-${seam.junction.id}`"
-			class="absolute top-1/2 -translate-y-1/2 z-20 -ml-[9px] w-[18px] h-[18px] rounded-md
-			       border border-red-500/70 bg-red-500/20 flex items-center justify-center pointer-events-auto cursor-pointer"
+			class="absolute top-1.5 h-3 z-20 -ml-[9px] w-[18px] rounded
+			       border border-red-500/70 bg-red-500/20 flex items-center justify-center cursor-pointer"
 			:style="{ transform: `translateX(${viewport.secToPx(seam.junction.cut)}px)` }"
 			:title="`${transitionLabel(seam.requested!.kind)} does not fit this cut — the clips are too short. Alt-click to remove.`"
 			@pointerdown.stop
 			@click.stop="onSeamClick(seam, $event)">
-			<span class="iconify tabler--alert-triangle w-3 h-3 text-red-500"></span>
+			<span class="iconify tabler--alert-triangle w-2.5 h-2.5 text-red-500"></span>
 		</div>
 
 		<!-- Seam targets, shown only while a preset is being dragged. Each says how
@@ -115,12 +119,14 @@ const showSeamTargets = computed(() =>
 
 const blockStyle = (seam: Seam) => {
 	const w = seam.window!
-	// Keep clear of each clip's 6px trim handle so trimming still works at a cut
-	// that carries a transition.
-	const INSET_PX = 7
-	const left = viewport.secToPx(w.start)
-	const width = Math.max(viewport.secToPx(w.duration) - INSET_PX * 2, 10)
-	return { transform: `translateX(${left + INSET_PX}px)`, width: `${width}px` }
+	// Spans the true window. An earlier version inset this by 7px to spare the
+	// trim handles, which could never work — the handles are at the CUT, i.e. the
+	// middle of the window, never its edges. The ribbon height is what frees them,
+	// and the inset only biased short transitions to the right of their cut.
+	return {
+		transform: `translateX(${viewport.secToPx(w.start)}px)`,
+		width: `${Math.max(viewport.secToPx(w.duration), 6)}px`
+	}
 }
 
 const onSeamClick = (seam: Seam, e: MouseEvent) => {

@@ -25,7 +25,7 @@
 						</label>
 						<input type="range" :min="MIN_TRANSITION_SEC" :max="MAX_TRANSITION_SEC" step="0.05"
 							:value="requestedDuration" class="w-full accent-secondary"
-							@change="onDurationInput" />
+							@change="onTransitionDuration" />
 						<p class="mt-1 text-[9px] text-zinc-400 leading-snug">
 							The window straddles the cut. Nothing moves — the extra frames come from
 							footage you trimmed away.
@@ -90,7 +90,7 @@
 						</label>
 						<input type="number" min="0.05" step="0.1" :value="timelineItem.duration.toFixed(2)"
 							class="w-full px-2 py-1.5 rounded-lg border border-zinc-200 dark:border-zinc-700 bg-white dark:bg-zinc-900 text-xs font-mono text-zinc-800 dark:text-zinc-200 input-focus-ring"
-							@change="onDurationInput" />
+							@change="onTargetDurationInput" />
 						<p class="mt-1 text-[9px] text-zinc-400 leading-snug">
 							Changing duration retimes the clip (same content, new speed) and ripples the track.
 						</p>
@@ -383,7 +383,10 @@ const onSpeedInput = (event: Event) => {
 	}
 }
 
-const onDurationInput = (event: Event) => {
+/** Retime: a target on-timeline LENGTH, reached by changing speed. Named for the
+ *  store action it calls — a transition slider once bound to this by mistake and
+ *  silently did nothing, because it acts on the selected item, not a seam. */
+const onTargetDurationInput = (event: Event) => {
 	const value = parseFloat((event.target as HTMLInputElement).value)
 	if (timelineItem.value && Number.isFinite(value) && value > 0) {
 		editorStore.setItemTargetDuration(timelineItem.value.id, value)
