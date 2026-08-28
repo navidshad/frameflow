@@ -36,7 +36,7 @@ const previewDir = (tempDir: string) => path.join(tempDir, THREAD_DIRS.PREVIEWS)
  * that would change the picture produces a different key, which is what makes
  * invalidation automatic rather than something to remember.
  */
-function cacheKey(region: OverlapRegion, plan: RegionPlan): string {
+export function cacheKey(region: OverlapRegion, plan: RegionPlan): string {
 	const side = (s: OverlapRegion['from']) =>
 		[s.srcPath, s.in.toFixed(4), s.out.toFixed(4), s.offset.toFixed(4),
 			s.duration.toFixed(4), s.freezeHead.toFixed(4), s.freezeTail.toFixed(4),
@@ -55,7 +55,7 @@ function cacheKey(region: OverlapRegion, plan: RegionPlan): string {
 }
 
 /** Shrink the export plan to something that encodes in about a second. */
-function previewPlan(plan: RegionPlan): RegionPlan {
+export function previewPlan(plan: RegionPlan): RegionPlan {
 	const scale = Math.min(1, PREVIEW_MAX_EDGE / Math.max(plan.width, plan.height))
 	const even = (n: number) => Math.max(2, Math.floor(n / 2) * 2)
 	return {

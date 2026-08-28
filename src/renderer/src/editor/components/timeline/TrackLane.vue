@@ -23,12 +23,19 @@
 				: 'border-secondary/70 bg-secondary/20 hover:bg-secondary/30'"
 			:style="blockStyle(seam)"
 			role="option" :aria-selected="seam.junction.id === store.selectedSeamId" tabindex="0"
-			:title="`${transitionLabel(seam.window!.kind)} — ${seam.window!.duration.toFixed(2)}s. Alt-click to remove.`"
+			:title="seamTitle(seam)"
 			@pointerdown.stop
 			@click.stop="onSeamClick(seam, $event)">
 			<svg class="w-full h-full text-secondary" viewBox="0 0 40 40" preserveAspectRatio="none" aria-hidden="true">
 				<path d="M0,3 L40,37 M0,37 L40,3" stroke="currentColor" stroke-width="1.5" fill="none" />
 			</svg>
+			<!-- The exact preview is still encoding. Shown HERE because this is
+			     where you just dropped it and where you are looking; the monitor
+			     only says so while the playhead is inside the window. -->
+			<span v-if="previewStatus(seam) === 'rendering'"
+				class="absolute inset-0 flex items-center justify-center bg-secondary/25">
+				<span class="iconify tabler--loader-2 w-2.5 h-2.5 text-white animate-spin"></span>
+			</span>
 		</div>
 
 		<!-- A transition that no longer fits. Struck through rather than vanishing,
@@ -127,6 +134,17 @@ const blockStyle = (seam: Seam) => {
 		transform: `translateX(${viewport.secToPx(w.start)}px)`,
 		width: `${Math.max(viewport.secToPx(w.duration), 6)}px`
 	}
+}
+
+/** Readiness of the pre-rendered preview for this window, if any. */
+const previewStatus = (seam: Seam) => store.transitionPreviews.get(seam.junction.id)?.status
+
+const seamTitle = (seam: Seam) => {
+	const base = `${transitionLabel(seam.window!.kind)} — ${seam.window!.duration.toFixed(2)}s`
+	const status = previewStatus(seam)
+	if (status === 'rendering') return `${base}. Preparing an exact preview…`
+	if (status === 'error') return `${base}. Preview could not be rendered; the monitor cross-fades instead.`
+	return `${base}. Alt-click to remove.`
 }
 
 const onSeamClick = (seam: Seam, e: MouseEvent) => {

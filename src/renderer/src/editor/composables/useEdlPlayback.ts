@@ -207,6 +207,8 @@ export function useEdlPlayback(
 			showCached.value = false
 			opacityA.value = activeIsA.value ? 1 : 0
 			opacityB.value = activeIsA.value ? 0 : 1
+			// Undo the window's equal-power ramp, or a clip stays quiet after it.
+			for (const el of [videoA.value, videoB.value]) if (el && el.volume !== 1) el.volume = 1
 			const cached = videoT.value
 			if (cached && !cached.paused) cached.pause()
 			return false
@@ -264,6 +266,12 @@ export function useEdlPlayback(
 			el.muted = seg.muted
 			const target = Math.min(side.out, side.in + (t - w.start) * seg.speed)
 			if (Math.abs(el.currentTime - target) > 0.12) el.currentTime = Math.max(0, target)
+			// Equal power, mirroring the acrossfade the export uses: both clips at
+			// full level through the window is audible double-talk.
+			const ramp = side.item.id === w.outgoing.item.id
+				? Math.cos((frame.progress * Math.PI) / 2)
+				: Math.sin((frame.progress * Math.PI) / 2)
+			el.volume = Math.max(0, Math.min(1, ramp))
 			if (store.isPlaying) { if (el.paused) el.play().catch(() => { }) }
 			else if (!el.paused) el.pause()
 		}
@@ -416,6 +424,12 @@ export function useEdlPlayback(
 		applyWindow(store.playheadSec)
 		if (!store.isPlaying) activateAt(store.playheadSec)
 	})
+
+	// A render starting or landing changes what the monitor should show, and
+	// nothing else re-evaluates: `tick` only runs while playing and the playhead
+	// watcher only fires when it moves. Without this the "preparing" hint never
+	// appeared and the finished render only swapped in once you happened to scrub.
+	watch(() => store.transitionPreviews, () => applyWindow(store.playheadSec))
 
 	watch(() => store.isPlaying, (playing) => {
 		if (playing) {

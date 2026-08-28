@@ -75,7 +75,7 @@
 					     real filter. Covers A/B whenever it is ready. -->
 					<video ref="videoTRef" class="absolute inset-0 w-full h-full object-contain"
 						:style="{ opacity: edl.showCached.value ? 1 : 0 }"
-						preload="auto" muted></video>
+						preload="auto"></video>
 					<div v-if="edl.previewPending.value"
 						class="absolute bottom-2 left-1/2 -translate-x-1/2 flex items-center gap-1.5 px-2 py-1
 						       rounded-md bg-black/60 backdrop-blur-sm pointer-events-none">
