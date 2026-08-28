@@ -10,6 +10,56 @@
 		<!-- Windowed clip rendering -->
 		<TimelineClip v-for="item in visibleItems" :key="item.id" :item="item" />
 
+		<!-- Placed transitions. Above the clips so the block stays clickable, but
+		     inset so each clip's outer trim handle is still grabbable. -->
+		<div v-for="seam in placedSeams" :key="`t-${seam.junction.id}`"
+			class="absolute top-1.5 bottom-1.5 z-20 rounded-md border overflow-hidden cursor-pointer transition-shadow"
+			:class="seam.junction.id === store.selectedSeamId
+				? 'border-secondary ring-2 ring-secondary/40 bg-secondary/30'
+				: 'border-secondary/70 bg-secondary/20 hover:bg-secondary/30'"
+			:style="blockStyle(seam)"
+			role="option" :aria-selected="seam.junction.id === store.selectedSeamId" tabindex="0"
+			:title="`${transitionLabel(seam.window!.kind)} — ${seam.window!.duration.toFixed(2)}s. Alt-click to remove.`"
+			@pointerdown.stop
+			@click.stop="onSeamClick(seam, $event)">
+			<svg class="w-full h-full text-secondary" viewBox="0 0 40 40" preserveAspectRatio="none" aria-hidden="true">
+				<path d="M0,3 L40,37 M0,37 L40,3" stroke="currentColor" stroke-width="1.5" fill="none" />
+			</svg>
+		</div>
+
+		<!-- A transition that no longer fits. Struck through rather than vanishing,
+		     so trimming a clip too short never silently drops the user's edit. -->
+		<div v-for="seam in strandedSeams" :key="`s-${seam.junction.id}`"
+			class="absolute top-1/2 -translate-y-1/2 z-20 -ml-[9px] w-[18px] h-[18px] rounded-md
+			       border border-red-500/70 bg-red-500/20 flex items-center justify-center pointer-events-auto cursor-pointer"
+			:style="{ transform: `translateX(${viewport.secToPx(seam.junction.cut)}px)` }"
+			:title="`${transitionLabel(seam.requested!.kind)} does not fit this cut — the clips are too short. Alt-click to remove.`"
+			@pointerdown.stop
+			@click.stop="onSeamClick(seam, $event)">
+			<span class="iconify tabler--alert-triangle w-3 h-3 text-red-500"></span>
+		</div>
+
+		<!-- Seam targets, shown only while a preset is being dragged. Each says how
+		     long a transition it can take BEFORE frames start repeating — the thing
+		     that stops the feature failing invisibly on untrimmed footage. -->
+		<template v-if="showSeamTargets">
+			<div v-for="seam in visibleSeams" :key="`h-${seam.junction.id}`"
+				class="absolute top-1 bottom-1 z-30 -ml-[14px] w-[28px] rounded-lg border-2 border-dashed
+				       flex items-end justify-center pb-0.5 transition-colors"
+				:class="hoverSeamId === seam.junction.id
+					? 'border-solid border-accent bg-accent/25'
+					: 'border-zinc-400/60 dark:border-zinc-500/60 bg-zinc-500/10'"
+				:style="{ transform: `translateX(${viewport.secToPx(seam.junction.cut)}px)` }"
+				@dragover.stop="onSeamDragOver(seam, $event)"
+				@dragleave.stop="hoverSeamId = null"
+				@drop.stop="onSeamDrop(seam, $event)">
+				<span class="text-[8px] font-mono font-semibold whitespace-nowrap px-1 rounded"
+					:class="seam.limits.freeDuration > 0 ? 'text-zinc-500 dark:text-zinc-400' : 'text-red-500'">
+					{{ seam.limits.freeDuration > 0 ? `${seam.limits.freeDuration.toFixed(1)}s` : 'repeats' }}
+				</span>
+			</div>
+		</template>
+
 		<!-- Hints -->
 		<div v-if="items.length === 0" class="absolute inset-0 flex items-center px-3 pointer-events-none">
 			<span class="text-[10px] text-zinc-400 dark:text-zinc-600">{{ emptyHint }}</span>
@@ -21,6 +71,8 @@
 import { computed, inject, ref } from 'vue'
 import type { Track } from '@shared/types'
 import { itemEnd } from '@shared/timeline'
+import { DEFAULT_TRANSITION_SEC, type Seam } from '@shared/transitionPlan'
+import { transitionLabel } from '@shared/transitionPresets'
 import { useEditorStore } from '../../../stores/editorStore'
 import { TimelineViewportKey } from '../../composables/useTimelineViewport'
 import TimelineClip from './TimelineClip.vue'
@@ -31,12 +83,57 @@ const store = useEditorStore()
 const viewport = inject(TimelineViewportKey)!
 
 const dragOver = ref(false)
+const hoverSeamId = ref<string | null>(null)
 
 const items = computed(() => store.itemsByTrack[props.track.id] || [])
 
 const visibleItems = computed(() =>
 	items.value.filter((i) => viewport.intersectsVisible(i.timelineStart, itemEnd(i)))
 )
+
+// ===== Seams =====
+
+const laneSeams = computed(() => store.seams.filter((s) => s.junction.trackId === props.track.id))
+
+const visibleSeams = computed(() =>
+	laneSeams.value.filter((s) => viewport.intersectsVisible(s.junction.cut, s.junction.cut))
+)
+
+/** Seams whose annotation resolved to a real window. */
+const placedSeams = computed(() =>
+	visibleSeams.value.filter((s) => s.window)
+)
+
+/** Annotated, but the geometry cannot reach the floor — must still be visible. */
+const strandedSeams = computed(() =>
+	visibleSeams.value.filter((s) => s.requested && !s.window)
+)
+
+const showSeamTargets = computed(() =>
+	!!store.draggingTransitionKind && props.track.kind === 'video' && !props.track.locked && !props.track.hidden
+)
+
+const blockStyle = (seam: Seam) => {
+	const w = seam.window!
+	// Keep clear of each clip's 6px trim handle so trimming still works at a cut
+	// that carries a transition.
+	const INSET_PX = 7
+	const left = viewport.secToPx(w.start)
+	const width = Math.max(viewport.secToPx(w.duration) - INSET_PX * 2, 10)
+	return { transform: `translateX(${left + INSET_PX}px)`, width: `${width}px` }
+}
+
+const onSeamClick = (seam: Seam, e: MouseEvent) => {
+	// Alt-click removes, mirroring the ruler's marker idiom.
+	if (e.altKey) {
+		store.selectSeam(null)
+		store.clearTransition(seam.junction.outgoing.id)
+		return
+	}
+	store.selectSeam(seam.junction.id)
+}
+
+// ===== Drag & drop =====
 
 const laneTint = computed(() => {
 	switch (props.track.kind) {
@@ -95,10 +192,31 @@ const onDrop = (e: DragEvent) => {
 	if (clipId) store.addItemFromClip(clipId, props.track.id, atSec)
 }
 
+// A seam target handles its own drag entirely — `.stop` keeps the event from
+// reaching the lane, which would set dropEffect='none' and cancel the drop this
+// zone just accepted.
+const onSeamDragOver = (seam: Seam, e: DragEvent) => {
+	if (!e.dataTransfer?.types.includes('application/x-frameflow-kind-transition')) return
+	e.preventDefault()
+	e.dataTransfer.dropEffect = 'copy'
+	hoverSeamId.value = seam.junction.id
+}
+
+const onSeamDrop = (seam: Seam, e: DragEvent) => {
+	hoverSeamId.value = null
+	const kind = e.dataTransfer?.getData('application/x-frameflow-transition')
+	if (!kind) return
+	e.preventDefault()
+	store.setTransition(seam.junction.outgoing.id, kind, DEFAULT_TRANSITION_SEC)
+	store.selectSeam(seam.junction.id)
+	store.draggingTransitionKind = null
+}
+
 // Clicking empty lane space clears selection
 const onLanePointerDown = (e: PointerEvent) => {
 	if ((e.target as HTMLElement).dataset.trackId === props.track.id) {
 		store.clearItemSelection()
+		store.selectSeam(null)
 	}
 }
 </script>

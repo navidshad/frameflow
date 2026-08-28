@@ -5,8 +5,64 @@
 		</div>
 
 		<div class="flex-1 min-h-0 overflow-y-auto custom-scrollbar px-4 pb-4">
+			<!-- Seam mode. FIRST: selecting a seam usually leaves an adjacent clip
+			     selected too, and the item branch below would otherwise win. -->
+			<template v-if="seam">
+				<h3 class="text-sm font-bold text-zinc-800 dark:text-zinc-200 font-heading truncate">
+					{{ seam.window ? transitionLabel(seam.window.kind) : transitionLabel(seam.requested!.kind) }}
+				</h3>
+				<p class="mt-0.5 text-[10px] text-zinc-400">
+					Between “{{ seam.junction.outgoing.label || 'clip' }}” and “{{ seam.junction.incoming.label || 'clip' }}”
+				</p>
+
+				<div v-if="seam.window" class="mt-4 space-y-4">
+					<div>
+						<label class="text-[10px] font-bold uppercase tracking-widest text-zinc-500 block mb-1">
+							Duration
+							<span class="normal-case tracking-normal font-mono text-secondary ml-1">
+								{{ seam.window.duration.toFixed(2) }}s
+							</span>
+						</label>
+						<input type="range" :min="MIN_TRANSITION_SEC" :max="MAX_TRANSITION_SEC" step="0.05"
+							:value="requestedDuration" class="w-full accent-secondary"
+							@change="onDurationInput" />
+						<p class="mt-1 text-[9px] text-zinc-400 leading-snug">
+							The window straddles the cut. Nothing moves — the extra frames come from
+							footage you trimmed away.
+						</p>
+					</div>
+
+					<dl class="space-y-1.5">
+						<MetaRow label="Asked for" :value="`${requestedDuration.toFixed(2)}s`" mono />
+						<MetaRow label="Effective" :value="`${seam.window.duration.toFixed(2)}s`" mono />
+						<MetaRow label="Alignment" :value="alignment" />
+						<MetaRow label="Repeated" :value="repeated" mono />
+					</dl>
+
+					<p v-if="clamped" class="text-[10px] leading-snug text-amber-600 dark:text-amber-500">
+						Shortened to fit: these clips can only give
+						{{ seam.limits.maxDuration.toFixed(2) }}s between them.
+					</p>
+					<p v-else-if="repeatsFrames" class="text-[10px] leading-snug text-amber-600 dark:text-amber-500">
+						Part of this transition holds a still frame — there is no spare footage
+						at this cut. Trim either clip to remove it.
+					</p>
+				</div>
+
+				<p v-else class="mt-4 text-[10px] leading-snug text-red-500">
+					These clips are now too short for a transition, so this cut renders hard.
+					Lengthen either clip, or remove it below.
+				</p>
+
+				<button
+					class="mt-4 w-full px-3 py-2 rounded-xl border border-zinc-200 dark:border-zinc-700 text-xs font-bold text-zinc-600 dark:text-zinc-300 hover:border-red-500/40 hover:text-red-500 transition active:scale-95"
+					@click="removeTransition">
+					Remove transition
+				</button>
+			</template>
+
 			<!-- Timeline-item mode (priority when items are selected) -->
-			<template v-if="timelineItem">
+			<template v-else-if="timelineItem">
 				<h3 class="text-sm font-bold text-zinc-800 dark:text-zinc-200 font-heading truncate">
 					{{ timelineItem.label || 'Timeline clip' }}
 				</h3>
@@ -289,6 +345,10 @@
 
 <script setup lang="ts">
 import { toMediaUrl } from '@shared/media-url'
+import {
+	DEFAULT_TRANSITION_SEC, MAX_TRANSITION_SEC, MIN_TRANSITION_SEC
+} from '@shared/transitionPlan'
+import { transitionLabel } from '@shared/transitionPresets'
 import { computed, h, ref } from 'vue'
 import type { FunctionalComponent } from 'vue'
 import { useEditorStore } from '../../stores/editorStore'
@@ -404,6 +464,47 @@ const transcribe = async () => {
 	} finally {
 		transcribing.value = false
 	}
+}
+
+// ===== Seam (transition) mode =====
+
+const seam = computed(() => editorStore.selectedSeam)
+const requestedDuration = computed(() =>
+	seam.value?.requested?.duration ?? seam.value?.window?.duration ?? DEFAULT_TRANSITION_SEC
+)
+const clamped = computed(() =>
+	!!seam.value?.window && seam.value.window.duration < requestedDuration.value - 1e-6
+)
+const repeatsFrames = computed(() => {
+	const w = seam.value?.window
+	return !!w && (w.outgoing.freeze > 0 || w.incoming.freeze > 0)
+})
+const repeated = computed(() => {
+	const w = seam.value?.window
+	if (!w) return '—'
+	const total = w.outgoing.freeze + w.incoming.freeze
+	return total > 0 ? `${total.toFixed(2)}s` : 'none'
+})
+const alignment = computed(() => {
+	const w = seam.value?.window
+	if (!w) return '—'
+	return Math.abs(w.front - w.back) > 0.01 ? 'slid off centre' : 'centred on the cut'
+})
+
+const onTransitionDuration = (event: Event) => {
+	const value = parseFloat((event.target as HTMLInputElement).value)
+	const current = seam.value
+	if (current && Number.isFinite(value)) {
+		const kind = current.window?.kind ?? current.requested?.kind
+		if (kind) editorStore.setTransition(current.junction.outgoing.id, kind, value)
+	}
+}
+
+const removeTransition = () => {
+	const current = seam.value
+	if (!current) return
+	editorStore.selectSeam(null)
+	editorStore.clearTransition(current.junction.outgoing.id)
 }
 
 // Small label/value row

@@ -15,6 +15,11 @@ import { computeScope } from '@shared/ai-scope'
 import { childrenByParent, collectSubtree, hasBranch } from '@shared/revision-tree'
 import { DEFAULT_PERSONA_ID } from '@shared/personas'
 import { toMediaUrl } from '@shared/media-url'
+import { isTransitionKind, transitionLabel } from '@shared/transitionPresets'
+import {
+	MAX_TRANSITION_SEC, MIN_TRANSITION_SEC, planTransitions, seamAt, sourceDurationsFrom,
+	type Seam
+} from '@shared/transitionPlan'
 
 /**
  * Store for the timeline video editor (/editor/:id).
@@ -191,6 +196,42 @@ export const useEditorStore = defineStore('editor', () => {
 	const selectedItems = computed<TimelineItem[]>(() =>
 		(doc.value?.timeline || []).filter((i) => selectedItemIds.value.includes(i.id))
 	)
+
+	/**
+	 * Every cut between adjacent video clips, with what a transition there could
+	 * support and the window any annotation resolves to. One list serves the drag
+	 * affordance, the timeline blocks and the inspector.
+	 *
+	 * VIDEO tracks only: findJunctions pairs whatever it is given, and the export
+	 * planner passes video items for the same reason.
+	 */
+	const seams = computed<Seam[]>(() => {
+		if (!doc.value) return []
+		const videoTrackIds = new Set(
+			doc.value.tracks.filter((t) => t.kind === 'video' && !t.hidden).map((t) => t.id)
+		)
+		return planTransitions(
+			doc.value.timeline.filter((i) => videoTrackIds.has(i.trackId)),
+			sourceDurationsFrom(doc.value.media)
+		)
+	})
+
+	/** Ephemeral, like silenceScan — a seam is not an item, so it stays out of
+	 *  doc.selection, which pruneSelection would strip of any non-item id. */
+	const selectedSeamId = ref<string | null>(null)
+	const selectedSeam = computed<Seam | null>(() =>
+		seams.value.find((s) => s.junction.id === selectedSeamId.value) || null
+	)
+	const selectSeam = (id: string | null) => {
+		selectedSeamId.value = id
+		if (id) clearItemSelection()
+	}
+
+	/** The preset kind currently being dragged, so lanes know to reveal seams. */
+	const draggingTransitionKind = ref<string | null>(null)
+
+	/** Seam nearest `t`, within a tolerance the caller derives from zoom. */
+	const seamNear = (t: number, toleranceSec: number) => seamAt(seams.value, t, toleranceSec)
 
 	/** Ordered playable segments for EDL preview (unhidden video tracks). */
 	const videoSegments = computed(() => {
@@ -1175,6 +1216,15 @@ export const useEditorStore = defineStore('editor', () => {
 			item.out = sourceSplit
 			item.duration = (item.out - item.in) / (item.speed || 1)
 			item.masterSegmentIndex = undefined
+			// The deep clone above copied `transition.out` onto BOTH halves. It
+			// belongs to the cut at the original clip's END, which only the right
+			// half still has — the left half's would sit on the split itself, a cut
+			// the user just created and never asked to soften.
+			if (item.transition?.out) {
+				const rest = { ...item.transition }
+				delete rest.out
+				item.transition = Object.keys(rest).length ? rest : undefined
+			}
 			doc.value.timeline.push(right)
 			newIds.push(item.id, right.id)
 		}
@@ -1283,6 +1333,33 @@ export const useEditorStore = defineStore('editor', () => {
 		if (edge === 'in') item.fadeInSec = clamped || undefined
 		else item.fadeOutSec = clamped || undefined
 		commitStep({ before, label: `Fade ${edge} ${clamped.toFixed(1)}s` })
+	}
+
+	/**
+	 * Attach a transition to the cut AFTER this clip. The annotation lives on the
+	 * outgoing item; no clip moves and the sequence length is unchanged — the
+	 * window is resolved at render time from each side's trimmed-away handles.
+	 */
+	const setTransition = (id: string, kind: string, seconds: number) => {
+		const item = doc.value?.timeline.find((i) => i.id === id)
+		if (!item || !isTransitionKind(kind) || !Number.isFinite(seconds)) return
+		const before = snapshotState()
+		const duration = Math.max(MIN_TRANSITION_SEC, Math.min(MAX_TRANSITION_SEC, seconds))
+		// REPLACE, never mutate: diffTimelines compares `transition` by value, and
+		// mutating in place makes the before/after snapshots alias so the edit is
+		// never recorded. See the contract in shared/timeline.ts.
+		item.transition = { ...item.transition, out: { kind, duration } }
+		commitStep({ before, label: `Transition ${transitionLabel(kind)}` })
+	}
+
+	const clearTransition = (id: string) => {
+		const item = doc.value?.timeline.find((i) => i.id === id)
+		if (!item?.transition?.out) return
+		const before = snapshotState()
+		const rest = { ...item.transition }
+		delete rest.out
+		item.transition = Object.keys(rest).length ? rest : undefined
+		commitStep({ before, label: 'Remove transition' })
 	}
 
 	const nudgeItems = (ids: string[], deltaSec: number) => {
@@ -2141,6 +2218,14 @@ export const useEditorStore = defineStore('editor', () => {
 		toggleItemMuted,
 		setItemGain,
 		setItemFade,
+		setTransition,
+		clearTransition,
+		seams,
+		selectedSeamId,
+		selectedSeam,
+		selectSeam,
+		draggingTransitionKind,
+		seamNear,
 		nudgeItems,
 		addMarker,
 		removeMarker,

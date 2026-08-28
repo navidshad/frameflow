@@ -6,6 +6,7 @@ import { join } from 'path'
 import { promisify } from 'util'
 import type { EditorDocument, MediaAsset, TimelineItem, Track } from '@shared/types'
 import { getFFmpegBinaryPath, getFFprobeBinaryPath } from '../ffmpeg/binaries'
+import { TRANSITION_PRESETS } from '@shared/transitionPresets'
 import { computeRegions } from './render'
 import { buildRegionGraph, type OverlapRegion, type Region, type RegionPlan } from './renderBuilders'
 
@@ -173,4 +174,24 @@ describe('render pipeline — against the real ffmpeg', () => {
 		const file = await renderGraph(window, plan, 'freeze.mp4')
 		expect(await durationOf(file)).toBeCloseTo(window.duration, 1)
 	}, 60_000)
+})
+
+describe('transition catalogue vs the real binary', () => {
+	it('lists exactly the presets this ffmpeg build accepts', async () => {
+		// Guards against drift: an ffmpeg upgrade that adds, renames or drops a
+		// transition would otherwise surface as a failed export, not a failed test.
+		const { stdout, stderr } = await execFileAsync(ffmpeg, ['-hide_banner', '-h', 'filter=xfade'])
+		const help = `${stdout}${stderr}`
+		const section = help.slice(help.indexOf('transition'))
+		const offered = new Set<string>()
+		for (const line of section.split('\n')) {
+			const m = line.match(/^\s{5,}([a-z]+)\s+(-?\d+)\s/)
+			if (m && m[1] !== 'custom') offered.add(m[1])
+		}
+		expect(offered.size).toBeGreaterThan(50)
+
+		const catalogued = new Set(TRANSITION_PRESETS.map((p) => p.kind))
+		expect([...offered].filter((k) => !catalogued.has(k)).sort()).toEqual([])
+		expect([...catalogued].filter((k) => !offered.has(k)).sort()).toEqual([])
+	}, 30_000)
 })

@@ -1,5 +1,6 @@
 import type { TimelineItem, TransitionRef } from './types'
 import { itemDuration, itemEnd } from './timeline'
+import { isTransitionKind } from './transitionPresets'
 
 /**
  * Transition window geometry (ROADMAP Phase 1 §Transitions, item 1).
@@ -203,6 +204,10 @@ export function planTransition(
 ): TransitionWindow | null {
 	const requested = Number(ref?.duration)
 	if (!Number.isFinite(requested) || requested <= 0) return null
+	// Guard the boundary. `kind` comes from a persisted document or an AI edit,
+	// and an unknown name would otherwise reach `xfade=transition=` and fail the
+	// whole render. Degrade to a plain cut instead.
+	if (!ref?.kind || !isTransitionKind(ref.kind)) return null
 
 	const limits = junctionLimits(junction, sources)
 	const duration = Math.min(requested, limits.maxDuration)
@@ -266,6 +271,27 @@ export function planTransitions(items: readonly TimelineItem[], sources: SourceD
 		if (!requested) return { junction, limits }
 		return { junction, limits, requested, window: planTransition(junction, requested, sources) ?? undefined }
 	})
+}
+
+/**
+ * The seam nearest `t`, within `toleranceSec` of its cut — the drop rule for the
+ * timeline's junction hit zones, kept here so it is testable without a DOM.
+ *
+ * The caller converts a PIXEL tolerance through the viewport, so the target
+ * stays the same size on screen at every zoom level rather than covering wildly
+ * different amounts of time.
+ */
+export function seamAt(seams: readonly Seam[], t: number, toleranceSec: number): Seam | null {
+	let best: Seam | null = null
+	let bestDist = Math.abs(toleranceSec)
+	for (const seam of seams) {
+		const dist = Math.abs(seam.junction.cut - t)
+		if (dist <= bestDist) {
+			best = seam
+			bestDist = dist
+		}
+	}
+	return best
 }
 
 /** The blend in flight at time `t`, or null when the playhead is outside every window. */

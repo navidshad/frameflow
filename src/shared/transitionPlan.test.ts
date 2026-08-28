@@ -9,6 +9,7 @@ import {
 	junctionLimits,
 	planTransition,
 	planTransitions,
+	seamAt,
 	sourceDurationsFrom,
 	transitionAt,
 	type Junction,
@@ -495,5 +496,59 @@ describe('sourceDurationsFrom', () => {
 			{ id: 'd', metadata: { duration: Number.NaN } }
 		])
 		expect(map.size).toBe(0)
+	})
+})
+
+// ===== The preset gate =====
+
+describe('planTransition — unknown kinds', () => {
+	it('degrades to a cut rather than letting a bad kind reach ffmpeg', () => {
+		// A hand-edited or AI-written document can carry anything. An unknown name
+		// would fail `xfade=transition=` and take the whole render down with it.
+		const { items, sources } = seam({ tail: 5, head: 5 })
+		expect(planTransition(only(items), { kind: 'crossfade', duration: 2 }, sources)).toBeNull()
+		expect(planTransition(only(items), { kind: '', duration: 2 }, sources)).toBeNull()
+	})
+
+	it('still accepts every catalogued preset', () => {
+		const { items, sources } = seam({ tail: 5, head: 5 })
+		for (const kind of ['fade', 'slideleft', 'zoomin', 'revealdown']) {
+			expect(planTransition(only(items), { kind, duration: 2 }, sources)).not.toBeNull()
+		}
+	})
+})
+
+// ===== seamAt =====
+
+describe('seamAt', () => {
+	const threeClips = () => {
+		const a = clip(0, { id: 'A' })
+		const b = clip(10, { id: 'B' })
+		const c = clip(20, { id: 'C' })
+		return planTransitions([a, b, c], new Map())
+	}
+
+	it('finds the seam under an exact hit', () => {
+		expect(seamAt(threeClips(), 10, 0.5)?.junction.cut).toBe(10)
+	})
+
+	it('finds a seam within tolerance either side', () => {
+		expect(seamAt(threeClips(), 9.7, 0.5)?.junction.cut).toBe(10)
+		expect(seamAt(threeClips(), 10.3, 0.5)?.junction.cut).toBe(10)
+	})
+
+	it('returns null beyond tolerance', () => {
+		expect(seamAt(threeClips(), 15, 0.5)).toBeNull()
+	})
+
+	it('picks the nearer of two seams in range', () => {
+		// A wide tolerance at low zoom can cover both; the drop must be unambiguous.
+		expect(seamAt(threeClips(), 12, 20)?.junction.cut).toBe(10)
+		expect(seamAt(threeClips(), 18, 20)?.junction.cut).toBe(20)
+	})
+
+	it('returns null for an empty plan or a zero tolerance miss', () => {
+		expect(seamAt([], 10, 0.5)).toBeNull()
+		expect(seamAt(threeClips(), 10.01, 0)).toBeNull()
 	})
 })

@@ -57,7 +57,7 @@
 
 						<!-- Left rail: media (drag its right edge to resize) -->
 						<div v-if="leftOpen" class="relative min-h-0 flex">
-							<MediaPanel v-model:collapsed="leftCollapsedProxy" class="flex-1 min-w-0" />
+							<LeftRail v-model:collapsed="leftCollapsedProxy" v-model:tab="leftTab" />
 							<ResizeHandle direction="vertical" class="absolute inset-y-0 -right-2.5 z-20"
 								@resize="resizeLeft" @reset="resetLeft" />
 						</div>
@@ -112,7 +112,7 @@ import type { FunctionalComponent } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import GraphHeader from '../components/graph/GraphHeader.vue'
 import { useEditorStore } from '../stores/editorStore'
-import MediaPanel from './components/MediaPanel.vue'
+import LeftRail, { type LeftTab } from './components/LeftRail.vue'
 import PreviewMonitor from './components/PreviewMonitor.vue'
 import TimelinePanel from './components/TimelinePanel.vue'
 import ChatColumn from './components/ChatColumn.vue'
@@ -129,6 +129,8 @@ const showExport = ref(false)
 
 // ===== Collapsible rails (persisted per machine) =====
 const leftOpen = ref(localStorage.getItem('editor.leftRail') !== 'closed')
+const leftTab = ref<LeftTab>((localStorage.getItem('editor.leftTab') as LeftTab) || 'media')
+watch(leftTab, (v) => localStorage.setItem('editor.leftTab', v))
 // Right region = two independently-collapsible COLUMNS. Closing a column frees
 // its horizontal space, widening the player.
 const chatColOpen = ref(localStorage.getItem('editor.chatCol') !== 'closed')
@@ -214,6 +216,11 @@ watch(chatColOpen, (open) => { if (open) chatBadge.value = false })
 // Selecting a clip reveals the Inspector row so its details are visible.
 watch(() => editorStore.selectedItemIds.length, (n) => {
 	if (n > 0 && !inspectorOpen.value) inspectorOpen.value = true
+})
+
+// Same courtesy for a transition: its whole inspector is where you set the length.
+watch(() => editorStore.selectedSeamId, (id) => {
+	if (id && !inspectorOpen.value) inspectorOpen.value = true
 })
 
 const totalCost = computed(() =>
