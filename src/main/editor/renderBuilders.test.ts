@@ -1,0 +1,214 @@
+import { describe, expect, it } from 'vitest'
+import type { TimelineItem, Track } from '@shared/types'
+import {
+	allSlices, atempoChain, buildRegionGraph,
+	type CutRegion, type OverlapRegion, type RegionPlan, type SourceSlice
+} from './renderBuilders'
+
+// ===== Fixtures =====
+
+const track: Track = {
+	id: 'v1', kind: 'video', name: 'V1', order: 0,
+	muted: false, locked: false, hidden: false, height: 72
+}
+
+const item = (over: Partial<TimelineItem> = {}): TimelineItem => ({
+	id: over.id ?? 'i1', trackId: 'v1', sourceAssetId: 'a',
+	timelineStart: 0, in: 0, out: 10, speed: 1, preservePitch: true, duration: 10, ...over
+})
+
+/** A slice spanning its whole region unless told otherwise. */
+const slice = (over: Partial<SourceSlice> = {}): SourceSlice => ({
+	srcPath: '/tmp/a.mp4', in: 0, out: 2,
+	offset: 0, duration: 2, freezeHead: 0, freezeTail: 0,
+	item: item(), track, ...over
+})
+
+const plan: RegionPlan = {
+	regions: [], width: 1920, height: 1080, fps: 30, duration: 0, hasOverlap: false
+}
+
+const cut = (over: Partial<CutRegion> = {}): CutRegion => ({
+	kind: 'cut', duration: 2, videoLayers: [], audioSources: [], ...over
+})
+
+const overlap = (over: Partial<OverlapRegion> = {}): OverlapRegion => ({
+	kind: 'overlap', duration: 2,
+	transition: { kind: 'fade', duration: 2 },
+	from: slice({ item: item({ id: 'A' }), srcPath: '/tmp/A.mp4' }),
+	to: slice({ item: item({ id: 'B' }), srcPath: '/tmp/B.mp4' }),
+	cutAt: 1, fromAudioActive: true, toAudioActive: true, audioSources: [], ...over
+})
+
+const graphOf = (region: CutRegion | OverlapRegion) => {
+	const g = buildRegionGraph(region, plan)
+	return { ...g, text: g.filters.join(';') }
+}
+
+// ===== Ordinary regions =====
+
+describe('buildRegionGraph — cut regions', () => {
+	it('normalizes the top layer and maps it as the picture', () => {
+		const g = graphOf(cut({ videoLayers: [slice()] }))
+		expect(g.video).toBe('[v]')
+		expect(g.text).toContain('scale=1920:1080:force_original_aspect_ratio=decrease')
+		expect(g.text).toContain('fps=30')
+		expect(g.inputs[0]).toEqual({ path: '/tmp/a.mp4', options: ['-ss', '0.000', '-t', '2.000'] })
+	})
+
+	it('pads nothing when a slice spans its whole region', () => {
+		// The shape every existing export relies on: no placement filters at all.
+		const g = graphOf(cut({ videoLayers: [slice()], audioSources: [slice()] }))
+		expect(g.text).not.toContain('tpad')
+		expect(g.text).not.toContain('adelay')
+	})
+
+	it('renders black and silence for an empty region', () => {
+		const g = graphOf(cut())
+		expect(g.inputs[0].format).toBe('lavfi')
+		expect(g.inputs[0].path).toContain('color=black')
+		expect(g.inputs[1].path).toContain('anullsrc')
+		expect(g.audio).toBe('[a]')
+	})
+
+	it('passes a lone audio source straight through without a mixer', () => {
+		const g = graphOf(cut({ videoLayers: [slice()], audioSources: [slice()] }))
+		expect(g.audio).toBe('[a0]')
+		expect(g.text).not.toContain('amix')
+	})
+
+	it('mixes several audio sources at unity', () => {
+		const g = graphOf(cut({ videoLayers: [slice()], audioSources: [slice(), slice()] }))
+		expect(g.text).toContain('[a0][a1]amix=inputs=2:normalize=0[a]')
+	})
+
+	it('pins every audio stream to the region length', () => {
+		const g = graphOf(cut({ audioSources: [slice({ out: 1 })] }))
+		expect(g.text).toContain('apad=whole_dur=2.000,atrim=0:2.000')
+	})
+})
+
+// ===== Region-local placement (the Stage A regression) =====
+
+describe('buildRegionGraph — slice placement', () => {
+	it('delays an audio slice that starts partway through its region', () => {
+		// REGRESSION. Collapsing near-coincident boundaries means a region no longer
+		// starts at every item edge, so a bed can begin inside one. Without adelay
+		// it played from the top of the region — up to 50ms early, against picture.
+		const g = graphOf(cut({ audioSources: [slice({ offset: 0.02, duration: 1.98 })] }))
+		expect(g.text).toContain('adelay=20|20')
+	})
+
+	it('delays after the builder chain, so a fade envelope is not dragged with it', () => {
+		// fadeA emits volume=…:eval=frame in stream-relative t; delaying upstream
+		// would move the ramp as well as the audio.
+		const g = graphOf(cut({
+			audioSources: [slice({ offset: 0.5, duration: 1.5, item: item({ fadeInSec: 1 }) })]
+		}))
+		expect(g.text.indexOf('volume=')).toBeLessThan(g.text.indexOf('adelay='))
+	})
+
+	it('pads a late video slice with black rather than refusing to render it', () => {
+		const g = graphOf(cut({ videoLayers: [slice({ offset: 0.02, duration: 1.98 })] }))
+		expect(g.text).toContain('tpad=start_mode=add:start_duration=0.020:color=black')
+	})
+
+	it('pads both ends of a video slice that is shorter than its region', () => {
+		const g = graphOf(cut({ videoLayers: [slice({ offset: 0.5, duration: 1 })] }))
+		expect(g.text).toContain('start_mode=add:start_duration=0.500')
+		expect(g.text).toContain('stop_mode=add:stop_duration=0.500')
+	})
+
+	it('rounds a sub-millisecond offset away rather than emitting a no-op delay', () => {
+		const g = graphOf(cut({ audioSources: [slice({ offset: 0.0001, duration: 1.9999 })] }))
+		expect(g.text).not.toContain('adelay')
+	})
+})
+
+// ===== Transitions =====
+
+describe('buildRegionGraph — overlap regions', () => {
+	it('blends the two clips across the whole window', () => {
+		const g = graphOf(overlap())
+		expect(g.text).toContain('[vf][vt]xfade=transition=fade:duration=2.000:offset=0[v]')
+	})
+
+	it('carries the chosen preset', () => {
+		const g = graphOf(overlap({ transition: { kind: 'wipeleft', duration: 2 } }))
+		expect(g.text).toContain('xfade=transition=wipeleft')
+	})
+
+	it('normalizes both sides, because xfade requires matching geometry', () => {
+		const g = graphOf(overlap())
+		expect(g.text.match(/scale=1920:1080/g)).toHaveLength(2)
+	})
+
+	it('feeds both sources as separate inputs', () => {
+		const g = graphOf(overlap())
+		expect(g.inputs.map((i) => i.path)).toEqual(['/tmp/A.mp4', '/tmp/B.mp4', '/tmp/A.mp4', '/tmp/B.mp4'])
+	})
+
+	it('crossfades the pair at equal power and never mixes them', () => {
+		// Both at full level through the window is audible double-talk.
+		const g = graphOf(overlap())
+		expect(g.text).toContain('[af][at]acrossfade=d=2.000:c1=qsin:c2=qsin[apair]')
+		expect(g.audio).toBe('[apair]')
+		expect(g.text).not.toContain('amix')
+	})
+
+	it('holds the outgoing clip on its last frame when its handle runs out', () => {
+		const g = graphOf(overlap({ from: slice({ out: 1.5, duration: 2, freezeTail: 0.5 }) }))
+		expect(g.text).toContain('tpad=stop_mode=clone:stop_duration=0.500')
+	})
+
+	it('holds the incoming clip on its first frame at the head of the window', () => {
+		const g = graphOf(overlap({ to: slice({ out: 1.5, duration: 2, freezeHead: 0.5 }) }))
+		expect(g.text).toContain('tpad=start_mode=clone:start_duration=0.500')
+	})
+
+	it('fills a frozen audio head with silence, not repeated samples', () => {
+		const g = graphOf(overlap({ to: slice({ out: 1.5, duration: 2, freezeHead: 0.5 }) }))
+		expect(g.text).toContain('adelay=500|500')
+	})
+
+	it('gives a silent side its half of the ramp against silence', () => {
+		const g = graphOf(overlap({ toAudioActive: false }))
+		expect(g.inputs.some((i) => i.path.includes('anullsrc'))).toBe(true)
+		expect(g.text).toContain('acrossfade')
+	})
+
+	it('mixes a bystander bed on top of the blended pair', () => {
+		const bed = slice({ item: item({ id: 'BED' }), srcPath: '/tmp/bed.m4a' })
+		const g = graphOf(overlap({ audioSources: [bed] }))
+		expect(g.text).toContain('[apair][ab0]amix=inputs=2:normalize=0[a]')
+		expect(g.audio).toBe('[a]')
+	})
+
+	it('places a bed that enters partway through the window', () => {
+		const bed = slice({ item: item({ id: 'BED' }), srcPath: '/tmp/bed.m4a', offset: 0.4, duration: 1.6 })
+		const g = graphOf(overlap({ audioSources: [bed] }))
+		expect(g.text).toContain('adelay=400|400')
+	})
+})
+
+// ===== allSlices / atempoChain =====
+
+describe('allSlices', () => {
+	it('reaches both sides of a transition and its bystanders', () => {
+		const bed = slice({ item: item({ id: 'BED' }) })
+		expect(allSlices(overlap({ audioSources: [bed] })).map((s) => s.item.id)).toEqual(['A', 'B', 'BED'])
+	})
+})
+
+describe('atempoChain', () => {
+	it('keeps every stage inside ffmpeg 0.5–2.0 range', () => {
+		for (const speed of [0.25, 0.5, 1, 1.5, 2, 3, 4]) {
+			const stages = atempoChain(speed).split(',').map((s) => Number(s.replace('atempo=', '')))
+			for (const stage of stages) {
+				expect(stage).toBeGreaterThanOrEqual(0.5)
+				expect(stage).toBeLessThanOrEqual(2)
+			}
+			expect(stages.reduce((a, b) => a * b, 1)).toBeCloseTo(speed, 6)
+		}
+	})
+})

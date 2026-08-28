@@ -14,8 +14,8 @@ import { threadManager } from '../threads'
 import { assembleVideo, sanitizeFilename } from '../ffmpeg'
 import { THREAD_DIRS } from '../constants/paths'
 import {
-	allSlices, audioBuilders, buildChain, videoBuilders,
-	type BuildCtx, type Region, type RegionPlan, type SourceSlice
+	allSlices, buildRegionGraph,
+	type Region, type RegionPlan, type SourceSlice
 } from './renderBuilders'
 
 export { atempoChain } from './renderBuilders'
@@ -187,11 +187,11 @@ export function computeRegions(doc: EditorDocument, quality: ExportQuality): Reg
 		item.timelineStart < t1 - TIME_EPS && itemEnd(item) > t0 + TIME_EPS
 
 	/**
-	 * The item's content clipped to [t0,t1). On a transition-free timeline this is
-	 * IDENTICAL to the old covering-item slice — regions are cut at every item
-	 * edge, so an intersecting item always spans the whole cell and offset is 0.
-	 * It is a strict generalisation, needed only because a window's edges are not
-	 * item edges.
+	 * The item's content clipped to [t0,t1), carrying where inside the region it
+	 * belongs. `offset` is usually 0 — but NOT always, and an earlier version of
+	 * this comment wrongly claimed it was: collapsing near-coincident boundaries
+	 * means a region no longer starts at every item edge, so an item can begin
+	 * partway through one. The renderer places it with `tpad` / `adelay`.
 	 */
 	const toSlice = (item: TimelineItem, t0: number, t1: number): SourceSlice => {
 		const asset = assetById.get(item.sourceAssetId)
@@ -303,10 +303,8 @@ export function computeRegions(doc: EditorDocument, quality: ExportQuality): Reg
 			}
 			if (!hits.length) continue
 			const slice = toSlice(hits[0], t0, t1)
-			if (slice.offset > TIME_EPS || slice.duration < duration - TIME_EPS) {
-				// Video has no region-local placement in renderRegion (a late start
-				// needs black padding), so enforce the invariant rather than mis-render.
-				throw new Error(`Clip "${hits[0].label || hits[0].id}" only partly covers its region.`)
+			if (slice.offset + slice.duration > duration + TIME_EPS) {
+				throw new Error(`Clip "${hits[0].label || hits[0].id}" overruns its region.`)
 			}
 			videoLayers.push(slice)
 		}
@@ -396,10 +394,6 @@ export function isFastPathEligible(items: TimelineItem[], track: Track, hasAudio
 
 // ===== ffmpeg building blocks =====
 
-const vnorm = (w: number, h: number, fps: number) =>
-	`scale=${w}:${h}:force_original_aspect_ratio=decrease,` +
-	`pad=${w}:${h}:(ow-iw)/2:(oh-ih)/2,setsar=1,fps=${fps},format=yuv420p`
-
 // Uniform intermediates: identical codec/res/fps/rate/layout is REQUIRED for
 // concat -c copy. Forced h264+aac mp4 on all platforms (incl. webm sources).
 const intermediateOpts = (): string[] => [
@@ -452,71 +446,21 @@ async function renderRegion(
 	signal: AbortSignal,
 	onProgress: (percent: number) => void
 ): Promise<string> {
-	const duration = region.duration
-	const dur = duration.toFixed(3)
+	const dur = region.duration.toFixed(3)
 	const outputPath = path.join(workDir, `region-${String(index).padStart(3, '0')}.mp4`)
 
+	const graph = buildRegionGraph(region, plan)
 	const command = ffmpeg()
-	const filters: string[] = []
-	let inputIdx = 0
-	const ctxFor = (slice: SourceSlice): BuildCtx => ({ slice, plan })
-
-	if (region.kind === 'overlap') {
-		// Item 2 of the roadmap replaces this with the xfade / acrossfade graph.
-		// Until then the plan can EXPRESS a transition that the renderer cannot
-		// draw, and the only acceptable behaviour is to stop.
-		throw new Error('This build cannot render transitions yet.')
-	}
-
-	// ---- Video: top layer's slice, or black of exactly `duration`.
-	// videoLayers[1..n] are the compositing seam (PiP/overlay, deferred). ----
-	const topLayer = region.videoLayers[0]
-	if (topLayer) {
-		const cut = (topLayer.out - topLayer.in).toFixed(3)
-		command.input(topLayer.srcPath).inputOptions(['-ss', topLayer.in.toFixed(3), '-t', cut])
-		const chain = [...buildChain(videoBuilders, ctxFor(topLayer)), vnorm(plan.width, plan.height, plan.fps)]
-		filters.push(`[${inputIdx++}:v]${chain.join(',')}[v]`)
-	} else {
-		command.input(`color=black:size=${plan.width}x${plan.height}:rate=${plan.fps}`)
-			.inputFormat('lavfi').inputOptions(['-t', dur])
-		filters.push(`[${inputIdx++}:v]setsar=1,format=yuv420p[v]`)
-	}
-
-	// ---- Audio: silence, single stream, or amix of k streams ----
-	let audioLabel = '[a]'
-	if (region.audioSources.length === 0) {
-		command.input('anullsrc=r=48000:cl=stereo').inputFormat('lavfi').inputOptions(['-t', dur])
-		filters.push(`[${inputIdx++}:a]atrim=0:${dur},asetpts=PTS-STARTPTS[a]`)
-	} else {
-		const labels: string[] = []
-		region.audioSources.forEach((a, k) => {
-			const cut = (a.out - a.in).toFixed(3)
-			command.input(a.srcPath).inputOptions(['-ss', a.in.toFixed(3), '-t', cut])
-			const label = `[a${k}]`
-			// Head: PTS reset. Builders: speed → gain → fade → effects. Tail:
-			// conform + apad + atrim pin every stream to EXACTLY the region
-			// duration so amix aligns them and the intermediate stays A/V
-			// frame-aligned for concat.
-			const chain = [
-				'asetpts=PTS-STARTPTS',
-				...buildChain(audioBuilders, ctxFor(a)),
-				'aresample=48000',
-				`aformat=sample_fmts=fltp:channel_layouts=stereo,apad=whole_dur=${dur},atrim=0:${dur}`
-			]
-			filters.push(`[${inputIdx++}:a]${chain.join(',')}${label}`)
-			labels.push(label)
-		})
-		if (labels.length === 1) {
-			audioLabel = labels[0]
-		} else {
-			filters.push(`${labels.join('')}amix=inputs=${labels.length}:normalize=0[a]`)
-		}
+	for (const input of graph.inputs) {
+		const added = command.input(input.path)
+		if (input.format) added.inputFormat(input.format)
+		added.inputOptions(input.options)
 	}
 
 	command
-		.complexFilter(filters.join(';'))
-		.map('[v]')
-		.map(audioLabel)
+		.complexFilter(graph.filters.join(';'))
+		.map(graph.video)
+		.map(graph.audio)
 		.outputOptions([...intermediateOpts(), '-t', dur])
 
 	await runCommand(command, outputPath, signal, onProgress)
@@ -600,14 +544,6 @@ export function startEditorRender(options: {
 	const missing = srcPaths.filter((p) => !fs.existsSync(p))
 	if (missing.length > 0) {
 		throw new Error(`Missing source file(s): ${missing.map((p) => path.basename(p)).join(', ')}`)
-	}
-	// Reject up front rather than mid-render: the plan can describe a transition
-	// that renderRegion cannot draw until roadmap item 2 lands.
-	if (plan.hasOverlap) {
-		throw new Error(
-			'This timeline uses transitions, which this build cannot export yet. ' +
-			'Remove the transition, or export again after updating.'
-		)
 	}
 
 	const renderId = uuidv4()

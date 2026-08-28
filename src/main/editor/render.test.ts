@@ -242,6 +242,32 @@ describe('computeRegions — boundaries', () => {
 		expect(bed.duration).toBeCloseTo(1.6, 6)
 	})
 
+	it('exports two same-track clips separated by less than the snap threshold', () => {
+		// REGRESSION. Collapsing the two near-coincident edges leaves the second clip
+		// starting inside the first's region. That used to throw "only partly covers
+		// its region" on a perfectly ordinary timeline; the renderer now places it.
+		const p = plan({ timeline: [item(0, { in: 0, out: 9.98 }), item(10)] })
+		expect(total(p)).toBeCloseTo(20, 6)
+		const late = p.regions.flatMap(allSlices).find((sl) => sl.offset > 0)!
+		expect(late.offset).toBeCloseTo(0.02, 6)
+	})
+
+	it('gives a bed starting just after a clip ends a region-local offset', () => {
+		// The audio half of the same collapse: without an offset the bed would be
+		// rendered from the top of the region, ahead of the picture.
+		const p = plan({
+			media: [asset('a'), asset('music', 500)],
+			tracks: [track('v1'), track('a1', { kind: 'audio', order: 0 })],
+			timeline: [
+				item(0, { in: 0, out: 9.98 }),
+				item(10, { id: 'BED', trackId: 'a1', sourceAssetId: 'music', in: 0, out: 10 })
+			]
+		})
+		const bed = p.regions.flatMap(allSlices).find((sl) => sl.item.id === 'BED')!
+		expect(bed.offset).toBeCloseTo(0.02, 6)
+		expect(total(p)).toBeCloseTo(20, 6)
+	})
+
 	it('snaps a near-coincident edge instead of dropping a sliver of the timeline', () => {
 		// An item edge 20ms from a window edge would have produced a sub-SNAP_EPS
 		// span, which the old walker deleted — shortening the export.

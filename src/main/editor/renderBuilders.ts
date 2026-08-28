@@ -248,3 +248,179 @@ export const audioBuilders: FilterBuilder[] = [speedA, gainA, fadeA, effectsA]
 export function buildChain(builders: FilterBuilder[], ctx: BuildCtx): string[] {
 	return builders.map((b) => b.build(ctx)).filter((f) => f !== '')
 }
+
+// ===== Region graph =====
+// The filtergraph for one region, built as DATA so it can be asserted in tests
+// without ffmpeg in the loop. renderRegion just feeds the result to
+// fluent-ffmpeg. Neither of the two slice-placement bugs this replaced could be
+// caught while the graph only existed inside an async function that shells out.
+
+const t3 = (n: number) => n.toFixed(3)
+const PAD_EPS = 1e-6
+
+export interface GraphInput {
+	path: string
+	options: string[]
+	/** 'lavfi' for synthesised sources (black, silence). */
+	format?: string
+}
+
+export interface RegionGraph {
+	inputs: GraphInput[]
+	filters: string[]
+	video: string   // filtergraph label carrying the finished picture
+	audio: string   // …and the finished mix
+}
+
+/** Normalize to the sequence's frame size and rate. `xfade` requires its two
+ *  inputs to match exactly, so both sides of a transition run this too. */
+export const vnorm = (w: number, h: number, fps: number) =>
+	`scale=${w}:${h}:force_original_aspect_ratio=decrease,` +
+	`pad=${w}:${h}:(ow-iw)/2:(oh-ih)/2,setsar=1,fps=${fps},format=yuv420p`
+
+/**
+ * Pad a video stream at either end. `add` fills with black — the slice starts
+ * partway through its region, so the timeline genuinely shows nothing there.
+ * `clone` holds the boundary frame, which is the repeated-frame behaviour a
+ * transition falls back on when a clip has no handle media left.
+ */
+function vpad(head: number, tail: number, mode: 'add' | 'clone'): string {
+	const parts: string[] = []
+	if (head > PAD_EPS) parts.push(`start_mode=${mode}:start_duration=${t3(head)}`)
+	if (tail > PAD_EPS) parts.push(`stop_mode=${mode}:stop_duration=${t3(tail)}`)
+	if (!parts.length) return ''
+	return `tpad=${parts.join(':')}${mode === 'add' ? ':color=black' : ''}`
+}
+
+/** Silence before an audio stream, in whole milliseconds. The tail is covered by
+ *  `apad` in the fixed conform step, so only the head needs placing. */
+function adelay(seconds: number): string {
+	const ms = Math.round(Math.max(0, seconds) * 1000)
+	return ms > 0 ? `adelay=${ms}|${ms}` : ''
+}
+
+/** One video slice → a labelled stream of exactly `regionDur`. */
+function videoStream(
+	slice: SourceSlice, plan: RegionPlan, regionDur: number, idx: number, label: string
+): { input: GraphInput; filter: string } {
+	const cut = t3(slice.out - slice.in)
+	const chain = [
+		...buildChain(videoBuilders, { slice, plan }),
+		vnorm(plan.width, plan.height, plan.fps),
+		// Repeated frames first — they belong to the slice's own content — then
+		// black to position that content inside the region.
+		vpad(slice.freezeHead, slice.freezeTail, 'clone'),
+		vpad(slice.offset, regionDur - slice.offset - slice.duration, 'add')
+	].filter((f) => f !== '')
+	return {
+		input: { path: slice.srcPath, options: ['-ss', t3(slice.in), '-t', cut] },
+		filter: `[${idx}:v]${chain.join(',')}${label}`
+	}
+}
+
+/** One audio slice → a labelled stream pinned to exactly `regionDur`. */
+function audioStream(
+	slice: SourceSlice, plan: RegionPlan, regionDur: number, idx: number, label: string
+): { input: GraphInput; filter: string } {
+	const dur = t3(regionDur)
+	const cut = t3(slice.out - slice.in)
+	const chain = [
+		'asetpts=PTS-STARTPTS',
+		...buildChain(audioBuilders, { slice, plan }),
+		// AFTER the builders: `fadeA` emits a volume envelope in stream-relative
+		// `t`, so delaying upstream would drag the fade ramp along with it.
+		// A frozen head is silence, never repeated samples.
+		adelay(slice.offset + slice.freezeHead),
+		'aresample=48000',
+		`aformat=sample_fmts=fltp:channel_layouts=stereo,apad=whole_dur=${dur},atrim=0:${dur}`
+	].filter((f) => f !== '')
+	return {
+		input: { path: slice.srcPath, options: ['-ss', t3(slice.in), '-t', cut] },
+		filter: `[${idx}:a]${chain.join(',')}${label}`
+	}
+}
+
+const silence = (dur: string): GraphInput =>
+	({ path: 'anullsrc=r=48000:cl=stereo', options: ['-t', dur], format: 'lavfi' })
+
+/**
+ * Build the whole filtergraph for one region.
+ *
+ * A cut region is the top video layer (or black) plus its mixed audio. An
+ * overlap region is the transition: both clips normalized to the same geometry,
+ * padded to the full window, then blended — `xfade` for the picture and an
+ * equal-power `acrossfade` for the pair's own sound, with any audio-track
+ * bystanders mixed on top afterwards.
+ */
+export function buildRegionGraph(region: Region, plan: RegionPlan): RegionGraph {
+	const regionDur = region.duration
+	const dur = t3(regionDur)
+	const inputs: GraphInput[] = []
+	const filters: string[] = []
+	const add = (made: { input: GraphInput; filter: string }) => {
+		inputs.push(made.input)
+		filters.push(made.filter)
+	}
+
+	if (region.kind === 'overlap') {
+		// ---- Picture: both sides, then the blend ----
+		add(videoStream(region.from, plan, regionDur, inputs.length, '[vf]'))
+		add(videoStream(region.to, plan, regionDur, inputs.length, '[vt]'))
+		// Both inputs are exactly regionDur, so xfade's `in1 + in2 - duration`
+		// yields exactly regionDur — the window's length is preserved by
+		// construction rather than by trimming afterwards.
+		filters.push(
+			`[vf][vt]xfade=transition=${region.transition.kind}:duration=${dur}:offset=0[v]`
+		)
+
+		// ---- Sound: equal-power crossfade of the pair, then the bystanders ----
+		// An inactive side feeds silence rather than taking a different code path,
+		// so the audible side still gets its half of the ramp with no level jump.
+		const side = (slice: SourceSlice, active: boolean, label: string) => {
+			if (active) return add(audioStream(slice, plan, regionDur, inputs.length, label))
+			inputs.push(silence(dur))
+			filters.push(`[${inputs.length - 1}:a]atrim=0:${dur},asetpts=PTS-STARTPTS${label}`)
+		}
+		side(region.from, region.fromAudioActive, '[af]')
+		side(region.to, region.toAudioActive, '[at]')
+		// NEVER amix the pair: both at full level through the window is audible
+		// double-talk. Equal power keeps the blend's loudness flat.
+		filters.push(`[af][at]acrossfade=d=${dur}:c1=qsin:c2=qsin[apair]`)
+
+		const beds = region.audioSources.map((slice, k) => {
+			add(audioStream(slice, plan, regionDur, inputs.length, `[ab${k}]`))
+			return `[ab${k}]`
+		})
+		const audio = beds.length
+			? (filters.push(`[apair]${beds.join('')}amix=inputs=${beds.length + 1}:normalize=0[a]`), '[a]')
+			: '[apair]'
+		return { inputs, filters, video: '[v]', audio }
+	}
+
+	// ---- Video: top layer's slice, or black of exactly `duration`.
+	// videoLayers[1..n] are the compositing seam (PiP/overlay, deferred). ----
+	const topLayer = region.videoLayers[0]
+	if (topLayer) {
+		add(videoStream(topLayer, plan, regionDur, inputs.length, '[v]'))
+	} else {
+		inputs.push({
+			path: `color=black:size=${plan.width}x${plan.height}:rate=${plan.fps}`,
+			options: ['-t', dur], format: 'lavfi'
+		})
+		filters.push(`[${inputs.length - 1}:v]setsar=1,format=yuv420p[v]`)
+	}
+
+	// ---- Audio: silence, single stream, or amix of k streams ----
+	if (region.audioSources.length === 0) {
+		inputs.push(silence(dur))
+		filters.push(`[${inputs.length - 1}:a]atrim=0:${dur},asetpts=PTS-STARTPTS[a]`)
+		return { inputs, filters, video: '[v]', audio: '[a]' }
+	}
+	const labels = region.audioSources.map((slice, k) => {
+		add(audioStream(slice, plan, regionDur, inputs.length, `[a${k}]`))
+		return `[a${k}]`
+	})
+	if (labels.length === 1) return { inputs, filters, video: '[v]', audio: labels[0] }
+	filters.push(`${labels.join('')}amix=inputs=${labels.length}:normalize=0[a]`)
+	return { inputs, filters, video: '[v]', audio: '[a]' }
+}
