@@ -274,7 +274,11 @@ export function useEdlPlayback(
 			// Hard-seek only on ENTRY, then let it free-run. Re-seeking a playing
 			// element every time it drifts a frame is itself the judder — the audio
 			// pool learned the same lesson and only corrects on a large gap.
-			if (entering || Math.abs(el.currentTime - target) > 0.5) {
+			// Even on entry, seek only if it is actually out of position: the
+			// outgoing clip has been playing straight into the window and is already
+			// exactly there, and seeking a playing element is its own hitch.
+			const drift = Math.abs(el.currentTime - target)
+			if ((entering && drift > 0.08) || drift > 0.5) {
 				el.currentTime = Math.max(0, target)
 			}
 			// The cached file carries the crossfaded audio, so silence the sources
@@ -371,7 +375,24 @@ export function useEdlPlayback(
 		const seg = segmentAt(t)
 		if (!seg) return
 		const upcoming = store.seams.find((s) => s.window && s.window.start > t && s.window.start - t < 6)
-		const lead = Math.max(1.5, (upcoming?.window?.duration ?? 0) / 2 + 1)
+
+		// Prime the cached transition FIRST and on its own schedule — as soon as the
+		// window is in sight, several seconds out. It used to sit below the clip
+		// preload's early returns, so it only ran on the single frame that primed the
+		// clip, and never at all if the render had not landed by then. Entering the
+		// window was then the first time that file was fetched, which is the stall.
+		const cached = videoT.value
+		const ready = upcoming && store.transitionPreviews.get(upcoming.junction.id)
+		if (cached && ready?.status === 'ready' && ready.src && cached.dataset.edlSrc !== ready.src) {
+			cached.src = ready.src
+			cached.dataset.edlSrc = ready.src
+			cached.currentTime = 0
+			cached.pause()
+		}
+
+		// A window starts BEFORE the cut, so the incoming clip must be ready earlier
+		// than a plain cut needs — `front` seconds earlier, plus headroom to buffer.
+		const lead = upcoming?.window ? upcoming.window.front + 2 : 1.5
 		if (seg.tEnd - t > lead) return
 		const next = nextSegmentAfter(seg.tEnd)
 		if (!next || next.itemId === seg.itemId || preloadedFor === next.itemId) return
@@ -393,17 +414,6 @@ export function useEdlPlayback(
 		buf.currentTime = Math.max(0, startsEarlyAt)
 		buf.pause()
 		preloadedFor = next.itemId
-
-		// Prime the cached transition too, so entering the window is not the first
-		// time that file is fetched and decoded.
-		const cached = videoT.value
-		const ready = upcoming && store.transitionPreviews.get(upcoming.junction.id)
-		if (cached && ready?.status === 'ready' && ready.src && cached.dataset.edlSrc !== ready.src) {
-			cached.src = ready.src
-			cached.dataset.edlSrc = ready.src
-			cached.currentTime = 0
-			cached.pause()
-		}
 	}
 
 	// ---------- rAF loop ----------
