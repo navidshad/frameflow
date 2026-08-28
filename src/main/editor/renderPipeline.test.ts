@@ -9,6 +9,7 @@ import { getFFmpegBinaryPath, getFFprobeBinaryPath } from '../ffmpeg/binaries'
 import { TRANSITION_PRESETS } from '@shared/transitionPresets'
 import { computeRegions } from './render'
 import { buildRegionGraph, type OverlapRegion, type Region, type RegionPlan } from './renderBuilders'
+import { previewPlan, renderTransitionWindow } from './preview'
 
 /**
  * End-to-end against the REAL bundled binary: proves the filtergraph this module
@@ -156,6 +157,41 @@ describe('render pipeline — against the real ffmpeg', () => {
 		const rendered = await Promise.all(files.map(durationOf))
 		expect(rendered.reduce((a, b) => a + b, 0)).toBeCloseTo(sum(withBlend), 1)
 	}, 120_000)
+
+	it('encodes a window at preview scale to a playable file', async () => {
+		// REGRESSION. The encode wrote to `<key>.mp4.part`, and ffmpeg picks its
+		// muxer from the extension — so EVERY preview failed with "Unable to
+		// choose an output format", the monitor silently fell back to a
+		// cross-fade, and every transition looked identical. Nothing caught it
+		// because no test ran ffmpeg over this path.
+		const plan = computeRegions(document({ kind: 'wipeleft', duration: 1 }), 'preview')
+		const small = previewPlan(plan)
+		const window = plan.regions.find((r): r is OverlapRegion => r.kind === 'overlap')!
+		const out = join(dir, 'cached-window.mp4')
+
+		await renderTransitionWindow(window, small, out)
+
+		expect(await durationOf(out)).toBeCloseTo(window.duration, 1)
+		// And it is the real preset, not a dissolve: a left wipe has a hard
+		// vertical edge mid-transition, so the two halves differ sharply.
+		const { stdout } = await execFileAsync(ffmpeg,
+			['-v', 'error', '-ss', String(window.duration / 2), '-i', out, '-frames:v', '1',
+				'-vf', 'scale=2:1,format=rgb24', '-f', 'rawvideo', '-'],
+			{ encoding: 'buffer', maxBuffer: 1 << 20 })
+		const px = stdout as unknown as Buffer
+		const left = [px[0], px[1], px[2]]
+		const right = [px[3], px[4], px[5]]
+		expect(Math.abs(left[0] - right[0]) + Math.abs(left[2] - right[2])).toBeGreaterThan(60)
+	}, 60_000)
+
+	it('leaves no partial file behind', async () => {
+		const plan = computeRegions(document({ kind: 'fade', duration: 1 }), 'preview')
+		const window = plan.regions.find((r): r is OverlapRegion => r.kind === 'overlap')!
+		const out = join(dir, 'no-partial.mp4')
+		await renderTransitionWindow(window, previewPlan(plan), out)
+		const leftovers = (await fs.readdir(dir)).filter((f) => f.includes('.part'))
+		expect(leftovers).toEqual([])
+	}, 60_000)
 
 	it('repeats frames instead of failing when neither clip has handles', async () => {
 		const doc = document({ kind: 'fade', duration: 1 })

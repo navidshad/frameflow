@@ -66,11 +66,18 @@ export function previewPlan(plan: RegionPlan): RegionPlan {
 	}
 }
 
+/**
+ * Suffix for a render in progress. It has to keep the `.mp4` extension:
+ * ffmpeg picks its muxer from the filename, and a `.mp4.part` name fails with
+ * "Unable to choose an output format" — which silently broke every preview.
+ */
+const PARTIAL_SUFFIX = '.part.mp4'
+
 /** Keep the newest N files; a long editing session would otherwise accumulate. */
 function sweep(dir: string): void {
 	try {
 		const files = fs.readdirSync(dir)
-			.filter((f) => f.endsWith('.mp4'))
+			.filter((f) => f.endsWith('.mp4') && !f.endsWith(PARTIAL_SUFFIX))
 			.map((f) => {
 				const full = path.join(dir, f)
 				return { full, at: fs.statSync(full).mtimeMs }
@@ -80,6 +87,37 @@ function sweep(dir: string): void {
 			try { fs.unlinkSync(stale.full) } catch { /* ignore */ }
 		}
 	} catch { /* the directory may not exist yet */ }
+}
+
+/**
+ * Encode one transition window to `outputPath`.
+ *
+ * Split out so it can be exercised against the real binary — the filename
+ * bug above was invisible to every unit test, because nothing ran ffmpeg.
+ */
+export async function renderTransitionWindow(
+	region: OverlapRegion,
+	plan: RegionPlan,
+	outputPath: string
+): Promise<void> {
+	const graph = buildRegionGraph(region, plan)
+	const command = ffmpeg()
+	for (const input of graph.inputs) {
+		const added = command.input(input.path)
+		if (input.format) added.inputFormat(input.format)
+		added.inputOptions(input.options)
+	}
+	command
+		.complexFilter(graph.filters.join(';'))
+		.map(graph.video)
+		.map(graph.audio)
+		.outputOptions([...intermediateOpts(), '-t', region.duration.toFixed(3)])
+
+	// Encode to a sibling name and rename, so a crash mid-encode cannot leave a
+	// truncated file sitting at a key that would read as a cache hit forever.
+	const partial = outputPath.replace(/\.mp4$/, PARTIAL_SUFFIX)
+	await runCommand(command, partial, new AbortController().signal)
+	fs.renameSync(partial, outputPath)
 }
 
 /** In-flight renders, so two requests for the same window share one encode. */
@@ -123,24 +161,7 @@ export async function ensureTransitionPreview(options: {
 
 	const job = (async () => {
 		fs.mkdirSync(dir, { recursive: true })
-		const graph = buildRegionGraph(region, plan)
-		const command = ffmpeg()
-		for (const input of graph.inputs) {
-			const added = command.input(input.path)
-			if (input.format) added.inputFormat(input.format)
-			added.inputOptions(input.options)
-		}
-		command
-			.complexFilter(graph.filters.join(';'))
-			.map(graph.video)
-			.map(graph.audio)
-			.outputOptions([...intermediateOpts(), '-t', region.duration.toFixed(3)])
-
-		// Write to a temp name and rename, so a crash mid-encode cannot leave a
-		// truncated file sitting at a key that reads as a cache hit forever.
-		const partial = `${outputPath}.part`
-		await runCommand(command, partial, new AbortController().signal)
-		fs.renameSync(partial, outputPath)
+		await renderTransitionWindow(region, plan, outputPath)
 		sweep(dir)
 		return outputPath
 	})()
