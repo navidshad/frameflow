@@ -230,6 +230,13 @@ export function useEdlPlayback(
 					const target = sourceTime(t, seg)
 					if (Math.abs(el.currentTime - target) > 0.08) el.currentTime = target
 				}
+				// Outside a window exactly ONE element is on screen, so exactly one
+				// may be making sound. A window deliberately keeps both rolling so the
+				// handover is seamless — but if the outgoing clip is not stopped the
+				// moment the window ends it plays on underneath the next one, and you
+				// hear both at once. The ordinary A/B swap pauses it; a window skips
+				// that path entirely, so it has to happen here.
+				if (el !== activeEl() && !el.paused) el.pause()
 			}
 			const cached = videoT.value
 			if (cached && !cached.paused) cached.pause()
