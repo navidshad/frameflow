@@ -66,7 +66,14 @@
 					     rather than in CSS because letterboxing a plain element
 					     against BOTH axes is not something CSS can express. -->
 					<div class="relative overflow-hidden bg-black ring-1 ring-white/10" :style="frameStyle">
-						<!-- Opacity is a NUMBER written every tick, not a CSS transition:
+						<!-- Generated layers, UNDER the video elements because a
+					     background is what the pair sits on. Solid and gradient map
+					     onto CSS exactly; grain and bars get the notice instead. -->
+					<div v-for="layer in store.activeGenerators" :key="layer.id"
+						class="absolute inset-0 pointer-events-none"
+						:style="{ background: generatorCss(layer.generator) || '#000' }"></div>
+
+					<!-- Opacity is a NUMBER written every tick, not a CSS transition:
 						     inside a transition the blend has to hold its exact frame
 						     when you pause or scrub, which a CSS ramp cannot do. -->
 						<video ref="videoARef" class="absolute inset-0 w-full h-full"
@@ -120,7 +127,9 @@
 						       pointer-events-none flex items-center gap-1.5">
 						<span class="iconify tabler--eye-off w-3 h-3 text-white/60"></span>
 						<span class="text-[9px] font-mono uppercase tracking-widest text-white/50">
-							key applies on export
+							{{ store.activeGenerators.some((g) => !hasGeneratorCss(g.generator))
+								? 'background renders on export'
+								: 'key applies on export' }}
 						</span>
 					</div>
 					<div v-if="edl.previewPending.value"
@@ -191,6 +200,7 @@
 <script setup lang="ts">
 import { captionMetrics, cueAt } from '@shared/captions'
 import { effectCss } from '@shared/effects'
+import { generatorCss, hasGeneratorCss } from '@shared/generators'
 import { transformCss } from '@shared/transform'
 import { FRAME_PRESETS, panObjectPosition } from '@shared/framing'
 import { toMediaUrl } from '@shared/media-url'
@@ -252,10 +262,16 @@ watch(stageRef, (el) => {
 
 onBeforeUnmount(() => stageObserver?.disconnect())
 
-/** Whether anything on screen right now is keyed — the monitor cannot show it. */
+/**
+ * Whether anything on screen right now is something the monitor cannot draw
+ * honestly: a keyed layer (CSS has no chroma key) or a generator with no CSS
+ * equivalent. Saying so beats a preview that quietly disagrees with the export.
+ */
 const keyedLayer = computed(() => {
 	const ids = [edl.itemA.value, edl.itemB.value, edl.itemO.value].filter(Boolean)
-	return ids.some((id) => !!store.doc?.timeline.find((i) => i.id === id)?.key)
+	const keyed = ids.some((id) => !!store.doc?.timeline.find((i) => i.id === id)?.key)
+	const opaque = store.activeGenerators.some((g) => !hasGeneratorCss(g.generator))
+	return keyed || opaque
 })
 
 // ===== Captions =====

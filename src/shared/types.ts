@@ -188,6 +188,7 @@ export interface Thread {
 
 // ============================================================
 import type { KeySpec } from './keying'
+import type { GeneratorSpec } from './generators'
 
 // Timeline Video Editor (see video-editor-prd.md §6)
 // Canonical time unit is SECONDS. SRT strings appear only at the boundary
@@ -364,6 +365,11 @@ export interface TimelineItem {  // an instance of a clip placed on a track
 	 * FRONT of the layer below rather than beside it. See shared/keying.ts.
 	 */
 	key?: KeySpec
+	/**
+	 * A synthesised layer — a gradient, a colour, grain — with no footage
+	 * behind it. `sourceAssetId` is empty for these, the same as a title.
+	 */
+	generator?: GeneratorSpec
 	/**
 	 * What this clip is FOR, in a composited shot. Purely descriptive today —
 	 * it is what lets "put this behind the subject" be a field rather than an

@@ -90,6 +90,9 @@
 
 			<ToolButton icon="tabler--typography" title="Add a title at the playhead"
 				@click="store.addTitle()" />
+			<ToolButton icon="tabler--color-swatch"
+				title="Add a generated background at the playhead — something for a keyed layer to sit in front of"
+				@click="store.addGeneratedLayer()" />
 			<ToolButton icon="tabler--plus" title="Add a video track — clips above the bottom one composite on top"
 				@click="store.addVideoTrack()" />
 			<ToolButton icon="tabler--bookmark-plus" title="Save revision checkpoint"

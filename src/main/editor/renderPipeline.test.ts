@@ -17,6 +17,7 @@ import { duckExpression } from '@shared/ducking'
 import { transformFilter } from '@shared/transform'
 import { allEffects, effectChain } from '@shared/effects'
 import { parsePack, starterManifest, STARTER_LOOKS, toCube } from '@shared/packs'
+import { GENERATORS } from '@shared/generators'
 
 /**
  * End-to-end against the REAL bundled binary: proves the filtergraph this module
@@ -363,6 +364,71 @@ describe('render pipeline — against the real ffmpeg', () => {
 				'-show_entries', 'stream=pix_fmt', '-of', 'csv=p=0', file])
 			expect(stdout.trim()).toBe('yuv420p')
 		}, 90_000)
+	})
+
+	describe('generated layers', () => {
+		/** A generated background under a keyed subject — the whole Phase 5 shot. */
+		const generated = (generator: Parameters<typeof clip>[0]['generator']) => {
+			const v2: Track = { ...vtrack, id: 'v2', name: 'V2', order: 1 }
+			const d = document()
+			d.tracks = [vtrack, v2]
+			d.media = [asset('sg', G())]
+			d.timeline = [
+				clip({ id: 'bg', sourceAssetId: '', trackId: 'v1', timelineStart: 0, in: 0, out: 1, duration: 1, generator }),
+				clip({
+					id: 'fg', sourceAssetId: 'sg', trackId: 'v2', timelineStart: 0, in: 0, out: 1, duration: 1,
+					key: { kind: 'chroma', colour: '#00B140', similarity: 0.3, blend: 0.05, despill: 0.4 }
+				})
+			]
+			d.timelineMeta = { fps: 30, width: 320, height: 180, duration: 0, frameChosen: true }
+			return computeRegions(d, 'original')
+		}
+
+		const patch = async (file: string, fx: number, fy: number): Promise<[number, number, number]> => {
+			const { stdout } = await execFileAsync(ffmpeg,
+				['-v', 'error', '-i', file, '-frames:v', '1',
+					'-vf', `crop=16:16:${Math.round(fx * 320) - 8}:${Math.round(fy * 180) - 8},scale=1:1,format=rgb24`,
+					'-f', 'rawvideo', '-'],
+				{ encoding: 'buffer', maxBuffer: 1 << 20 })
+			const buf = stdout as unknown as Buffer
+			return [buf[0], buf[1], buf[2]]
+		}
+
+		it('needs no file on disk, and the pre-flight knows it', () => {
+			const plan = generated({ kind: 'solid', colour: '#FF0000' })
+			const slices = plan.regions.flatMap((r) => (r.kind === 'cut' ? r.videoLayers : []))
+			const synthetic = slices.find((s) => s.lavfi)
+			expect(synthetic).toBeDefined()
+			expect(synthetic!.srcPath).toContain('color=c=0xFF0000')
+		})
+
+		it('renders a solid colour as the layer under a keyed subject', async () => {
+			const plan = generated({ kind: 'solid', colour: '#FF0000' })
+			const file = await renderGraph(plan.regions[0], plan, 'gen-solid.mp4')
+			const [r] = await patch(file, 0.12, 0.5)
+			expect(r, 'the generated background').toBeGreaterThan(150)
+			const [, , b] = await patch(file, 0.5, 0.5)
+			expect(b, 'the keyed subject in front of it').toBeGreaterThan(120)
+		}, 90_000)
+
+		it('renders a gradient, and the same one twice', async () => {
+			// The default seed is random, so without pinning it a re-export would
+			// not match what was previewed.
+			const spec = { kind: 'gradient' as const, colour: '#000080', colour2: '#FF8000' }
+			const a = await renderGraph(generated(spec).regions[0], generated(spec), 'gen-grad-a.mp4')
+			const b = await renderGraph(generated(spec).regions[0], generated(spec), 'gen-grad-b.mp4')
+			const pa = await patch(a, 0.12, 0.5)
+			const pb = await patch(b, 0.12, 0.5)
+			expect(pa[0] + pa[1] + pa[2]).toBeGreaterThan(20)
+			expect(pa).toEqual(pb)
+		}, 90_000)
+
+		it('renders every generator this build offers', async () => {
+			for (const g of GENERATORS) {
+				const plan = generated({ kind: g.kind })
+				await expect(renderGraph(plan.regions[0], plan, `gen-${g.kind}.mp4`), g.kind).resolves.toBeDefined()
+			}
+		}, 120_000)
 	})
 
 	describe('keying — a subject IN FRONT of a background', () => {

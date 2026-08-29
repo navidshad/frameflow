@@ -5,6 +5,7 @@ import { duckExpression, type Interval } from '@shared/ducking'
 import { transformFilter } from '@shared/transform'
 import { keyframeExpression } from '@shared/keyframes'
 import { hasKey, keyFilter } from '@shared/keying'
+import { generatorFilter } from '@shared/generators'
 
 /**
  * Handler-based filter builders (PRD §7 — "Render engine is handler-based").
@@ -23,7 +24,14 @@ import { hasKey, keyFilter } from '@shared/keying'
 // field (speed, gain, fades, effects, …) instead of copies going stale.
 
 export interface SourceSlice {
+	/** A file, or a lavfi source string when `lavfi` is set. */
 	srcPath: string
+	/**
+	 * `srcPath` is a synthesised source, not a file on disk. The graph feeds it
+	 * to ffmpeg with `-f lavfi` and no seek, and the export pre-flight knows not
+	 * to look for it.
+	 */
+	lavfi?: boolean
 	in: number                  // source seconds mapped to this region
 	out: number
 	/**
@@ -389,6 +397,8 @@ function videoStream(
 	const keyed = hasKey(slice.item.key)
 	const withAlpha = alpha || keyed
 	const chain = [
+		// A generated layer's own grain or shimmer, before anything else acts on it.
+		slice.item.generator ? generatorFilter(slice.item.generator) : '',
 		...buildChain(videoBuilders, { slice, plan }),
 		// Before the conform, on source pixels: keying after a letterbox pad
 		// would have to decide what the bars are, and keying after a scale keys
@@ -408,7 +418,11 @@ function videoStream(
 		vpad(slice.offset, regionDur - slice.offset - slice.duration, 'add', withAlpha)
 	].filter((f) => f !== '')
 	return {
-		input: { path: slice.srcPath, options: ['-ss', t3(slice.in), '-t', cut] },
+		input: slice.lavfi
+			// A synthesised source has no timeline to seek into: it is generated
+			// for exactly the window it fills, so `-t` alone bounds it.
+			? { path: slice.srcPath, options: ['-t', cut], format: 'lavfi' }
+			: { path: slice.srcPath, options: ['-ss', t3(slice.in), '-t', cut] },
 		filter: `[${idx}:v]${chain.join(',')}${label}`
 	}
 }

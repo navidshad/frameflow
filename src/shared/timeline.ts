@@ -4,6 +4,7 @@ import type {
 import { sameTransform } from './transform'
 import { sameKeyframes } from './keyframes'
 import { sameKey } from './keying'
+import { sameGenerator } from './generators'
 
 /**
  * Pure timeline helpers shared by renderer (manual editing, undo/redo) and
@@ -308,7 +309,8 @@ export function diffTimelines(
 				!sameText(beforeItem.text, afterItem.text) ||
 				!sameTransform(beforeItem.transform, afterItem.transform) ||
 				!sameKeyframes(beforeItem.keyframes, afterItem.keyframes) ||
-				!sameKey(beforeItem.key, afterItem.key)
+				!sameKey(beforeItem.key, afterItem.key) ||
+				!sameGenerator(beforeItem.generator, afterItem.generator)
 			const fwd = changedFields(beforeItem, afterItem, ITEM_FIELDS)
 				?? (objectChanged ? {} : null)
 			if (fwd) {
@@ -332,6 +334,9 @@ export function diffTimelines(
 				}
 				if (!sameKey(beforeItem.key, afterItem.key)) {
 					fwd.key = afterItem.key
+				}
+				if (!sameGenerator(beforeItem.generator, afterItem.generator)) {
+					fwd.generator = afterItem.generator
 				}
 				const keys = Object.keys(fwd) as (keyof TimelineItem)[]
 				;(forward.updateItems ||= []).push({ id, ...fwd })
@@ -555,10 +560,12 @@ export function findOrphanItems(
 	items: readonly TimelineItem[],
 	assetIds: ReadonlySet<string>
 ): TimelineItem[] {
-	// A title carries its own content and references no media, so it has no
-	// asset id to match. Without this exemption every title would be pruned by
-	// the next autosave — main treats an unknown id as media that was removed.
-	return items.filter((item) => !item.text && !assetIds.has(item.sourceAssetId))
+	// A title or a generated layer carries its own content and references no
+	// media, so it has no asset id to match. Without this exemption both would
+	// be pruned by the next autosave — main treats an unknown id as media that
+	// was removed.
+	return items.filter((item) =>
+		!item.text && !item.generator && !assetIds.has(item.sourceAssetId))
 }
 
 /**

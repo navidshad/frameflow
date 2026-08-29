@@ -17,6 +17,7 @@ import { speechIntervals } from '@shared/ducking'
 import { hasTransform } from '@shared/transform'
 import { hasKeyframes } from '@shared/keyframes'
 import { hasKey } from '@shared/keying'
+import { generatorSource } from '@shared/generators'
 import type { TranscriptEntry } from '@shared/captions'
 import { burnCaptions, cuesForDoc, transcriptsForDoc } from './captions'
 import { normaliseLoudness } from './loudness'
@@ -197,7 +198,10 @@ export function computeRegions(
 		.map((c) => c.t)
 
 	// A video item's own audio contributes when unmuted and the source has audio.
-	const videoAudioActive = (item: TimelineItem, asset: MediaAsset) =>
+	// A GENERATED layer has no source and therefore no audio — it is a picture,
+	// not a recording.
+	const videoAudioActive = (item: TimelineItem, asset: MediaAsset | undefined) =>
+		!item.generator && !!asset &&
 		!item.muted && !trackById.get(item.trackId)?.muted && asset.metadata?.hasAudio !== false
 	// An audio-track item contributes when neither it nor its track is muted.
 	const audioItemActive = (item: TimelineItem) =>
@@ -214,16 +218,27 @@ export function computeRegions(
 	 * partway through one. The renderer places it with `tpad` / `adelay`.
 	 */
 	const toSlice = (item: TimelineItem, t0: number, t1: number): SourceSlice => {
-		const asset = assetById.get(item.sourceAssetId)
-		if (!asset) throw new Error(`Missing media asset for clip "${item.label || item.id}".`)
 		const s = Math.max(t0, item.timelineStart)
 		const e = Math.min(t1, itemEnd(item))
 		const { in: sIn, out: sOut } = sliceSource(item, s, e)
-		return {
-			srcPath: srcFor(asset), in: sIn, out: sOut,
+		const common = {
+			in: sIn, out: sOut,
 			offset: s - t0, duration: e - s, freezeHead: 0, freezeTail: 0,
 			item, track: trackById.get(item.trackId)!
 		}
+		// A generated layer has no footage behind it. It is synthesised for
+		// exactly the window it fills, which is why the source string carries the
+		// region's own duration rather than the item's.
+		if (item.generator) {
+			return {
+				...common,
+				lavfi: true,
+				srcPath: generatorSource(item.generator, { width, height, fps }, e - s)
+			}
+		}
+		const asset = assetById.get(item.sourceAssetId)
+		if (!asset) throw new Error(`Missing media asset for clip "${item.label || item.id}".`)
+		return { ...common, srcPath: srcFor(asset) }
 	}
 
 	/** One side of a transition, extended into its handle and frozen past it. */
@@ -331,7 +346,7 @@ export function computeRegions(
 
 		// ---- Audio: each video layer's own audio + covering audio-track items ----
 		for (const layer of videoLayers) {
-			const asset = assetById.get(layer.item.sourceAssetId)!
+			const asset = assetById.get(layer.item.sourceAssetId)
 			if (videoAudioActive(layer.item, asset)) audioSources.push(toSlice(layer.item, t0, t1))
 		}
 		addTrackAudio()
@@ -431,6 +446,8 @@ export function isFastPathEligible(items: TimelineItem[], track: Track, hasAudio
 	if (items.some((i) => hasTransform(i.transform))) return false
 	if (items.some((i) => hasKeyframes(i.keyframes))) return false
 	if (items.some((i) => hasKey(i.key))) return false
+	// assembleVideo re-muxes ONE source file; a synthesised layer is not one.
+	if (items.some((i) => !!i.generator)) return false
 	if (Math.abs(items[0].timelineStart) > SNAP_EPS) return false // leading gap needs black
 	for (let i = 1; i < items.length; i++) {
 		if (Math.abs(items[i].timelineStart - itemEnd(items[i - 1])) > SNAP_EPS) return false
@@ -590,7 +607,9 @@ export function startEditorRender(options: {
 	// `allSlices` is exhaustive over region kinds, so a slice can never escape this
 	// check by living in a field the pre-flight forgot — which would turn a clean
 	// synchronous rejection into a failure halfway through a long render.
-	const srcPaths = [...new Set(plan.regions.flatMap(allSlices).map((s) => s.srcPath))]
+	const srcPaths = [...new Set(
+		plan.regions.flatMap(allSlices).filter((s) => !s.lavfi).map((s) => s.srcPath)
+	)]
 	const missing = srcPaths.filter((p) => !fs.existsSync(p))
 	if (missing.length > 0) {
 		throw new Error(`Missing source file(s): ${missing.map((p) => path.basename(p)).join(', ')}`)

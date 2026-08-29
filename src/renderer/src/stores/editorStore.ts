@@ -16,6 +16,7 @@ import { hasTransform, TRANSFORM_DEFAULTS } from '@shared/transform'
 import { isAnimatable, valueAt } from '@shared/keyframes'
 import { planRangeRemoval } from '@shared/rangeEdit'
 import { hasKey, KEY_DEFAULTS, type KeySpec } from '@shared/keying'
+import { GENERATOR_DEFAULTS, GENERATORS, type GeneratorSpec } from '@shared/generators'
 import { defaultParams, effectDef, registerEffects } from '@shared/effects'
 import { parsePack } from '@shared/packs'
 import {
@@ -300,6 +301,18 @@ export const useEditorStore = defineStore('editor', () => {
 		return id
 	}
 
+	/** Generated layers covering the playhead — the monitor draws them in CSS. */
+	const activeGenerators = computed(() => {
+		const d = doc.value
+		if (!d) return []
+		const hidden = new Set(d.tracks.filter((t) => t.hidden).map((t) => t.id))
+		const t = playheadSec.value
+		return d.timeline.filter((i) =>
+			i.generator && !hidden.has(i.trackId) &&
+			t >= i.timelineStart && t < i.timelineStart + i.duration
+		)
+	})
+
 	/** Titles covering the playhead, so the monitor can draw them. */
 	const activeTitles = computed(() => {
 		const d = doc.value
@@ -473,8 +486,26 @@ export const useEditorStore = defineStore('editor', () => {
 			.sort((a, b) => a.order - b.order)
 	)
 
+	/**
+	 * Video tracks the monitor's <video> pair can actually play — ones carrying
+	 * at least one item with a real file behind it.
+	 *
+	 * A generated background is a video track with no footage on it, and it sits
+	 * BELOW everything by design. Taking the lowest track as the timebase would
+	 * hand the pair a track with nothing to play and blank the monitor, which is
+	 * exactly what happened the first time a background was added.
+	 */
+	const playableVideoTracks = computed(() => {
+		const withMedia = new Set(
+			(doc.value?.timeline ?? [])
+				.filter((i) => !i.generator && !i.text && i.sourceAssetId)
+				.map((i) => i.trackId)
+		)
+		return visibleVideoTracks.value.filter((t) => withMedia.has(t.id))
+	})
+
 	/** The layer everything else composites onto, and the monitor's timebase. */
-	const baseVideoTrackId = computed(() => visibleVideoTracks.value[0]?.id ?? null)
+	const baseVideoTrackId = computed(() => playableVideoTracks.value[0]?.id ?? null)
 
 	const segmentsForTracks = (trackIds: Set<string>) => {
 		if (!doc.value || !trackIds.size) return []
@@ -519,7 +550,7 @@ export const useEditorStore = defineStore('editor', () => {
 	 * it just previews as base plus top.
 	 */
 	const overlaySegments = computed(() => {
-		const tracks = visibleVideoTracks.value
+		const tracks = playableVideoTracks.value
 		if (tracks.length < 2) return []
 		return segmentsForTracks(new Set([tracks[tracks.length - 1].id]))
 	})
@@ -1761,6 +1792,60 @@ export const useEditorStore = defineStore('editor', () => {
 		commitStep({ before, label: 'Reorder effects' })
 	}
 
+	const DEFAULT_GENERATED_SEC = 5
+
+	/**
+	 * Add a generated layer on its own track BELOW everything else.
+	 *
+	 * Not on the bottom existing track: the footage is already there, the two
+	 * would overlap, and `repairOverlaps` would quietly throw the background
+	 * away — which is exactly what happened the first time this was tried. The
+	 * compositor draws bottom-up, so a background wants to be genuinely
+	 * underneath, and that means a track of its own.
+	 */
+	const addGeneratedLayer = (kind: GeneratorSpec['kind'] = 'gradient') => {
+		if (!doc.value) return null
+		const before = snapshotState()
+		let track = doc.value.tracks.find((t) => t.kind === 'video' && t.name === 'BG')
+		if (!track) {
+			track = {
+				id: newId('tr'), kind: 'video', name: 'BG',
+				// Below every existing track. Order is only a sort key, so a
+				// negative one is the honest way to say "underneath".
+				order: Math.min(0, ...doc.value.tracks.map((t) => t.order)) - 1,
+				muted: false, locked: false, hidden: false, height: 48
+			}
+			doc.value.tracks.push(track)
+		}
+		const id = newId('ti')
+		const duration = DEFAULT_GENERATED_SEC
+		const start = Math.max(0, playheadSec.value)
+		// Its own track, so the only thing it can collide with is another
+		// background — push past one rather than let the repair discard this.
+		const busyUntil = doc.value.timeline
+			.filter((i) => i.trackId === track!.id && itemEnd(i) > start)
+			.reduce((max, i) => Math.max(max, itemEnd(i)), start)
+		doc.value.timeline.push({
+			id, trackId: track.id, sourceAssetId: '',
+			timelineStart: busyUntil,
+			in: 0, out: duration, speed: 1, preservePitch: true, duration,
+			label: GENERATORS.find((g) => g.kind === kind)?.label || 'Background',
+			layerRole: 'background',
+			generator: { kind, ...GENERATOR_DEFAULTS }
+		})
+		commitStep({ before, label: 'Add background' })
+		selectItems([id])
+		return id
+	}
+
+	const setGenerator = (id: string, patch: Partial<GeneratorSpec>) => {
+		const item = doc.value?.timeline.find((i) => i.id === id)
+		if (!item?.generator) return
+		const before = snapshotState()
+		item.generator = { ...item.generator, ...patch }
+		commitStep({ before, label: 'Edit background' })
+	}
+
 	/**
 	 * Key a clip's background out, so it sits IN FRONT of the layer below
 	 * rather than beside it. `undefined` puts the background back.
@@ -2093,6 +2178,36 @@ export const useEditorStore = defineStore('editor', () => {
 			muted: false, locked: false, hidden: false, height: 64
 		})
 		commitStep({ before, label: 'Add video track' })
+	}
+
+	/**
+	 * Delete a track and everything on it.
+	 *
+	 * There are four ways to ADD a track now — video, overlay, text, background —
+	 * and until this there was no way to remove one, so a project accumulated
+	 * empty lanes nobody could clear. The last video track is kept: a sequence
+	 * with nowhere to put a picture is not a state worth being able to reach.
+	 */
+	const removeTrack = (trackId: string) => {
+		if (!doc.value) return false
+		const track = doc.value.tracks.find((t) => t.id === trackId)
+		if (!track) return false
+		if (track.kind === 'video' && doc.value.tracks.filter((t) => t.kind === 'video').length < 2) {
+			return false
+		}
+		const before = snapshotState()
+		doc.value.tracks = doc.value.tracks.filter((t) => t.id !== trackId)
+		doc.value.timeline = doc.value.timeline.filter((i) => i.trackId !== trackId)
+		commitStep({ before, label: `Remove ${track.name}` })
+		return true
+	}
+
+	/** Whether removing this track is offered at all. */
+	const canRemoveTrack = (trackId: string) => {
+		const d = doc.value
+		const track = d?.tracks.find((t) => t.id === trackId)
+		if (!d || !track) return false
+		return track.kind !== 'video' || d.tracks.filter((t) => t.kind === 'video').length > 1
 	}
 
 	const addOverlayTrack = () => {
@@ -2822,6 +2937,8 @@ export const useEditorStore = defineStore('editor', () => {
 		clearTransition,
 		setItemTransform,
 		setItemKey,
+		addGeneratedLayer,
+		setGenerator,
 		setLayerRole,
 		setKeyframe,
 		removeKeyframe,
@@ -2846,11 +2963,14 @@ export const useEditorStore = defineStore('editor', () => {
 		startExportBatch,
 		toggleTrackMusic,
 		addVideoTrack,
+		removeTrack,
+		canRemoveTrack,
 		overlaySegments,
 		baseVideoTrackId,
 		addTitle,
 		setTitle,
 		activeTitles,
+		activeGenerators,
 		loudnessEnabled,
 		setLoudnessEnabled,
 		refreshTranscripts,

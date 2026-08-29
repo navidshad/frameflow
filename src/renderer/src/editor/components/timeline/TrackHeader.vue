@@ -35,6 +35,13 @@
 				@click="store.toggleTrackFlag(track.id, 'hidden')">
 				<span :class="track.hidden ? 'iconify tabler--eye-off' : 'iconify tabler--eye'" class="w-3 h-3"></span>
 			</button>
+			<button v-if="store.canRemoveTrack(track.id)"
+				class="w-5 h-5 flex items-center justify-center rounded transition
+				       text-zinc-300 dark:text-zinc-700 hover:text-red-500 hover:bg-red-500/10"
+				:title="`Delete ${track.name} and everything on it`"
+				@click="store.removeTrack(track.id)">
+				<span class="iconify tabler--trash w-3 h-3"></span>
+			</button>
 		</div>
 	</div>
 </template>
