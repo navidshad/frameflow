@@ -12,6 +12,7 @@ import { buildRegionGraph, type OverlapRegion, type Region, type RegionPlan } fr
 import { previewPlan, renderTransitionWindow } from './preview'
 import { burnCaptions } from './captions'
 import { normaliseLoudness } from './loudness'
+import { deliver } from './deliver'
 import { duckExpression } from '@shared/ducking'
 import { transformFilter } from '@shared/transform'
 import { allEffects, effectChain } from '@shared/effects'
@@ -704,6 +705,55 @@ describe('audio vs the real binary', () => {
 		}
 		expect(await codecOf(out)).toBe(await codecOf(quiet))
 	}, 120_000)
+})
+
+describe('delivery vs the real binary', () => {
+	let dlDir: string
+	let source: string
+
+	beforeAll(async () => {
+		dlDir = await fs.mkdtemp(join(tmpdir(), 'ff-dl-'))
+		source = join(dlDir, 'src.mp4')
+		await execFileAsync(ffmpeg, ['-y', '-v', 'error',
+			'-f', 'lavfi', '-i', 'testsrc=s=320x180:d=1:r=10',
+			'-f', 'lavfi', '-i', 'sine=frequency=440:duration=1',
+			'-shortest', '-c:v', 'libx264', '-preset', 'ultrafast', '-c:a', 'aac', '-t', '1', source])
+	}, 60_000)
+
+	afterAll(async () => { await fs.rm(dlDir, { recursive: true, force: true }) })
+
+	it('does nothing at all for the format the render already produced', async () => {
+		// An identity transcode would cost a full encode and a generation of
+		// quality for a file that is already correct.
+		expect(await deliver({ sourcePath: source, format: 'h264', signal: new AbortController().signal }))
+			.toBeNull()
+	})
+
+	it('writes a real ProRes 422 HQ file, with PCM audio', async () => {
+		const out = await deliver({
+			sourcePath: source, format: 'prores', signal: new AbortController().signal
+		})
+		expect(out).toMatch(/\.mov$/)
+		const { stdout } = await execFileAsync(ffprobe, ['-v', 'error',
+			'-show_entries', 'stream=codec_name,profile,pix_fmt', '-of', 'csv=p=0', out!])
+		expect(stdout).toContain('prores')
+		expect(stdout).toContain('yuv422p10le')
+		// PCM is the ProRes convention: an intermediate that will be encoded
+		// again downstream should not carry a lossy track.
+		expect(stdout).toContain('pcm_s16le')
+	}, 90_000)
+
+	it('keeps the picture, rather than quietly rescaling it', async () => {
+		const out = await deliver({
+			sourcePath: source, format: 'prores', signal: new AbortController().signal
+		})
+		const size = async (file: string) => {
+			const { stdout } = await execFileAsync(ffprobe, ['-v', 'error', '-select_streams', 'v:0',
+				'-show_entries', 'stream=width,height', '-of', 'csv=p=0', file])
+			return stdout.trim()
+		}
+		expect(await size(out!)).toBe(await size(source))
+	}, 90_000)
 })
 
 describe('captions vs the real binary', () => {

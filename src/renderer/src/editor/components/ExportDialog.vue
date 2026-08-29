@@ -19,6 +19,25 @@
 					</label>
 				</div>
 
+				<div>
+					<label class="text-[10px] font-bold uppercase tracking-widest text-zinc-500 block mb-1.5">
+						Format
+					</label>
+					<div class="flex bg-zinc-100 dark:bg-zinc-800/60 rounded-lg p-0.5">
+						<button v-for="f in FORMATS" :key="f.value"
+							class="flex-1 px-2 py-1.5 rounded-md text-[10px] font-bold transition"
+							:class="format === f.value
+								? 'bg-white dark:bg-zinc-700 shadow-sm text-zinc-800 dark:text-white'
+								: 'text-zinc-500 hover:text-zinc-700 dark:hover:text-zinc-300'"
+							@click="format = f.value">
+							{{ f.label }}
+						</button>
+					</div>
+					<p class="mt-1 text-[9px] text-zinc-400 leading-snug">
+						{{ FORMATS.find((f) => f.value === format)?.description }}
+					</p>
+				</div>
+
 				<div v-if="store.exportWarnings.length" class="space-y-1.5">
 					<div v-for="warning in store.exportWarnings" :key="warning.id"
 						class="flex items-center gap-2 px-2.5 py-1.5 rounded-lg bg-amber-500/10 border border-amber-500/20">
@@ -83,7 +102,7 @@
 				<!-- Idle -->
 				<template v-if="!state">
 					<button class="btn-ghost" @click="close">Cancel</button>
-					<button class="btn-primary" :disabled="!store.canExport" @click="store.startExport(quality)">
+					<button class="btn-primary" :disabled="!store.canExport" @click="store.startExport(quality, format)">
 						<span class="iconify tabler--file-export w-3.5 h-3.5 inline-block align-[-2px] mr-1"></span>
 						Export
 					</button>
@@ -120,6 +139,7 @@
 
 <script setup lang="ts">
 import { computed, ref } from 'vue'
+import type { DeliveryFormat } from '@shared/types'
 import { Modal } from 'pilotui/complex'
 import { useEditorStore } from '../../stores/editorStore'
 
@@ -128,6 +148,20 @@ const emit = defineEmits<{ (e: 'update:modelValue', value: boolean): void }>()
 
 const store = useEditorStore()
 const quality = ref<'original' | 'preview'>('original')
+const format = ref<DeliveryFormat>('h264')
+
+const FORMATS: { value: DeliveryFormat; label: string; description: string }[] = [
+	{
+		value: 'h264',
+		label: 'MP4 (H.264)',
+		description: 'What you post. Plays everywhere, small file.'
+	},
+	{
+		value: 'prores',
+		label: 'ProRes 422 HQ',
+		description: 'What you hand to another editor. Large file, no generation loss.'
+	}
+]
 
 const state = computed(() => store.renderState)
 const isCanceled = computed(() => state.value?.error === 'aborted')

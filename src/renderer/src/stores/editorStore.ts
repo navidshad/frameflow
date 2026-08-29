@@ -3,7 +3,7 @@ import { ref, computed, watch } from 'vue'
 import type {
 	BackgroundTask, Clip, EditorDocument, EditorHistoryStep, EditorMarker,
 	EditorPersona, EditorRevision, MediaAsset, PromptTurn, Thread, TimelineDiff,
-	TimelineItem, TimelineItemTransform, TimelineSnapshot, Track
+	DeliveryFormat, TimelineItem, TimelineItemTransform, TimelineSnapshot, Track
 } from '@shared/types'
 import {
 	applyTimelineDiff, clampSpeed, clipToItem, computeContentEnd,
@@ -2339,7 +2339,7 @@ export const useEditorStore = defineStore('editor', () => {
 	}
 
 	// ===== Export actions (M4 + background exports) =====
-	const startExport = async (quality: 'original' | 'preview') => {
+	const startExport = async (quality: 'original' | 'preview', format: DeliveryFormat = 'h264') => {
 		if (!threadId.value || !canExport.value || !doc.value) return
 		const tid = threadId.value
 		const entry: RenderEntry = {
@@ -2356,7 +2356,7 @@ export const useEditorStore = defineStore('editor', () => {
 			// from the editor entirely (keep editing / switch revision / load
 			// another project), and the snapshot is never persisted.
 			const snapshot = JSON.parse(JSON.stringify(doc.value))
-			const result = await api.exportEditorTimeline({ threadId: tid, quality, doc: snapshot })
+			const result = await api.exportEditorTimeline({ threadId: tid, quality, doc: snapshot, format })
 			if (result?.renderId && renders.value[tid]) {
 				renders.value = { ...renders.value, [tid]: { ...renders.value[tid], renderId: result.renderId } }
 			}

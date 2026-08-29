@@ -6,7 +6,7 @@ import { pathToFileURL } from 'url'
 import { Pipeline } from './pipeline'
 import { settingsManager } from './settings'
 import { threadManager } from './threads'
-import type { EditorDocument, TimelineItem } from '@shared/types'
+import type { DeliveryFormat, EditorDocument, TimelineItem } from '@shared/types'
 import { pruneOrphanItems } from '@shared/timeline'
 import * as extraction from './pipeline/phases/extraction'
 import * as supply from './pipeline/phases/supply'
@@ -635,12 +635,12 @@ app.whenReady().then(() => {
 
 	// Export / render (M4): fast path via assembleVideo, region path via
 	// segment-then-concat; progress streams over editor-render-progress.
-	ipcMain.handle('export-editor-timeline', (_event, { threadId, quality, doc }: {
-		threadId: string, quality: 'original' | 'preview', doc?: EditorDocument
+	ipcMain.handle('export-editor-timeline', (_event, { threadId, quality, doc, format }: {
+		threadId: string, quality: 'original' | 'preview', doc?: EditorDocument, format?: DeliveryFormat
 	}) => {
 		// `doc` is the renderer's in-memory timeline snapshot at click time —
 		// the render is detached from the live document and never persists it.
-		return editorRender.startEditorRender({ threadId, quality, doc })
+		return editorRender.startEditorRender({ threadId, quality, doc, format })
 	})
 
 	ipcMain.handle('ensure-transition-preview', (_event, data: {

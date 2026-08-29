@@ -5,6 +5,7 @@ import path from 'path'
 import process from 'node:process'
 import { v4 as uuidv4 } from 'uuid'
 import type {
+	DeliveryFormat,
 	EditorDocument, EditorRenderProgress, ExportQuality, MediaAsset,
 	TimelineItem, TimelineSegment, Track
 } from '@shared/types'
@@ -18,6 +19,7 @@ import { hasKeyframes } from '@shared/keyframes'
 import type { TranscriptEntry } from '@shared/captions'
 import { burnCaptions, cuesForDoc, transcriptsForDoc } from './captions'
 import { normaliseLoudness } from './loudness'
+import { deliver } from './deliver'
 import { threadManager } from '../threads'
 import { assembleVideo, sanitizeFilename } from '../ffmpeg'
 import { THREAD_DIRS } from '../constants/paths'
@@ -568,6 +570,8 @@ export function startEditorRender(options: {
 	 * is persisted. Falls back to the persisted thread doc when absent.
 	 */
 	doc?: EditorDocument
+	/** What kind of file to deliver. Defaults to the h264 mp4 already produced. */
+	format?: DeliveryFormat
 }): { renderId: string } {
 	const { threadId, quality } = options
 	const thread = threadManager.getThread(threadId)
@@ -725,6 +729,22 @@ export function startEditorRender(options: {
 				sidecarPath = await normaliseLoudness({ sourcePath: finalPath, signal })
 				fs.renameSync(sidecarPath, finalPath)
 				sidecarPath = null
+			}
+
+			// ---- Delivery ----
+			// Last, so it transcodes the finished picture and mix rather than
+			// something the caption or loudness pass would then have to redo.
+			const delivered = await deliver({
+				sourcePath: finalPath,
+				format: options.format ?? 'h264',
+				signal,
+				onProgress: (pct) => progress(99 + pct * 0.01, 'stitching')
+			})
+			if (delivered) {
+				// A different container, so the mp4 is replaced rather than
+				// renamed over — and removed, because nobody asked for two files.
+				try { fs.unlinkSync(finalPath) } catch { /* ignore */ }
+				finalPath = delivered
 			}
 
 			emitRenderProgress({ threadId, renderId, percent: 100, phase: 'done', outputPath: finalPath })

@@ -631,6 +631,13 @@ export type TimelineDiff = {
 
 export type ExportQuality = 'original' | 'preview'
 
+/**
+ * What kind of file comes out. `h264` is the mp4 the render already produces;
+ * anything else is a transcode of it, because the intermediates have to be
+ * identical h264 for `concat -c copy` to work at all.
+ */
+export type DeliveryFormat = 'h264' | 'prores'
+
 export type RenderPhase = 'rendering' | 'stitching' | 'done' | 'error'
 
 export interface EditorRenderProgress {
