@@ -165,6 +165,7 @@
 
 <script setup lang="ts">
 import { captionMetrics, cueAt } from '@shared/captions'
+import { effectCss } from '@shared/effects'
 import { FRAME_PRESETS, panObjectPosition } from '@shared/framing'
 import { toMediaUrl } from '@shared/media-url'
 import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue'
@@ -270,11 +271,15 @@ const captionTextStyle = computed(() => {
  * burns in — the whole reason the transition cache exists.
  */
 const framingStyle = (itemId: string | null) => {
-	const framing = itemId
-		? store.doc?.timeline.find((i) => i.id === itemId)?.framing
-		: undefined
-	if (framing?.mode !== 'fill') return { objectFit: 'contain' as const }
-	return { objectFit: 'cover' as const, objectPosition: panObjectPosition(framing.pan) }
+	const item = itemId ? store.doc?.timeline.find((i) => i.id === itemId) : undefined
+	// The colour approximation rides along here rather than on the frame, so a
+	// graded clip and an ungraded one can sit either side of a transition and
+	// each show its own look.
+	const filter = effectCss(item?.effects)
+	const fit = item?.framing?.mode !== 'fill'
+		? { objectFit: 'contain' as const }
+		: { objectFit: 'cover' as const, objectPosition: panObjectPosition(item.framing.pan) }
+	return filter ? { ...fit, filter } : fit
 }
 
 const activeSegmentLabel = computed(() => {

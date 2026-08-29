@@ -12,6 +12,7 @@ import {
 	type TimelineState
 } from '@shared/timeline'
 import { computeScope } from '@shared/ai-scope'
+import { defaultParams, effectDef } from '@shared/effects'
 import {
 	captionsFromTimeline, type CaptionCue, type TranscriptEntry
 } from '@shared/captions'
@@ -1500,6 +1501,69 @@ export const useEditorStore = defineStore('editor', () => {
 		commitStep({ before, label: `Fade ${edge} ${clamped.toFixed(1)}s` })
 	}
 
+	// ===== Effects =====
+
+	/** The id idiom used throughout this store, in one place. */
+	const newId = (prefix: string) =>
+		(crypto as any).randomUUID ? crypto.randomUUID() : `${prefix}-${Date.now()}-${Math.random().toString(36).slice(2)}`
+
+	/** The kind currently being dragged, so clips can light up as a target. */
+	const draggingEffectKind = ref<string | null>(null)
+
+	/**
+	 * Append an effect to a clip, at its identity settings — adding one and
+	 * applying it stay separate gestures, so you can see what your own
+	 * adjustment did.
+	 */
+	const addEffect = (itemId: string, kind: string) => {
+		const item = doc.value?.timeline.find((i) => i.id === itemId)
+		const def = effectDef(kind)
+		if (!item || !def) return
+		const before = snapshotState()
+		// Replace, never mutate — the diff compares by value and a mutated array
+		// makes the before/after snapshots alias, recording no edit at all.
+		item.effects = [
+			...(item.effects ?? []),
+			{ id: newId('fx'), kind, params: defaultParams(def) }
+		]
+		commitStep({ before, label: `Add ${def.label}` })
+	}
+
+	const removeEffect = (itemId: string, effectId: string) => {
+		const item = doc.value?.timeline.find((i) => i.id === itemId)
+		if (!item?.effects?.length) return
+		const before = snapshotState()
+		const next = item.effects.filter((e) => e.id !== effectId)
+		item.effects = next.length ? next : undefined
+		commitStep({ before, label: 'Remove effect' })
+	}
+
+	const setEffectParam = (itemId: string, effectId: string, key: string, value: number | string) => {
+		const item = doc.value?.timeline.find((i) => i.id === itemId)
+		const effect = item?.effects?.find((e) => e.id === effectId)
+		if (!item || !effect) return
+		const before = snapshotState()
+		item.effects = item.effects!.map((e) =>
+			e.id === effectId ? { ...e, params: { ...(e.params ?? {}), [key]: value } } : e
+		)
+		commitStep({ before, label: 'Adjust effect' })
+	}
+
+	/** Reorder within the chain. A filter chain is not commutative, so this is
+	 *  a real edit rather than a cosmetic one. */
+	const moveEffect = (itemId: string, effectId: string, delta: number) => {
+		const item = doc.value?.timeline.find((i) => i.id === itemId)
+		if (!item?.effects?.length) return
+		const from = item.effects.findIndex((e) => e.id === effectId)
+		const to = from + delta
+		if (from < 0 || to < 0 || to >= item.effects.length) return
+		const before = snapshotState()
+		const next = [...item.effects]
+		next.splice(to, 0, ...next.splice(from, 1))
+		item.effects = next
+		commitStep({ before, label: 'Reorder effects' })
+	}
+
 	/**
 	 * How a clip fills a sequence frame of a different shape: letterbox it (`fit`,
 	 * the default and today's behaviour) or crop it to the frame (`fill`), with a
@@ -2421,6 +2485,11 @@ export const useEditorStore = defineStore('editor', () => {
 		setTransition,
 		clearTransition,
 		setItemFraming,
+		draggingEffectKind,
+		addEffect,
+		removeEffect,
+		setEffectParam,
+		moveEffect,
 		setSequenceFrame,
 		clearSequenceFrame,
 		sequenceFrame,

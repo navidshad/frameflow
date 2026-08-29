@@ -265,3 +265,42 @@ describe('atempoChain', () => {
 		}
 	})
 })
+
+// ===== Effects =====
+
+describe('effects in the region graph', () => {
+	const chainOf = (effects?: { id: string; kind: string; params?: Record<string, number> }[]) =>
+		graphOf(cut({ videoLayers: [slice({ item: item({ effects }) })] })).text
+
+	it('emits nothing when a clip has no effects', () => {
+		expect(chainOf()).toBe(chainOf([]))
+	})
+
+	it('puts the filter in the clip’s own chain', () => {
+		expect(chainOf([{ id: 'e', kind: 'saturation', params: { amount: 0 } }]))
+			.toContain('eq=saturation=0')
+	})
+
+	it('runs effects BEFORE the conform, so they act in source pixels', () => {
+		// vnorm scales and pads to the sequence frame; a blur applied after that
+		// would smear the letterbox bars into the picture.
+		const chain = chainOf([{ id: 'e', kind: 'blur', params: { radius: 3 } }])
+		expect(chain.indexOf('gblur')).toBeLessThan(chain.indexOf('scale=1920:1080'))
+	})
+
+	it('keeps the order the user put them in', () => {
+		const chain = chainOf([
+			{ id: 'a', kind: 'blur', params: { radius: 3 } },
+			{ id: 'b', kind: 'sharpen', params: { amount: 1 } }
+		])
+		expect(chain.indexOf('gblur')).toBeLessThan(chain.indexOf('unsharp'))
+	})
+
+	it('does not emit a stray comma for an effect left at its defaults', () => {
+		// `buildChain` drops empty fragments, and an untouched effect IS empty —
+		// a bare comma would make the whole filtergraph unparseable.
+		const chain = chainOf([{ id: 'e', kind: 'contrast', params: { amount: 1 } }])
+		expect(chain).not.toMatch(/,,/)
+		expect(chain).toBe(chainOf())
+	})
+})

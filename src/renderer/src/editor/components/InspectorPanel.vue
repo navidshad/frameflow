@@ -133,6 +133,62 @@
 						</p>
 					</div>
 
+					<!-- Effects, in chain order. A filter chain is not commutative, so
+					     the list reads top-to-bottom exactly as ffmpeg applies it. -->
+					<div>
+						<label class="text-[10px] font-bold uppercase tracking-widest text-zinc-500 block mb-1">
+							Effects
+							<span v-if="itemEffects.length" class="normal-case tracking-normal font-mono text-primary ml-1">
+								{{ itemEffects.length }}
+							</span>
+						</label>
+						<p v-if="!itemEffects.length" class="text-[9px] text-zinc-400 leading-snug">
+							Drag one from the Effects tab onto this clip.
+						</p>
+						<div v-for="(effect, index) in itemEffects" :key="effect.id"
+							class="mb-1.5 rounded-lg border border-zinc-200 dark:border-zinc-700/70 p-2">
+							<div class="flex items-center gap-1">
+								<span class="flex-1 text-[10px] font-semibold text-zinc-700 dark:text-zinc-200 truncate">
+									{{ defFor(effect.kind)?.label || effect.kind }}
+								</span>
+								<button class="w-5 h-5 rounded text-zinc-400 hover:text-primary disabled:opacity-30 transition"
+									title="Move earlier in the chain" :disabled="index === 0"
+									@click="editorStore.moveEffect(timelineItem!.id, effect.id, -1)">
+									<span class="iconify tabler--chevron-up w-3 h-3 block mx-auto"></span>
+								</button>
+								<button class="w-5 h-5 rounded text-zinc-400 hover:text-primary disabled:opacity-30 transition"
+									title="Move later in the chain" :disabled="index === itemEffects.length - 1"
+									@click="editorStore.moveEffect(timelineItem!.id, effect.id, 1)">
+									<span class="iconify tabler--chevron-down w-3 h-3 block mx-auto"></span>
+								</button>
+								<button class="w-5 h-5 rounded text-zinc-400 hover:text-red-500 transition" title="Remove"
+									@click="editorStore.removeEffect(timelineItem!.id, effect.id)">
+									<span class="iconify tabler--x w-3 h-3 block mx-auto"></span>
+								</button>
+							</div>
+							<template v-for="param in defFor(effect.kind)?.params || []" :key="param.key">
+								<div v-if="param.kind === 'number'" class="mt-1.5">
+									<div class="flex items-baseline justify-between">
+										<span class="text-[9px] uppercase tracking-widest text-zinc-500">{{ param.label }}</span>
+										<span class="font-mono text-[9px] text-primary">
+											{{ paramValue(effect, param) }}{{ param.unit || '' }}
+										</span>
+									</div>
+									<input type="range" class="w-full accent-primary"
+										:min="param.min" :max="param.max" :step="param.step"
+										:value="paramValue(effect, param)"
+										@change="onEffectParam(effect.id, param.key, $event)" />
+								</div>
+							</template>
+							<p v-if="!defFor(effect.kind)" class="mt-1 text-[9px] text-amber-500 leading-snug">
+								This build has no “{{ effect.kind }}” — it will be skipped on export.
+							</p>
+							<p v-else class="mt-1 text-[9px] text-zinc-400 leading-snug">
+								{{ defFor(effect.kind)!.description }}
+							</p>
+						</div>
+					</div>
+
 					<!-- Audio gain (mix level applied at export) -->
 					<div>
 						<label class="text-[10px] font-bold uppercase tracking-widest text-zinc-500 block mb-1">
@@ -378,7 +434,9 @@
 </template>
 
 <script setup lang="ts">
+import { effectDef, num, type EffectParam } from '@shared/effects'
 import { toMediaUrl } from '@shared/media-url'
+import type { EffectRef } from '@shared/types'
 import {
 	DEFAULT_TRANSITION_SEC, MAX_TRANSITION_SEC, MIN_TRANSITION_SEC
 } from '@shared/transitionPlan'
@@ -500,6 +558,24 @@ const transcribe = async () => {
 		await editorStore.transcribeAsset(asset.value.id)
 	} finally {
 		transcribing.value = false
+	}
+}
+
+// ===== Effects =====
+
+const itemEffects = computed(() => timelineItem.value?.effects ?? [])
+const defFor = (kind: string) => effectDef(kind)
+
+/** The slider's current value, falling back to the definition's identity. */
+const paramValue = (effect: EffectRef, param: EffectParam) =>
+	param.kind === 'number' ? num(effect.params ?? {}, param) : param.default
+
+// `@change`, never `@input`: every commit is a history step, and a dragged
+// slider would otherwise bury the undo stack under a step per pixel.
+const onEffectParam = (effectId: string, key: string, event: Event) => {
+	const value = parseFloat((event.target as HTMLInputElement).value)
+	if (timelineItem.value && Number.isFinite(value)) {
+		editorStore.setEffectParam(timelineItem.value.id, effectId, key, value)
 	}
 }
 
