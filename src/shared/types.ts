@@ -349,6 +349,12 @@ export interface TimelineItem {  // an instance of a clip placed on a track
 	/** Reframing for a sequence of a different shape. Absent = 'fit' (letterbox). */
 	framing?: ItemFraming
 	effects?: EffectRef[]
+	/**
+	 * Parameters that change over the clip, keyed by path (`transform.x`,
+	 * `gain`). Times are seconds from the clip's own start. See
+	 * shared/keyframes.ts for which paths this build can actually animate.
+	 */
+	keyframes?: Record<string, { t: number; value: number; ease?: 'linear' | 'hold' | 'ease' }[]>
 	transition?: { in?: TransitionRef; out?: TransitionRef }
 	text?: TextOverlaySpec
 }

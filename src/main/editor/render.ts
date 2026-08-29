@@ -14,6 +14,7 @@ import { sequenceFrame, type FrameSource } from '@shared/framing'
 import { hasRenderableEffects } from '@shared/effects'
 import { speechIntervals } from '@shared/ducking'
 import { hasTransform } from '@shared/transform'
+import { hasKeyframes } from '@shared/keyframes'
 import type { TranscriptEntry } from '@shared/captions'
 import { burnCaptions, cuesForDoc, transcriptsForDoc } from './captions'
 import { normaliseLoudness } from './loudness'
@@ -425,6 +426,7 @@ export function isFastPathEligible(items: TimelineItem[], track: Track, hasAudio
 	// so a graded clip would export ungraded with no error and no log.
 	if (items.some((i) => hasRenderableEffects(i.effects))) return false
 	if (items.some((i) => hasTransform(i.transform))) return false
+	if (items.some((i) => hasKeyframes(i.keyframes))) return false
 	if (Math.abs(items[0].timelineStart) > SNAP_EPS) return false // leading gap needs black
 	for (let i = 1; i < items.length; i++) {
 		if (Math.abs(items[i].timelineStart - itemEnd(items[i - 1])) > SNAP_EPS) return false

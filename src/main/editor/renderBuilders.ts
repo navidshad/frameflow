@@ -3,6 +3,7 @@ import { panFraction } from '@shared/framing'
 import { effectChain } from '@shared/effects'
 import { duckExpression, type Interval } from '@shared/ducking'
 import { transformFilter } from '@shared/transform'
+import { keyframeExpression } from '@shared/keyframes'
 
 /**
  * Handler-based filter builders (PRD §7 — "Render engine is handler-based").
@@ -143,6 +144,17 @@ export function atempoChain(speed: number): string {
 	return stages.map((s) => `atempo=${fmt(s)}`).join(',')
 }
 
+/**
+ * Where a slice's content begins, in seconds from its CLIP's start.
+ *
+ * Every animated parameter needs this: keyframe times are clip-local, but a
+ * filter's `t` starts at zero for the slice it runs on, and a slice does not
+ * necessarily begin where its clip does. `fadeA` and the ducking envelope both
+ * compute the same number.
+ */
+export const sliceOffset = (slice: SourceSlice): number =>
+	(slice.in - slice.item.in) / (slice.item.speed || 1)
+
 /** Effective gain = item gain × track gain (PRD §5.9 mix). */
 export function effectiveGain(item: TimelineItem, track: Track): number {
 	return (item.gain ?? 1) * (track.gain ?? 1)
@@ -190,6 +202,17 @@ const speedA: FilterBuilder = {
 const gainA: FilterBuilder = {
 	id: 'gain', stream: 'audio',
 	build: ({ slice }) => {
+		// Animated gain is the same filter with an expression instead of a
+		// number — `volume` has taken one since the fade envelope needed it.
+		const curve = keyframeExpression(slice.item.keyframes?.gain, {
+			offset: sliceOffset(slice)
+		})
+		if (curve) {
+			// The TRACK's gain still multiplies: the keyframes ride on the item.
+			const track = slice.track.gain ?? 1
+			const scaled = track === 1 ? `(${curve})` : `(${curve})*${track}`
+			return `volume='max(0,${scaled})':eval=frame`
+		}
 		const gain = effectiveGain(slice.item, slice.track)
 		return gain === 1 ? '' : `volume=${gain}`
 	}
@@ -365,7 +388,10 @@ function videoStream(
 		// Frame space starts here: the picture is now exactly plan.width x
 		// plan.height, which is the only place a position or a scale means
 		// anything.
-		transformFilter(slice.item.transform, plan.width, plan.height, alpha),
+		transformFilter(slice.item.transform, plan.width, plan.height, alpha, {
+			tracks: slice.item.keyframes,
+			offset: sliceOffset(slice)
+		}),
 		// Repeated frames first — they belong to the slice's own content — then
 		// black to position that content inside the region.
 		vpad(slice.freezeHead, slice.freezeTail, 'clone', alpha),

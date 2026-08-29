@@ -123,11 +123,23 @@
 						</div>
 						<div class="grid grid-cols-2 gap-x-2 gap-y-1.5">
 							<div v-for="knob in TRANSFORM_KNOBS" :key="knob.key">
-								<div class="flex items-baseline justify-between">
+								<div class="flex items-baseline justify-between gap-1">
 									<span class="text-[9px] uppercase tracking-widest text-zinc-500">{{ knob.label }}</span>
 									<span class="font-mono text-[9px] text-primary">
 										{{ knob.format(transformValue(knob.key)) }}
 									</span>
+									<button v-if="knob.path"
+										class="w-4 h-4 rounded flex items-center justify-center transition shrink-0"
+										:class="keyCount(knob.path)
+											? 'text-secondary bg-secondary/10'
+											: 'text-zinc-300 dark:text-zinc-600 hover:text-secondary'"
+										:title="keyCount(knob.path)
+											? `${keyCount(knob.path)} keyframe(s) — click to add one at the playhead, alt-click to clear`
+											: 'Animate: add a keyframe at the playhead'"
+										@click="onKeyframe(knob, $event)">
+										<span class="iconify tabler--diamond w-2.5 h-2.5"></span>
+									</button>
+									<span v-else class="w-4 shrink-0"></span>
 								</div>
 								<input type="range" class="w-full accent-primary"
 									:min="knob.min" :max="knob.max" :step="knob.step"
@@ -532,6 +544,7 @@
 <script setup lang="ts">
 import { effectDef, num, type EffectParam } from '@shared/effects'
 import { hasTransform, TRANSFORM_DEFAULTS } from '@shared/transform'
+import { valueAt } from '@shared/keyframes'
 import { toMediaUrl } from '@shared/media-url'
 import type { EffectRef } from '@shared/types'
 import {
@@ -660,22 +673,51 @@ const transcribe = async () => {
 
 // ===== Transform =====
 
+// `path` is absent for Scale on purpose: `crop`'s size is evaluated once at
+// init in this build, so a scale cannot be animated the way a position can.
+// Offering a diamond that produced nothing would be worse than not offering it.
 const TRANSFORM_KNOBS = [
-	{ key: 'scale' as const, label: 'Scale', min: 0.05, max: 5, step: 0.01, format: (v: number) => `${Math.round(v * 100)}%` },
-	{ key: 'rotation' as const, label: 'Rotate', min: -180, max: 180, step: 1, format: (v: number) => `${Math.round(v)}°` },
-	{ key: 'x' as const, label: 'Across', min: -1, max: 1, step: 0.01, format: (v: number) => `${Math.round(v * 100)}%` },
-	{ key: 'y' as const, label: 'Down', min: -1, max: 1, step: 0.01, format: (v: number) => `${Math.round(v * 100)}%` }
+	{ key: 'scale' as const, path: '', label: 'Scale', min: 0.05, max: 5, step: 0.01, format: (v: number) => `${Math.round(v * 100)}%` },
+	{ key: 'rotation' as const, path: 'transform.rotation', label: 'Rotate', min: -180, max: 180, step: 1, format: (v: number) => `${Math.round(v)}°` },
+	{ key: 'x' as const, path: 'transform.x', label: 'Across', min: -1, max: 1, step: 0.01, format: (v: number) => `${Math.round(v * 100)}%` },
+	{ key: 'y' as const, path: 'transform.y', label: 'Down', min: -1, max: 1, step: 0.01, format: (v: number) => `${Math.round(v * 100)}%` }
 ]
+
+/** Where the playhead sits inside the selected clip. */
+const clipTime = computed(() =>
+	Math.max(0, editorStore.playheadSec - (timelineItem.value?.timelineStart ?? 0))
+)
+
+const keyCount = (path: string) => timelineItem.value?.keyframes?.[path]?.length ?? 0
+
+const onKeyframe = (knob: { key: 'x' | 'y' | 'scale' | 'rotation'; path: string }, event: MouseEvent) => {
+	const item = timelineItem.value
+	if (!item || !knob.path) return
+	if (event.altKey) editorStore.clearKeyframes(item.id, knob.path)
+	else editorStore.setKeyframe(item.id, knob.path, clipTime.value, transformValue(knob.key))
+}
 
 const transformActive = computed(() => hasTransform(timelineItem.value?.transform))
 
-const transformValue = (key: 'x' | 'y' | 'scale' | 'rotation') =>
-	timelineItem.value?.transform?.[key] ?? TRANSFORM_DEFAULTS[key]
+const transformValue = (key: 'x' | 'y' | 'scale' | 'rotation') => {
+	const still = timelineItem.value?.transform?.[key] ?? TRANSFORM_DEFAULTS[key]
+	const track = timelineItem.value?.keyframes?.[`transform.${key}`]
+	// An animated parameter shows what it is doing RIGHT NOW, so the slider
+	// reads the curve rather than a static value the export ignores.
+	return track?.length ? valueAt(track, clipTime.value, still) : still
+}
 
 const onTransform = (key: 'x' | 'y' | 'scale' | 'rotation', event: Event) => {
 	const value = parseFloat((event.target as HTMLInputElement).value)
-	if (timelineItem.value && Number.isFinite(value)) {
-		editorStore.setItemTransform(timelineItem.value.id, { [key]: value })
+	const item = timelineItem.value
+	if (!item || !Number.isFinite(value)) return
+	const path = `transform.${key}`
+	// Once a parameter is animated, the slider edits the curve at the playhead.
+	// Writing the static value instead would move nothing and look broken.
+	if (item.keyframes?.[path]?.length) {
+		editorStore.setKeyframe(item.id, path, clipTime.value, value)
+	} else {
+		editorStore.setItemTransform(item.id, { [key]: value })
 	}
 }
 

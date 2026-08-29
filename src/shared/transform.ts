@@ -1,4 +1,8 @@
 import type { TimelineItemTransform } from './types'
+import {
+	hasKeyframes, keyframeExpression, normalise, valueAt,
+	type Keyframe, type KeyframeTracks
+} from './keyframes'
 
 /**
  * Moving, scaling and rotating a clip inside the sequence frame.
@@ -61,9 +65,27 @@ export function transformFilter(
 	 * must be TRANSPARENT rather than black — black would paint over whatever
 	 * sits underneath, which is the whole picture in a picture-in-picture.
 	 */
-	alpha = false
+	alpha = false,
+	/**
+	 * Keyframes for `transform.x`, `transform.y` and `transform.rotation`, with
+	 * the offset from the clip's start to this slice's start.
+	 *
+	 * `transform.scale` is deliberately absent: `crop`'s w/h are evaluated once
+	 * at init in this build, so a scale cannot ride on the same crop the
+	 * position does. Animating it needs `zoompan`, which resamples every frame.
+	 */
+	animation?: { tracks?: KeyframeTracks; offset?: number }
 ): string {
-	if (!hasTransform(transform)) return ''
+	const tracks = animation?.tracks
+	const offset = animation?.offset ?? 0
+	const anim = {
+		x: clampTrack(tracks?.['transform.x'], OFFSET_RANGE),
+		y: clampTrack(tracks?.['transform.y'], OFFSET_RANGE),
+		rotation: normalise(tracks?.['transform.rotation'])
+	}
+	const animated = anim.x.length > 1 || anim.y.length > 1 || anim.rotation.length > 1
+	if (!hasTransform(transform) && !animated) return ''
+
 	const t = read(transform)
 	const parts: string[] = []
 	const fill = alpha ? 'black@0' : 'black'
@@ -75,26 +97,47 @@ export function transformFilter(
 		h = even(height * t.scale)
 		parts.push(`scale=${w}:${h}`)
 	}
-	if (t.rotation !== 0) {
+
+	// `rotate` evaluates its angle every frame, so an animated one is just a
+	// different string in the same place.
+	const rotationExpr = keyframeExpression(anim.rotation, { offset })
+	if (rotationExpr) {
+		parts.push(`rotate=a='(${rotationExpr})*PI/180':ow=${w}:oh=${h}:c=${fill}`)
+	} else if (t.rotation !== 0) {
 		// Same size in, same size out: the corners that rotate out of frame go
 		// black, which is what every editor does with a rotated full-frame clip.
 		parts.push(`rotate=${fmt((t.rotation * Math.PI) / 180)}:ow=${w}:oh=${h}:c=${fill}`)
 	}
 
-	const dx = Math.round(t.x * width)
-	const dy = Math.round(t.y * height)
-	const padW = even(Math.max(width + 2 * Math.abs(dx), w))
-	const padH = even(Math.max(height + 2 * Math.abs(dy), h))
+	// The pad has to cover the WHOLE journey, not just where the clip starts:
+	// the crop window walks across it as time passes, and a window that leaves
+	// its input is an error rather than a clamp.
+	const reach = (track: Keyframe[], still: number) =>
+		track.length > 1 ? Math.max(...track.map((k) => Math.abs(k.value))) : Math.abs(still)
+	const padW = even(Math.max(width + 2 * Math.round(reach(anim.x, t.x) * width), w))
+	const padH = even(Math.max(height + 2 * Math.round(reach(anim.y, t.y) * height), h))
 	if (padW !== w || padH !== h) {
 		parts.push(`pad=${padW}:${padH}:(ow-iw)/2:(oh-ih)/2:${fill}`)
 	}
-	// Moving the CONTENT right means moving the crop window left, hence the minus.
-	// The offsets are snapped to even as well: on 4:2:0 an odd crop origin shifts
-	// chroma half a sample against luma, which reads as a coloured fringe.
-	const cx = snap((padW - width) / 2 - dx, 0, padW - width)
-	const cy = snap((padH - height) / 2 - dy, 0, padH - height)
-	parts.push(`crop=${width}:${height}:${cx}:${cy}`)
+
+	// Moving the CONTENT right means moving the crop window left, hence the
+	// minus. Static offsets are snapped to even as well: on 4:2:0 an odd crop
+	// origin shifts chroma half a sample against luma, a coloured fringe.
+	const axis = (track: Keyframe[], still: number, span: number, room: number) => {
+		const expression = keyframeExpression(track, { offset })
+		return expression
+			? `'${room / 2}-(${expression})*${span}'`
+			: String(snap(room / 2 - Math.round(still * span), 0, room))
+	}
+	const cx = axis(anim.x, t.x, width, padW - width)
+	const cy = axis(anim.y, t.y, height, padH - height)
+	parts.push(`crop=${width}:${height}:x=${cx}:y=${cy}`)
 	return parts.join(',')
+}
+
+/** A keyframe list with every value clamped the way `read` clamps a static one. */
+function clampTrack(track: Keyframe[] | undefined, range: { min: number; max: number }): Keyframe[] {
+	return normalise(track).map((k) => ({ ...k, value: clamp(k.value, range.min, range.max) }))
 }
 
 /**
@@ -104,9 +147,24 @@ export function transformFilter(
  * translate — the same order the filter chain does. Unlike the colour
  * approximations, this one is exact: both are affine transforms of the frame.
  */
-export function transformCss(transform: TimelineItemTransform | undefined): string {
-	if (!hasTransform(transform)) return ''
-	const t = read(transform)
+export function transformCss(
+	transform: TimelineItemTransform | undefined,
+	/** Keyframes plus the clip-local time to read them at. */
+	animation?: { tracks?: KeyframeTracks; t?: number }
+): string {
+	const tracks = animation?.tracks
+	const now = animation?.t ?? 0
+	const animated = hasKeyframes(tracks)
+	if (!hasTransform(transform) && !animated) return ''
+	const still = read(transform)
+	// Evaluated from the SAME list the export turns into an expression, so the
+	// preview follows the same curve rather than a second implementation of it.
+	const t = {
+		x: clamp(valueAt(tracks?.['transform.x'], now, still.x), OFFSET_RANGE.min, OFFSET_RANGE.max),
+		y: clamp(valueAt(tracks?.['transform.y'], now, still.y), OFFSET_RANGE.min, OFFSET_RANGE.max),
+		scale: still.scale,
+		rotation: valueAt(tracks?.['transform.rotation'], now, still.rotation)
+	}
 	const parts: string[] = []
 	if (t.x !== 0 || t.y !== 0) parts.push(`translate(${fmt(t.x * 100)}%, ${fmt(t.y * 100)}%)`)
 	if (t.rotation !== 0) parts.push(`rotate(${fmt(t.rotation)}deg)`)

@@ -553,6 +553,41 @@ describe('transform vs the real binary', () => {
 		expect((stdout as unknown as Buffer).reduce((m, v) => (v > m ? v : m), 0)).toBeGreaterThan(200)
 	}, 60_000)
 
+	it('animates a position across the clip', async () => {
+		// The keyframe evaluator and the ffmpeg expression are separately tested
+		// to agree; this proves the expression is one ffmpeg will actually run,
+		// and that it moves the picture over TIME rather than once at init.
+		const chain = transformFilter(undefined, 320, 180, false, {
+			tracks: { 'transform.x': [{ t: 0, value: -0.3 }, { t: 2, value: 0.3 }] }
+		})
+		expect(chain).toContain('crop=320:180:x=')
+
+		const out = join(trDir, 'anim.mp4')
+		await execFileAsync(ffmpeg, ['-y', '-v', 'error',
+			'-f', 'lavfi', '-i', 'color=c=black:s=320x180:d=2:r=10',
+			'-vf', `drawbox=x=150:y=80:w=20:h=20:color=white@1:t=fill,${chain}`,
+			'-c:v', 'libx264', '-preset', 'ultrafast', '-t', '2', out])
+
+		const at = async (t: number) => {
+			const { stdout } = await execFileAsync(ffmpeg,
+				['-v', 'error', '-ss', String(t), '-i', out, '-frames:v', '1',
+					'-vf', 'scale=64:36,format=gray', '-f', 'rawvideo', '-'],
+				{ encoding: 'buffer', maxBuffer: 1 << 20 })
+			const buf = stdout as unknown as Buffer
+			let best = -1, idx = 0
+			for (let i = 0; i < buf.length; i++) if (buf[i] > best) { best = buf[i]; idx = i }
+			return (idx % 64) / 64
+		}
+
+		const start = await at(0.1)
+		const middle = await at(1)
+		const end = await at(1.9)
+		expect(start).toBeLessThan(0.3)
+		expect(middle).toBeGreaterThan(start)
+		expect(end).toBeGreaterThan(middle)
+		expect(end).toBeGreaterThan(0.7)
+	}, 90_000)
+
 	it('accepts a rotation', async () => {
 		const rotated = await brightestAt(await render({ rotation: 30 }, 'rot'))
 		// A centred square rotated about the centre is still centred.

@@ -13,6 +13,7 @@ import {
 } from '@shared/timeline'
 import { computeScope } from '@shared/ai-scope'
 import { hasTransform, TRANSFORM_DEFAULTS } from '@shared/transform'
+import { isAnimatable, valueAt } from '@shared/keyframes'
 import { defaultParams, effectDef, registerEffects } from '@shared/effects'
 import { parsePack } from '@shared/packs'
 import {
@@ -1735,6 +1736,48 @@ export const useEditorStore = defineStore('editor', () => {
 	}
 
 	/**
+	 * Add or replace a keyframe on `path` at clip-local time `t`.
+	 *
+	 * Times are clip-local so a keyframe survives the clip being moved, and
+	 * SNAPPED to a hundredth of a second so clicking the same spot twice edits
+	 * one keyframe rather than stacking two a microsecond apart.
+	 */
+	const setKeyframe = (id: string, path: string, t: number, value: number) => {
+		const item = doc.value?.timeline.find((i) => i.id === id)
+		if (!item || !isAnimatable(path) || !Number.isFinite(value)) return
+		const at = Math.max(0, Math.round(t * 100) / 100)
+		const before = snapshotState()
+		const existing = item.keyframes?.[path] ?? []
+		const next = [...existing.filter((k) => Math.abs(k.t - at) > 0.005), { t: at, value }]
+			.sort((a, b) => a.t - b.t)
+		item.keyframes = { ...item.keyframes, [path]: next }
+		commitStep({ before, label: 'Add keyframe' })
+	}
+
+	const removeKeyframe = (id: string, path: string, t: number) => {
+		const item = doc.value?.timeline.find((i) => i.id === id)
+		if (!item?.keyframes?.[path]) return
+		const before = snapshotState()
+		const next = item.keyframes[path].filter((k) => Math.abs(k.t - t) > 0.005)
+		const tracks = { ...item.keyframes }
+		if (next.length) tracks[path] = next
+		else delete tracks[path]
+		item.keyframes = Object.keys(tracks).length ? tracks : undefined
+		commitStep({ before, label: 'Remove keyframe' })
+	}
+
+	/** Stop animating a parameter, leaving its static value in charge. */
+	const clearKeyframes = (id: string, path: string) => {
+		const item = doc.value?.timeline.find((i) => i.id === id)
+		if (!item?.keyframes?.[path]) return
+		const before = snapshotState()
+		const tracks = { ...item.keyframes }
+		delete tracks[path]
+		item.keyframes = Object.keys(tracks).length ? tracks : undefined
+		commitStep({ before, label: 'Clear keyframes' })
+	}
+
+	/**
 	 * How a clip fills a sequence frame of a different shape: letterbox it (`fit`,
 	 * the default and today's behaviour) or crop it to the frame (`fill`), with a
 	 * pan choosing which part survives. Part of the timeline, so it undoes.
@@ -2674,6 +2717,9 @@ export const useEditorStore = defineStore('editor', () => {
 		setTransition,
 		clearTransition,
 		setItemTransform,
+		setKeyframe,
+		removeKeyframe,
+		clearKeyframes,
 		setItemFraming,
 		effectsVersion,
 		loadEffectPacks,

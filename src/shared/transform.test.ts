@@ -24,23 +24,23 @@ describe('transformFilter', () => {
 	})
 
 	it('scales and crops back to the frame', () => {
-		expect(filter({ scale: 2 })).toBe('scale=3840:2160,crop=1920:1080:960:540')
+		expect(filter({ scale: 2 })).toBe('scale=3840:2160,crop=1920:1080:x=960:y=540')
 	})
 
 	it('pads when the clip is smaller than the frame, so the crop has room', () => {
 		const chain = filter({ scale: 0.5 })
 		expect(chain).toContain('scale=960:540')
 		expect(chain).toContain('pad=1920:1080')
-		expect(chain).toContain('crop=1920:1080:0:0')
+		expect(chain).toContain('crop=1920:1080:x=0:y=0')
 	})
 
 	it('moves the crop window opposite the content', () => {
 		// Asking for the picture 10% right means taking the window 192px left.
 		const chain = filter({ x: 0.1 })
 		expect(chain).toContain('pad=2304:1080')
-		expect(chain).toContain('crop=1920:1080:0:0')
+		expect(chain).toContain('crop=1920:1080:x=0:y=0')
 		const left = filter({ x: -0.1 })
-		expect(left).toContain('crop=1920:1080:384:0')
+		expect(left).toContain('crop=1920:1080:x=384:y=0')
 	})
 
 	it('grows the pad to cover the offset, rather than clamping the move', () => {

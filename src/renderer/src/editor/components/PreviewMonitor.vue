@@ -323,7 +323,10 @@ const framingStyle = (itemId: string | null) => {
 	const filter = effectCss(item?.effects)
 	// Exact, unlike the colour approximation above it: both this and the filter
 	// chain are affine transforms of the same frame.
-	const transform = transformCss(item?.transform)
+	const transform = transformCss(item?.transform, {
+		tracks: item?.keyframes,
+		t: item ? store.playheadSec - item.timelineStart : 0
+	})
 	const fit = item?.framing?.mode !== 'fill'
 		? { objectFit: 'contain' as const }
 		: { objectFit: 'cover' as const, objectPosition: panObjectPosition(item.framing.pan) }
