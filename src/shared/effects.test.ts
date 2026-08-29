@@ -9,7 +9,7 @@ const applied = (kind: string, params?: Record<string, number | string>) =>
 
 describe('the catalogue', () => {
 	it('ships a usable set rather than a demo', () => {
-		expect(allEffects().length).toBeGreaterThanOrEqual(14)
+		expect(allEffects().length).toBeGreaterThanOrEqual(21)
 		expect(effectGroups('video').map((g) => g.group)).toEqual(['Adjust', 'Looks', 'Detail'])
 	})
 
@@ -32,6 +32,25 @@ describe('the catalogue', () => {
 		const vintage = effectDef('look-vintage')!
 		expect(vintage.params).toEqual([])
 		expect(vintage.build({})).toBe('curves=preset=vintage')
+	})
+})
+
+describe('audio repair', () => {
+	it('is offered on the audio stream only', () => {
+		expect(effectGroups('audio').map((g) => g.group)).toEqual(['Repair'])
+		expect(effectGroups('video').map((g) => g.group)).not.toContain('Repair')
+	})
+
+	it('writes the filter each control names', () => {
+		expect(effectChain(applied('denoise', { amount: 12 }), 'audio')).toEqual(['afftdn=nr=12:nf=-40'])
+		expect(effectChain(applied('rumble', { hz: 80 }), 'audio')).toEqual(['highpass=f=80'])
+		expect(effectChain(applied('level', { strength: 3 }), 'audio')).toEqual(['speechnorm=e=3:p=0.95'])
+	})
+
+	it('starts off, like every other effect', () => {
+		expect(effectChain(applied('denoise', { amount: 0 }), 'audio')).toEqual([])
+		expect(effectChain(applied('rumble', { hz: 0 }), 'audio')).toEqual([])
+		expect(effectChain(applied('compress', { ratio: 1 }), 'audio')).toEqual([])
 	})
 })
 

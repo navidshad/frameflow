@@ -184,6 +184,41 @@ const DETAIL: EffectDef[] = [
 		(v) => (v === 0 ? '' : `blur(${fmt(v)}px)`))
 ]
 
+/**
+ * Audio repair. Recorded speech has four common problems and one filter each:
+ * a noise floor, rumble under the voice, a level that wanders, and peaks that
+ * stick out. Loudness is NOT here — it is a property of the finished mix, not
+ * of one clip, and lives as a document setting instead.
+ */
+const repair = (
+	kind: string, label: string, description: string, param: EffectParam,
+	build: (value: number) => string
+): EffectDef => ({
+	kind, label, group: 'Repair', stream: 'audio', description,
+	params: [param],
+	build: (p) => build(num(p, param))
+})
+
+const REPAIR: EffectDef[] = [
+	repair('denoise', 'Denoise', 'Pulls out steady background hiss and hum.',
+		number('amount', 'Amount', 0, 40, 1, 0, 'dB'),
+		(v) => (v === 0 ? '' : `afftdn=nr=${fmt(v)}:nf=-40`)),
+
+	// 80Hz is under the male speaking range and above most handling noise, so
+	// the default position of the slider is the one that helps most voices.
+	repair('rumble', 'Remove rumble', 'Cuts traffic, aircon and handling noise below the voice.',
+		number('hz', 'Below', 0, 300, 5, 0, 'Hz'),
+		(v) => (v === 0 ? '' : `highpass=f=${fmt(v)}`)),
+
+	repair('level', 'Even out level', 'Lifts quiet speech toward the loud parts.',
+		number('strength', 'Strength', 1, 8, 0.5, 1, '\u00d7'),
+		(v) => (v === 1 ? '' : `speechnorm=e=${fmt(v)}:p=0.95`)),
+
+	repair('compress', 'Compress', 'Tames peaks so nothing jumps out.',
+		number('ratio', 'Ratio', 1, 12, 0.5, 1, ':1'),
+		(v) => (v === 1 ? '' : `acompressor=threshold=0.125:ratio=${fmt(v)}:attack=20:release=250`))
+]
+
 // ===== Registry =====
 
 const registry = new Map<string, EffectDef>()
@@ -205,7 +240,7 @@ export function registerEffects(defs: EffectDef[]): string[] {
 	return replaced
 }
 
-registerEffects([...ADJUST, ...LOOKS, ...DETAIL])
+registerEffects([...ADJUST, ...LOOKS, ...DETAIL, ...REPAIR])
 
 export const allEffects = (): EffectDef[] => [...registry.values()]
 

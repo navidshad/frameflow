@@ -11,6 +11,7 @@ import { computeRegions } from './render'
 import { buildRegionGraph, type OverlapRegion, type Region, type RegionPlan } from './renderBuilders'
 import { previewPlan, renderTransitionWindow } from './preview'
 import { burnCaptions } from './captions'
+import { normaliseLoudness } from './loudness'
 import { allEffects, effectChain } from '@shared/effects'
 
 /**
@@ -368,6 +369,80 @@ describe('effects vs the real binary', () => {
 		const negative = await through(effectChain(fx('look-negative'), 'video').join(','), 'neg')
 		expect(luma(negative)).toBeLessThan(255)
 		expect(Math.abs(negative[0] - (255 - base[0]))).toBeLessThan(40)
+	}, 120_000)
+})
+
+describe('audio vs the real binary', () => {
+	let auDir: string
+	let quiet: string
+
+	/** Integrated loudness in LUFS, measured with ebur128. */
+	const loudnessOf = async (file: string): Promise<number> => {
+		const { stderr } = await execFileAsync(ffmpeg,
+			['-v', 'info', '-i', file, '-filter_complex', 'ebur128=peak=true', '-f', 'null', '-'],
+			{ maxBuffer: 1 << 22 }).catch((e) => ({ stderr: e.stderr as string }))
+		const match = /I:\s*(-?\d+(?:\.\d+)?)\s*LUFS/g
+		let last: number | null = null
+		for (const m of String(stderr).matchAll(match)) last = Number(m[1])
+		if (last === null) throw new Error('ebur128 reported no integrated loudness')
+		return last
+	}
+
+	beforeAll(async () => {
+		auDir = await fs.mkdtemp(join(tmpdir(), 'ff-audio-'))
+		// A quiet tone: well below the -14 LUFS target, so normalisation has to
+		// move it UP and the direction of the fix is unambiguous.
+		quiet = join(auDir, 'quiet.mp4')
+		await execFileAsync(ffmpeg, ['-y', '-v', 'error',
+			'-f', 'lavfi', '-i', 'color=c=black:s=64x64:d=4:r=10',
+			'-f', 'lavfi', '-i', 'sine=frequency=300:duration=4',
+			'-af', 'volume=0.02',
+			'-shortest', '-c:v', 'libx264', '-preset', 'ultrafast', '-c:a', 'aac', '-t', '4', quiet
+		])
+	}, 60_000)
+
+	afterAll(async () => { await fs.rm(auDir, { recursive: true, force: true }) })
+
+	it('accepts every repair filter the catalogue can emit', async () => {
+		for (const def of allEffects()) {
+			if (def.stream !== 'audio') continue
+			const params: Record<string, number> = {}
+			for (const p of def.params) {
+				if (p.kind !== 'number') continue
+				params[p.key] = p.default === p.max ? p.min : p.max
+			}
+			const chain = def.build(params)
+			if (!chain) continue
+			await execFileAsync(ffmpeg, ['-y', '-v', 'error', '-i', quiet, '-af', chain,
+				'-t', '1', '-f', 'null', '-'])
+		}
+	}, 120_000)
+
+	it('normalises a quiet mix up toward the streaming target', async () => {
+		const before = await loudnessOf(quiet)
+		expect(before).toBeLessThan(-25)
+
+		const out = await normaliseLoudness({
+			sourcePath: quiet,
+			signal: new AbortController().signal
+		})
+		const after = await loudnessOf(out)
+		// Single-pass loudnorm lands near the target, not exactly on it.
+		expect(after).toBeGreaterThan(before + 10)
+		expect(Math.abs(after - -14)).toBeLessThan(3)
+	}, 120_000)
+
+	it('leaves the picture untouched, because it only re-encodes audio', async () => {
+		const out = await normaliseLoudness({
+			sourcePath: quiet,
+			signal: new AbortController().signal
+		})
+		const codecOf = async (file: string) => {
+			const { stdout } = await execFileAsync(ffprobe, ['-v', 'error', '-select_streams', 'v:0',
+				'-show_entries', 'stream=codec_name,width,height', '-of', 'csv=p=0', file])
+			return stdout.trim()
+		}
+		expect(await codecOf(out)).toBe(await codecOf(quiet))
 	}, 120_000)
 })
 

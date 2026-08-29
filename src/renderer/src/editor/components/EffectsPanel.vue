@@ -24,8 +24,10 @@
 
 		<div class="flex-1 min-h-0 overflow-y-auto custom-scrollbar px-3 pb-3">
 			<template v-for="group in groups" :key="group.group">
-				<div class="px-1 pt-2 pb-1.5">
+				<div class="px-1 pt-2 pb-1.5 flex items-baseline gap-1.5">
 					<span class="text-[9px] font-bold uppercase tracking-widest text-zinc-400">{{ group.group }}</span>
+					<span v-if="group.effects[0]?.stream === 'audio'"
+						class="text-[8px] font-mono uppercase tracking-widest text-emerald-500/70">sound</span>
 				</div>
 				<div class="grid grid-cols-2 gap-1.5">
 					<button v-for="def in group.effects" :key="def.kind"
@@ -71,19 +73,24 @@ defineEmits<{ (e: 'update:collapsed', value: boolean): void }>()
 
 const store = useEditorStore()
 
-const groups = computed(() => effectGroups('video'))
-const total = computed(() => allEffects().filter((e) => e.stream === 'video').length)
+// Both streams in one list: a clip carries picture and sound together, so
+// splitting the library by stream would only make the user think about which
+// tab a control lives in. The group heading says which is which.
+const groups = computed(() => effectGroups())
+const total = computed(() => allEffects().length)
 const clipCount = computed(() => store.doc?.timeline.length ?? 0)
 
 const SWATCH: Record<string, string> = {
 	Adjust: 'bg-primary/70',
 	Looks: 'bg-secondary/70',
-	Detail: 'bg-accent/70'
+	Detail: 'bg-accent/70',
+	Repair: 'bg-emerald-500/70'
 }
 const ICON: Record<string, string> = {
 	Adjust: 'tabler--adjustments',
 	Looks: 'tabler--palette',
-	Detail: 'tabler--focus-2'
+	Detail: 'tabler--focus-2',
+	Repair: 'tabler--wave-sine'
 }
 
 const onDragStart = (def: EffectDef, event: DragEvent) => {

@@ -234,6 +234,17 @@ export const useEditorStore = defineStore('editor', () => {
 		markDirty()
 	}
 
+	// ===== Loudness =====
+
+	const loudnessEnabled = computed(() => doc.value?.loudnessEnabled === true)
+
+	/** Project-level and not undoable, exactly like captions. */
+	const setLoudnessEnabled = (enabled: boolean) => {
+		if (!doc.value) return
+		doc.value.loudnessEnabled = enabled
+		markDirty()
+	}
+
 	// Transcripts live on disk and arrive from preprocessing, not from an edit —
 	// so the trigger is a transcript appearing, moving or being cleared. The
 	// preprocess state rides along because a RE-transcribe rewrites the same
@@ -622,6 +633,13 @@ export const useEditorStore = defineStore('editor', () => {
 			warnings.push({ id: 'overlay', text: "Overlay/text tracks won't appear in this export." })
 		}
 
+		if (doc.value.loudnessEnabled) {
+			warnings.push({
+				id: 'loudness',
+				text: 'The mix will be normalised to -14 LUFS, the level streaming platforms expect.'
+			})
+		}
+
 		// Not a mistake to fix — a cost to know about. Every other export stitches
 		// with a stream copy; painting captions onto the picture cannot.
 		if (doc.value.captionsEnabled && captionCues.value.length) {
@@ -670,7 +688,8 @@ export const useEditorStore = defineStore('editor', () => {
 				// `?? false` because JSON.stringify drops an undefined, and the main
 				// handler would then read the patch as "no opinion" and keep the old
 				// value — the same trap the cleared-transition bug fell into.
-				captionsEnabled: doc.value.captionsEnabled ?? false
+				captionsEnabled: doc.value.captionsEnabled ?? false,
+				loudnessEnabled: doc.value.loudnessEnabled ?? false
 			}))
 			await api.saveEditorDoc({ threadId: threadId.value, patch })
 			dirty.value = false
@@ -2497,6 +2516,8 @@ export const useEditorStore = defineStore('editor', () => {
 		captionsEnabled,
 		hasTranscript,
 		setCaptionsEnabled,
+		loudnessEnabled,
+		setLoudnessEnabled,
 		refreshTranscripts,
 		seams,
 		selectedSeamId,

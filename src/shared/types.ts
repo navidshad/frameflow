@@ -211,6 +211,12 @@ export interface EditorDocument {
 	 * before paying for a render. NOT undoable, same as markers.
 	 */
 	captionsEnabled?: boolean
+	/**
+	 * Normalise the finished mix to the streaming target (-14 LUFS). A property
+	 * of the whole export, not of any one clip — which is why it is a document
+	 * setting rather than an effect. NOT undoable, same as captions.
+	 */
+	loudnessEnabled?: boolean
 	/** Pointer into the revisions sidecar (userData/editor-revisions/{id}.json). */
 	currentRevisionId?: string
 }

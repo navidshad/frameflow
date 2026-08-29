@@ -13,6 +13,7 @@ import { planTransitions, sourceDurationsFrom, type TransitionWindow } from '@sh
 import { sequenceFrame, type FrameSource } from '@shared/framing'
 import { hasRenderableEffects } from '@shared/effects'
 import { burnCaptions, cuesForDoc } from './captions'
+import { normaliseLoudness } from './loudness'
 import { threadManager } from '../threads'
 import { assembleVideo, sanitizeFilename } from '../ffmpeg'
 import { THREAD_DIRS } from '../constants/paths'
@@ -583,9 +584,10 @@ export function startEditorRender(options: {
 	void (async () => {
 		const baseName = sanitizeFilename(thread.title || 'export')
 		let finalPath = path.join(exportsDir, `${baseName}_${renderId.slice(0, 8)}.mp4`)
-		// Held outside the try so the cleanup can remove a half-burned file too;
-		// it lives beside finalPath rather than inside workDir, which is swept.
-		let captionedPath: string | null = null
+		// Held outside the try so the cleanup can remove a half-written
+		// intermediate too; these live beside finalPath, not inside workDir,
+		// which the `finally` sweeps.
+		let sidecarPath: string | null = null
 		try {
 			progress(0, 'rendering')
 
@@ -680,7 +682,7 @@ export function startEditorRender(options: {
 				const cues = cuesForDoc(doc)
 				if (cues.length) {
 					progress(97, 'stitching')
-					captionedPath = await burnCaptions({
+					sidecarPath = await burnCaptions({
 						sourcePath: finalPath,
 						workDir,
 						cues,
@@ -689,9 +691,19 @@ export function startEditorRender(options: {
 						onProgress: (pct) => progress(97 + pct * 0.03, 'stitching')
 					})
 					// Replace the uncaptioned render only once the burn has landed.
-					fs.renameSync(captionedPath, finalPath)
-					captionedPath = null
+					fs.renameSync(sidecarPath, finalPath)
+					sidecarPath = null
 				}
+			}
+
+			// ---- Loudness ----
+			// After the caption burn, so it measures the file that ships. Audio
+			// only, so it is cheap next to everything above it.
+			if (doc.loudnessEnabled) {
+				progress(99, 'stitching')
+				sidecarPath = await normaliseLoudness({ sourcePath: finalPath, signal })
+				fs.renameSync(sidecarPath, finalPath)
+				sidecarPath = null
 			}
 
 			emitRenderProgress({ threadId, renderId, percent: 100, phase: 'done', outputPath: finalPath })
@@ -700,7 +712,7 @@ export function startEditorRender(options: {
 			if (!signal.aborted) console.error('[render] Export failed:', error)
 			// Remove a partial final file
 			try { if (fs.existsSync(finalPath)) fs.unlinkSync(finalPath) } catch { /* ignore */ }
-			try { if (captionedPath && fs.existsSync(captionedPath)) fs.unlinkSync(captionedPath) } catch { /* ignore */ }
+			try { if (sidecarPath && fs.existsSync(sidecarPath)) fs.unlinkSync(sidecarPath) } catch { /* ignore */ }
 			emitRenderProgress({ threadId, renderId, percent: 0, phase: 'error', error: message })
 		} finally {
 			try { fs.rmSync(workDir, { recursive: true, force: true }) } catch { /* ignore */ }

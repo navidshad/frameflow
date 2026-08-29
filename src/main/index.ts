@@ -397,6 +397,7 @@ app.whenReady().then(() => {
 			markers?: any[]
 			currentRevisionId?: string
 			captionsEnabled?: boolean
+			loudnessEnabled?: boolean
 		}
 	}) => {
 		return await threadManager.updateThreadWith(threadId, (thread) => {
@@ -430,6 +431,7 @@ app.whenReady().then(() => {
 			// Explicitly against undefined: turning captions OFF is a false, which
 			// a truthiness check would silently refuse to save.
 			if (patch.captionsEnabled !== undefined) editor.captionsEnabled = patch.captionsEnabled
+			if (patch.loudnessEnabled !== undefined) editor.loudnessEnabled = patch.loudnessEnabled
 			if (patch.currentRevisionId !== undefined) editor.currentRevisionId = patch.currentRevisionId
 
 			// Fold clip-selected flags into the matching clips (the one renderer-owned

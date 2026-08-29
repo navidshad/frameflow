@@ -41,6 +41,12 @@
 						: 'Captions off'"
 				:active="store.captionsEnabled"
 				@click="store.setCaptionsEnabled(!store.captionsEnabled)" />
+			<ToolButton icon="tabler--wave-sine"
+				:title="store.loudnessEnabled
+					? 'Loudness on — the mix is normalised to -14 LUFS on export'
+					: 'Loudness off — the export keeps whatever level the sources had'"
+				:active="store.loudnessEnabled"
+				@click="store.setLoudnessEnabled(!store.loudnessEnabled)" />
 			<div class="w-px h-4 bg-zinc-200 dark:bg-zinc-800 mx-1"></div>
 
 			<!-- Marker / chapter jump list (§5.3) -->
