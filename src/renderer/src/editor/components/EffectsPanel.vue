@@ -56,7 +56,7 @@
 </template>
 
 <script setup lang="ts">
-import { computed } from 'vue'
+import { computed, onMounted } from 'vue'
 import { useEditorStore } from '../../stores/editorStore'
 import { allEffects, effectGroups, type EffectDef } from '@shared/effects'
 import SlimTooltip from '../../components/SlimTooltip.vue'
@@ -73,11 +73,16 @@ defineEmits<{ (e: 'update:collapsed', value: boolean): void }>()
 
 const store = useEditorStore()
 
+onMounted(() => { void store.loadEffectPacks() })
+
 // Both streams in one list: a clip carries picture and sound together, so
 // splitting the library by stream would only make the user think about which
 // tab a control lives in. The group heading says which is which.
-const groups = computed(() => effectGroups())
-const total = computed(() => allEffects().length)
+// `effectsVersion` is the dependency, not the value: the catalogue lives in a
+// module-level registry Vue cannot see into, so this is what re-renders the
+// list once packs have registered.
+const groups = computed(() => (store.effectsVersion, effectGroups()))
+const total = computed(() => (store.effectsVersion, allEffects().length))
 const clipCount = computed(() => store.doc?.timeline.length ?? 0)
 
 const SWATCH: Record<string, string> = {

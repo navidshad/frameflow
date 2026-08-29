@@ -27,6 +27,7 @@ import * as editorPrompt from './editor/prompt'
 import * as editorPreview from './editor/preview'
 import * as editorRender from './editor/render'
 import * as editorCaptions from './editor/captions'
+import { loadPacks, packManifests } from './editor/packs'
 import * as editorRevisions from './editor/revisions'
 import { BUILTIN_PERSONAS } from './constants/personas'
 import { v4 as uuidv4 } from 'uuid'
@@ -99,6 +100,14 @@ app.whenReady().then(() => {
 	threadManager.init()
 
 	backgroundTaskManager.init()
+
+	// Effect packs, before any window can ask for the catalogue. Never fatal —
+	// a broken pack on disk must not stop the app opening.
+	try {
+		loadPacks()
+	} catch (error) {
+		console.warn('[packs] load failed:', error)
+	}
 
 	app.on('browser-window-created', (_, window) => {
 		optimizer.watchWindowShortcuts(window)
@@ -640,6 +649,10 @@ app.whenReady().then(() => {
 		outgoingId: string
 		incomingId: string
 	}) => editorPreview.ensureTransitionPreview(data))
+
+	// Effect packs are pure data; the renderer parses the same manifests with the
+	// same parser, because an EffectDef's `build` cannot cross IPC.
+	ipcMain.handle('get-effect-packs', () => packManifests())
 
 	// The monitor draws captions itself, from the same mapper the export burns
 	// with — so it needs the transcripts, not a picture of them.

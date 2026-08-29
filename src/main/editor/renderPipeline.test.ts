@@ -1,6 +1,6 @@
 import { describe, expect, it, beforeAll, afterAll } from 'vitest'
 import { execFile } from 'child_process'
-import { promises as fs } from 'fs'
+import { promises as fs, writeFileSync } from 'fs'
 import { tmpdir } from 'os'
 import { join } from 'path'
 import { promisify } from 'util'
@@ -14,6 +14,7 @@ import { burnCaptions } from './captions'
 import { normaliseLoudness } from './loudness'
 import { duckExpression } from '@shared/ducking'
 import { allEffects, effectChain } from '@shared/effects'
+import { parsePack, starterManifest, STARTER_LOOKS, toCube } from '@shared/packs'
 
 /**
  * End-to-end against the REAL bundled binary: proves the filtergraph this module
@@ -342,6 +343,28 @@ describe('effects vs the real binary', () => {
 			const chain = def.build(params)
 			if (!chain) continue
 			await expect(through(chain, `accept-${def.kind}`), def.kind).resolves.toBeDefined()
+		}
+	}, 120_000)
+
+	it('renders the starter pack’s LUTs, generated and loaded like any other pack', async () => {
+		// The looks this app ships go through the pack loader rather than being
+		// registered directly, so the seam a third-party pack uses is exercised
+		// on every launch. This proves the files that seam produces are real
+		// LUTs ffmpeg will apply.
+		const parsed = parsePack(starterManifest(), (name) => {
+			const file = join(fxDir, name)
+			const look = STARTER_LOOKS.find((l) => `${l.kind}.cube` === name)!
+			writeFileSync(file, toCube(look.label, 17, look.map), 'utf-8')
+			return file
+		})
+		expect(parsed.problems).toEqual([])
+
+		const base = await through('', 'lut-base')
+		for (const effect of parsed.effects) {
+			const out = await through(effect.build({}), `lut-${effect.kind}`)
+			// A look that changed nothing would be a look nobody would notice.
+			const distance = Math.abs(out[0] - base[0]) + Math.abs(out[1] - base[1]) + Math.abs(out[2] - base[2])
+			expect(distance, effect.kind).toBeGreaterThan(3)
 		}
 	}, 120_000)
 

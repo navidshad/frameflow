@@ -89,6 +89,7 @@ const api = {
 		ipcRenderer.invoke('abort-editor-render', data),
 	getEditorTranscripts: (threadId: string) =>
 		ipcRenderer.invoke('get-editor-transcripts', threadId),
+	getEffectPacks: () => ipcRenderer.invoke('get-effect-packs'),
 	ensureTransitionPreview: (data: {
 		threadId: string; doc: unknown; outgoingId: string; incomingId: string
 	}) => ipcRenderer.invoke('ensure-transition-preview', data),

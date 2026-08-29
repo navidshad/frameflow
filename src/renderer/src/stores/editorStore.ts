@@ -12,7 +12,8 @@ import {
 	type TimelineState
 } from '@shared/timeline'
 import { computeScope } from '@shared/ai-scope'
-import { defaultParams, effectDef } from '@shared/effects'
+import { defaultParams, effectDef, registerEffects } from '@shared/effects'
+import { parsePack } from '@shared/packs'
 import {
 	captionsFromTimeline, type CaptionCue, type TranscriptEntry
 } from '@shared/captions'
@@ -1593,6 +1594,39 @@ export const useEditorStore = defineStore('editor', () => {
 		commitStep({ before, label: `Fade ${edge} ${clamped.toFixed(1)}s` })
 	}
 
+	// ===== Effect packs =====
+
+	/**
+	 * Bumped once packs are registered. `allEffects()` reads a module-level
+	 * registry, which Vue cannot see into — this is what tells the library to
+	 * re-render once the extra looks are in it.
+	 */
+	const effectsVersion = ref(0)
+
+	/**
+	 * Register the packs main found.
+	 *
+	 * The renderer parses the manifests ITSELF, with the same `parsePack`, rather
+	 * than receiving finished definitions: an EffectDef carries a `build`
+	 * function and cannot cross IPC. One parser, one set of rules, two processes.
+	 */
+	const loadEffectPacks = async () => {
+		try {
+			const packs = await api.getEffectPacks() as { manifest: unknown; files: Record<string, string> }[]
+			let added = 0
+			for (const pack of packs || []) {
+				const parsed = parsePack(pack.manifest, (name) => pack.files[name] ?? null)
+				if (parsed.effects.length) {
+					registerEffects(parsed.effects)
+					added += parsed.effects.length
+				}
+			}
+			if (added) effectsVersion.value++
+		} catch (error) {
+			console.error('[editorStore] effect packs failed to load:', error)
+		}
+	}
+
 	// ===== Effects =====
 
 	/** The id idiom used throughout this store, in one place. */
@@ -2577,6 +2611,8 @@ export const useEditorStore = defineStore('editor', () => {
 		setTransition,
 		clearTransition,
 		setItemFraming,
+		effectsVersion,
+		loadEffectPacks,
 		draggingEffectKind,
 		addEffect,
 		removeEffect,
