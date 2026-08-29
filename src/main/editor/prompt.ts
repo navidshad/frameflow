@@ -50,6 +50,7 @@ function emitTurnUpdate(payload: {
 	threadId: string
 	turn: PromptTurn
 	addMarkers?: { time: number; label: string }[]
+	docSettings?: { captionsEnabled?: boolean; loudnessEnabled?: boolean }
 	thinContext?: boolean
 	truncated?: boolean
 }) {
@@ -252,7 +253,7 @@ export function runEditorPrompt(options: {
 			// Map ops against a FRESH read (doc may have advanced during the call);
 			// the renderer re-validates against ITS live doc anyway.
 			const freshDoc = threadManager.getThread(threadId)?.editor || doc
-			const { diff, addMarkers, droppedOps, notes } = opsToDiff(ops || {}, freshDoc)
+			const { diff, addMarkers, docSettings, droppedOps, notes } = opsToDiff(ops || {}, freshDoc)
 			const targetLengthSec = parseTargetLength(ops?.targetLength)
 			const build = measureBuild(diff, freshDoc, stats, targetLengthSec)
 
@@ -291,6 +292,9 @@ export function runEditorPrompt(options: {
 				threadId,
 				turn: completed,
 				addMarkers,
+				// Project settings live outside TimelineState, so they travel
+				// beside the diff exactly as markers do.
+				docSettings: Object.keys(docSettings).length ? docSettings : undefined,
 				thinContext: finalContext.thinContext,
 				// OR-ed: the flag must survive whichever pass truncated — the
 				// detail pass is a strict superset of the survey, so it can hit

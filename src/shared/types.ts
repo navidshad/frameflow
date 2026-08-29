@@ -559,7 +559,36 @@ export interface EditorOps {
 		gain?: number
 		fadeInSec?: number
 		fadeOutSec?: number
+		/** Move, scale or rotate inside the frame (Phase 3's free transform). */
+		transform?: { x?: number; y?: number; scale?: number; rotation?: number }
+		/** How this clip fills a frame of a different shape. */
+		framing?: { mode: 'fit' | 'fill'; pan?: number }
 	}>
+	/**
+	 * A transition on the cut AFTER each named item. `kind: 'none'` removes one.
+	 * Keyed by the OUTGOING item because that is where the document stores it.
+	 */
+	setTransitions?: Array<{ afterItemId: string; kind: string; durationSec?: number }>
+	/**
+	 * Append a look or a repair to each named clip. Appends rather than replaces,
+	 * so a second call stacks — `clearLooks` is how you start over.
+	 */
+	applyLook?: Array<{ itemIds: string[]; kind: string; params?: Record<string, number | string> }>
+	/** Item ids whose effects should all be removed. */
+	clearLooks?: string[]
+	/** Text on the frame. Placed on a text track, created if there is not one. */
+	addTitles?: Array<{
+		text: string
+		atSec: number
+		durationSec?: number
+		x?: number
+		y?: number
+		size?: number
+	}>
+	/** Burn the transcript into the picture. */
+	captions?: boolean
+	/** Normalise the finished mix to the streaming target. */
+	loudness?: boolean
 	addClips?: Array<{
 		assetId: string
 		sceneIndex?: number       // preferred: a scene # from AVAILABLE SCENES

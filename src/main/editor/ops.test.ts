@@ -783,3 +783,171 @@ describe('parseTargetLength', () => {
 		expect(parseTargetLength(undefined)).toBeUndefined()
 	})
 })
+
+// ===== Look, sound and text ops (Phase 4) =====
+
+describe('opsToDiff / transitions', () => {
+	const doc = () => makeDoc([makeAsset('a', uniform(3, 2))], [
+		{ id: 'i1', trackId: 'v1', sourceAssetId: 'a', timelineStart: 0, in: 0, out: 2, speed: 1, preservePitch: true, duration: 2 },
+		{ id: 'i2', trackId: 'v1', sourceAssetId: 'a', timelineStart: 2, in: 2, out: 4, speed: 1, preservePitch: true, duration: 2 }
+	])
+
+	it('attaches to the outgoing item, which is where the document keeps it', () => {
+		const { diff } = opsToDiff({ setTransitions: [{ afterItemId: 'i1', kind: 'fade', durationSec: 1 }] }, doc())
+		expect(diff.updateItems).toEqual([{ id: 'i1', transition: { out: { kind: 'fade', duration: 1 } } }])
+	})
+
+	it('refuses a kind this ffmpeg build cannot render', () => {
+		// Better a dropped op than an export that fails after the user waits.
+		const { diff, droppedOps } = opsToDiff({ setTransitions: [{ afterItemId: 'i1', kind: 'teleport' }] }, doc())
+		expect(diff.updateItems).toBeUndefined()
+		expect(droppedOps[0]).toContain('unknown kind')
+	})
+
+	it('clamps a duration rather than dropping it', () => {
+		const { diff } = opsToDiff({ setTransitions: [{ afterItemId: 'i1', kind: 'fade', durationSec: 900 }] }, doc())
+		expect(diff.updateItems![0].transition!.out!.duration).toBe(5)
+	})
+
+	it('removes one when asked for "none"', () => {
+		const { diff } = opsToDiff({ setTransitions: [{ afterItemId: 'i1', kind: 'none' }] }, doc())
+		expect(diff.updateItems).toEqual([{ id: 'i1', transition: undefined }])
+	})
+
+	it('drops an unknown item instead of inventing it', () => {
+		const { droppedOps } = opsToDiff({ setTransitions: [{ afterItemId: 'nope', kind: 'fade' }] }, doc())
+		expect(droppedOps[0]).toContain('unknown item')
+	})
+})
+
+describe('opsToDiff / looks', () => {
+	const doc = () => makeDoc([makeAsset('a', uniform(2, 2))], [
+		{ id: 'i1', trackId: 'v1', sourceAssetId: 'a', timelineStart: 0, in: 0, out: 2, speed: 1, preservePitch: true, duration: 2 }
+	])
+
+	it('applies a look with the effect’s own neutral defaults filled in', () => {
+		const { diff } = opsToDiff({ applyLook: [{ itemIds: ['i1'], kind: 'look-vintage' }] }, doc())
+		expect(diff.updateItems![0].effects![0].kind).toBe('look-vintage')
+	})
+
+	it('takes the parameters it was given', () => {
+		const { diff } = opsToDiff(
+			{ applyLook: [{ itemIds: ['i1'], kind: 'saturation', params: { amount: 0 } }] },
+			doc()
+		)
+		expect(diff.updateItems![0].effects![0].params).toEqual({ amount: 0 })
+	})
+
+	it('stacks two looks in one response rather than the second replacing the first', () => {
+		const { diff } = opsToDiff({
+			applyLook: [
+				{ itemIds: ['i1'], kind: 'look-vintage' },
+				{ itemIds: ['i1'], kind: 'sharpen', params: { amount: 1 } }
+			]
+		}, doc())
+		expect(diff.updateItems![0].effects!.map((e) => e.kind)).toEqual(['look-vintage', 'sharpen'])
+	})
+
+	it('refuses an effect that is not in the catalogue', () => {
+		const { diff, droppedOps } = opsToDiff({ applyLook: [{ itemIds: ['i1'], kind: 'make-it-pop' }] }, doc())
+		expect(diff.updateItems).toBeUndefined()
+		expect(droppedOps[0]).toContain('unknown effect')
+	})
+
+	it('clears, then applies, when asked to do both', () => {
+		const withLook = doc()
+		withLook.timeline[0].effects = [{ id: 'old', kind: 'blur', params: { radius: 5 } }]
+		const { diff } = opsToDiff({
+			clearLooks: ['i1'],
+			applyLook: [{ itemIds: ['i1'], kind: 'look-punch' }]
+		}, withLook)
+		expect(diff.updateItems![0].effects!.map((e) => e.kind)).toEqual(['look-punch'])
+	})
+})
+
+describe('opsToDiff / transform', () => {
+	const doc = () => makeDoc([makeAsset('a', uniform(2, 2))], [
+		{ id: 'i1', trackId: 'v1', sourceAssetId: 'a', timelineStart: 0, in: 0, out: 2, speed: 1, preservePitch: true, duration: 2 }
+	])
+
+	it('clamps to the range a person could reach with the sliders', () => {
+		const { diff } = opsToDiff(
+			{ updateItems: [{ id: 'i1', transform: { scale: 999, x: -99 } }] },
+			doc()
+		)
+		expect(diff.updateItems![0].transform).toEqual({ x: -1.5, y: 0, scale: 5, rotation: 0 })
+	})
+
+	it('drops a transform that changes nothing', () => {
+		const { diff } = opsToDiff({ updateItems: [{ id: 'i1', transform: { scale: 1 } }] }, doc())
+		expect(diff.updateItems![0].transform).toBeUndefined()
+	})
+
+	it('takes a fill framing with a clamped pan', () => {
+		const { diff } = opsToDiff({ updateItems: [{ id: 'i1', framing: { mode: 'fill', pan: 8 } }] }, doc())
+		expect(diff.updateItems![0].framing).toEqual({ mode: 'fill', pan: 1 })
+	})
+})
+
+describe('opsToDiff / titles and settings', () => {
+	const doc = () => makeDoc([makeAsset('a', uniform(2, 2))])
+
+	it('makes a text track when the project has none', () => {
+		const { diff } = opsToDiff({ addTitles: [{ text: 'Chapter One', atSec: 4 }] }, doc())
+		expect(diff.addTracks).toHaveLength(1)
+		expect(diff.addTracks![0].kind).toBe('text')
+		const title = diff.addItems!.find((i) => i.text)
+		expect(title!.text!.content).toBe('Chapter One')
+		expect(title!.timelineStart).toBe(4)
+		expect(title!.duration).toBe(3)
+	})
+
+	it('reuses a text track that already exists', () => {
+		const withTrack = doc()
+		withTrack.tracks.push({ id: 't1', kind: 'text', name: 'T1', order: 1, muted: false, locked: false, hidden: false, height: 40 })
+		const { diff } = opsToDiff({ addTitles: [{ text: 'Hi', atSec: 0 }] }, withTrack)
+		expect(diff.addTracks).toBeUndefined()
+		expect(diff.addItems![0].trackId).toBe('t1')
+	})
+
+	it('clamps a position that would land off the frame', () => {
+		const { diff } = opsToDiff({ addTitles: [{ text: 'Hi', atSec: 0, x: 9, y: -9, size: 9 }] }, doc())
+		expect(diff.addItems![0].text).toMatchObject({ x: 1, y: 0, size: 0.3 })
+	})
+
+	it('drops an empty title', () => {
+		const { diff, droppedOps } = opsToDiff({ addTitles: [{ text: '   ', atSec: 0 }] }, doc())
+		expect(diff.addItems).toBeUndefined()
+		expect(droppedOps[0]).toContain('empty text')
+	})
+
+	it('carries project settings beside the diff, not inside it', () => {
+		// They live outside TimelineState, exactly as markers do.
+		const { diff, docSettings } = opsToDiff({ captions: true, loudness: false }, doc())
+		expect(docSettings).toEqual({ captionsEnabled: true, loudnessEnabled: false })
+		expect(diff.updateItems).toBeUndefined()
+	})
+
+	it('says nothing about settings the model did not mention', () => {
+		expect(opsToDiff({}, doc()).docSettings).toEqual({})
+	})
+})
+
+describe('opsToDiff / one update per item', () => {
+	it('merges several ops touching the same clip', () => {
+		// Two entries for one id would make the diff order-dependent.
+		const doc = makeDoc([makeAsset('a', uniform(2, 2))], [
+			{ id: 'i1', trackId: 'v1', sourceAssetId: 'a', timelineStart: 0, in: 0, out: 2, speed: 1, preservePitch: true, duration: 2 },
+			{ id: 'i2', trackId: 'v1', sourceAssetId: 'a', timelineStart: 2, in: 2, out: 4, speed: 1, preservePitch: true, duration: 2 }
+		])
+		const { diff } = opsToDiff({
+			updateItems: [{ id: 'i1', gain: 0.5 }],
+			setTransitions: [{ afterItemId: 'i1', kind: 'fade' }],
+			applyLook: [{ itemIds: ['i1'], kind: 'look-soft' }]
+		}, doc)
+		expect(diff.updateItems).toHaveLength(1)
+		expect(diff.updateItems![0]).toMatchObject({ id: 'i1', gain: 0.5 })
+		expect(diff.updateItems![0].transition).toBeDefined()
+		expect(diff.updateItems![0].effects).toHaveLength(1)
+	})
+})

@@ -2428,6 +2428,7 @@ export const useEditorStore = defineStore('editor', () => {
 		threadId: string
 		turn: PromptTurn
 		addMarkers?: { time: number; label: string }[]
+		docSettings?: { captionsEnabled?: boolean; loudnessEnabled?: boolean }
 		thinContext?: boolean
 		truncated?: boolean
 	}) => {
@@ -2448,7 +2449,8 @@ export const useEditorStore = defineStore('editor', () => {
 				return
 			}
 			const markers = payload.addMarkers || []
-			if (!hasOps(turn.diff) && !markers.length) {
+			const settings = payload.docSettings
+			if (!hasOps(turn.diff) && !markers.length && !settings) {
 				promptError.value = 'The AI proposed no changes. Try a more specific request.'
 				return
 			}
@@ -2457,7 +2459,7 @@ export const useEditorStore = defineStore('editor', () => {
 			const { applied, pruned } = dryRunProposal(turn.diff!)
 			const before = currentState()
 			const diffed = diffTimelines(before, applied)
-			if (!diffed && !markers.length) {
+			if (!diffed && !markers.length && !settings) {
 				promptError.value = 'Nothing applicable — the timeline changed while the AI was working.'
 				return
 			}
@@ -2478,6 +2480,10 @@ export const useEditorStore = defineStore('editor', () => {
 				commitStep({ prebuilt: diffed, origin: 'ai', turnId: turn.id, label: persona?.name || 'AI edit' })
 			}
 			for (const m of markers) addMarker(m.time, m.label)
+			// Project settings sit outside TimelineState, so they are applied
+			// directly rather than through the diff — the same route markers take.
+			if (settings?.captionsEnabled !== undefined) setCaptionsEnabled(settings.captionsEnabled)
+			if (settings?.loudnessEnabled !== undefined) setLoudnessEnabled(settings.loudnessEnabled)
 
 			const rev = await createRevision({
 				origin: 'ai',

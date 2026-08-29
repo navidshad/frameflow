@@ -1,4 +1,6 @@
 import type { Clip, EditorDocument, TimelineItem } from '@shared/types'
+import { effectGroups } from '@shared/effects'
+import { FEATURED_KINDS, transitionGroups } from '@shared/transitionPresets'
 import { computeScope, type AiScope } from '@shared/ai-scope'
 import { itemDuration } from '@shared/timeline'
 
@@ -457,6 +459,31 @@ export function buildPromptContext(
 			lines.push(' parallel camera angles of one moment, not consecutive material, so do not play')
 			lines.push(' both end to end.)')
 		}
+		lines.push('')
+
+		// ---- CATALOGUES ----
+		// What the ops schema will accept, straight from the registries the
+		// renderer uses. Named rather than described: the model has to write a
+		// `kind` exactly, and inventing one gets the op dropped.
+		lines.push('AVAILABLE TRANSITIONS (for setTransitions.kind)')
+		lines.push(`- Best first: ${FEATURED_KINDS.join(', ')}`)
+		for (const group of transitionGroups()) {
+			lines.push(`- ${group.label}: ${group.presets.map((p) => p.kind).join(', ')}`)
+		}
+		lines.push('')
+
+		lines.push('AVAILABLE EFFECTS (for applyLook.kind)')
+		for (const group of effectGroups()) {
+			const items = group.effects.map((e) => {
+				const params = e.params
+					.filter((p) => p.kind === 'number')
+					.map((p) => `${p.key} ${p.min}..${p.max}, neutral ${p.default}`)
+				return params.length ? `${e.kind} (${params.join('; ')})` : e.kind
+			})
+			lines.push(`- ${group.group}${group.effects[0]?.stream === 'audio' ? ' [sound]' : ''}: ${items.join(', ')}`)
+		}
+		lines.push('(A look with no parameters applies as-is. One with parameters does nothing at')
+		lines.push(' its neutral value, so name a value when you want a visible change.)')
 		lines.push('')
 
 		// ---- SCOPE ----
