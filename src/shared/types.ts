@@ -187,6 +187,8 @@ export interface Thread {
 }
 
 // ============================================================
+import type { KeySpec } from './keying'
+
 // Timeline Video Editor (see video-editor-prd.md §6)
 // Canonical time unit is SECONDS. SRT strings appear only at the boundary
 // with assembleVideo (the ffmpeg renderer) — see srtToSeconds in
@@ -357,6 +359,17 @@ export interface TimelineItem {  // an instance of a clip placed on a track
 	keyframes?: Record<string, { t: number; value: number; ease?: 'linear' | 'hold' | 'ease' }[]>
 	transition?: { in?: TransitionRef; out?: TransitionRef }
 	text?: TextOverlaySpec
+	/**
+	 * Derive an alpha channel from this clip's own pixels, so it can sit IN
+	 * FRONT of the layer below rather than beside it. See shared/keying.ts.
+	 */
+	key?: KeySpec
+	/**
+	 * What this clip is FOR, in a composited shot. Purely descriptive today —
+	 * it is what lets "put this behind the subject" be a field rather than an
+	 * architecture, and what tells the AI which of two stacked clips is which.
+	 */
+	layerRole?: 'subject' | 'background' | 'overlay'
 }
 
 export interface TimelineItemTransform { x?: number; y?: number; scale?: number; rotation?: number }

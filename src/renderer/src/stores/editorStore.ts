@@ -15,6 +15,7 @@ import { computeScope } from '@shared/ai-scope'
 import { hasTransform, TRANSFORM_DEFAULTS } from '@shared/transform'
 import { isAnimatable, valueAt } from '@shared/keyframes'
 import { planRangeRemoval } from '@shared/rangeEdit'
+import { hasKey, KEY_DEFAULTS, type KeySpec } from '@shared/keying'
 import { defaultParams, effectDef, registerEffects } from '@shared/effects'
 import { parsePack } from '@shared/packs'
 import {
@@ -1761,6 +1762,28 @@ export const useEditorStore = defineStore('editor', () => {
 	}
 
 	/**
+	 * Key a clip's background out, so it sits IN FRONT of the layer below
+	 * rather than beside it. `undefined` puts the background back.
+	 */
+	const setItemKey = (id: string, key: KeySpec | undefined) => {
+		const item = doc.value?.timeline.find((i) => i.id === id)
+		if (!item) return
+		const before = snapshotState()
+		// Replace, never mutate — the diff compares by value.
+		item.key = key && hasKey(key) ? { ...key } : undefined
+		commitStep({ before, label: key ? 'Key background' : 'Remove key' })
+	}
+
+	/** What this clip is FOR in a stack. Descriptive, and read by the AI. */
+	const setLayerRole = (id: string, role: TimelineItem['layerRole']) => {
+		const item = doc.value?.timeline.find((i) => i.id === id)
+		if (!item) return
+		const before = snapshotState()
+		item.layerRole = role
+		commitStep({ before, label: 'Set layer role' })
+	}
+
+	/**
 	 * Move, scale or rotate a clip inside the frame — the free transform, and
 	 * what PiP is built on. Replace, never mutate: the diff compares by value.
 	 */
@@ -2798,6 +2821,8 @@ export const useEditorStore = defineStore('editor', () => {
 		setTransition,
 		clearTransition,
 		setItemTransform,
+		setItemKey,
+		setLayerRole,
 		setKeyframe,
 		removeKeyframe,
 		clearKeyframes,

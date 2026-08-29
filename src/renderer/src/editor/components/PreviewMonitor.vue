@@ -112,6 +112,17 @@
 							<span v-else class="text-[10px] font-mono text-white/30 uppercase tracking-widest">gap</span>
 						</div>
 					</div>
+					<!-- The monitor stacks <video> elements; CSS has no chroma key, so
+					     a keyed layer previews UNKEYED. Saying so beats a preview
+					     that quietly disagrees with the export. -->
+					<div v-if="keyedLayer"
+						class="absolute bottom-2 left-2 px-2 py-1 rounded-md bg-black/60 backdrop-blur-sm
+						       pointer-events-none flex items-center gap-1.5">
+						<span class="iconify tabler--eye-off w-3 h-3 text-white/60"></span>
+						<span class="text-[9px] font-mono uppercase tracking-widest text-white/50">
+							key applies on export
+						</span>
+					</div>
 					<div v-if="edl.previewPending.value"
 						class="absolute bottom-2 left-1/2 -translate-x-1/2 flex items-center gap-1.5 px-2 py-1
 						       rounded-md bg-black/60 backdrop-blur-sm pointer-events-none">
@@ -240,6 +251,12 @@ watch(stageRef, (el) => {
 }, { immediate: true })
 
 onBeforeUnmount(() => stageObserver?.disconnect())
+
+/** Whether anything on screen right now is keyed — the monitor cannot show it. */
+const keyedLayer = computed(() => {
+	const ids = [edl.itemA.value, edl.itemB.value, edl.itemO.value].filter(Boolean)
+	return ids.some((id) => !!store.doc?.timeline.find((i) => i.id === id)?.key)
+})
 
 // ===== Captions =====
 

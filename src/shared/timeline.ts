@@ -3,6 +3,7 @@ import type {
 } from './types'
 import { sameTransform } from './transform'
 import { sameKeyframes } from './keyframes'
+import { sameKey } from './keying'
 
 /**
  * Pure timeline helpers shared by renderer (manual editing, undo/redo) and
@@ -201,7 +202,7 @@ export function segmentsToItems(
 
 // Fields compared per-entity when diffing (id is the key, not a field).
 const ITEM_FIELDS: (keyof TimelineItem)[] = [
-	'trackId', 'sourceAssetId', 'sourceClipId', 'masterSegmentIndex',
+	'trackId', 'sourceAssetId', 'sourceClipId', 'masterSegmentIndex', 'layerRole',
 	'timelineStart', 'in', 'out', 'speed', 'preservePitch', 'duration',
 	'label', 'gain', 'muted', 'fadeInSec', 'fadeOutSec'
 ]
@@ -306,7 +307,8 @@ export function diffTimelines(
 				!sameEffects(beforeItem.effects, afterItem.effects) ||
 				!sameText(beforeItem.text, afterItem.text) ||
 				!sameTransform(beforeItem.transform, afterItem.transform) ||
-				!sameKeyframes(beforeItem.keyframes, afterItem.keyframes)
+				!sameKeyframes(beforeItem.keyframes, afterItem.keyframes) ||
+				!sameKey(beforeItem.key, afterItem.key)
 			const fwd = changedFields(beforeItem, afterItem, ITEM_FIELDS)
 				?? (objectChanged ? {} : null)
 			if (fwd) {
@@ -327,6 +329,9 @@ export function diffTimelines(
 				}
 				if (!sameKeyframes(beforeItem.keyframes, afterItem.keyframes)) {
 					fwd.keyframes = afterItem.keyframes
+				}
+				if (!sameKey(beforeItem.key, afterItem.key)) {
+					fwd.key = afterItem.key
 				}
 				const keys = Object.keys(fwd) as (keyof TimelineItem)[]
 				;(forward.updateItems ||= []).push({ id, ...fwd })

@@ -4,6 +4,7 @@ import { effectChain } from '@shared/effects'
 import { duckExpression, type Interval } from '@shared/ducking'
 import { transformFilter } from '@shared/transform'
 import { keyframeExpression } from '@shared/keyframes'
+import { hasKey, keyFilter } from '@shared/keying'
 
 /**
  * Handler-based filter builders (PRD §7 — "Render engine is handler-based").
@@ -382,20 +383,29 @@ function videoStream(
 	alpha = false
 ): { input: GraphInput; filter: string } {
 	const cut = t3(slice.out - slice.in)
+	// A keyed clip carries alpha whether or not it is a compositing layer: it
+	// asked for its background to go, and the conform and transform after it
+	// must not fill the hole back in with black.
+	const keyed = hasKey(slice.item.key)
+	const withAlpha = alpha || keyed
 	const chain = [
 		...buildChain(videoBuilders, { slice, plan }),
-		vnorm(plan.width, plan.height, plan.fps, slice.item.framing, alpha),
+		// Before the conform, on source pixels: keying after a letterbox pad
+		// would have to decide what the bars are, and keying after a scale keys
+		// resampled edges.
+		keyFilter(slice.item.key),
+		vnorm(plan.width, plan.height, plan.fps, slice.item.framing, withAlpha),
 		// Frame space starts here: the picture is now exactly plan.width x
 		// plan.height, which is the only place a position or a scale means
 		// anything.
-		transformFilter(slice.item.transform, plan.width, plan.height, alpha, {
+		transformFilter(slice.item.transform, plan.width, plan.height, withAlpha, {
 			tracks: slice.item.keyframes,
 			offset: sliceOffset(slice)
 		}),
 		// Repeated frames first — they belong to the slice's own content — then
 		// black to position that content inside the region.
-		vpad(slice.freezeHead, slice.freezeTail, 'clone', alpha),
-		vpad(slice.offset, regionDur - slice.offset - slice.duration, 'add', alpha)
+		vpad(slice.freezeHead, slice.freezeTail, 'clone', withAlpha),
+		vpad(slice.offset, regionDur - slice.offset - slice.duration, 'add', withAlpha)
 	].filter((f) => f !== '')
 	return {
 		input: { path: slice.srcPath, options: ['-ss', t3(slice.in), '-t', cut] },

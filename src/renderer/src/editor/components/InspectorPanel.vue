@@ -107,6 +107,55 @@
 						<span class="text-[11px] text-zinc-600 dark:text-zinc-300">Preserve audio pitch when retimed</span>
 					</label>
 
+					<!-- Key: what makes a clip sit IN FRONT of the one below rather
+					     than beside it. Only offered when there IS one below. -->
+					<div v-if="canKey">
+						<div class="flex items-baseline justify-between mb-1">
+							<label class="text-[10px] font-bold uppercase tracking-widest text-zinc-500">
+								Key out background
+							</label>
+							<button v-if="keySpec"
+								class="text-[9px] font-semibold text-zinc-400 hover:text-primary transition"
+								@click="editorStore.setItemKey(timelineItem!.id, undefined)">
+								off
+							</button>
+						</div>
+						<div v-if="!keySpec" class="flex gap-1.5">
+							<button v-for="k in (['chroma', 'luma'] as const)" :key="k"
+								class="flex-1 px-2 py-1.5 rounded-lg border border-zinc-200 dark:border-zinc-700
+								       text-[10px] font-semibold text-zinc-600 dark:text-zinc-300
+								       hover:border-primary/40 hover:text-primary transition active:scale-95"
+								@click="editorStore.setItemKey(timelineItem!.id, { kind: k, ...KEY_DEFAULTS })">
+								{{ k === 'chroma' ? 'Colour' : 'Brightness' }}
+							</button>
+						</div>
+						<template v-else>
+							<div v-if="keySpec.kind === 'chroma'" class="flex items-center gap-2 mb-1.5">
+								<span class="text-[9px] uppercase tracking-widest text-zinc-500">Screen</span>
+								<input type="color" class="w-7 h-6 rounded border-0 bg-transparent cursor-pointer"
+									:value="keySpec.colour ?? KEY_DEFAULTS.colour"
+									@change="onKey('colour', ($event.target as HTMLInputElement).value)" />
+								<span class="font-mono text-[9px] text-zinc-400">{{ keySpec.colour ?? KEY_DEFAULTS.colour }}</span>
+							</div>
+							<div v-for="knob in keyKnobs" :key="knob.key">
+								<div class="flex items-baseline justify-between">
+									<span class="text-[9px] uppercase tracking-widest text-zinc-500">{{ knob.label }}</span>
+									<span class="font-mono text-[9px] text-primary">
+										{{ Math.round((keySpec[knob.key] as number ?? KEY_DEFAULTS[knob.key]) * 100) }}%
+									</span>
+								</div>
+								<input type="range" min="0" max="1" step="0.01" class="w-full accent-primary"
+									:value="keySpec[knob.key] ?? KEY_DEFAULTS[knob.key]"
+									@change="onKeyNumber(knob.key, $event)" />
+							</div>
+							<p class="mt-1 text-[9px] text-zinc-400 leading-snug">
+								{{ keySpec.kind === 'chroma'
+									? 'Pick the screen colour, then widen Tolerance until it goes. Spill pulls the screen’s colour back out of the edges.'
+									: 'Removes the dark end of the picture. Good for anything shot on black.' }}
+							</p>
+						</template>
+					</div>
+
 					<!-- Transform: where the picture sits once it is the right shape.
 					     Separate from Framing, which is only about reconciling two
 					     different shapes. -->
@@ -544,6 +593,7 @@
 <script setup lang="ts">
 import { effectDef, num, type EffectParam } from '@shared/effects'
 import { hasTransform, TRANSFORM_DEFAULTS } from '@shared/transform'
+import { KEY_DEFAULTS } from '@shared/keying'
 import { valueAt } from '@shared/keyframes'
 import { toMediaUrl } from '@shared/media-url'
 import type { EffectRef } from '@shared/types'
@@ -668,6 +718,50 @@ const transcribe = async () => {
 		await editorStore.transcribeAsset(asset.value.id)
 	} finally {
 		transcribing.value = false
+	}
+}
+
+// ===== Keying =====
+
+const keySpec = computed(() => timelineItem.value?.key)
+
+/**
+ * A key only means something when there IS a layer below to reveal. On the
+ * bottom track it would just punch a hole to black, which is a confusing thing
+ * to offer.
+ */
+const canKey = computed(() => {
+	const item = timelineItem.value
+	if (!item) return false
+	const track = editorStore.doc?.tracks.find((t) => t.id === item.trackId)
+	if (track?.kind !== 'video') return false
+	return editorStore.baseVideoTrackId !== track.id || !!keySpec.value
+})
+
+const keyKnobs = computed(() =>
+	keySpec.value?.kind === 'luma'
+		? ([
+			{ key: 'threshold' as const, label: 'Threshold' },
+			{ key: 'similarity' as const, label: 'Tolerance' },
+			{ key: 'blend' as const, label: 'Softness' }
+		])
+		: ([
+			{ key: 'similarity' as const, label: 'Tolerance' },
+			{ key: 'blend' as const, label: 'Softness' },
+			{ key: 'despill' as const, label: 'Spill' }
+		])
+)
+
+const onKey = (field: 'colour', value: string) => {
+	if (timelineItem.value && keySpec.value) {
+		editorStore.setItemKey(timelineItem.value.id, { ...keySpec.value, [field]: value })
+	}
+}
+
+const onKeyNumber = (field: 'similarity' | 'blend' | 'despill' | 'threshold', event: Event) => {
+	const value = parseFloat((event.target as HTMLInputElement).value)
+	if (timelineItem.value && keySpec.value && Number.isFinite(value)) {
+		editorStore.setItemKey(timelineItem.value.id, { ...keySpec.value, [field]: value })
 	}
 }
 

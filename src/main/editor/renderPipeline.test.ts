@@ -37,6 +37,8 @@ const A = () => join(dir, 'A.mp4')
 const B = () => join(dir, 'B.mp4')
 /** Red on the left half, black on the right — so a pan is measurable. */
 const C = () => join(dir, 'C.mp4')
+/** A blue subject on a chroma-green screen. */
+const G = () => join(dir, 'G.mp4')
 
 /** Run a region's graph exactly as renderRegion would, and return the file. */
 async function renderGraph(region: Region, plan: RegionPlan, name: string): Promise<string> {
@@ -140,6 +142,13 @@ describe('render pipeline — against the real ffmpeg', () => {
 			'-f', 'lavfi', '-i', 'sine=frequency=600:duration=4',
 			'-vf', 'drawbox=x=0:y=0:w=160:h=180:color=red@1:t=fill',
 			'-shortest', '-c:v', 'libx264', '-preset', 'ultrafast', '-c:a', 'aac', '-t', '4', C()
+		])
+		await execFileAsync(ffmpeg, [
+			'-y', '-v', 'error',
+			'-f', 'lavfi', '-i', 'color=c=0x00B140:s=320x180:d=4:r=30',
+			'-f', 'lavfi', '-i', 'sine=frequency=500:duration=4',
+			'-vf', 'drawbox=x=110:y=50:w=100:h=80:color=blue@1:t=fill',
+			'-shortest', '-c:v', 'libx264', '-preset', 'ultrafast', '-c:a', 'aac', '-t', '4', G()
 		])
 	}, 60_000)
 
@@ -350,6 +359,64 @@ describe('render pipeline — against the real ffmpeg', () => {
 		it('encodes a pixel format h264 can actually take', async () => {
 			const plan = stacked({ scale: 0.4 })
 			const file = await renderGraph(plan.regions[0], plan, 'stack-fmt.mp4')
+			const { stdout } = await execFileAsync(ffprobe, ['-v', 'error', '-select_streams', 'v:0',
+				'-show_entries', 'stream=pix_fmt', '-of', 'csv=p=0', file])
+			expect(stdout.trim()).toBe('yuv420p')
+		}, 90_000)
+	})
+
+	describe('keying — a subject IN FRONT of a background', () => {
+		/**
+		 * The layer the compositor was built for. Phase 3 could put a layer
+		 * BESIDE another; a key is what puts one IN FRONT.
+		 */
+		const keyed = (key?: Parameters<typeof clip>[0]['key']) => {
+			const v2: Track = { ...vtrack, id: 'v2', name: 'V2', order: 1 }
+			const d = document()
+			d.tracks = [vtrack, v2]
+			d.media = [asset('sa', A()), asset('sg', G())]
+			d.timeline = [
+				clip({ id: 'bg', sourceAssetId: 'sa', trackId: 'v1', timelineStart: 0, in: 0, out: 1, duration: 1 }),
+				clip({ id: 'fg', sourceAssetId: 'sg', trackId: 'v2', timelineStart: 0, in: 0, out: 1, duration: 1, key })
+			]
+			d.timelineMeta = { fps: 30, width: 320, height: 180, duration: 0, frameChosen: true }
+			return computeRegions(d, 'original')
+		}
+
+		const patch = async (file: string, fx: number, fy: number): Promise<[number, number, number]> => {
+			const { stdout } = await execFileAsync(ffmpeg,
+				['-v', 'error', '-i', file, '-frames:v', '1',
+					'-vf', `crop=16:16:${Math.round(fx * 320) - 8}:${Math.round(fy * 180) - 8},scale=1:1,format=rgb24`,
+					'-f', 'rawvideo', '-'],
+				{ encoding: 'buffer', maxBuffer: 1 << 20 })
+			const buf = stdout as unknown as Buffer
+			return [buf[0], buf[1], buf[2]]
+		}
+
+		it('without a key, the green screen covers everything', async () => {
+			const plan = keyed()
+			const file = await renderGraph(plan.regions[0], plan, 'key-off.mp4')
+			const [, g] = await patch(file, 0.15, 0.5)
+			expect(g, 'the screen itself').toBeGreaterThan(100)
+		}, 90_000)
+
+		it('with a key, the background shows through and the subject does not', async () => {
+			const plan = keyed({ kind: 'chroma', colour: '#00B140', similarity: 0.3, blend: 0.05, despill: 0.4 })
+			const file = await renderGraph(plan.regions[0], plan, 'key-on.mp4')
+
+			// Where the screen was, A (red) now shows through.
+			const [edgeR, edgeG] = await patch(file, 0.12, 0.5)
+			expect(edgeR, 'background should show through').toBeGreaterThan(150)
+			expect(edgeG).toBeLessThan(90)
+
+			// The subject — a blue box on the green source — survives.
+			const [, , centreB] = await patch(file, 0.5, 0.5)
+			expect(centreB, 'the subject should survive the key').toBeGreaterThan(120)
+		}, 90_000)
+
+		it('still encodes something h264 can take', async () => {
+			const plan = keyed({ kind: 'chroma', colour: '#00B140' })
+			const file = await renderGraph(plan.regions[0], plan, 'key-fmt.mp4')
 			const { stdout } = await execFileAsync(ffprobe, ['-v', 'error', '-select_streams', 'v:0',
 				'-show_entries', 'stream=pix_fmt', '-of', 'csv=p=0', file])
 			expect(stdout.trim()).toBe('yuv420p')
