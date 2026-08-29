@@ -1,4 +1,5 @@
 import { BrowserWindow } from 'electron'
+import { transcriptsForDoc } from './captions'
 import { v4 as uuidv4 } from 'uuid'
 import type { EditorDocument, EditorOps, EditorPersona, PromptTurn, Thread, UsageRecord } from '@shared/types'
 import { applyTimelineDiff, computeContentEnd, itemDuration } from '@shared/timeline'
@@ -130,10 +131,14 @@ export function runEditorPrompt(options: {
 			emitTurnUpdate({ threadId, turn })
 
 			const persona = resolvePersona(doc, personaId)
+			// Read once and reused by both passes: it costs one file per asset and
+			// only the cutaway shortlist consumes it.
+			const transcripts = transcriptsForDoc(doc)
 			const context = buildPromptContext(doc, prompt, {
 				selectedItemIds: options.selectedItemIds,
 				playheadSec: options.playheadSec,
-				widen: options.widen
+				widen: options.widen,
+				transcripts
 			})
 
 			// What "full length" means for this project. Only in-scope, timed assets
@@ -212,7 +217,8 @@ export function runEditorPrompt(options: {
 						selectedItemIds: options.selectedItemIds,
 						playheadSec: options.playheadSec,
 						widen: options.widen,
-						expandRegions: route.regions
+						expandRegions: route.regions,
+						transcripts
 					})
 					finalContext = detailContext
 					const detail = await adapter.generateStructuredText<EditorOps>(

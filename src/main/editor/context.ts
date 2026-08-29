@@ -1,5 +1,7 @@
 import type { Clip, EditorDocument, TimelineItem } from '@shared/types'
 import { effectGroups } from '@shared/effects'
+import { findCutaways } from '@shared/broll'
+import type { TranscriptEntry } from '@shared/captions'
 import { FEATURED_KINDS, transitionGroups } from '@shared/transitionPresets'
 import { computeScope, type AiScope } from '@shared/ai-scope'
 import { itemDuration } from '@shared/timeline'
@@ -310,6 +312,11 @@ export function buildPromptContext(
 		widen?: 'chapter' | 'full'
 		/** Pass 2 of a survey-band turn: spans the model asked to read in full. */
 		expandRegions?: ExpandRegion[]
+		/**
+		 * Transcripts by asset, when main has read them. Only used to shortlist
+		 * cutaways — everything else in this context comes from the document.
+		 */
+		transcripts?: Record<string, TranscriptEntry[]>
 	}
 ): PromptContextResult {
 
@@ -485,6 +492,29 @@ export function buildPromptContext(
 		lines.push('(A look with no parameters applies as-is. One with parameters does nothing at')
 		lines.push(' its neutral value, so name a value when you want a visible change.)')
 		lines.push('')
+
+		// ---- CUTAWAY OPPORTUNITIES ----
+		// Both halves were already computed and sitting unused: the transcript
+		// says what is being said, `clip.visual` says what every piece looks
+		// like. This crosses them and hands the model a shortlist — the ranking
+		// is keyword overlap, so it is a shortlist and not a decision.
+		const cutaways = opts.transcripts
+			? findCutaways({ timeline: doc.timeline, tracks: doc.tracks, media: doc.media }, opts.transcripts)
+			: []
+		if (cutaways.length) {
+			lines.push('CUTAWAY OPPORTUNITIES')
+			lines.push('(Long single shots with speech over them, and material that might illustrate')
+			lines.push(' them. Suggestions only — ranked by shared words, not by judgement. Put a')
+			lines.push(' cutaway on a SECOND video track and it composites over the first; use')
+			lines.push(' `updateItems.transform` to make it an inset instead of a full replacement.)')
+			for (const spot of cutaways) {
+				lines.push(`- ${fmt(spot.start)}–${fmt(spot.end)}s on item ${spot.itemId}: "${spot.saidText.slice(0, 90)}"`)
+				for (const c of spot.candidates) {
+					lines.push(`    → asset ${c.assetId} piece #${c.sceneIndex} (${fmt(c.out - c.in)}s): ${c.visual} [${c.matched.join(', ')}]`)
+				}
+			}
+			lines.push('')
+		}
 
 		// ---- SCOPE ----
 		lines.push(`SCOPE: ${scope.label}`)
