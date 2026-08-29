@@ -244,6 +244,15 @@ const sameEffects = (a: TimelineItem['effects'], b: TimelineItem['effects']): bo
 	})
 }
 
+/** Same immutability contract; every field compared by value. */
+const sameText = (a: TimelineItem['text'], b: TimelineItem['text']): boolean => {
+	if (a === b) return true
+	if (!a || !b) return false
+	const keys: (keyof NonNullable<TimelineItem['text']>)[] =
+		['content', 'x', 'y', 'size', 'color', 'outline', 'bold']
+	return keys.every((k) => a[k] === b[k])
+}
+
 function changedFields<T extends { id: string }>(before: T, after: T, fields: (keyof T)[]): Partial<T> | null {
 	let changed: Partial<T> | null = null
 	for (const field of fields) {
@@ -292,7 +301,8 @@ export function diffTimelines(
 			const objectChanged =
 				!sameTransition(beforeItem.transition, afterItem.transition) ||
 				!sameFraming(beforeItem.framing, afterItem.framing) ||
-				!sameEffects(beforeItem.effects, afterItem.effects)
+				!sameEffects(beforeItem.effects, afterItem.effects) ||
+				!sameText(beforeItem.text, afterItem.text)
 			const fwd = changedFields(beforeItem, afterItem, ITEM_FIELDS)
 				?? (objectChanged ? {} : null)
 			if (fwd) {
@@ -304,6 +314,9 @@ export function diffTimelines(
 				}
 				if (!sameEffects(beforeItem.effects, afterItem.effects)) {
 					fwd.effects = afterItem.effects
+				}
+				if (!sameText(beforeItem.text, afterItem.text)) {
+					fwd.text = afterItem.text
 				}
 				const keys = Object.keys(fwd) as (keyof TimelineItem)[]
 				;(forward.updateItems ||= []).push({ id, ...fwd })
@@ -527,7 +540,10 @@ export function findOrphanItems(
 	items: readonly TimelineItem[],
 	assetIds: ReadonlySet<string>
 ): TimelineItem[] {
-	return items.filter((item) => !assetIds.has(item.sourceAssetId))
+	// A title carries its own content and references no media, so it has no
+	// asset id to match. Without this exemption every title would be pruned by
+	// the next autosave — main treats an unknown id as media that was removed.
+	return items.filter((item) => !item.text && !assetIds.has(item.sourceAssetId))
 }
 
 /**

@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import {
-	assTime, captionsFromTimeline, chunkPhrase, cuesToAss, escapeAssText, escapeSubtitlesPath,
+	allBurnedCues, assColour, assTime, captionsFromTimeline, chunkPhrase, cuesToAss,
+	escapeAssText, escapeSubtitlesPath, titleCues,
 	type TranscriptEntry
 } from './captions'
 import type { TimelineItem, Track } from './types'
@@ -253,5 +254,94 @@ describe('escapeSubtitlesPath', () => {
 		expect(escapeSubtitlesPath('C:\\Users\\x\\captions.ass')).toBe('C\\\\:/Users/x/captions.ass')
 		// One literal backslash needs escaping at BOTH levels, hence four.
 		expect(escapeSubtitlesPath('/tmp/back\\slash.ass')).toBe('/tmp/back\\\\\\\\slash.ass')
+	})
+})
+
+// ===== Titles =====
+
+describe('titleCues', () => {
+	const ttrack: Track = { ...vtrack, id: 't1', kind: 'text', name: 'T1' }
+	const FRAME = { width: 1080, height: 1920 }
+	const title = (over: Partial<TimelineItem> = {}, text = { content: 'Hello' }): TimelineItem =>
+		item({ id: 'ttl', trackId: 't1', sourceAssetId: '', timelineStart: 2, in: 0, out: 3, duration: 3, text, ...over })
+
+	it('spans exactly its item', () => {
+		const [cue] = titleCues(doc([title()], [ttrack]), FRAME)
+		expect(cue.start).toBe(2)
+		expect(cue.end).toBe(5)
+		expect(cue.text).toBe('Hello')
+	})
+
+	it('anchors on the centre of the text, in frame pixels', () => {
+		const [cue] = titleCues(doc([title({}, { content: 'Hi', x: 0.25, y: 0.5 })], [ttrack]), FRAME)
+		expect(cue.override).toContain('\\an5')
+		expect(cue.override).toContain('\\pos(270,960)')
+	})
+
+	it('sizes from the frame, so a title survives a change of shape', () => {
+		const tall = titleCues(doc([title({}, { content: 'Hi', size: 0.1 })], [ttrack]), FRAME)
+		const wide = titleCues(doc([title({}, { content: 'Hi', size: 0.1 })], [ttrack]), { width: 1920, height: 1080 })
+		expect(tall[0].override).toContain('\\fs192')
+		expect(wide[0].override).toContain('\\fs108')
+	})
+
+	it('writes colours the way ASS wants them, which is backwards', () => {
+		const [cue] = titleCues(doc([title({}, { content: 'Hi', color: '#FF8000' })], [ttrack]), FRAME)
+		expect(cue.override).toContain('\\1c&H000080FF&')
+	})
+
+	it('falls back rather than emitting a broken colour', () => {
+		expect(assColour('nope', '&H00FFFFFF&')).toBe('&H00FFFFFF&')
+		expect(assColour(undefined, '&H00FFFFFF&')).toBe('&H00FFFFFF&')
+		expect(assColour('#000000', '&H00FFFFFF&')).toBe('&H00000000&')
+	})
+
+	it('says nothing for an empty title or a hidden track', () => {
+		expect(titleCues(doc([title({}, { content: '   ' })], [ttrack]), FRAME)).toEqual([])
+		expect(titleCues(doc([title()], [{ ...ttrack, hidden: true }]), FRAME)).toEqual([])
+	})
+
+	it('clamps a position that would land off the frame', () => {
+		const [cue] = titleCues(doc([title({}, { content: 'Hi', x: 5, y: -2 })], [ttrack]), FRAME)
+		expect(cue.override).toContain('\\pos(1080,0)')
+	})
+})
+
+describe('allBurnedCues', () => {
+	const ttrack: Track = { ...vtrack, id: 't1', kind: 'text', name: 'T1' }
+	const FRAME = { width: 1920, height: 1080 }
+	const transcripts = { a1: [phrase()] }
+	const withTitle = doc(
+		[item(), item({ id: 'ttl', trackId: 't1', sourceAssetId: '', timelineStart: 1, duration: 2, text: { content: 'Hi' } })],
+		[vtrack, ttrack]
+	)
+
+	it('puts captions and titles in one list, in time order', () => {
+		const cues = allBurnedCues(withTitle, transcripts, FRAME)
+		expect(cues.some((c) => c.text === 'Hi')).toBe(true)
+		expect(cues.some((c) => c.text === 'one two three')).toBe(true)
+		for (let i = 1; i < cues.length; i++) {
+			expect(cues[i].start).toBeGreaterThanOrEqual(cues[i - 1].start)
+		}
+	})
+
+	it('lets captions be switched off without touching titles', () => {
+		const cues = allBurnedCues(withTitle, transcripts, FRAME, { captions: false })
+		expect(cues.map((c) => c.text)).toEqual(['Hi'])
+	})
+})
+
+describe('cuesToAss with a title', () => {
+	it('puts the title’s own tags in front of its text', () => {
+		const ass = cuesToAss(
+			[{ start: 0, end: 1, text: 'Hi', override: '{\\an5\\pos(10,20)}' }],
+			{ width: 1920, height: 1080 }
+		)
+		expect(ass).toContain('Default,,0,0,0,,{\\an5\\pos(10,20)}Hi')
+	})
+
+	it('leaves a caption unadorned, so every caption looks the same', () => {
+		const ass = cuesToAss([{ start: 0, end: 1, text: 'Hi' }], { width: 1920, height: 1080 })
+		expect(ass).toContain('Default,,0,0,0,,Hi')
 	})
 })

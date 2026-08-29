@@ -81,6 +81,13 @@
 						<video ref="videoTRef" class="absolute inset-0 w-full h-full object-contain"
 							:style="{ opacity: edl.showCached.value ? 1 : 0 }"
 							preload="auto"></video>
+						<!-- Titles. Position and size are fractions of the frame in both
+						     places, so this and the burned-in version land together
+						     without either side converting to the other's units. -->
+						<div v-for="title in store.activeTitles" :key="title.id"
+							class="absolute pointer-events-none whitespace-pre-wrap text-center"
+							:style="titleStyle(title)">{{ title.text!.content }}</div>
+
 						<!-- Captions, laid out from the same metrics the burn uses, so
 						     this is a preview rather than an impression of one. -->
 						<div v-if="activeCue" class="absolute inset-x-0 bottom-0 flex justify-center
@@ -264,6 +271,35 @@ const captionTextStyle = computed(() => {
 			.map((offset) => `${offset} #000`).join(', ')
 	}
 })
+
+/**
+ * A title's box, in the frame's CURRENT pixels.
+ *
+ * `translate(-50%, -50%)` is the CSS spelling of ASS's `\an5`: the stored x/y
+ * is the CENTRE of the text, which is the only anchor that stays put when the
+ * words change or the sequence changes shape.
+ */
+const titleStyle = (item: { text?: { x?: number; y?: number; size?: number; color?: string; outline?: string; bold?: boolean } }) => {
+	const spec = item.text ?? {}
+	const { w, h } = stage.value
+	const scale = w && h ? Math.min(w / seqWidth.value, h / seqHeight.value) : 0
+	const frameH = scale ? seqHeight.value * scale : 0
+	const size = Math.max(8, (spec.size ?? 0.07) * frameH)
+	const outline = Math.max(1, Math.round(size * 0.06))
+	const stroke = spec.outline ?? '#000000'
+	return {
+		left: `${(spec.x ?? 0.5) * 100}%`,
+		top: `${(spec.y ?? 0.85) * 100}%`,
+		transform: 'translate(-50%, -50%)',
+		fontFamily: 'Arial, Helvetica, sans-serif',
+		fontWeight: spec.bold === false ? 400 : 700,
+		fontSize: `${size}px`,
+		lineHeight: 1.15,
+		color: spec.color ?? '#FFFFFF',
+		textShadow: [`${outline}px 0`, `-${outline}px 0`, `0 ${outline}px`, `0 -${outline}px`]
+			.map((offset) => `${offset} ${stroke}`).join(', ')
+	}
+}
 
 /**
  * How one element fills the frame. `object-position` comes from the same

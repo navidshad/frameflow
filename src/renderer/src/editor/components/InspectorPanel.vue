@@ -70,12 +70,18 @@
 				<dl class="mt-3 space-y-2">
 					<MetaRow label="Track" :value="trackName" />
 					<MetaRow label="Start" :value="formatTime(timelineItem.timelineStart)" mono />
-					<MetaRow label="Source in" :value="formatTime(timelineItem.in)" mono />
-					<MetaRow label="Source out" :value="formatTime(timelineItem.out)" mono />
+					<MetaRow v-if="titleSpec" label="Length" :value="`${timelineItem.duration.toFixed(2)}s`" mono />
+					<template v-else>
+						<MetaRow label="Source in" :value="formatTime(timelineItem.in)" mono />
+						<MetaRow label="Source out" :value="formatTime(timelineItem.out)" mono />
+					</template>
 				</dl>
 
 				<!-- Retime: speed OR exact duration (PRD §5.6 numeric path) -->
 				<div class="mt-4 space-y-3">
+					<!-- A title has no media behind it, so retiming, framing, gain and
+					     fades mean nothing to it. It gets its own controls instead. -->
+					<template v-if="!titleSpec">
 					<div>
 						<label class="text-[10px] font-bold uppercase tracking-widest text-zinc-500 block mb-1">
 							Speed <span class="normal-case tracking-normal font-mono text-secondary ml-1">{{ timelineItem.speed.toFixed(2) }}×</span>
@@ -132,6 +138,64 @@
 								: 'Letterboxes this clip inside the frame. Nothing is lost.' }}
 						</p>
 					</div>
+					</template>
+
+					<template v-if="titleSpec">
+						<div>
+							<label class="text-[10px] font-bold uppercase tracking-widest text-zinc-500 block mb-1">
+								Text
+							</label>
+							<textarea rows="2"
+								class="w-full px-2 py-1.5 rounded-lg text-xs bg-zinc-100 dark:bg-zinc-800
+								       border border-zinc-200 dark:border-zinc-700 focus:border-primary outline-none resize-none"
+								:value="titleSpec.content"
+								@change="onTitle('content', ($event.target as HTMLTextAreaElement).value)"></textarea>
+						</div>
+
+						<div class="grid grid-cols-2 gap-2">
+							<div>
+								<label class="text-[10px] font-bold uppercase tracking-widest text-zinc-500 block mb-1">
+									Across <span class="font-mono text-primary normal-case">{{ pct(titleSpec.x ?? 0.5) }}</span>
+								</label>
+								<input type="range" min="0" max="1" step="0.01" class="w-full accent-primary"
+									:value="titleSpec.x ?? 0.5" @change="onTitleNumber('x', $event)" />
+							</div>
+							<div>
+								<label class="text-[10px] font-bold uppercase tracking-widest text-zinc-500 block mb-1">
+									Down <span class="font-mono text-primary normal-case">{{ pct(titleSpec.y ?? 0.85) }}</span>
+								</label>
+								<input type="range" min="0" max="1" step="0.01" class="w-full accent-primary"
+									:value="titleSpec.y ?? 0.85" @change="onTitleNumber('y', $event)" />
+							</div>
+						</div>
+
+						<div>
+							<label class="text-[10px] font-bold uppercase tracking-widest text-zinc-500 block mb-1">
+								Size <span class="font-mono text-primary normal-case">{{ pct(titleSpec.size ?? 0.07) }}</span>
+							</label>
+							<input type="range" min="0.02" max="0.3" step="0.005" class="w-full accent-primary"
+								:value="titleSpec.size ?? 0.07" @change="onTitleNumber('size', $event)" />
+							<p class="mt-1 text-[9px] text-zinc-400 leading-snug">
+								Position and size are fractions of the frame, so a title survives a
+								change of sequence shape.
+							</p>
+						</div>
+
+						<div class="flex items-center gap-3">
+							<label class="flex items-center gap-1.5">
+								<span class="text-[10px] font-bold uppercase tracking-widest text-zinc-500">Colour</span>
+								<input type="color" class="w-7 h-6 rounded border-0 bg-transparent cursor-pointer"
+									:value="titleSpec.color ?? '#FFFFFF'"
+									@change="onTitle('color', ($event.target as HTMLInputElement).value)" />
+							</label>
+							<label class="flex items-center gap-1.5">
+								<span class="text-[10px] font-bold uppercase tracking-widest text-zinc-500">Outline</span>
+								<input type="color" class="w-7 h-6 rounded border-0 bg-transparent cursor-pointer"
+									:value="titleSpec.outline ?? '#000000'"
+									@change="onTitle('outline', ($event.target as HTMLInputElement).value)" />
+							</label>
+						</div>
+					</template>
 
 					<!-- Effects, in chain order. A filter chain is not commutative, so
 					     the list reads top-to-bottom exactly as ffmpeg applies it. -->
@@ -190,6 +254,7 @@
 					</div>
 
 					<!-- Audio gain (mix level applied at export) -->
+					<template v-if="!titleSpec">
 					<div>
 						<label class="text-[10px] font-bold uppercase tracking-widest text-zinc-500 block mb-1">
 							Gain <span class="normal-case tracking-normal font-mono text-accent ml-1">{{ gainValue.toFixed(2) }}×</span>
@@ -224,17 +289,18 @@
 							Audio ramps at the clip's edges — heard in preview and applied at export.
 						</p>
 					</div>
+					</template>
 				</div>
 
 				<!-- Actions -->
 				<div class="mt-4 flex flex-col gap-2">
-					<button
+					<button v-if="!titleSpec"
 						class="w-full px-3 py-2 rounded-xl border border-zinc-200 dark:border-zinc-700 text-xs font-bold text-zinc-600 dark:text-zinc-300 hover:border-primary/40 hover:text-primary transition active:scale-95"
 						@click="editorStore.toggleItemMuted(timelineItem!.id)">
 						<span :class="timelineItem.muted ? 'iconify tabler--volume' : 'iconify tabler--volume-off'" class="w-3.5 h-3.5 inline-block align-[-2px] mr-1"></span>
 						{{ timelineItem.muted ? 'Unmute clip audio' : 'Mute clip audio' }}
 					</button>
-					<button
+					<button v-if="!titleSpec"
 						class="w-full px-3 py-2 rounded-xl border border-zinc-200 dark:border-zinc-700 text-xs font-bold text-zinc-600 dark:text-zinc-300 hover:border-primary/40 hover:text-primary transition active:scale-95"
 						@click="editorStore.splitAtPlayhead()">
 						<span class="iconify tabler--blade-filled w-3.5 h-3.5 inline-block align-[-2px] mr-1"></span>
@@ -558,6 +624,23 @@ const transcribe = async () => {
 		await editorStore.transcribeAsset(asset.value.id)
 	} finally {
 		transcribing.value = false
+	}
+}
+
+// ===== Titles =====
+
+const titleSpec = computed(() => timelineItem.value?.text)
+
+const pct = (n: number) => `${Math.round(n * 100)}%`
+
+const onTitle = (key: 'content' | 'color' | 'outline', value: string) => {
+	if (timelineItem.value) editorStore.setTitle(timelineItem.value.id, { [key]: value })
+}
+
+const onTitleNumber = (key: 'x' | 'y' | 'size', event: Event) => {
+	const value = parseFloat((event.target as HTMLInputElement).value)
+	if (timelineItem.value && Number.isFinite(value)) {
+		editorStore.setTitle(timelineItem.value.id, { [key]: value })
 	}
 }
 

@@ -234,6 +234,67 @@ export const useEditorStore = defineStore('editor', () => {
 		markDirty()
 	}
 
+	// ===== Titles =====
+
+	const DEFAULT_TITLE_SEC = 3
+
+	/**
+	 * Add a title at the playhead, making a text track if there is not one.
+	 *
+	 * A title item carries no `sourceAssetId` — it references no media — which
+	 * is why `findOrphanItems` exempts anything holding a `text` spec. Without
+	 * that, main would read the empty id as media that had been removed and
+	 * prune the title on the next autosave.
+	 */
+	const addTitle = (content = 'Title') => {
+		if (!doc.value) return null
+		const before = snapshotState()
+		let track = doc.value.tracks.find((t) => t.kind === 'text')
+		if (!track) {
+			track = {
+				id: newId('tr'), kind: 'text', name: 'T1',
+				order: Math.max(...doc.value.tracks.map((t) => t.order)) + 1,
+				muted: false, locked: false, hidden: false, height: 40
+			}
+			doc.value.tracks.push(track)
+		}
+		const start = Math.max(0, playheadSec.value)
+		const id = newId('ti')
+		doc.value.timeline.push({
+			id, trackId: track.id, sourceAssetId: '',
+			timelineStart: start, in: 0, out: DEFAULT_TITLE_SEC,
+			speed: 1, preservePitch: true, duration: DEFAULT_TITLE_SEC,
+			label: content,
+			text: { content }
+		})
+		commitStep({ before, label: 'Add title' })
+		selectItems([id])
+		return id
+	}
+
+	/** Titles covering the playhead, so the monitor can draw them. */
+	const activeTitles = computed(() => {
+		const d = doc.value
+		if (!d) return []
+		const hidden = new Set(d.tracks.filter((t) => t.hidden).map((t) => t.id))
+		const t = playheadSec.value
+		return d.timeline.filter((i) =>
+			i.text?.content?.trim() &&
+			!hidden.has(i.trackId) &&
+			t >= i.timelineStart && t < i.timelineStart + i.duration
+		)
+	})
+
+	const setTitle = (itemId: string, patch: Partial<NonNullable<TimelineItem['text']>>) => {
+		const item = doc.value?.timeline.find((i) => i.id === itemId)
+		if (!item?.text) return
+		const before = snapshotState()
+		// Replace, never mutate — the diff compares by value.
+		item.text = { ...item.text, ...patch }
+		if (patch.content !== undefined) item.label = patch.content
+		commitStep({ before, label: 'Edit title' })
+	}
+
 	// ===== Loudness =====
 
 	const loudnessEnabled = computed(() => doc.value?.loudnessEnabled === true)
@@ -2516,6 +2577,9 @@ export const useEditorStore = defineStore('editor', () => {
 		captionsEnabled,
 		hasTranscript,
 		setCaptionsEnabled,
+		addTitle,
+		setTitle,
+		activeTitles,
 		loudnessEnabled,
 		setLoudnessEnabled,
 		refreshTranscripts,

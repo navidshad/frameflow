@@ -675,20 +675,19 @@ export function startEditorRender(options: {
 				}
 			}
 
-			// ---- Captions ----
+			// ---- Burned-in text: captions and titles ----
 			// One pass over the finished file, so it covers the fast path and the
-			// region path alike — both have assigned finalPath by here.
-			if (doc.captionsEnabled) {
-				const cues = cuesForDoc(doc)
+			// region path alike — both have assigned finalPath by here. Titles go
+			// through the same pass, because a title IS a cue that carries its own
+			// placement; there is no second text pipeline.
+			{
+				const frame = { width: plan.width, height: plan.height }
+				const cues = cuesForDoc(doc, frame)
 				if (cues.length) {
 					progress(97, 'stitching')
 					sidecarPath = await burnCaptions({
-						sourcePath: finalPath,
-						workDir,
-						cues,
-						frame: { width: plan.width, height: plan.height },
-						signal,
-						onProgress: (pct) => progress(97 + pct * 0.03, 'stitching')
+						sourcePath: finalPath, workDir, cues, frame, signal,
+						onProgress: (pct) => progress(97 + pct * 0.02, 'stitching')
 					})
 					// Replace the uncaptioned render only once the burn has landed.
 					fs.renameSync(sidecarPath, finalPath)

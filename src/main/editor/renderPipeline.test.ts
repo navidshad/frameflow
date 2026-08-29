@@ -497,6 +497,32 @@ describe('captions vs the real binary', () => {
 		expect(await maxLumaAt(out, 1.5)).toBeGreaterThan(200)
 	}, 90_000)
 
+	it('burns a positioned title where it was placed', async () => {
+		// The title sits in the top-left quadrant, so the bottom half must stay
+		// black — which is the assertion that catches a placement pointed at the
+		// wrong corner, something a "did any pixel light up" test cannot.
+		const out = await burnCaptions({
+			sourcePath: black,
+			workDir: capDir,
+			cues: [{
+				start: 0.5, end: 2.5, text: 'TOP LEFT',
+				override: '{\\an5\\pos(80,45)\\fs28\\1c&H00FFFFFF&\\b1}'
+			}],
+			frame: { width: 320, height: 180 },
+			signal: new AbortController().signal
+		})
+
+		const half = async (crop: string) => {
+			const { stdout } = await execFileAsync(ffmpeg,
+				['-v', 'error', '-ss', '1.5', '-i', out, '-frames:v', '1',
+					'-vf', `crop=${crop},format=gray`, '-f', 'rawvideo', '-'],
+				{ encoding: 'buffer', maxBuffer: 1 << 24 })
+			return (stdout as unknown as Buffer).reduce((max, v) => (v > max ? v : max), 0)
+		}
+		expect(await half('320:90:0:0')).toBeGreaterThan(200)    // top half: text
+		expect(await half('320:90:0:90')).toBeLessThan(24)       // bottom half: black
+	}, 90_000)
+
 	it('leaves the source file alone', async () => {
 		const before = (await fs.stat(black)).size
 		await burnCaptions({

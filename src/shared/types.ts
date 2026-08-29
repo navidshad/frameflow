@@ -367,7 +367,24 @@ export interface ItemFraming { mode: 'fit' | 'fill'; pan?: number }
 /** One effect on a clip. `kind` indexes the catalogue in shared/effects.ts. */
 export interface EffectRef { id: string; kind: string; params?: Record<string, number | string> }
 export interface TransitionRef { kind: string; duration: number }                          // stub
-export interface TextOverlaySpec { content: string; style?: Record<string, unknown> }      // stub
+/**
+ * A title: text placed on the frame for the length of its timeline item.
+ *
+ * Position and size are FRACTIONS of the frame, not pixels, so a title survives
+ * a change of sequence shape — the same reason `ItemFraming.pan` is normalised.
+ */
+export interface TextOverlaySpec {
+	content: string
+	/** 0,0 is the top-left of the frame; 0.5,0.5 is dead centre. */
+	x?: number
+	y?: number
+	/** Cap height as a fraction of frame height. */
+	size?: number
+	/** '#RRGGBB'. */
+	color?: string
+	outline?: string
+	bold?: boolean
+}
 
 export interface EditorPersona {
 	id: string

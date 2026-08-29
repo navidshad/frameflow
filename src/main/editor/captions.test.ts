@@ -80,19 +80,41 @@ describe('transcriptsForAssets', () => {
 	})
 })
 
+const FRAME = { width: 1920, height: 1080 }
+
 describe('cuesForDoc', () => {
 	it('turns a transcript on disk into cues on the timeline', () => {
 		const path = write('t3.json', [
 			{ start: '00:00:00,000', end: '00:00:06,000', text: 'one two three four five six' }
 		])
-		const cues = cuesForDoc(doc({ media: [asset('a1', path)], timeline: [item({ timelineStart: 4 })] }))
+		const cues = cuesForDoc(
+			doc({ media: [asset('a1', path)], timeline: [item({ timelineStart: 4 })], captionsEnabled: true }),
+			FRAME
+		)
 		expect(cues.map((c) => c.text)).toEqual(['one two three', 'four five six'])
 		expect(cues[0].start).toBeCloseTo(4, 6)
 		expect(cues[1].end).toBeCloseTo(10, 6)
 	})
 
+	it('says nothing when captions are switched off', () => {
+		const path = write('t5.json', [{ start: '0', end: '3', text: 'hello there world' }])
+		expect(cuesForDoc(doc({ media: [asset('a1', path)] }), FRAME)).toEqual([])
+	})
+
+	it('burns a title whether or not captions are on', () => {
+		// A title is content the user placed by hand, not a setting.
+		const titled = doc({
+			tracks: [vtrack, { ...vtrack, id: 't1', kind: 'text', name: 'T1' }],
+			timeline: [item({ id: 'ttl', trackId: 't1', timelineStart: 2, duration: 3, text: { content: 'Chapter One' } })]
+		})
+		const cues = cuesForDoc(titled, FRAME)
+		expect(cues.map((c) => c.text)).toEqual(['Chapter One'])
+		expect(cues[0].start).toBe(2)
+		expect(cues[0].end).toBe(5)
+	})
+
 	it('ignores an asset the timeline does not use', () => {
 		const path = write('t4.json', [{ start: '0', end: '3', text: 'unused' }])
-		expect(cuesForDoc(doc({ media: [asset('a2', path)] }))).toEqual([])
+		expect(cuesForDoc(doc({ media: [asset('a2', path)], captionsEnabled: true }), FRAME)).toEqual([])
 	})
 })

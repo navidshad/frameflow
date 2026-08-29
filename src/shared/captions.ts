@@ -31,11 +31,18 @@ export interface TranscriptEntry {
 	text: string
 }
 
-/** One caption, in TIMELINE seconds. */
+/** One line of burned-in text, in TIMELINE seconds. */
 export interface CaptionCue {
 	start: number
 	end: number
 	text: string
+	/**
+	 * ASS override tags for this line alone — position, size, colour.
+	 *
+	 * Captions leave this empty and inherit the file's Default style, which is
+	 * what makes them consistent. A title sets it, because a title is placed.
+	 */
+	override?: string
 }
 
 export interface CaptionOptions {
@@ -200,6 +207,89 @@ function cuesForItem(
 	return out
 }
 
+// ===== Titles =====
+
+/** '#RRGGBB' to ASS's '&HBBGGRR&'. ASS colours are BGR, and they surprise everyone. */
+export function assColour(hex: string | undefined, fallback: string): string {
+	const match = /^#?([0-9a-f]{6})$/i.exec((hex ?? '').trim())
+	if (!match) return fallback
+	const [r, g, b] = [0, 2, 4].map((i) => match[1].slice(i, i + 2).toUpperCase())
+	return `&H00${b}${g}${r}&`
+}
+
+const TITLE_DEFAULTS = { x: 0.5, y: 0.85, size: 0.07, color: '#FFFFFF', outline: '#000000' }
+
+/**
+ * Titles as cues, so they burn in through the very same pass captions do.
+ *
+ * There is no second text pipeline: Phase 1 already put arbitrary positioned
+ * text on the frame through libass and already drew it in the monitor. A title
+ * is a cue that carries its own placement, which is exactly what `override` is.
+ *
+ * `\an5` anchors on the text's CENTRE, so the stored x/y is the middle of the
+ * title rather than a corner — the only anchor that behaves sanely when the
+ * text grows or the sequence changes shape.
+ */
+export function titleCues(
+	doc: Pick<EditorDocument, 'timeline' | 'tracks'>,
+	frame: { width: number; height: number }
+): CaptionCue[] {
+	const trackById = new Map(doc.tracks.map((t) => [t.id, t]))
+	const cues: CaptionCue[] = []
+
+	for (const item of doc.timeline) {
+		const spec = item.text
+		if (!spec?.content?.trim()) continue
+		const track = trackById.get(item.trackId)
+		// Hidden means hidden, whatever kind of thing is on the track.
+		if (track?.hidden) continue
+		const end = item.timelineStart + item.duration
+		if (!(end - item.timelineStart > TIME_EPS)) continue
+
+		const x = Math.round(clamp01(spec.x ?? TITLE_DEFAULTS.x) * frame.width)
+		const y = Math.round(clamp01(spec.y ?? TITLE_DEFAULTS.y) * frame.height)
+		const size = Math.max(8, Math.round(
+			Math.max(0.01, Math.min(0.5, spec.size ?? TITLE_DEFAULTS.size)) * frame.height
+		))
+		const tags = [
+			'\\an5',
+			`\\pos(${x},${y})`,
+			`\\fs${size}`,
+			`\\1c${assColour(spec.color, '&H00FFFFFF&')}`,
+			`\\3c${assColour(spec.outline, '&H00000000&')}`,
+			`\\bord${Math.max(1, Math.round(size * 0.06))}`,
+			`\\b${spec.bold === false ? 0 : 1}`
+		].join('')
+
+		cues.push({
+			start: item.timelineStart,
+			end,
+			text: spec.content.trim(),
+			override: `{${tags}}`
+		})
+	}
+
+	return cues
+}
+
+const clamp01 = (n: number) => (Number.isFinite(n) ? Math.max(0, Math.min(1, n)) : 0.5)
+
+/**
+ * Everything that burns into the picture: spoken captions and placed titles,
+ * in one list and therefore in one `subtitles=` pass.
+ */
+export function allBurnedCues(
+	doc: Pick<EditorDocument, 'timeline' | 'tracks'>,
+	transcripts: Record<string, TranscriptEntry[]>,
+	frame: { width: number; height: number },
+	options: { captions?: boolean; titles?: boolean } = {}
+): CaptionCue[] {
+	const cues: CaptionCue[] = []
+	if (options.captions !== false) cues.push(...captionsFromTimeline(doc, transcripts))
+	if (options.titles !== false) cues.push(...titleCues(doc, frame))
+	return cues.sort((a, b) => a.start - b.start || a.end - b.end)
+}
+
 // ===== ASS =====
 
 export interface CaptionStyle {
@@ -328,8 +418,10 @@ export function cuesToAss(
 		if (!(cue.end - cue.start > TIME_EPS)) continue
 		const text = escapeAssText(cue.text).trim()
 		if (!text) continue
+		// A title's own tags go in front of its text; a caption has none and takes
+		// the Default style, which is what keeps captions looking consistent.
 		lines.push(
-			`Dialogue: 0,${assTime(cue.start)},${assTime(cue.end)},Default,,0,0,0,,${text}`
+			`Dialogue: 0,${assTime(cue.start)},${assTime(cue.end)},Default,,0,0,0,,${cue.override ?? ''}${text}`
 		)
 	}
 

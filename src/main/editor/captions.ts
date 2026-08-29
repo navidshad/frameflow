@@ -4,7 +4,7 @@ import path from 'path'
 import type { EditorDocument, MediaAsset } from '@shared/types'
 import { srtToSeconds } from '@shared/timeline'
 import {
-	captionsFromTimeline, cuesToAss, escapeSubtitlesPath,
+	allBurnedCues, cuesToAss, escapeSubtitlesPath,
 	type CaptionCue, type TranscriptEntry
 } from '@shared/captions'
 import { runCommand } from './render'
@@ -54,9 +54,14 @@ export const transcriptsForDoc = (doc: EditorDocument): Record<string, Transcrip
 	return transcriptsForAssets(doc.media.filter((a) => used.has(a.id)))
 }
 
-/** Every cue this document should show, ready for the monitor or for libass. */
-export function cuesForDoc(doc: EditorDocument): CaptionCue[] {
-	return captionsFromTimeline(doc, transcriptsForDoc(doc))
+/**
+ * Every cue this document burns in: spoken captions when the switch is on, and
+ * titles always — a title is content the user placed by hand, not a setting.
+ */
+export function cuesForDoc(doc: EditorDocument, frame: { width: number; height: number }): CaptionCue[] {
+	return allBurnedCues(doc, transcriptsForDoc(doc), frame, {
+		captions: doc.captionsEnabled === true
+	})
 }
 
 /**
