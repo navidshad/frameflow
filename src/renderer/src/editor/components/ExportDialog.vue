@@ -23,18 +23,22 @@
 					<label class="text-[10px] font-bold uppercase tracking-widest text-zinc-500 block mb-1.5">
 						Format
 					</label>
-					<div class="flex bg-zinc-100 dark:bg-zinc-800/60 rounded-lg p-0.5">
-						<button v-for="f in FORMATS" :key="f.value"
-							class="flex-1 px-2 py-1.5 rounded-md text-[10px] font-bold transition"
-							:class="format === f.value
-								? 'bg-white dark:bg-zinc-700 shadow-sm text-zinc-800 dark:text-white'
-								: 'text-zinc-500 hover:text-zinc-700 dark:hover:text-zinc-300'"
-							@click="format = f.value">
-							{{ f.label }}
-						</button>
+					<div class="space-y-1">
+						<label v-for="f in FORMATS" :key="f.value"
+							class="flex items-start gap-2 px-2 py-1.5 rounded-lg border cursor-pointer transition"
+							:class="formats.includes(f.value)
+								? 'border-primary bg-primary/5'
+								: 'border-zinc-200 dark:border-zinc-700 hover:border-primary/40'">
+							<input type="checkbox" class="accent-primary mt-0.5"
+								:checked="formats.includes(f.value)" @change="toggleFormat(f.value)" />
+							<span class="min-w-0">
+								<span class="block text-[11px] font-bold text-zinc-800 dark:text-zinc-200">{{ f.label }}</span>
+								<span class="block text-[9px] text-zinc-400 leading-snug">{{ f.description }}</span>
+							</span>
+						</label>
 					</div>
-					<p class="mt-1 text-[9px] text-zinc-400 leading-snug">
-						{{ FORMATS.find((f) => f.value === format)?.description }}
+					<p v-if="formats.length > 1" class="mt-1 text-[9px] text-zinc-400 leading-snug">
+						Rendered one after another — two at once finishes later than two in a row.
 					</p>
 				</div>
 
@@ -102,7 +106,8 @@
 				<!-- Idle -->
 				<template v-if="!state">
 					<button class="btn-ghost" @click="close">Cancel</button>
-					<button class="btn-primary" :disabled="!store.canExport" @click="store.startExport(quality, format)">
+					<button class="btn-primary" :disabled="!store.canExport || !formats.length"
+						@click="store.startExportBatch(quality, formats)">
 						<span class="iconify tabler--file-export w-3.5 h-3.5 inline-block align-[-2px] mr-1"></span>
 						Export
 					</button>
@@ -148,7 +153,13 @@ const emit = defineEmits<{ (e: 'update:modelValue', value: boolean): void }>()
 
 const store = useEditorStore()
 const quality = ref<'original' | 'preview'>('original')
-const format = ref<DeliveryFormat>('h264')
+const formats = ref<DeliveryFormat[]>(['h264'])
+
+const toggleFormat = (value: DeliveryFormat) => {
+	formats.value = formats.value.includes(value)
+		? formats.value.filter((f) => f !== value)
+		: [...formats.value, value]
+}
 
 const FORMATS: { value: DeliveryFormat; label: string; description: string }[] = [
 	{

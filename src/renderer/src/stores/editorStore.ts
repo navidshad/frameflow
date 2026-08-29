@@ -2339,6 +2339,37 @@ export const useEditorStore = defineStore('editor', () => {
 	}
 
 	// ===== Export actions (M4 + background exports) =====
+
+	/**
+	 * Formats still to render for this project, after the one in flight.
+	 *
+	 * A queue rather than concurrency: an export saturates the machine, and two
+	 * at once finishes later than two in sequence while making the progress bar
+	 * meaningless. `renders` is keyed by thread, so there is one slot anyway.
+	 */
+	const exportQueue = ref<{ quality: 'original' | 'preview'; format: DeliveryFormat }[]>([])
+
+	/**
+	 * Render the timeline once per format, in order.
+	 *
+	 * The snapshot is taken PER JOB rather than once for the batch — each render
+	 * detaches from the live doc, and a doc that changed between jobs should
+	 * produce what it says at the moment each one starts.
+	 */
+	const startExportBatch = (quality: 'original' | 'preview', formats: DeliveryFormat[]) => {
+		const wanted = formats.length ? formats : ['h264' as const]
+		exportQueue.value = wanted.slice(1).map((format) => ({ quality, format }))
+		void startExport(quality, wanted[0])
+	}
+
+	/** Start the next queued format, if a finished export left one waiting. */
+	const drainExportQueue = () => {
+		const next = exportQueue.value[0]
+		if (!next) return
+		exportQueue.value = exportQueue.value.slice(1)
+		void startExport(next.quality, next.format)
+	}
+
 	const startExport = async (quality: 'original' | 'preview', format: DeliveryFormat = 'h264') => {
 		if (!threadId.value || !canExport.value || !doc.value) return
 		const tid = threadId.value
@@ -2624,6 +2655,11 @@ export const useEditorStore = defineStore('editor', () => {
 						error: data.error
 					}
 				}
+				// A batch moves on when the one in flight lands — including on an
+				// error, so one bad format does not strand the rest.
+				if (data.threadId === threadId.value && (data.phase === 'done' || data.phase === 'error')) {
+					drainExportQueue()
+				}
 			})
 		}
 	}
@@ -2735,6 +2771,8 @@ export const useEditorStore = defineStore('editor', () => {
 		captionsEnabled,
 		hasTranscript,
 		setCaptionsEnabled,
+		exportQueue,
+		startExportBatch,
 		toggleTrackMusic,
 		addVideoTrack,
 		overlaySegments,
