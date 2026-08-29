@@ -1041,3 +1041,67 @@ describe('opsToDiff / removeRanges', () => {
 		expect(diff.addItems).toBeUndefined()
 	})
 })
+
+describe('opsToDiff / layers', () => {
+	const doc = () => makeDoc([makeAsset('a', uniform(2, 5))], [
+		{ id: 'i1', trackId: 'v1', sourceAssetId: 'a', timelineStart: 0, in: 0, out: 5, speed: 1, preservePitch: true, duration: 5 }
+	])
+
+	it('takes a key, clamped the way the sliders are', () => {
+		const { diff } = opsToDiff({
+			updateItems: [{ id: 'i1', key: { kind: 'chroma', colour: '#00FF00', similarity: 9, blend: -1 } }]
+		}, doc())
+		expect(diff.updateItems![0].key).toMatchObject({
+			kind: 'chroma', colour: '#00FF00', similarity: 1, blend: 0
+		})
+	})
+
+	it('ignores a key kind this build has no filter for', () => {
+		const { diff } = opsToDiff(
+			{ updateItems: [{ id: 'i1', key: { kind: 'magic' as 'chroma' } }] },
+			doc()
+		)
+		expect(diff.updateItems![0].key).toBeUndefined()
+	})
+
+	it('records a layer role, and only a real one', () => {
+		expect(opsToDiff({ updateItems: [{ id: 'i1', layerRole: 'subject' }] }, doc())
+			.diff.updateItems![0].layerRole).toBe('subject')
+		expect(opsToDiff({ updateItems: [{ id: 'i1', layerRole: 'wallpaper' as 'subject' }] }, doc())
+			.diff.updateItems).toBeUndefined()
+	})
+
+	it('puts a background on its own track below everything', () => {
+		// On an existing track it would overlap the footage and the repair would
+		// discard it, which is exactly what the UI hit.
+		const { diff } = opsToDiff({ addBackgrounds: [{ kind: 'gradient', colour: '#101820' }] }, doc())
+		const track = diff.addTracks![0]
+		expect(track.name).toBe('BG')
+		expect(track.order).toBeLessThan(0)
+		expect(diff.addItems![0].generator).toMatchObject({ kind: 'gradient', colour: '#101820' })
+		expect(diff.addItems![0].layerRole).toBe('background')
+	})
+
+	it('butt-joins several backgrounds rather than stacking them', () => {
+		const { diff } = opsToDiff({
+			addBackgrounds: [{ durationSec: 4 }, { durationSec: 3 }]
+		}, doc())
+		expect(diff.addItems!.map((i) => i.timelineStart)).toEqual([0, 4])
+	})
+
+	it('falls back to a gradient for a kind it does not have', () => {
+		const { diff } = opsToDiff(
+			{ addBackgrounds: [{ kind: 'plasma' as 'solid' }] },
+			doc()
+		)
+		expect(diff.addItems![0].generator!.kind).toBe('gradient')
+	})
+
+	it('reuses a BG track that already exists', () => {
+		const withBg = doc()
+		withBg.tracks.push({ id: 'bg', kind: 'video', name: 'BG', order: -1, muted: false, locked: false, hidden: false, height: 48 })
+		const { diff } = opsToDiff({ addBackgrounds: [{}] }, withBg)
+		expect(diff.addTracks).toBeUndefined()
+		expect(diff.addItems![0].trackId).toBe('bg')
+	})
+})

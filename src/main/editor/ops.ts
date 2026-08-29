@@ -9,6 +9,8 @@ import {
 import { DETAIL_MAX_PIECES, EXPAND_MAX_REGIONS } from './context'
 import { clampPan } from '@shared/framing'
 import { planRangeRemoval } from '@shared/rangeEdit'
+import { KEY_DEFAULTS } from '@shared/keying'
+import { GENERATOR_DEFAULTS, GENERATORS } from '@shared/generators'
 import { hasTransform, OFFSET_RANGE, SCALE_RANGE } from '@shared/transform'
 import { defaultParams, effectDef } from '@shared/effects'
 import { isTransitionKind } from '@shared/transitionPresets'
@@ -97,6 +99,23 @@ export const EDITOR_OPS_SCHEMA = {
 							pan: { type: 'number' }
 						},
 						required: ['mode']
+					},
+					key: {
+						type: 'object',
+						description: 'Remove this clip’s background so it sits IN FRONT of the layer below. Only meaningful on a clip above another video track. chroma removes a colour (green screen); luma removes the dark end (footage shot on black).',
+						properties: {
+							kind: { type: 'string', enum: ['chroma', 'luma'] },
+							colour: { type: 'string', description: '#RRGGBB of the screen, for chroma' },
+							similarity: { type: 'number', description: '0-1, how far from the colour still counts' },
+							blend: { type: 'number', description: '0-1 edge softness' },
+							despill: { type: 'number', description: '0-1, how much of the screen colour to pull out of the edges' }
+						},
+						required: ['kind']
+					},
+					layerRole: {
+						type: 'string',
+						enum: ['subject', 'background', 'overlay'],
+						description: 'What this clip is FOR in a stacked shot. Descriptive; it does not change the render.'
 					}
 				},
 				required: ['id']
@@ -172,6 +191,20 @@ export const EDITOR_OPS_SCHEMA = {
 					toSec: { type: 'number' }
 				},
 				required: ['fromSec', 'toSec']
+			}
+		},
+		addBackgrounds: {
+			type: 'array',
+			description: 'Add a synthesised background — a gradient or a colour — on its own track below everything. This is what a keyed clip sits in front of.',
+			items: {
+				type: 'object',
+				properties: {
+					kind: { type: 'string', enum: ['solid', 'gradient', 'bars', 'noise'] },
+					colour: { type: 'string', description: '#RRGGBB' },
+					colour2: { type: 'string', description: '#RRGGBB, the second colour of a gradient' },
+					atSec: { type: 'number' },
+					durationSec: { type: 'number' }
+				}
 			}
 		},
 		captions: {
@@ -663,6 +696,11 @@ export function composeSystemInstruction(
 		'  - `updateItems.transform` moves, scales and rotates a clip inside the frame; x/y are',
 		'    fractions of the frame from centre and scale 1 is untouched. `framing` only matters',
 		'    when the clip and the sequence are different shapes.',
+		'  - Layers: a clip on a HIGHER video track composites over the one below it.',
+		'    `updateItems.key` removes a clip’s background so it sits IN FRONT rather than',
+		'    covering everything, and `addBackgrounds` makes something for it to sit in front',
+		'    of. Combine with `transform` for a picture-in-picture. Only worth doing when the',
+		'    material actually suits it — a key on ordinary footage removes the wrong thing.',
 		'  - `removeRanges` cuts spans of TIMELINE time out, splitting a clip where the span falls',
 		'    inside it. This is how you remove one sentence, a stumble or a repeated take without',
 		'    losing the whole piece around it. Use `removeItemIds` when a whole piece should go.',
@@ -836,6 +874,24 @@ export function opsToDiff(ops: EditorOps, doc: EditorDocument): OpsToDiffResult 
 				clean.framing = update.framing.mode === 'fill'
 					? { mode: 'fill' as const, pan: clampPan(update.framing.pan) }
 					: undefined
+			}
+			if (update.key) {
+				// The shared clamps again: a model cannot reach a key a person
+				// could not set with the sliders.
+				const unit = (n: unknown, fallback: number) =>
+					typeof n === 'number' && Number.isFinite(n) ? Math.max(0, Math.min(1, n)) : fallback
+				clean.key = update.key.kind === 'chroma' || update.key.kind === 'luma'
+					? {
+						kind: update.key.kind,
+						colour: update.key.colour || KEY_DEFAULTS.colour,
+						similarity: unit(update.key.similarity, KEY_DEFAULTS.similarity),
+						blend: unit(update.key.blend, KEY_DEFAULTS.blend),
+						despill: unit(update.key.despill, KEY_DEFAULTS.despill)
+					}
+					: undefined
+			}
+			if (update.layerRole && ['subject', 'background', 'overlay'].includes(update.layerRole)) {
+				clean.layerRole = update.layerRole
 			}
 			if (Object.keys(clean).length > 1) updates.push(clean)
 		}
@@ -1386,6 +1442,50 @@ export function opsToDiff(ops: EditorOps, doc: EditorDocument): OpsToDiffResult 
 			const existing = updates.find((u) => u.id === id)
 			if (existing) Object.assign(existing, fields)
 			else updates.push({ id, ...fields })
+		}
+	}
+
+	if (ops.addBackgrounds?.length) {
+		// Its own track below everything, for the same reason the UI does it:
+		// on an existing track the background overlaps the footage and the
+		// overlap repair discards it.
+		let bgTrack = doc.tracks.find((t) => t.kind === 'video' && t.name === 'BG')
+		if (!bgTrack) {
+			bgTrack = {
+				id: uuidv4(), kind: 'video', name: 'BG',
+				order: Math.min(0, ...doc.tracks.map((t) => t.order)) - 1,
+				muted: false, locked: false, hidden: false, height: 48
+			}
+			;(diff.addTracks ||= []).push(bgTrack)
+		}
+		let cursor = 0
+		for (const request of ops.addBackgrounds) {
+			const kind = GENERATORS.some((g) => g.kind === request.kind)
+				? request.kind!
+				: 'gradient'
+			const duration = Math.max(0.2, Math.min(600,
+				typeof request.durationSec === 'number' && Number.isFinite(request.durationSec)
+					? request.durationSec
+					: 5))
+			// Butt-joined when unpositioned, so several in one response do not
+			// land on top of each other and get repaired away.
+			const start = typeof request.atSec === 'number' && request.atSec >= 0
+				? request.atSec
+				: cursor
+			cursor = start + duration
+			;(diff.addItems ||= []).push({
+				id: uuidv4(), trackId: bgTrack.id, sourceAssetId: '',
+				timelineStart: start, in: 0, out: duration,
+				speed: 1, preservePitch: true, duration,
+				label: GENERATORS.find((g) => g.kind === kind)?.label || 'Background',
+				layerRole: 'background',
+				generator: {
+					kind,
+					colour: request.colour || GENERATOR_DEFAULTS.colour,
+					colour2: request.colour2 || GENERATOR_DEFAULTS.colour2,
+					speed: GENERATOR_DEFAULTS.speed
+				}
+			})
 		}
 	}
 

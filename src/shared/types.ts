@@ -605,6 +605,22 @@ export interface EditorOps {
 		transform?: { x?: number; y?: number; scale?: number; rotation?: number }
 		/** How this clip fills a frame of a different shape. */
 		framing?: { mode: 'fit' | 'fill'; pan?: number }
+		/** Key this clip's background out so it sits in front of the layer below. */
+		key?: { kind: 'chroma' | 'luma'; colour?: string; similarity?: number; blend?: number; despill?: number }
+		/** What this clip is FOR in a composited shot. */
+		layerRole?: 'subject' | 'background' | 'overlay'
+	}>
+	/**
+	 * Synthesised backgrounds — a gradient or a colour with no footage behind
+	 * them. They go on their own track below everything, which is what a keyed
+	 * subject needs to sit in front of.
+	 */
+	addBackgrounds?: Array<{
+		kind?: 'solid' | 'gradient' | 'bars' | 'noise'
+		colour?: string
+		colour2?: string
+		atSec?: number
+		durationSec?: number
 	}>
 	/**
 	 * A transition on the cut AFTER each named item. `kind: 'none'` removes one.
