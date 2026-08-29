@@ -1,5 +1,6 @@
 import type { ItemFraming, TimelineItem, Track, TransitionRef } from '@shared/types'
 import { panFraction } from '@shared/framing'
+import { effectChain } from '@shared/effects'
 
 /**
  * Handler-based filter builders (PRD §7 — "Render engine is handler-based").
@@ -160,13 +161,16 @@ const transformV: FilterBuilder = {
 	}
 }
 
-/** Per-item visual effects — registered no-op; iterate EffectRef[] in v2. */
+/**
+ * Per-item visual effects, resolved through the shared catalogue.
+ *
+ * Order is the user's: the inspector's list top-to-bottom is the filter chain
+ * left-to-right, which is what makes "blur then sharpen" differ from the
+ * reverse and is the only ordering a person can predict.
+ */
 const effectsV: FilterBuilder = {
 	id: 'effects', stream: 'video',
-	build: ({ slice }) => {
-		void (slice.item.effects ?? []) // seam: resolve each EffectRef to a filter
-		return ''
-	}
+	build: ({ slice }) => effectChain(slice.item.effects, 'video').join(',')
 }
 
 // Transitions (xfade/acrossfade) are NOT a per-slice builder: they need region
@@ -229,13 +233,10 @@ const fadeA: FilterBuilder = {
 	}
 }
 
-/** Per-item audio effects — registered no-op; iterate EffectRef[] in v2. */
+/** Per-item audio effects, from the same catalogue. */
 const effectsA: FilterBuilder = {
 	id: 'effects', stream: 'audio',
-	build: ({ slice }) => {
-		void (slice.item.effects ?? [])
-		return ''
-	}
+	build: ({ slice }) => effectChain(slice.item.effects, 'audio').join(',')
 }
 
 // ===== Registries (ORDER MATTERS: retime first, so later fragments run in

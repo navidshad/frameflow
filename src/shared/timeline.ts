@@ -226,6 +226,24 @@ const sameFraming = (a: TimelineItem['framing'], b: TimelineItem['framing']): bo
 	return a.mode === b.mode && (a.pan ?? 0) === (b.pan ?? 0)
 }
 
+/**
+ * Same immutability contract again. Compared item by item and value by value:
+ * an effect list is ordered — the chain top-to-bottom IS the filter order — so
+ * a reorder is a real change and has to register as one.
+ */
+const sameEffects = (a: TimelineItem['effects'], b: TimelineItem['effects']): boolean => {
+	if (a === b) return true
+	const left = a ?? []
+	const right = b ?? []
+	if (left.length !== right.length) return false
+	return left.every((effect, i) => {
+		const other = right[i]
+		if (effect.id !== other.id || effect.kind !== other.kind) return false
+		const keys = new Set([...Object.keys(effect.params ?? {}), ...Object.keys(other.params ?? {})])
+		return [...keys].every((key) => effect.params?.[key] === other.params?.[key])
+	})
+}
+
 function changedFields<T extends { id: string }>(before: T, after: T, fields: (keyof T)[]): Partial<T> | null {
 	let changed: Partial<T> | null = null
 	for (const field of fields) {
@@ -273,7 +291,8 @@ export function diffTimelines(
 			// to undo and to revisions.
 			const objectChanged =
 				!sameTransition(beforeItem.transition, afterItem.transition) ||
-				!sameFraming(beforeItem.framing, afterItem.framing)
+				!sameFraming(beforeItem.framing, afterItem.framing) ||
+				!sameEffects(beforeItem.effects, afterItem.effects)
 			const fwd = changedFields(beforeItem, afterItem, ITEM_FIELDS)
 				?? (objectChanged ? {} : null)
 			if (fwd) {
@@ -282,6 +301,9 @@ export function diffTimelines(
 				}
 				if (!sameFraming(beforeItem.framing, afterItem.framing)) {
 					fwd.framing = afterItem.framing
+				}
+				if (!sameEffects(beforeItem.effects, afterItem.effects)) {
+					fwd.effects = afterItem.effects
 				}
 				const keys = Object.keys(fwd) as (keyof TimelineItem)[]
 				;(forward.updateItems ||= []).push({ id, ...fwd })

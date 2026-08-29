@@ -11,6 +11,7 @@ import { computeRegions } from './render'
 import { buildRegionGraph, type OverlapRegion, type Region, type RegionPlan } from './renderBuilders'
 import { previewPlan, renderTransitionWindow } from './preview'
 import { burnCaptions } from './captions'
+import { allEffects, effectChain } from '@shared/effects'
 
 /**
  * End-to-end against the REAL bundled binary: proves the filtergraph this module
@@ -20,6 +21,9 @@ import { burnCaptions } from './captions'
  */
 
 const execFileAsync = promisify(execFile)
+
+/** One applied effect, the shape a TimelineItem carries. */
+const fx = (kind: string, params?: Record<string, number>) => [{ id: 'e', kind, params }]
 const ffmpeg = getFFmpegBinaryPath()
 const ffprobe = getFFprobeBinaryPath()
 
@@ -286,6 +290,85 @@ describe('render pipeline — against the real ffmpeg', () => {
 		const file = await renderGraph(window, plan, 'freeze.mp4')
 		expect(await durationOf(file)).toBeCloseTo(window.duration, 1)
 	}, 60_000)
+})
+
+describe('effects vs the real binary', () => {
+	// The unit tests assert the filter STRINGS. These prove the strings are
+	// filters this build accepts, and that each one moves the picture the way
+	// its label promises — the only check that catches a well-formed filter
+	// pointed the wrong way.
+	let fxDir: string
+	let grey: string
+
+	/** Mean RGB of a one-frame render of `chain` applied to the grey source. */
+	const through = async (chain: string, name: string): Promise<[number, number, number]> => {
+		const out = join(fxDir, `${name}.png`)
+		await execFileAsync(ffmpeg, ['-y', '-v', 'error', '-i', grey, '-frames:v', '1',
+			...(chain ? ['-vf', chain] : []), out])
+		const { stdout } = await execFileAsync(ffmpeg,
+			['-v', 'error', '-i', out, '-frames:v', '1', '-vf', 'scale=1:1,format=rgb24',
+				'-f', 'rawvideo', '-'],
+			{ encoding: 'buffer', maxBuffer: 1 << 20 })
+		const buf = stdout as unknown as Buffer
+		return [buf[0], buf[1], buf[2]]
+	}
+
+	beforeAll(async () => {
+		fxDir = await fs.mkdtemp(join(tmpdir(), 'ff-fx-'))
+		// A mid-grey with a colour cast: flat enough to measure, coloured enough
+		// that saturation and hue have something to act on.
+		grey = join(fxDir, 'grey.mp4')
+		await execFileAsync(ffmpeg, ['-y', '-v', 'error',
+			'-f', 'lavfi', '-i', 'color=c=0x806040:s=160x90:d=1:r=10',
+			'-c:v', 'libx264', '-preset', 'ultrafast', '-t', '1', grey])
+	}, 60_000)
+
+	afterAll(async () => { await fs.rm(fxDir, { recursive: true, force: true }) })
+
+	it('accepts every filter the catalogue can emit', async () => {
+		// Guards against drift the way the transition catalogue test does: an
+		// ffmpeg upgrade dropping a filter would otherwise surface as a failed
+		// export rather than a failed test.
+		for (const def of allEffects()) {
+			if (def.stream !== 'video') continue
+			// A value away from the identity, so `build` returns something.
+			const params: Record<string, number> = {}
+			for (const p of def.params) {
+				if (p.kind !== 'number') continue
+				params[p.key] = p.default === p.max ? p.min : p.max
+			}
+			const chain = def.build(params)
+			if (!chain) continue
+			await expect(through(chain, `accept-${def.kind}`), def.kind).resolves.toBeDefined()
+		}
+	}, 120_000)
+
+	it('moves the picture the way each label promises', async () => {
+		const base = await through('', 'base')
+		const luma = (c: [number, number, number]) => 0.299 * c[0] + 0.587 * c[1] + 0.114 * c[2]
+		const spread = (c: [number, number, number]) => Math.max(...c) - Math.min(...c)
+
+		expect(luma(await through(effectChain(fx('exposure', { amount: 0.3 }), 'video').join(','), 'up')))
+			.toBeGreaterThan(luma(base))
+		expect(luma(await through(effectChain(fx('exposure', { amount: -0.3 }), 'video').join(','), 'down')))
+			.toBeLessThan(luma(base))
+
+		// Saturation to zero must leave grey: R, G and B collapse together.
+		expect(spread(await through(effectChain(fx('saturation', { amount: 0 }), 'video').join(','), 'mono')))
+			.toBeLessThan(6)
+		expect(spread(await through(effectChain(fx('saturation', { amount: 2.5 }), 'video').join(','), 'vivid')))
+			.toBeGreaterThan(spread(base))
+
+		// Warm pushes red up relative to blue; cool does the reverse.
+		const warm = await through(effectChain(fx('warmth', { kelvin: 2500 }), 'video').join(','), 'warm')
+		const cool = await through(effectChain(fx('warmth', { kelvin: 11000 }), 'video').join(','), 'cool')
+		expect(warm[0] - warm[2]).toBeGreaterThan(cool[0] - cool[2])
+
+		// A negative is a negative.
+		const negative = await through(effectChain(fx('look-negative'), 'video').join(','), 'neg')
+		expect(luma(negative)).toBeLessThan(255)
+		expect(Math.abs(negative[0] - (255 - base[0]))).toBeLessThan(40)
+	}, 120_000)
 })
 
 describe('captions vs the real binary', () => {

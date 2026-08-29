@@ -11,6 +11,7 @@ import type {
 import { findOrphanItems, itemEnd } from '@shared/timeline'
 import { planTransitions, sourceDurationsFrom, type TransitionWindow } from '@shared/transitionPlan'
 import { sequenceFrame, type FrameSource } from '@shared/framing'
+import { hasRenderableEffects } from '@shared/effects'
 import { burnCaptions, cuesForDoc } from './captions'
 import { threadManager } from '../threads'
 import { assembleVideo, sanitizeFilename } from '../ffmpeg'
@@ -402,6 +403,9 @@ export function isFastPathEligible(items: TimelineItem[], track: Track, hasAudio
 	// source's own dimensions. Any clip asked to fill a differently-shaped frame
 	// would silently come out letterboxed at the source size instead.
 	if (items.some((i) => i.framing && i.framing.mode !== 'fit')) return false
+	// Same blind spot, third time: assembleVideo emits no filter chain at all,
+	// so a graded clip would export ungraded with no error and no log.
+	if (items.some((i) => hasRenderableEffects(i.effects))) return false
 	if (Math.abs(items[0].timelineStart) > SNAP_EPS) return false // leading gap needs black
 	for (let i = 1; i < items.length; i++) {
 		if (Math.abs(items[i].timelineStart - itemEnd(items[i - 1])) > SNAP_EPS) return false

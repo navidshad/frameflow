@@ -358,7 +358,8 @@ export interface TimelineItemTransform { x?: number; y?: number; scale?: number;
  * resolves it from the frame at filter time rather than from source metadata.
  */
 export interface ItemFraming { mode: 'fit' | 'fill'; pan?: number }
-export interface EffectRef { id: string; kind: string; params?: Record<string, unknown> } // stub
+/** One effect on a clip. `kind` indexes the catalogue in shared/effects.ts. */
+export interface EffectRef { id: string; kind: string; params?: Record<string, number | string> }
 export interface TransitionRef { kind: string; duration: number }                          // stub
 export interface TextOverlaySpec { content: string; style?: Record<string, unknown> }      // stub
 
