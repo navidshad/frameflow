@@ -203,7 +203,7 @@ const ITEM_FIELDS: (keyof TimelineItem)[] = [
 	'timelineStart', 'in', 'out', 'speed', 'preservePitch', 'duration',
 	'label', 'gain', 'muted', 'fadeInSec', 'fadeOutSec'
 ]
-const TRACK_FIELDS: (keyof Track)[] = ['kind', 'name', 'order', 'muted', 'locked', 'hidden', 'height', 'gain']
+const TRACK_FIELDS: (keyof Track)[] = ['kind', 'name', 'order', 'muted', 'locked', 'hidden', 'height', 'gain', 'role']
 
 /**
  * `transition` is the only OBJECT-valued field we diff, and `changedFields`

@@ -234,6 +234,18 @@ export const useEditorStore = defineStore('editor', () => {
 		markDirty()
 	}
 
+	/**
+	 * Mark an audio track as a music bed, so it ducks under speech everywhere
+	 * else. Absent means the track IS speech as far as ducking is concerned.
+	 */
+	const toggleTrackMusic = (trackId: string) => {
+		const track = doc.value?.tracks.find((t) => t.id === trackId)
+		if (!track) return
+		const before = snapshotState()
+		track.role = track.role === 'music' ? undefined : 'music'
+		commitStep({ before, label: track.role === 'music' ? 'Mark as music bed' : 'Unmark music bed' })
+	}
+
 	// ===== Titles =====
 
 	const DEFAULT_TITLE_SEC = 3
@@ -2577,6 +2589,7 @@ export const useEditorStore = defineStore('editor', () => {
 		captionsEnabled,
 		hasTranscript,
 		setCaptionsEnabled,
+		toggleTrackMusic,
 		addTitle,
 		setTitle,
 		activeTitles,

@@ -4,7 +4,7 @@ import {
 	escapeAssText, escapeSubtitlesPath, titleCues,
 	type TranscriptEntry
 } from './captions'
-import type { TimelineItem, Track } from './types'
+import type { TextOverlaySpec, TimelineItem, Track } from './types'
 
 const vtrack: Track = {
 	id: 'v1', kind: 'video', name: 'V1', order: 0,
@@ -262,7 +262,7 @@ describe('escapeSubtitlesPath', () => {
 describe('titleCues', () => {
 	const ttrack: Track = { ...vtrack, id: 't1', kind: 'text', name: 'T1' }
 	const FRAME = { width: 1080, height: 1920 }
-	const title = (over: Partial<TimelineItem> = {}, text = { content: 'Hello' }): TimelineItem =>
+	const title = (over: Partial<TimelineItem> = {}, text: TextOverlaySpec = { content: 'Hello' }): TimelineItem =>
 		item({ id: 'ttl', trackId: 't1', sourceAssetId: '', timelineStart: 2, in: 0, out: 3, duration: 3, text, ...over })
 
 	it('spans exactly its item', () => {

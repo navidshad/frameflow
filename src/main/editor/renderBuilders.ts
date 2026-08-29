@@ -1,6 +1,7 @@
 import type { ItemFraming, TimelineItem, Track, TransitionRef } from '@shared/types'
 import { panFraction } from '@shared/framing'
 import { effectChain } from '@shared/effects'
+import { duckExpression, type Interval } from '@shared/ducking'
 
 /**
  * Handler-based filter builders (PRD §7 — "Render engine is handler-based").
@@ -99,11 +100,13 @@ export interface RegionPlan {
 	duration: number
 	/** Derived from the walker's own output, so it cannot drift from it. */
 	hasOverlap: boolean
+	/** Where speech happens, for the ducking envelope. Absent = no bed to duck. */
+	speech?: Interval[]
 }
 
 export interface BuildCtx {
 	slice: SourceSlice
-	plan: { width: number; height: number; fps: number }
+	plan: { width: number; height: number; fps: number; speech?: Interval[] }
 }
 
 /**
@@ -233,6 +236,26 @@ const fadeA: FilterBuilder = {
 	}
 }
 
+/**
+ * Duck a music bed under speech.
+ *
+ * Runs on the bed's own slice, in slice-local time, from intervals the walker
+ * resolved once for the whole timeline — so the envelope is identical no matter
+ * where the region boundaries fall. That is the entire reason this is not
+ * `sidechaincompress`.
+ */
+const duckA: FilterBuilder = {
+	id: 'duck', stream: 'audio',
+	build: ({ slice, plan }) => {
+		if (slice.track.role !== 'music' || !plan.speech?.length) return ''
+		const speed = slice.item.speed || 1
+		// Where this slice's content sits on the timeline — the same mapping the
+		// caption mapper and the fade builder both use.
+		const start = slice.item.timelineStart + (slice.in - slice.item.in) / speed
+		return duckExpression(plan.speech, { start, duration: slice.duration })
+	}
+}
+
 /** Per-item audio effects, from the same catalogue. */
 const effectsA: FilterBuilder = {
 	id: 'effects', stream: 'audio',
@@ -244,7 +267,7 @@ const effectsA: FilterBuilder = {
 // level; effects last, just before conform) =====
 
 export const videoBuilders: FilterBuilder[] = [speedV, transformV, effectsV]
-export const audioBuilders: FilterBuilder[] = [speedA, gainA, fadeA, effectsA]
+export const audioBuilders: FilterBuilder[] = [speedA, gainA, fadeA, duckA, effectsA]
 
 /** Fold a builder list into chain fragments, dropping no-ops. */
 export function buildChain(builders: FilterBuilder[], ctx: BuildCtx): string[] {

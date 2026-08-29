@@ -320,6 +320,11 @@ export interface Track {
 	hidden: boolean
 	height: number              // px in the timeline UI
 	gain?: number               // track-level audio gain, composed with item gain at render (default 1.0)
+	/**
+	 * 'music' marks a bed: it ducks under speech on every other track. Absent
+	 * means the track IS speech as far as ducking is concerned.
+	 */
+	role?: 'music'
 }
 
 export interface TimelineItem {  // an instance of a clip placed on a track

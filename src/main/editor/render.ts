@@ -12,7 +12,9 @@ import { findOrphanItems, itemEnd } from '@shared/timeline'
 import { planTransitions, sourceDurationsFrom, type TransitionWindow } from '@shared/transitionPlan'
 import { sequenceFrame, type FrameSource } from '@shared/framing'
 import { hasRenderableEffects } from '@shared/effects'
-import { burnCaptions, cuesForDoc } from './captions'
+import { speechIntervals } from '@shared/ducking'
+import type { TranscriptEntry } from '@shared/captions'
+import { burnCaptions, cuesForDoc, transcriptsForDoc } from './captions'
 import { normaliseLoudness } from './loudness'
 import { threadManager } from '../threads'
 import { assembleVideo, sanitizeFilename } from '../ffmpeg'
@@ -67,7 +69,16 @@ function sliceSource(item: TimelineItem, t0: number, t1: number): { in: number; 
 	}
 }
 
-export function computeRegions(doc: EditorDocument, quality: ExportQuality): RegionPlan {
+export function computeRegions(
+	doc: EditorDocument,
+	quality: ExportQuality,
+	/**
+	 * Transcripts, when the caller has them. Optional because every existing
+	 * caller renders a document alone: without them a bed still ducks, just
+	 * across whole clips rather than around the pauses between phrases.
+	 */
+	transcripts: Record<string, TranscriptEntry[]> = {}
+): RegionPlan {
 	// Video tracks TOP-most first (highest order wins visually); [0] of a
 	// region's videoLayers is the layer v1 actually renders.
 	const videoTracks = doc.tracks
@@ -333,10 +344,15 @@ export function computeRegions(doc: EditorDocument, quality: ExportQuality): Reg
 		)
 	}
 
+	// Resolved once for the whole timeline rather than per region, which is what
+	// makes the duck immune to where the region boundaries happen to fall.
+	const hasBed = doc.tracks.some((t) => t.role === 'music')
+
 	return {
 		regions, width, height, fps,
 		duration: end,
-		hasOverlap: regions.some((r) => r.kind === 'overlap')
+		hasOverlap: regions.some((r) => r.kind === 'overlap'),
+		...(hasBed ? { speech: speechIntervals(doc, transcripts) } : {})
 	}
 }
 
@@ -558,7 +574,9 @@ export function startEditorRender(options: {
 
 	// ---- Pre-flight (synchronous — a bad timeline rejects the invoke
 	// immediately instead of producing a ghost render) ----
-	const plan = computeRegions(doc, quality)
+	// The transcript sharpens ducking from whole-clip to phrase-level; reading it
+	// here costs one file per asset and nothing when no bed exists.
+	const plan = computeRegions(doc, quality, transcriptsForDoc(doc))
 	// `allSlices` is exhaustive over region kinds, so a slice can never escape this
 	// check by living in a field the pre-flight forgot — which would turn a clean
 	// synchronous rejection into a failure halfway through a long render.

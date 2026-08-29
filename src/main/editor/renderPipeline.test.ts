@@ -12,6 +12,7 @@ import { buildRegionGraph, type OverlapRegion, type Region, type RegionPlan } fr
 import { previewPlan, renderTransitionWindow } from './preview'
 import { burnCaptions } from './captions'
 import { normaliseLoudness } from './loudness'
+import { duckExpression } from '@shared/ducking'
 import { allEffects, effectChain } from '@shared/effects'
 
 /**
@@ -416,6 +417,42 @@ describe('audio vs the real binary', () => {
 			await execFileAsync(ffmpeg, ['-y', '-v', 'error', '-i', quiet, '-af', chain,
 				'-t', '1', '-f', 'null', '-'])
 		}
+	}, 120_000)
+
+	it('ducks the bed under speech and lets it back up after', async () => {
+		// A steady tone stands in for a music bed. Speech from 2s to 4s, so the
+		// window either side must come back louder than the window inside — which
+		// is the assertion an envelope pointed the wrong way fails.
+		const expression = duckExpression(
+			[{ start: 2, end: 4 }],
+			{ start: 0, duration: 6 },
+			{ ramp: 0.2 }
+		)
+		expect(expression).not.toBe('')
+
+		const ducked = join(auDir, 'ducked.wav')
+		await execFileAsync(ffmpeg, ['-y', '-v', 'error',
+			'-f', 'lavfi', '-i', 'sine=frequency=440:duration=6',
+			'-af', expression, ducked])
+
+		const rmsAt = async (from: number) => {
+			const { stderr } = await execFileAsync(ffmpeg,
+				['-v', 'info', '-ss', String(from), '-t', '1', '-i', ducked,
+					'-af', 'astats=metadata=1', '-f', 'null', '-'],
+				{ maxBuffer: 1 << 22 }).catch((e) => ({ stderr: e.stderr as string }))
+			const match = /RMS level dB:\s*(-?\d+(?:\.\d+)?)/g
+			const values = [...String(stderr).matchAll(match)].map((m) => Number(m[1]))
+			if (!values.length) throw new Error('astats reported no RMS')
+			return Math.max(...values)
+		}
+
+		const before = await rmsAt(0.5)
+		const during = await rmsAt(2.6)
+		const after = await rmsAt(5)
+		// -12 dB is what a depth of 0.25 comes to.
+		expect(during).toBeLessThan(before - 8)
+		expect(after).toBeGreaterThan(during + 8)
+		expect(Math.abs(after - before)).toBeLessThan(1)
 	}, 120_000)
 
 	it('normalises a quiet mix up toward the streaming target', async () => {
