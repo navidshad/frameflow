@@ -12,6 +12,7 @@ import {
 	type TimelineState
 } from '@shared/timeline'
 import { computeScope } from '@shared/ai-scope'
+import { sequenceFrame as resolveSequenceFrame } from '@shared/framing'
 import { childrenByParent, collectSubtree, hasBranch } from '@shared/revision-tree'
 import { DEFAULT_PERSONA_ID } from '@shared/personas'
 import { toMediaUrl } from '@shared/media-url'
@@ -187,6 +188,20 @@ export const useEditorStore = defineStore('editor', () => {
 			map[id].sort((a, b) => a.timelineStart - b.timelineStart)
 		}
 		return map
+	})
+
+	/**
+	 * The shape this project exports in. Resolved through the same function the
+	 * render uses, so the frame drawn in the monitor is the frame that encodes.
+	 */
+	const sequenceFrame = computed(() => {
+		const d = doc.value
+		if (!d) return { width: 1920, height: 1080 }
+		const used = new Set(d.timeline.map((i) => i.sourceAssetId))
+		return resolveSequenceFrame(
+			d.timelineMeta,
+			d.media.filter((a) => used.has(a.id) && a.kind !== 'audio').map((a) => a.metadata ?? {})
+		)
 	})
 
 	const contentEnd = computed(() => computeContentEnd(doc.value?.timeline || []))
@@ -734,6 +749,25 @@ export const useEditorStore = defineStore('editor', () => {
 	}
 
 	// ===== Media actions (M1) =====
+
+	/**
+	 * The first import decides the sequence's shape, the way an NLE does — so a
+	 * project shot on a phone does not start life landscape. Fires at most once
+	 * per project: it marks the frame chosen, and the picker owns it after that.
+	 *
+	 * Called on every upsert rather than only on insert, because dimensions
+	 * arrive with the main process's probe, which often lands after the asset.
+	 */
+	const seedSequenceFrame = (asset: MediaAsset) => {
+		const meta = doc.value?.timelineMeta
+		if (!meta || meta.frameChosen || asset.kind === 'audio') return
+		const width = asset.metadata?.width
+		const height = asset.metadata?.height
+		if (!width || !height) return
+		doc.value!.timelineMeta = { ...meta, width, height, frameChosen: true }
+		markDirty()
+	}
+
 	const upsertAsset = (incoming: MediaAsset) => {
 		if (!doc.value) return
 		const index = doc.value.media.findIndex((a) => a.id === incoming.id)
@@ -742,6 +776,7 @@ export const useEditorStore = defineStore('editor', () => {
 		} else {
 			doc.value.media[index] = mergeMainOwnedAsset(doc.value.media[index], incoming)
 		}
+		seedSequenceFrame(doc.value.media[index === -1 ? doc.value.media.length - 1 : index])
 	}
 
 	const addLocalMedia = async () => {
@@ -1395,6 +1430,34 @@ export const useEditorStore = defineStore('editor', () => {
 		if (edge === 'in') item.fadeInSec = clamped || undefined
 		else item.fadeOutSec = clamped || undefined
 		commitStep({ before, label: `Fade ${edge} ${clamped.toFixed(1)}s` })
+	}
+
+	/**
+	 * How a clip fills a sequence frame of a different shape: letterbox it (`fit`,
+	 * the default and today's behaviour) or crop it to the frame (`fill`), with a
+	 * pan choosing which part survives. Part of the timeline, so it undoes.
+	 */
+	const setItemFraming = (id: string, mode: 'fit' | 'fill', pan = 0) => {
+		const item = doc.value?.timeline.find((i) => i.id === id)
+		if (!item || !Number.isFinite(pan)) return
+		const before = snapshotState()
+		const clamped = Math.max(-1, Math.min(1, pan))
+		// Replace, never mutate — same contract as `transition`; the diff compares
+		// this object by value and mutating it makes the snapshots alias.
+		item.framing = mode === 'fit' ? undefined : { mode, pan: clamped }
+		commitStep({ before, label: mode === 'fit' ? 'Fit to frame' : 'Fill frame' })
+	}
+
+	/**
+	 * The sequence's own frame. Deliberately NOT undoable: `timelineMeta` sits
+	 * outside TimelineState, which is what the history diffs, and a project's
+	 * shape is a setting rather than an edit — the same call markers make.
+	 */
+	const setSequenceFrame = (width: number, height: number) => {
+		if (!doc.value || !Number.isFinite(width) || !Number.isFinite(height)) return
+		if (width < 2 || height < 2) return
+		doc.value.timelineMeta = { ...doc.value.timelineMeta, width, height, frameChosen: true }
+		markDirty()
 	}
 
 	/**
@@ -2282,6 +2345,9 @@ export const useEditorStore = defineStore('editor', () => {
 		setItemFade,
 		setTransition,
 		clearTransition,
+		setItemFraming,
+		setSequenceFrame,
+		sequenceFrame,
 		seams,
 		selectedSeamId,
 		selectedSeam,

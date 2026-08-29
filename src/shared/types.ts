@@ -215,6 +215,14 @@ export interface TimelineMeta {
 	height: number
 	duration: number            // seconds; derived = max(item.timelineStart + item.duration)
 	aspectRatio?: string        // "16:9" | "9:16"
+	/**
+	 * True once `width`/`height` were CHOSEN — by the frame picker, or seeded from
+	 * the first import. Without this the render cannot tell a chosen 1920x1080
+	 * from the literal every project has always been seeded with and nothing ever
+	 * read, and honouring that literal would silently relandscape every portrait
+	 * project already on disk.
+	 */
+	frameChosen?: boolean
 }
 
 export type MediaKind = 'video' | 'image' | 'audio'

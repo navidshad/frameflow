@@ -61,21 +61,37 @@
 				<p class="text-xs text-zinc-500 dark:text-zinc-400 font-medium">Timeline is empty — drag pieces onto a track</p>
 			</div>
 			<template v-else>
-				<div class="flex-1 min-h-0 bg-black relative">
-					<!-- Opacity is a NUMBER written every tick, not a CSS transition:
-					     inside a transition the blend has to hold its exact frame
-					     when you pause or scrub, which a CSS ramp cannot do. -->
-					<video ref="videoARef" class="absolute inset-0 w-full h-full object-contain"
-						:style="{ opacity: edl.inGap.value ? 0 : edl.opacityA.value }"
-						preload="auto"></video>
-					<video ref="videoBRef" class="absolute inset-0 w-full h-full object-contain"
-						:style="{ opacity: edl.inGap.value ? 0 : edl.opacityB.value }"
-						preload="auto"></video>
-					<!-- The exact transition, pre-rendered by the main process with the
-					     real filter. Covers A/B whenever it is ready. -->
-					<video ref="videoTRef" class="absolute inset-0 w-full h-full object-contain"
-						:style="{ opacity: edl.showCached.value ? 1 : 0 }"
-						preload="auto"></video>
+				<div ref="stageRef" class="flex-1 min-h-0 bg-zinc-950 relative flex items-center justify-center">
+					<!-- The sequence frame: what actually gets exported. Sized here
+					     rather than in CSS because letterboxing a plain element
+					     against BOTH axes is not something CSS can express. -->
+					<div class="relative overflow-hidden bg-black ring-1 ring-white/10" :style="frameStyle">
+						<!-- Opacity is a NUMBER written every tick, not a CSS transition:
+						     inside a transition the blend has to hold its exact frame
+						     when you pause or scrub, which a CSS ramp cannot do. -->
+						<video ref="videoARef" class="absolute inset-0 w-full h-full"
+							:style="{ opacity: edl.inGap.value ? 0 : edl.opacityA.value, ...framingStyle(edl.itemA.value) }"
+							preload="auto"></video>
+						<video ref="videoBRef" class="absolute inset-0 w-full h-full"
+							:style="{ opacity: edl.inGap.value ? 0 : edl.opacityB.value, ...framingStyle(edl.itemB.value) }"
+							preload="auto"></video>
+						<!-- The exact transition, pre-rendered by the main process with the
+						     real filter. Already at sequence geometry with the framing
+						     baked in, so it fills the frame flat. -->
+						<video ref="videoTRef" class="absolute inset-0 w-full h-full object-contain"
+							:style="{ opacity: edl.showCached.value ? 1 : 0 }"
+							preload="auto"></video>
+						<!-- Audio tracks play through an element pool in the composable
+						     (one per track), heard in parallel with the video. -->
+						<div v-if="edl.inGap.value"
+							class="absolute inset-0 flex flex-col items-center justify-center gap-2 pointer-events-none">
+							<template v-if="edl.audioActive.value">
+								<span class="iconify tabler--music w-6 h-6 text-white/40"></span>
+								<span class="text-[10px] font-mono text-white/30 uppercase tracking-widest">audio only</span>
+							</template>
+							<span v-else class="text-[10px] font-mono text-white/30 uppercase tracking-widest">gap</span>
+						</div>
+					</div>
 					<div v-if="edl.previewPending.value"
 						class="absolute bottom-2 left-1/2 -translate-x-1/2 flex items-center gap-1.5 px-2 py-1
 						       rounded-md bg-black/60 backdrop-blur-sm pointer-events-none">
@@ -84,16 +100,9 @@
 							preparing transition
 						</span>
 					</div>
-					<!-- Audio tracks play through an element pool in the composable
-					     (one per track), heard in parallel with the video. -->
-					<div v-if="edl.inGap.value"
-						class="absolute inset-0 flex flex-col items-center justify-center gap-2 pointer-events-none">
-						<template v-if="edl.audioActive.value">
-							<span class="iconify tabler--music w-6 h-6 text-white/40"></span>
-							<span class="text-[10px] font-mono text-white/30 uppercase tracking-widest">audio only</span>
-						</template>
-						<span v-else class="text-[10px] font-mono text-white/30 uppercase tracking-widest">gap</span>
-					</div>
+					<span class="absolute top-2 right-2 text-[9px] font-mono text-white/25 pointer-events-none">
+						{{ seqWidth }}×{{ seqHeight }}
+					</span>
 				</div>
 				<div class="px-4 py-2.5 flex items-center gap-3 border-t border-zinc-200 dark:border-zinc-800 shrink-0">
 					<button
@@ -115,8 +124,9 @@
 </template>
 
 <script setup lang="ts">
+import { panObjectPosition } from '@shared/framing'
 import { toMediaUrl } from '@shared/media-url'
-import { computed, onMounted, ref, watch } from 'vue'
+import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { useEditorStore } from '../../stores/editorStore'
 import { useEdlPlayback } from '../composables/useEdlPlayback'
 
@@ -131,6 +141,53 @@ const videoTRef = ref<HTMLVideoElement | null>(null)
 const edl = useEdlPlayback(videoARef, videoBRef, videoTRef)
 
 onMounted(() => edl.start())
+
+// ===== The sequence frame =====
+
+const seqWidth = computed(() => store.sequenceFrame.width)
+const seqHeight = computed(() => store.sequenceFrame.height)
+
+const stageRef = ref<HTMLElement | null>(null)
+const stage = ref({ w: 0, h: 0 })
+
+/** The largest box of the sequence's shape that fits the stage. */
+const frameStyle = computed(() => {
+	const { w, h } = stage.value
+	if (!w || !h) return { width: '100%', height: '100%' }
+	const scale = Math.min(w / seqWidth.value, h / seqHeight.value)
+	return {
+		width: `${Math.floor(seqWidth.value * scale)}px`,
+		height: `${Math.floor(seqHeight.value * scale)}px`
+	}
+})
+
+let stageObserver: ResizeObserver | null = null
+// The stage only exists once the timeline tab has content, so observe the ref
+// rather than assuming it is there at mount.
+watch(stageRef, (el) => {
+	stageObserver?.disconnect()
+	if (!el) return
+	stageObserver = new ResizeObserver(([entry]) => {
+		stage.value = { w: entry.contentRect.width, h: entry.contentRect.height }
+	})
+	stageObserver.observe(el)
+	stage.value = { w: el.clientWidth, h: el.clientHeight }
+}, { immediate: true })
+
+onBeforeUnmount(() => stageObserver?.disconnect())
+
+/**
+ * How one element fills the frame. `object-position` comes from the same
+ * function that writes the export's crop offset, so what is on screen is what
+ * burns in — the whole reason the transition cache exists.
+ */
+const framingStyle = (itemId: string | null) => {
+	const framing = itemId
+		? store.doc?.timeline.find((i) => i.id === itemId)?.framing
+		: undefined
+	if (framing?.mode !== 'fill') return { objectFit: 'contain' as const }
+	return { objectFit: 'cover' as const, objectPosition: panObjectPosition(framing.pan) }
+}
 
 const activeSegmentLabel = computed(() => {
 	const item = store.doc?.timeline.find((i) => i.id === edl.currentSegmentId.value)

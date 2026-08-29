@@ -10,6 +10,7 @@ import type {
 } from '@shared/types'
 import { findOrphanItems, itemEnd } from '@shared/timeline'
 import { planTransitions, sourceDurationsFrom, type TransitionWindow } from '@shared/transitionPlan'
+import { sequenceFrame } from '@shared/framing'
 import { threadManager } from '../threads'
 import { assembleVideo, sanitizeFilename } from '../ffmpeg'
 import { THREAD_DIRS } from '../constants/paths'
@@ -115,21 +116,13 @@ export function computeRegions(doc: EditorDocument, quality: ExportQuality): Reg
 	const usedVideoAssets = [...new Set(videoItems.map((i) => i.sourceAssetId))]
 		.map((id) => assetById.get(id))
 		.filter((a): a is MediaAsset => !!a)
-	const even = (n: number) => Math.max(2, Math.floor(n / 2) * 2)
-	const largest = usedVideoAssets.reduce((best, a) => {
-		const area = (a.metadata?.width || 0) * (a.metadata?.height || 0)
-		return area > best.area ? { area, w: a.metadata!.width, h: a.metadata!.height } : best
-	}, { area: 0, w: 1280, h: 720 })
-	// The SEQUENCE decides its own shape when the project has one — that is what
-	// makes a 9:16 export from 16:9 footage possible at all. Falling back to the
-	// largest source keeps every existing project rendering exactly as before,
-	// since nothing has ever written these fields.
-	const meta = doc.timelineMeta
-	const chosen = meta?.width && meta?.height
-		? { w: meta.width, h: meta.height }
-		: { w: largest.w, h: largest.h }
-	const width = even(chosen.w)
-	const height = even(chosen.h)
+	// The SEQUENCE decides its own shape when the project has chosen one — that is
+	// what makes a 9:16 export from 16:9 footage possible at all. The monitor
+	// resolves the frame through the same function.
+	const { width, height } = sequenceFrame(
+		doc.timelineMeta,
+		usedVideoAssets.map((a) => a.metadata ?? {})
+	)
 	const fps = Math.min(60, Math.max(10,
 		usedVideoAssets.reduce((max, a) => Math.max(max, a.metadata?.fps || 0), 0) || 30
 	))

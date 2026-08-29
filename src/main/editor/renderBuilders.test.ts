@@ -116,8 +116,9 @@ describe('vnorm — framing', () => {
 	it('walks the crop toward an edge as the pan moves', () => {
 		// The offset is an expression over iw/ih — the SCALED image — so this needs
 		// no source dimensions and works for either orientation.
-		expect(chainOf({ mode: 'fill', pan: -1 })).toContain('(iw-ow)/2+(-1)*(iw-ow)/2')
-		expect(chainOf({ mode: 'fill', pan: 1 })).toContain('(iw-ow)/2+(1)*(iw-ow)/2')
+		expect(chainOf({ mode: 'fill', pan: -1 })).toContain('crop=1920:1080:(iw-ow)*0:(ih-oh)*0')
+		expect(chainOf({ mode: 'fill', pan: 1 })).toContain('crop=1920:1080:(iw-ow)*1:(ih-oh)*1')
+		expect(chainOf({ mode: 'fill', pan: 0.5 })).toContain('(iw-ow)*0.75')
 	})
 
 	it('clamps a pan beyond the frame', () => {

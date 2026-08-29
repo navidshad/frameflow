@@ -101,6 +101,38 @@
 						<span class="text-[11px] text-zinc-600 dark:text-zinc-300">Preserve audio pitch when retimed</span>
 					</label>
 
+					<!-- Framing: only meaningful when the clip and the sequence disagree -->
+					<div v-if="framingMatters">
+						<label class="text-[10px] font-bold uppercase tracking-widest text-zinc-500 block mb-1">
+							Framing
+						</label>
+						<div class="flex bg-zinc-100 dark:bg-zinc-800/60 rounded-lg p-0.5">
+							<button v-for="m in (['fit', 'fill'] as const)" :key="m"
+								class="flex-1 px-2 py-1 rounded-md text-[10px] font-bold uppercase tracking-widest transition"
+								:class="framingMode === m
+									? 'bg-white dark:bg-zinc-700 shadow-sm text-zinc-800 dark:text-white'
+									: 'text-zinc-500 hover:text-zinc-700 dark:hover:text-zinc-300'"
+								@click="editorStore.setItemFraming(timelineItem!.id, m, framingPan)">
+								{{ m }}
+							</button>
+						</div>
+						<template v-if="framingMode === 'fill'">
+							<label class="text-[10px] font-bold uppercase tracking-widest text-zinc-500 block mt-2 mb-1">
+								Pan
+								<span class="normal-case tracking-normal font-mono text-primary ml-1">
+									{{ framingPan === 0 ? 'centre' : `${framingPan > 0 ? '+' : ''}${framingPan.toFixed(2)}` }}
+								</span>
+							</label>
+							<input type="range" min="-1" max="1" step="0.05" :value="framingPan"
+								class="w-full accent-primary" @change="onPanInput" />
+						</template>
+						<p class="mt-1 text-[9px] text-zinc-400 leading-snug">
+							{{ framingMode === 'fill'
+								? 'Crops this clip to the frame. Pan chooses which part survives.'
+								: 'Letterboxes this clip inside the frame. Nothing is lost.' }}
+						</p>
+					</div>
+
 					<!-- Audio gain (mix level applied at export) -->
 					<div>
 						<label class="text-[10px] font-bold uppercase tracking-widest text-zinc-500 block mb-1">
@@ -334,11 +366,40 @@
 				<SilenceFinder v-if="asset.metadata?.hasAudio !== false" :asset-id="asset.id" />
 			</template>
 
-			<!-- Empty -->
-			<div v-else class="h-full flex flex-col items-center justify-center gap-2 text-center py-8">
-				<span class="iconify tabler--click w-6 h-6 text-zinc-300 dark:text-zinc-600"></span>
-				<p class="text-xs text-zinc-400">Select a media file or piece to inspect it.</p>
-			</div>
+			<!-- Nothing selected: the sequence itself is the thing to inspect -->
+			<template v-else>
+				<h3 class="text-sm font-bold text-zinc-800 dark:text-zinc-200 font-heading">Sequence</h3>
+				<p class="mt-0.5 text-[10px] text-zinc-400">The shape everything is exported in.</p>
+
+				<div class="mt-4">
+					<label class="text-[10px] font-bold uppercase tracking-widest text-zinc-500 block mb-1">
+						Frame
+						<span class="normal-case tracking-normal font-mono text-primary ml-1">
+							{{ frameW }}×{{ frameH }}
+						</span>
+					</label>
+					<div class="grid grid-cols-2 gap-1.5">
+						<button v-for="preset in FRAME_PRESETS" :key="preset.label"
+							class="px-2 py-1.5 rounded-lg border text-[10px] font-semibold transition active:scale-95"
+							:class="frameChosen && isFrame(preset)
+								? 'border-primary bg-primary/10 text-primary'
+								: 'border-zinc-200 dark:border-zinc-700 text-zinc-600 dark:text-zinc-300 hover:border-primary/40'"
+							@click="editorStore.setSequenceFrame(preset.w, preset.h)">
+							{{ preset.label }}
+							<span class="block font-mono text-[9px] text-zinc-400">{{ preset.w }}×{{ preset.h }}</span>
+						</button>
+					</div>
+					<p class="mt-2 text-[9px] text-zinc-400 leading-snug">
+						<span v-if="!frameChosen">Following the footage until you pick one. </span>
+						Clips of a different shape are letterboxed unless you set them to fill,
+						which you do per clip.
+					</p>
+				</div>
+
+				<p class="mt-6 text-[10px] text-zinc-400 text-center">
+					Select a clip, a media file or a piece to inspect it.
+				</p>
+			</template>
 		</div>
 	</div>
 </template>
@@ -466,6 +527,45 @@ const transcribe = async () => {
 		await editorStore.transcribeAsset(asset.value.id)
 	} finally {
 		transcribing.value = false
+	}
+}
+
+// ===== Sequence frame =====
+
+const FRAME_PRESETS = [
+	{ label: 'Landscape 16:9', w: 1920, h: 1080 },
+	{ label: 'Vertical 9:16', w: 1080, h: 1920 },
+	{ label: 'Square 1:1', w: 1080, h: 1080 },
+	{ label: 'Portrait 4:5', w: 1080, h: 1350 }
+]
+
+const frameW = computed(() => editorStore.sequenceFrame.width)
+const frameH = computed(() => editorStore.sequenceFrame.height)
+/** Until a frame is picked the shape follows the footage, which is worth saying. */
+const frameChosen = computed(() => editorStore.doc?.timelineMeta?.frameChosen === true)
+const isFrame = (p: { w: number; h: number }) => p.w === frameW.value && p.h === frameH.value
+
+// ===== Per-clip framing =====
+
+const framingMode = computed(() => timelineItem.value?.framing?.mode ?? 'fit')
+const framingPan = computed(() => timelineItem.value?.framing?.pan ?? 0)
+
+/** Only worth showing when the clip's source and the sequence disagree in shape —
+ *  otherwise fit and fill are the same picture and the control is noise. */
+const framingMatters = computed(() => {
+	const item = timelineItem.value
+	if (!item) return false
+	const asset = editorStore.doc?.media.find((a) => a.id === item.sourceAssetId)
+	const w = asset?.metadata?.width
+	const h = asset?.metadata?.height
+	if (!w || !h) return true // unknown source shape: let the user decide
+	return Math.abs(w / h - frameW.value / frameH.value) > 0.01
+})
+
+const onPanInput = (event: Event) => {
+	const value = parseFloat((event.target as HTMLInputElement).value)
+	if (timelineItem.value && Number.isFinite(value)) {
+		editorStore.setItemFraming(timelineItem.value.id, 'fill', value)
 	}
 }
 

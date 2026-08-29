@@ -58,6 +58,16 @@ export function useEdlPlayback(
 	const previewPending = ref(false)
 	const currentSegmentId = ref<string | null>(null)
 	const audioActive = ref(false)
+	/** Which timeline item each element is showing. Mirrors `dataset.edlItem`,
+	 *  which the playback code needs anyway, so the monitor can style each
+	 *  element with that clip's own framing. */
+	const itemA = ref<string | null>(null)
+	const itemB = ref<string | null>(null)
+	const setElItem = (el: HTMLVideoElement, itemId: string) => {
+		el.dataset.edlItem = itemId
+		if (el === videoA.value) itemA.value = itemId
+		else if (el === videoB.value) itemB.value = itemId
+	}
 
 	// One <audio> element per audio track, created lazily. Attached to the DOM
 	// (hidden) rather than a bare `new Audio()` — Chromium plays in-document
@@ -175,7 +185,7 @@ export function useEdlPlayback(
 
 	const applySegmentToEl = (el: HTMLVideoElement, seg: EdlSegment, t: number) => {
 		const wantedSrc = seg.src
-		el.dataset.edlItem = seg.itemId
+		setElItem(el, seg.itemId)
 		// Compare the url we LAST SET, never el.src — reading it back returns the
 		// parser's re-serialisation, which need not be string-equal, so comparing
 		// against it can reload the element on every call.
@@ -266,7 +276,7 @@ export function useEdlPlayback(
 			const seg = segments.value.find((sg) => sg.itemId === side.item.id)
 			if (!seg) return
 			const entering = el.dataset.edlWindow !== w.junctionId
-			el.dataset.edlItem = side.item.id
+			setElItem(el, side.item.id)
 			el.dataset.edlWindow = w.junctionId
 			if (el.dataset.edlSrc !== seg.src) { el.src = seg.src; el.dataset.edlSrc = seg.src }
 			el.playbackRate = seg.speed
@@ -562,6 +572,8 @@ export function useEdlPlayback(
 		audioActive,
 		hasContent,
 		currentSegmentId,
+		itemA,
+		itemB,
 		opacityA,
 		opacityB,
 		showCached,

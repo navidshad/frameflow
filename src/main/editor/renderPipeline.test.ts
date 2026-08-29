@@ -25,6 +25,8 @@ const ffprobe = getFFprobeBinaryPath()
 let dir: string
 const A = () => join(dir, 'A.mp4')
 const B = () => join(dir, 'B.mp4')
+/** Red on the left half, black on the right — so a pan is measurable. */
+const C = () => join(dir, 'C.mp4')
 
 /** Run a region's graph exactly as renderRegion would, and return the file. */
 async function renderGraph(region: Region, plan: RegionPlan, name: string): Promise<string> {
@@ -107,6 +109,13 @@ describe('render pipeline — against the real ffmpeg', () => {
 				'-shortest', '-c:v', 'libx264', '-preset', 'ultrafast', '-c:a', 'aac', '-t', '4', file
 			])
 		}
+		await execFileAsync(ffmpeg, [
+			'-y', '-v', 'error',
+			'-f', 'lavfi', '-i', 'color=c=black:s=320x180:d=4:r=30',
+			'-f', 'lavfi', '-i', 'sine=frequency=600:duration=4',
+			'-vf', 'drawbox=x=0:y=0:w=160:h=180:color=red@1:t=fill',
+			'-shortest', '-c:v', 'libx264', '-preset', 'ultrafast', '-c:a', 'aac', '-t', '4', C()
+		])
 	}, 60_000)
 
 	afterAll(async () => {
@@ -199,7 +208,7 @@ describe('render pipeline — against the real ffmpeg', () => {
 		// The sources are flat colours, so a letterbox is detectable as black.
 		const portrait = (framing?: { mode: 'fit' | 'fill'; pan?: number }) => {
 			const d = document()
-			d.timelineMeta = { fps: 30, width: 180, height: 320, duration: 0 }
+			d.timelineMeta = { fps: 30, width: 180, height: 320, duration: 0, frameChosen: true }
 			d.timeline = [clip({ id: 'A', sourceAssetId: 'sa', timelineStart: 0, in: 1, out: 3, framing })]
 			return computeRegions(d, 'original')
 		}
@@ -218,6 +227,30 @@ describe('render pipeline — against the real ffmpeg', () => {
 		const fitAvg = await colourAt(fitFile, 0.5)
 		expect(fitAvg[0]).toBeLessThan(fillR)
 		expect(fitG + fitB).toBeLessThan(60)
+	}, 60_000)
+
+	it('pans the crop to the side of the source the user asked for', async () => {
+		// C is red on the left, black on the right. Cover-scaling 16:9 into 9:16
+		// keeps under a third of the width, so each extreme lands wholly inside
+		// one half — which makes the pan visible as a colour rather than a shift.
+		const panned = (pan: number) => {
+			const d = document()
+			d.media = [asset('sc', C())]
+			d.timelineMeta = { fps: 30, width: 180, height: 320, duration: 0, frameChosen: true }
+			d.timeline = [clip({
+				id: 'A', sourceAssetId: 'sc', timelineStart: 0, in: 1, out: 3,
+				framing: { mode: 'fill', pan }
+			})]
+			return computeRegions(d, 'original')
+		}
+
+		const leftPlan = panned(-1)
+		const left = await renderGraph(leftPlan.regions[0], leftPlan, 'pan-left.mp4')
+		const rightPlan = panned(1)
+		const right = await renderGraph(rightPlan.regions[0], rightPlan, 'pan-right.mp4')
+
+		expect((await colourAt(left, 0.5))[0]).toBeGreaterThan(200)
+		expect((await colourAt(right, 0.5))[0]).toBeLessThan(40)
 	}, 60_000)
 
 	it('repeats frames instead of failing when neither clip has handles', async () => {

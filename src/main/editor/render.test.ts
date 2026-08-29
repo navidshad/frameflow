@@ -311,7 +311,7 @@ describe('computeRegions — sequence geometry', () => {
 		// This is what makes a 9:16 export from 16:9 footage possible at all.
 		const p = plan({
 			timeline: [item(0)],
-			timelineMeta: { fps: 30, width: 1080, height: 1920, duration: 0 }
+			timelineMeta: { fps: 30, width: 1080, height: 1920, duration: 0, frameChosen: true }
 		})
 		expect([p.width, p.height]).toEqual([1080, 1920])
 	})
@@ -329,7 +329,7 @@ describe('computeRegions — sequence geometry', () => {
 	it('keeps frame dimensions even', () => {
 		const p = plan({
 			timeline: [item(0)],
-			timelineMeta: { fps: 30, width: 1081, height: 1921, duration: 0 }
+			timelineMeta: { fps: 30, width: 1081, height: 1921, duration: 0, frameChosen: true }
 		})
 		expect(p.width % 2).toBe(0)
 		expect(p.height % 2).toBe(0)

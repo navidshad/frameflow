@@ -1,4 +1,5 @@
 import type { ItemFraming, TimelineItem, Track, TransitionRef } from '@shared/types'
+import { panFraction } from '@shared/framing'
 
 /**
  * Handler-based filter builders (PRD §7 — "Render engine is handler-based").
@@ -295,10 +296,11 @@ export const vnorm = (w: number, h: number, fps: number, framing?: ItemFraming) 
 		return `scale=${w}:${h}:force_original_aspect_ratio=decrease,` +
 			`pad=${w}:${h}:(ow-iw)/2:(oh-ih)/2,${tail}`
 	}
-	const pan = Math.max(-1, Math.min(1, framing.pan ?? 0))
-	// (iw-ow)/2 is centred; adding pan * that same slack walks it to either edge.
+	// The fraction of the overflow cut from the near edge — shared with the
+	// monitor, which spends the same number as an `object-position`.
+	const f = panFraction(framing.pan)
 	const off = (i: string, o: string) =>
-		pan === 0 ? `(${i}-${o})/2` : `(${i}-${o})/2+(${fmt(pan)})*(${i}-${o})/2`
+		f === 0.5 ? `(${i}-${o})/2` : `(${i}-${o})*${fmt(f)}`
 	return `scale=${w}:${h}:force_original_aspect_ratio=increase,` +
 		`crop=${w}:${h}:${off('iw', 'ow')}:${off('ih', 'oh')},${tail}`
 }
