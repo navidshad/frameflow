@@ -106,9 +106,43 @@
 							preparing transition
 						</span>
 					</div>
-					<span class="absolute top-2 right-2 text-[9px] font-mono text-white/25 pointer-events-none">
-						{{ seqWidth }}×{{ seqHeight }}
-					</span>
+					<!-- The frame's own label IS the frame picker. It used to live in
+					     the inspector's empty state, which an auto-selected asset made
+					     unreachable — nobody could ever have found it. -->
+					<div class="absolute top-2 right-2">
+						<button
+							class="px-1.5 py-0.5 rounded-md text-[9px] font-mono transition
+							       text-white/30 hover:text-white/80 hover:bg-white/10"
+							:title="frameChosen ? 'Sequence frame' : 'Sequence frame — following the footage'"
+							@click="frameMenuOpen = !frameMenuOpen">
+							{{ seqWidth }}×{{ seqHeight }}
+							<span v-if="!frameChosen" class="text-white/25">auto</span>
+						</button>
+						<template v-if="frameMenuOpen">
+							<div class="fixed inset-0 z-40" @click="frameMenuOpen = false"></div>
+							<div class="absolute right-0 top-6 z-50 w-40 glass-card rounded-xl border
+							            border-zinc-200 dark:border-zinc-800 shadow-lg p-1 origin-top animate-menu">
+								<button v-for="preset in FRAME_PRESETS" :key="preset.short"
+									class="w-full flex items-center justify-between gap-2 px-2 py-1.5 rounded-lg text-left transition"
+									:class="frameChosen && preset.w === seqWidth && preset.h === seqHeight
+										? 'bg-primary/10 text-primary'
+										: 'text-zinc-600 dark:text-zinc-300 hover:bg-primary/10'"
+									@click="chooseFrame(preset)">
+									<span class="text-[11px] font-semibold">{{ preset.label }}</span>
+									<span class="font-mono text-[9px] text-zinc-400">{{ preset.short }}</span>
+								</button>
+								<button v-if="frameChosen"
+									class="w-full px-2 py-1.5 mt-0.5 rounded-lg text-left text-[11px]
+									       text-zinc-500 hover:bg-primary/10 transition"
+									@click="store.clearSequenceFrame(); frameMenuOpen = false">
+									Match footage
+								</button>
+								<p class="px-2 pt-1.5 pb-1 text-[9px] text-zinc-400 leading-snug">
+									Clips of another shape letterbox unless you set them to fill.
+								</p>
+							</div>
+						</template>
+					</div>
 				</div>
 				<div class="px-4 py-2.5 flex items-center gap-3 border-t border-zinc-200 dark:border-zinc-800 shrink-0">
 					<button
@@ -131,7 +165,7 @@
 
 <script setup lang="ts">
 import { captionMetrics, cueAt } from '@shared/captions'
-import { panObjectPosition } from '@shared/framing'
+import { FRAME_PRESETS, panObjectPosition } from '@shared/framing'
 import { toMediaUrl } from '@shared/media-url'
 import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { useEditorStore } from '../../stores/editorStore'
@@ -153,6 +187,13 @@ onMounted(() => edl.start())
 
 const seqWidth = computed(() => store.sequenceFrame.width)
 const seqHeight = computed(() => store.sequenceFrame.height)
+const frameChosen = computed(() => store.doc?.timelineMeta?.frameChosen === true)
+
+const frameMenuOpen = ref(false)
+const chooseFrame = (preset: { w: number; h: number }) => {
+	store.setSequenceFrame(preset.w, preset.h)
+	frameMenuOpen.value = false
+}
 
 const stageRef = ref<HTMLElement | null>(null)
 const stage = ref({ w: 0, h: 0 })

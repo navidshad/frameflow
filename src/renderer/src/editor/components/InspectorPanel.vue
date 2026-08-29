@@ -366,40 +366,13 @@
 				<SilenceFinder v-if="asset.metadata?.hasAudio !== false" :asset-id="asset.id" />
 			</template>
 
-			<!-- Nothing selected: the sequence itself is the thing to inspect -->
-			<template v-else>
-				<h3 class="text-sm font-bold text-zinc-800 dark:text-zinc-200 font-heading">Sequence</h3>
-				<p class="mt-0.5 text-[10px] text-zinc-400">The shape everything is exported in.</p>
-
-				<div class="mt-4">
-					<label class="text-[10px] font-bold uppercase tracking-widest text-zinc-500 block mb-1">
-						Frame
-						<span class="normal-case tracking-normal font-mono text-primary ml-1">
-							{{ frameW }}×{{ frameH }}
-						</span>
-					</label>
-					<div class="grid grid-cols-2 gap-1.5">
-						<button v-for="preset in FRAME_PRESETS" :key="preset.label"
-							class="px-2 py-1.5 rounded-lg border text-[10px] font-semibold transition active:scale-95"
-							:class="frameChosen && isFrame(preset)
-								? 'border-primary bg-primary/10 text-primary'
-								: 'border-zinc-200 dark:border-zinc-700 text-zinc-600 dark:text-zinc-300 hover:border-primary/40'"
-							@click="editorStore.setSequenceFrame(preset.w, preset.h)">
-							{{ preset.label }}
-							<span class="block font-mono text-[9px] text-zinc-400">{{ preset.w }}×{{ preset.h }}</span>
-						</button>
-					</div>
-					<p class="mt-2 text-[9px] text-zinc-400 leading-snug">
-						<span v-if="!frameChosen">Following the footage until you pick one. </span>
-						Clips of a different shape are letterboxed unless you set them to fill,
-						which you do per clip.
-					</p>
-				</div>
-
-				<p class="mt-6 text-[10px] text-zinc-400 text-center">
-					Select a clip, a media file or a piece to inspect it.
-				</p>
-			</template>
+			<!-- Empty. The sequence frame lives ON the monitor, where you can see
+			     what it is doing — putting it here made it unreachable, because an
+			     asset is auto-selected as soon as a project loads. -->
+			<div v-else class="h-full flex flex-col items-center justify-center gap-2 text-center py-8">
+				<span class="iconify tabler--click w-6 h-6 text-zinc-300 dark:text-zinc-600"></span>
+				<p class="text-xs text-zinc-400">Select a media file or piece to inspect it.</p>
+			</div>
 		</div>
 	</div>
 </template>
@@ -532,18 +505,8 @@ const transcribe = async () => {
 
 // ===== Sequence frame =====
 
-const FRAME_PRESETS = [
-	{ label: 'Landscape 16:9', w: 1920, h: 1080 },
-	{ label: 'Vertical 9:16', w: 1080, h: 1920 },
-	{ label: 'Square 1:1', w: 1080, h: 1080 },
-	{ label: 'Portrait 4:5', w: 1080, h: 1350 }
-]
-
 const frameW = computed(() => editorStore.sequenceFrame.width)
 const frameH = computed(() => editorStore.sequenceFrame.height)
-/** Until a frame is picked the shape follows the footage, which is worth saying. */
-const frameChosen = computed(() => editorStore.doc?.timelineMeta?.frameChosen === true)
-const isFrame = (p: { w: number; h: number }) => p.w === frameW.value && p.h === frameH.value
 
 // ===== Per-clip framing =====
 

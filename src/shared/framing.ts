@@ -63,3 +63,12 @@ export function sequenceFrame(
 	)
 	return { width: even(largest.w), height: even(largest.h) }
 }
+
+/** The shapes worth one click. Anything else is a per-project decision nobody
+ *  makes twice, so there is no free-form W×H field. */
+export const FRAME_PRESETS: { label: string; short: string; w: number; h: number }[] = [
+	{ label: 'Landscape', short: '16:9', w: 1920, h: 1080 },
+	{ label: 'Vertical', short: '9:16', w: 1080, h: 1920 },
+	{ label: 'Square', short: '1:1', w: 1080, h: 1080 },
+	{ label: 'Portrait', short: '4:5', w: 1080, h: 1350 }
+]

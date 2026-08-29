@@ -1528,6 +1528,13 @@ export const useEditorStore = defineStore('editor', () => {
 		markDirty()
 	}
 
+	/** Back to following the footage. Picking a frame was otherwise one-way. */
+	const clearSequenceFrame = () => {
+		if (!doc.value) return
+		doc.value.timelineMeta = { ...doc.value.timelineMeta, frameChosen: false }
+		markDirty()
+	}
+
 	/**
 	 * Attach a transition to the cut AFTER this clip. The annotation lives on the
 	 * outgoing item; no clip moves and the sequence length is unchanged — the
@@ -2415,6 +2422,7 @@ export const useEditorStore = defineStore('editor', () => {
 		clearTransition,
 		setItemFraming,
 		setSequenceFrame,
+		clearSequenceFrame,
 		sequenceFrame,
 		captionCues,
 		captionsEnabled,

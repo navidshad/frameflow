@@ -549,6 +549,17 @@ export function useEdlPlayback(
 		}
 	})
 
+	// The A/B elements only exist while the monitor is in TIMELINE mode, so on
+	// mount — and on every switch back from source mode — they are null and the
+	// `activateAt` in `start` has nothing to write to. Without this the monitor
+	// shows black, and a clip's framing does not take effect, until you happen
+	// to scrub.
+	watch(() => !!videoA.value && !!videoB.value, (ready) => {
+		if (!ready) return
+		activateAt(store.playheadSec)
+		applyWindow(store.playheadSec)
+	})
+
 	const start = () => {
 		lastTick = performance.now()
 		rafId = requestAnimationFrame(tick)
