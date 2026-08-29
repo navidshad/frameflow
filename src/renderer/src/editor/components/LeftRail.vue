@@ -16,6 +16,8 @@
 			:collapsed="collapsed" @update:collapsed="$emit('update:collapsed', $event)" />
 		<EffectsPanel v-if="tab === 'effects'" class="flex-1 min-h-0"
 			:collapsed="collapsed" @update:collapsed="$emit('update:collapsed', $event)" />
+		<TranscriptPanel v-if="tab === 'words'" class="flex-1 min-h-0"
+			:collapsed="collapsed" @update:collapsed="$emit('update:collapsed', $event)" />
 	</div>
 </template>
 
@@ -23,6 +25,7 @@
 import MediaPanel from './MediaPanel.vue'
 import LibraryPanel from './LibraryPanel.vue'
 import EffectsPanel from './EffectsPanel.vue'
+import TranscriptPanel from './TranscriptPanel.vue'
 
 /**
  * The left rail's tab host, mirroring ChatColumn. Media keeps its state across
@@ -31,12 +34,13 @@ import EffectsPanel from './EffectsPanel.vue'
  *
  * Collapse and resize stay with VideoEditorPage; this only routes the event.
  */
-export type LeftTab = 'media' | 'transitions' | 'effects'
+export type LeftTab = 'media' | 'transitions' | 'effects' | 'words'
 
 const TABS: { value: LeftTab; label: string }[] = [
 	{ value: 'media', label: 'media' },
 	{ value: 'transitions', label: 'transitions' },
-	{ value: 'effects', label: 'effects' }
+	{ value: 'effects', label: 'effects' },
+	{ value: 'words', label: 'words' }
 ]
 
 defineProps<{ tab: LeftTab; collapsed?: boolean }>()

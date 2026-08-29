@@ -14,6 +14,7 @@ import {
 import { computeScope } from '@shared/ai-scope'
 import { hasTransform, TRANSFORM_DEFAULTS } from '@shared/transform'
 import { isAnimatable, valueAt } from '@shared/keyframes'
+import { planRangeRemoval } from '@shared/rangeEdit'
 import { defaultParams, effectDef, registerEffects } from '@shared/effects'
 import { parsePack } from '@shared/packs'
 import {
@@ -222,6 +223,17 @@ export const useEditorStore = defineStore('editor', () => {
 	})
 
 	const captionsEnabled = computed(() => doc.value?.captionsEnabled === true)
+
+	/**
+	 * The spoken words on the timeline, whether or not captions are switched on.
+	 *
+	 * `captionCues` answers "what is burned in"; this answers "what is said",
+	 * which is what a transcript panel and word-level editing need — you should
+	 * be able to cut a sentence without turning captions on first.
+	 */
+	const transcriptCues = computed<CaptionCue[]>(() =>
+		doc.value ? captionsFromTimeline(doc.value, transcripts.value) : []
+	)
 
 	/** Whether there is anything to caption — the toggle is dead weight without it. */
 	const hasTranscript = computed(() => {
@@ -1483,6 +1495,32 @@ export const useEditorStore = defineStore('editor', () => {
 		commitStep({ before, label: `Add ${asset.name}` })
 		selectItems([item.id])
 		return item
+	}
+
+	/**
+	 * Remove spans of timeline rather than whole clips — what "cut the bit where
+	 * he says that" needs.
+	 *
+	 * The granularity comes from wherever the span does: a caption cue, a
+	 * transcript search, or the AI naming a time. Afterwards it closes the gaps
+	 * exactly as a normal delete does, so the result is indistinguishable from
+	 * having trimmed by hand.
+	 */
+	const removeRanges = (ranges: { start: number; end: number }[], label = 'Remove range') => {
+		if (!doc.value) return 0
+		const plan = planRangeRemoval(doc.value.timeline, ranges, () => newId('ti'))
+		if (!plan.removeIds.length && !plan.updated.length && !plan.added.length) return 0
+
+		const before = snapshotState()
+		const dead = new Set(plan.removeIds)
+		const reshaped = new Map(plan.updated.map((i) => [i.id, i]))
+		doc.value.timeline = [
+			...doc.value.timeline.filter((i) => !dead.has(i.id)).map((i) => reshaped.get(i.id) ?? i),
+			...plan.added
+		]
+		closeTimelineGaps({ tracks: doc.value.tracks, timeline: doc.value.timeline })
+		commitStep({ before, label })
+		return plan.removedSec
 	}
 
 	const splitAtPlayhead = () => {
@@ -2747,6 +2785,7 @@ export const useEditorStore = defineStore('editor', () => {
 		addItemFromClip,
 		addItemFromAsset,
 		splitAtPlayhead,
+		removeRanges,
 		deleteItems,
 		closeGaps,
 		hasGaps,
@@ -2774,6 +2813,7 @@ export const useEditorStore = defineStore('editor', () => {
 		clearSequenceFrame,
 		sequenceFrame,
 		captionCues,
+		transcriptCues,
 		captionsEnabled,
 		hasTranscript,
 		setCaptionsEnabled,

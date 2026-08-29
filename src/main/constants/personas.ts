@@ -23,6 +23,11 @@ export const BUILTIN_PERSONAS: EditorPersona[] = [
 		builtin: true,
 		tone: 'neutral',
 		defaults: { pacing: 'balanced' },
+		style: {
+			// Deliberately bare: this persona's whole point is that the request
+			// is the brief, so it imposes no look of its own.
+			loudness: true
+		},
 		featureSets: [],
 		systemPrompt: [
 			'You are a capable, general-purpose video editor.',
@@ -40,6 +45,13 @@ export const BUILTIN_PERSONAS: EditorPersona[] = [
 		builtin: true,
 		tone: 'neutral',
 		defaults: { pacing: 'relaxed' },
+		style: {
+			transitions: ['fade'],
+			looks: ['denoise', 'rumble', 'level'],
+			captions: false,
+			loudness: true,
+			note: 'Sound first. A podcast is listened to more than it is watched, so clean the audio and leave the picture alone.'
+		},
 		featureSets: [],
 		systemPrompt: [
 			'You are a seasoned podcast editor. Your job is to keep the FULL conversation',
@@ -61,6 +73,13 @@ export const BUILTIN_PERSONAS: EditorPersona[] = [
 		builtin: true,
 		tone: 'warm',
 		defaults: { pacing: 'balanced' },
+		style: {
+			transitions: ['fade', 'dissolve'],
+			looks: ['look-soft', 'level'],
+			captions: false,
+			loudness: true,
+			note: 'Invisible polish. Nothing should look graded; it should just look like a good day.'
+		},
 		featureSets: [],
 		systemPrompt: [
 			'You are polishing long-form footage (vlogs, webinars, streams, talks).',
@@ -80,6 +99,11 @@ export const BUILTIN_PERSONAS: EditorPersona[] = [
 		builtin: true,
 		tone: 'neutral',
 		defaults: { pacing: 'tight' },
+		style: {
+			// No look at all: this persona removes, it does not decorate.
+			loudness: true,
+			note: 'Touch nothing but the timing.'
+		},
 		featureSets: [],
 		systemPrompt: [
 			'You specialize in cleaning silence and dead air out of recordings.',
@@ -99,6 +123,12 @@ export const BUILTIN_PERSONAS: EditorPersona[] = [
 		builtin: true,
 		tone: 'authoritative',
 		defaults: { pacing: 'relaxed' },
+		style: {
+			transitions: ['fade'],
+			captions: false,
+			loudness: true,
+			note: 'Structure is the deliverable. A title at each chapter boundary is worth more than any look.'
+		},
 		featureSets: [],
 		systemPrompt: [
 			'You organize long recordings into chapters.',
@@ -118,6 +148,12 @@ export const BUILTIN_PERSONAS: EditorPersona[] = [
 		builtin: true,
 		tone: 'authoritative',
 		defaults: { pacing: 'relaxed' },
+		style: {
+			transitions: ['fade'],
+			captions: true,
+			loudness: true,
+			note: 'Captions on: this gets watched at 1.5x with the sound off as often as not.'
+		},
 		featureSets: [],
 		systemPrompt: [
 			'You are preparing lecture footage for studying.',

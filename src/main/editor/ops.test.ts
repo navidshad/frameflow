@@ -951,3 +951,93 @@ describe('opsToDiff / one update per item', () => {
 		expect(diff.updateItems![0].effects).toHaveLength(1)
 	})
 })
+
+describe('composeSystemInstruction / persona style', () => {
+	const stats: PromptStats = {
+		timelineItemCount: 0, timelineDurationSec: 0, sourceDurationSec: 600, sourceClipCount: 10
+	}
+	const persona = (style?: EditorPersona['style']): EditorPersona => ({
+		id: 'p', name: 'P', icon: '🎬', description: '', systemPrompt: 'be a good editor',
+		builtin: true, tone: 'neutral', defaults: { pacing: 'balanced' }, featureSets: [], style
+	})
+
+	it('says nothing when a persona has no house style', () => {
+		const text = composeSystemInstruction(persona(), stats)
+		expect(text).not.toContain('House style')
+		expect(text).not.toContain('Preferred transitions')
+	})
+
+	it('quotes the style as habits, not limits', () => {
+		// A persona confined to four transitions would be a worse editor than one
+		// that knows which four it likes.
+		const text = composeSystemInstruction(persona({
+			transitions: ['fade'], looks: ['look-soft'], captions: true, loudness: true,
+			note: 'Sound first.'
+		}), stats)
+		expect(text).toContain('House style: Sound first.')
+		expect(text).toContain('Preferred transitions: fade')
+		expect(text).toContain('Signature looks: look-soft')
+		expect(text).toContain('`captions: true`')
+		expect(text).toContain('`loudness: true`')
+		expect(text).toContain('not limits')
+	})
+
+	it('says explicitly when a voice does NOT caption', () => {
+		// Silence would read as "no opinion", and the model would guess.
+		const text = composeSystemInstruction(persona({ captions: false }), stats)
+		expect(text).toContain('not usually captioned')
+	})
+})
+
+describe('the built-in personas', () => {
+	it('every style names kinds that actually exist', async () => {
+		// A persona pointing at a kind the catalogue does not have would send the
+		// model to write an op that gets dropped.
+		const { BUILTIN_PERSONAS } = await import('../constants/personas')
+		const { isTransitionKind } = await import('@shared/transitionPresets')
+		const { isEffectKind } = await import('@shared/effects')
+		for (const p of BUILTIN_PERSONAS) {
+			for (const kind of p.style?.transitions ?? []) {
+				expect(isTransitionKind(kind), `${p.id}: ${kind}`).toBe(true)
+			}
+			for (const kind of p.style?.looks ?? []) {
+				expect(isEffectKind(kind), `${p.id}: ${kind}`).toBe(true)
+			}
+		}
+	})
+})
+
+describe('opsToDiff / removeRanges', () => {
+	const doc = () => makeDoc([makeAsset('a', uniform(2, 10))], [
+		{ id: 'i1', trackId: 'v1', sourceAssetId: 'a', timelineStart: 0, in: 0, out: 10, speed: 1, preservePitch: true, duration: 10 }
+	])
+
+	it('splits a clip to cut a span out of its middle', () => {
+		// The whole point: removing a sentence without losing the piece.
+		const { diff, notes } = opsToDiff({ removeRanges: [{ fromSec: 3, toSec: 5 }] }, doc())
+		expect(diff.removeItemIds).toBeUndefined()
+		expect(diff.updateItems![0]).toMatchObject({ id: 'i1', out: 3 })
+		expect(diff.addItems![0]).toMatchObject({ timelineStart: 5, in: 5, out: 10 })
+		expect(notes[0]).toContain('2.0s')
+	})
+
+	it('removes the clip outright when the span covers all of it', () => {
+		const { diff } = opsToDiff({ removeRanges: [{ fromSec: 0, toSec: 10 }] }, doc())
+		expect(diff.removeItemIds).toEqual(['i1'])
+		expect(diff.addItems).toBeUndefined()
+	})
+
+	it('says so rather than silently doing nothing', () => {
+		const { droppedOps } = opsToDiff({ removeRanges: [{ fromSec: 100, toSec: 120 }] }, doc())
+		expect(droppedOps[0]).toContain('nothing on the timeline')
+	})
+
+	it('does not act on a clip this same response already removed', () => {
+		const { diff } = opsToDiff(
+			{ removeItemIds: ['i1'], removeRanges: [{ fromSec: 3, toSec: 5 }] },
+			doc()
+		)
+		expect(diff.removeItemIds).toEqual(['i1'])
+		expect(diff.addItems).toBeUndefined()
+	})
+})

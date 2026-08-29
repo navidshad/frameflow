@@ -414,6 +414,29 @@ export interface EditorPersona {
 	 */
 	defaults?: { pacing?: 'tight' | 'balanced' | 'relaxed' }
 	featureSets?: FeatureSetRef[]  // deferred; always [] in v1
+	/**
+	 * The look this voice edits in — vocabulary, not rules.
+	 *
+	 * A persona already carries judgement about WHAT to cut; this carries what
+	 * the result should look and sound like, so the two travel together instead
+	 * of the user re-describing a house style in every prompt. Everything in
+	 * the catalogues stays available: these are preferences the model is told
+	 * about, not a whitelist it is confined to.
+	 */
+	style?: PersonaStyle
+}
+
+export interface PersonaStyle {
+	/** Transition kinds this voice reaches for first. */
+	transitions?: string[]
+	/** Effect kinds that make up its look. */
+	looks?: string[]
+	/** Whether it captions by default — short-form does, a lecture does not. */
+	captions?: boolean
+	/** Whether it normalises the mix. True for anything meant to be posted. */
+	loudness?: boolean
+	/** One line the system instruction quotes, in the persona's own voice. */
+	note?: string
 }
 
 export interface FeatureSetRef { id: string; name: string } // stub
@@ -585,6 +608,12 @@ export interface EditorOps {
 		y?: number
 		size?: number
 	}>
+	/**
+	 * Cut spans of TIME out of the timeline, splitting clips where a span falls
+	 * mid-clip. This is how a sentence gets removed without removing the piece
+	 * it sits in.
+	 */
+	removeRanges?: Array<{ fromSec: number; toSec: number }>
 	/** Burn the transcript into the picture. */
 	captions?: boolean
 	/** Normalise the finished mix to the streaming target. */

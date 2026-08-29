@@ -8,6 +8,7 @@ import {
 } from '@shared/timeline'
 import { DETAIL_MAX_PIECES, EXPAND_MAX_REGIONS } from './context'
 import { clampPan } from '@shared/framing'
+import { planRangeRemoval } from '@shared/rangeEdit'
 import { hasTransform, OFFSET_RANGE, SCALE_RANGE } from '@shared/transform'
 import { defaultParams, effectDef } from '@shared/effects'
 import { isTransitionKind } from '@shared/transitionPresets'
@@ -161,6 +162,18 @@ export const EDITOR_OPS_SCHEMA = {
 				required: ['text', 'atSec']
 			}
 		},
+		removeRanges: {
+			type: 'array',
+			description: 'Cut spans of TIMELINE time out, splitting a clip when the span falls inside it. Use this to remove a sentence or a stumble without removing the whole piece it sits in. Timeline seconds, not source seconds.',
+			items: {
+				type: 'object',
+				properties: {
+					fromSec: { type: 'number' },
+					toSec: { type: 'number' }
+				},
+				required: ['fromSec', 'toSec']
+			}
+		},
 		captions: {
 			type: 'boolean',
 			description: 'Burn the spoken transcript into the picture as captions. Only useful when a clip has been transcribed.'
@@ -230,6 +243,37 @@ export const EDITOR_OPS_SCHEMA = {
 			}
 		}
 	}
+}
+
+/**
+ * The persona's house style, as instruction.
+ *
+ * Preferences, not a whitelist — the catalogues are listed in full elsewhere in
+ * the context, and a persona that could only reach four transitions would be a
+ * worse editor than one that knows which four it likes. The point is that a
+ * user should not have to re-describe a house style in every prompt.
+ */
+function personaStyleLines(persona: EditorPersona): string[] {
+	const style = persona.style
+	if (!style) return []
+	const lines: string[] = []
+	if (style.note) lines.push(`House style: ${style.note}`)
+	if (style.transitions?.length) {
+		lines.push(`Preferred transitions: ${style.transitions.join(', ')} — reach for these first.`)
+	}
+	if (style.looks?.length) {
+		lines.push(`Signature looks: ${style.looks.join(', ')}.`)
+	}
+	if (style.captions !== undefined) {
+		lines.push(style.captions
+			? 'Captions belong on this kind of edit — set `captions: true` when the material has a transcript.'
+			: 'This kind of edit is not usually captioned; leave `captions` alone unless asked.')
+	}
+	if (style.loudness) {
+		lines.push('Set `loudness: true` — this is meant to be posted.')
+	}
+	lines.push('These are this voice\'s habits, not limits. Anything in the catalogues is available.')
+	return lines
 }
 
 // ===== System instruction composition =====
@@ -619,6 +663,9 @@ export function composeSystemInstruction(
 		'  - `updateItems.transform` moves, scales and rotates a clip inside the frame; x/y are',
 		'    fractions of the frame from centre and scale 1 is untouched. `framing` only matters',
 		'    when the clip and the sequence are different shapes.',
+		'  - `removeRanges` cuts spans of TIMELINE time out, splitting a clip where the span falls',
+		'    inside it. This is how you remove one sentence, a stumble or a repeated take without',
+		'    losing the whole piece around it. Use `removeItemIds` when a whole piece should go.',
 		'  - `addTitles` puts text on the picture. `captions: true` burns the spoken transcript',
 		'    in, and only helps when the material has actually been transcribed.',
 		'    `loudness: true` normalises the mix to the level streaming platforms expect —',
@@ -628,6 +675,7 @@ export function composeSystemInstruction(
 		'',
 		'=== ACTIVE PERSONA DEFAULTS ===',
 		`Tone: ${persona.tone || 'neutral'}. Pacing: ${defaults.pacing || 'balanced'}.`,
+		...personaStyleLines(persona),
 		...outputLengthLines(stats, phase),
 		...phaseLines
 	].filter(Boolean).join('\n')
@@ -792,6 +840,39 @@ export function opsToDiff(ops: EditorOps, doc: EditorDocument): OpsToDiffResult 
 			if (Object.keys(clean).length > 1) updates.push(clean)
 		}
 		if (updates.length) diff.updateItems = updates
+	}
+
+	// Sub-clip removals. Folded into the same removeItemIds/updateItems the rest
+	// of this function speaks, so everything downstream — ripple, revisions,
+	// undo — treats a cut sentence exactly like a deleted clip.
+	if (ops.removeRanges?.length) {
+		const survivors = doc.timeline.filter((i) => !diff.removeItemIds?.includes(i.id))
+		const plan = planRangeRemoval(
+			survivors,
+			ops.removeRanges.map((r) => ({ start: r.fromSec, end: r.toSec })),
+			() => uuidv4()
+		)
+		if (!plan.removedSec) {
+			droppedOps.push('removeRanges: nothing on the timeline in those spans')
+		} else {
+			if (plan.removeIds.length) {
+				diff.removeItemIds = [...(diff.removeItemIds || []), ...plan.removeIds]
+			}
+			for (const shaped of plan.updated) {
+				const updates = (diff.updateItems ||= [])
+				const existing = updates.find((u) => u.id === shaped.id)
+				const fields = {
+					timelineStart: shaped.timelineStart, in: shaped.in, out: shaped.out,
+					duration: shaped.duration, masterSegmentIndex: undefined,
+					...(shaped.transition === undefined ? { transition: undefined } : {})
+				}
+				if (existing) Object.assign(existing, fields)
+				else updates.push({ id: shaped.id, ...fields })
+			}
+			if (plan.added.length) diff.addItems = [...(diff.addItems || []), ...plan.added]
+			notes.push(`Cut ${plan.removedSec.toFixed(1)}s from inside ${
+				plan.updated.length + plan.removeIds.length} clip(s).`)
+		}
 	}
 
 	// ===== Adds: one phase, one cursor, ids generated HERE and never by the model =====
