@@ -277,6 +277,84 @@ describe('render pipeline — against the real ffmpeg', () => {
 		expect((await colourAt(right, 0.5))[0]).toBeLessThan(40)
 	}, 60_000)
 
+	describe('compositing vs the real binary', () => {
+		/** Mean RGB of a small window, as a fraction of the frame. */
+		const patch = async (file: string, fx: number, fy: number): Promise<[number, number, number]> => {
+			const { stdout } = await execFileAsync(ffmpeg,
+				['-v', 'error', '-i', file, '-frames:v', '1',
+					'-vf', `crop=24:24:${Math.round(fx * 320) - 12}:${Math.round(fy * 180) - 12},scale=1:1,format=rgb24`,
+					'-f', 'rawvideo', '-'],
+				{ encoding: 'buffer', maxBuffer: 1 << 20 })
+			const buf = stdout as unknown as Buffer
+			return [buf[0], buf[1], buf[2]]
+		}
+
+		/** Two video tracks: A underneath on v1, B on top of it on v2. */
+		const stacked = (transform?: { scale?: number; x?: number; y?: number }) => {
+			const v2: Track = { ...vtrack, id: 'v2', name: 'V2', order: 1 }
+			const d = document()
+			d.tracks = [vtrack, v2]
+			d.timeline = [
+				clip({ id: 'base', sourceAssetId: 'sa', trackId: 'v1', timelineStart: 0, in: 1, out: 2, duration: 1 }),
+				clip({ id: 'pip', sourceAssetId: 'sb', trackId: 'v2', timelineStart: 0, in: 1, out: 2, duration: 1, transform })
+			]
+			d.timelineMeta = { fps: 30, width: 320, height: 180, duration: 0, frameChosen: true }
+			return computeRegions(d, 'original')
+		}
+
+		it('carries every covering layer, top-most first', () => {
+			const plan = stacked()
+			const region = plan.regions[0]
+			expect(region.kind).toBe('cut')
+			// The walker has always carried these; until now only [0] was rendered.
+			expect((region as { videoLayers: unknown[] }).videoLayers).toHaveLength(2)
+		})
+
+		it('an untransformed top layer still hides what is under it', () => {
+			// The old behaviour, which must not change: a full-frame opaque layer on
+			// top is the whole picture.
+			const plan = stacked()
+			return renderGraph(plan.regions[0], plan, 'stack-full.mp4').then(async (file) => {
+				const [r, , b] = await patch(file, 0.5, 0.5)
+				expect(b).toBeGreaterThan(150) // B is blue
+				expect(r).toBeLessThan(80)
+			})
+		}, 90_000)
+
+		it('shows the layer underneath around a scaled-down one', async () => {
+			// This is picture-in-picture: blue in the middle, red around it. It only
+			// works if the area the scale vacates ends up TRANSPARENT — pad it with
+			// black and the base disappears under a black frame instead.
+			const plan = stacked({ scale: 0.4 })
+			const file = await renderGraph(plan.regions[0], plan, 'stack-pip.mp4')
+
+			const [cr, , cb] = await patch(file, 0.5, 0.5)
+			expect(cb, 'centre should be the PiP').toBeGreaterThan(150)
+			expect(cr).toBeLessThan(80)
+
+			const [er, , eb] = await patch(file, 0.1, 0.5)
+			expect(er, 'edge should be the layer underneath').toBeGreaterThan(150)
+			expect(eb).toBeLessThan(80)
+		}, 90_000)
+
+		it('puts the inset where the transform asks', async () => {
+			const plan = stacked({ scale: 0.3, x: 0.3, y: -0.3 })
+			const file = await renderGraph(plan.regions[0], plan, 'stack-corner.mp4')
+			const [, , topRight] = await patch(file, 0.8, 0.2)
+			expect(topRight, 'PiP should be up and to the right').toBeGreaterThan(150)
+			const [bottomLeftR] = await patch(file, 0.2, 0.8)
+			expect(bottomLeftR, 'and not down and to the left').toBeGreaterThan(150)
+		}, 90_000)
+
+		it('encodes a pixel format h264 can actually take', async () => {
+			const plan = stacked({ scale: 0.4 })
+			const file = await renderGraph(plan.regions[0], plan, 'stack-fmt.mp4')
+			const { stdout } = await execFileAsync(ffprobe, ['-v', 'error', '-select_streams', 'v:0',
+				'-show_entries', 'stream=pix_fmt', '-of', 'csv=p=0', file])
+			expect(stdout.trim()).toBe('yuv420p')
+		}, 90_000)
+	})
+
 	it('repeats frames instead of failing when neither clip has handles', async () => {
 		const doc = document({ kind: 'fade', duration: 1 })
 		// Untrimmed on both sides: no handle media anywhere.

@@ -55,11 +55,18 @@ const snap = (n: number, lo: number, hi: number) =>
 export function transformFilter(
 	transform: TimelineItemTransform | undefined,
 	width: number,
-	height: number
+	height: number,
+	/**
+	 * True for a compositing layer, where the area a scale or an offset vacates
+	 * must be TRANSPARENT rather than black — black would paint over whatever
+	 * sits underneath, which is the whole picture in a picture-in-picture.
+	 */
+	alpha = false
 ): string {
 	if (!hasTransform(transform)) return ''
 	const t = read(transform)
 	const parts: string[] = []
+	const fill = alpha ? 'black@0' : 'black'
 
 	let w = width
 	let h = height
@@ -71,7 +78,7 @@ export function transformFilter(
 	if (t.rotation !== 0) {
 		// Same size in, same size out: the corners that rotate out of frame go
 		// black, which is what every editor does with a rotated full-frame clip.
-		parts.push(`rotate=${fmt((t.rotation * Math.PI) / 180)}:ow=${w}:oh=${h}:c=black`)
+		parts.push(`rotate=${fmt((t.rotation * Math.PI) / 180)}:ow=${w}:oh=${h}:c=${fill}`)
 	}
 
 	const dx = Math.round(t.x * width)
@@ -79,7 +86,7 @@ export function transformFilter(
 	const padW = even(Math.max(width + 2 * Math.abs(dx), w))
 	const padH = even(Math.max(height + 2 * Math.abs(dy), h))
 	if (padW !== w || padH !== h) {
-		parts.push(`pad=${padW}:${padH}:(ow-iw)/2:(oh-ih)/2:black`)
+		parts.push(`pad=${padW}:${padH}:(ow-iw)/2:(oh-ih)/2:${fill}`)
 	}
 	// Moving the CONTENT right means moving the crop window left, hence the minus.
 	// The offsets are snapped to even as well: on 4:2:0 an odd crop origin shifts

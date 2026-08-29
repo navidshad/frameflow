@@ -452,17 +452,23 @@ export const useEditorStore = defineStore('editor', () => {
 	/** Seam nearest `t`, within a tolerance the caller derives from zoom. */
 	const seamNear = (t: number, toleranceSec: number) => seamAt(seams.value, t, toleranceSec)
 
-	/** Ordered playable segments for EDL preview (unhidden video tracks). */
-	const videoSegments = computed(() => {
-		if (!doc.value) return []
-		const hiddenOrVideoless = new Set(
-			doc.value.tracks.filter((t) => t.kind !== 'video' || t.hidden).map((t) => t.id)
-		)
+	/** Visible video tracks, bottom-most first — the render's stacking order. */
+	const visibleVideoTracks = computed(() =>
+		(doc.value?.tracks ?? [])
+			.filter((t) => t.kind === 'video' && !t.hidden)
+			.sort((a, b) => a.order - b.order)
+	)
+
+	/** The layer everything else composites onto, and the monitor's timebase. */
+	const baseVideoTrackId = computed(() => visibleVideoTracks.value[0]?.id ?? null)
+
+	const segmentsForTracks = (trackIds: Set<string>) => {
+		if (!doc.value || !trackIds.size) return []
 		const trackMuted = new Map(doc.value.tracks.map((t) => [t.id, t.muted]))
 		const assetById = new Map(doc.value.media.map((a) => [a.id, a]))
 
 		return doc.value.timeline
-			.filter((item) => !hiddenOrVideoless.has(item.trackId))
+			.filter((item) => trackIds.has(item.trackId))
 			.sort((a, b) => a.timelineStart - b.timelineStart)
 			.flatMap((item) => {
 				const asset = assetById.get(item.sourceAssetId)
@@ -478,6 +484,30 @@ export const useEditorStore = defineStore('editor', () => {
 					muted: !!item.muted || !!trackMuted.get(item.trackId)
 				}]
 			})
+	}
+
+	/**
+	 * Ordered playable segments for the monitor's A/B pair.
+	 *
+	 * Only the BASE track: the pair assumes its segments never overlap, and two
+	 * video tracks overlap by definition — that is what compositing is. Higher
+	 * layers get their own element below.
+	 */
+	const videoSegments = computed(() =>
+		segmentsForTracks(new Set(baseVideoTrackId.value ? [baseVideoTrackId.value] : []))
+	)
+
+	/**
+	 * The layer drawn ON TOP of the pair, from the highest visible video track.
+	 *
+	 * One layer, not n: the monitor has one overlay element. The export
+	 * composites every layer, so a three-track stack still renders correctly —
+	 * it just previews as base plus top.
+	 */
+	const overlaySegments = computed(() => {
+		const tracks = visibleVideoTracks.value
+		if (tracks.length < 2) return []
+		return segmentsForTracks(new Set([tracks[tracks.length - 1].id]))
 	})
 
 	// Audio-track segments for preview (PRD §5.3): items on audio-kind tracks.
@@ -1942,6 +1972,25 @@ export const useEditorStore = defineStore('editor', () => {
 		commitStep({ before, label: `Track ${flag}` })
 	}
 
+	/**
+	 * A second video track, which is what makes picture-in-picture reachable:
+	 * the render composites every visible video track bottom-up, and until now
+	 * there was no way to make a second one.
+	 */
+	const addVideoTrack = () => {
+		if (!doc.value) return
+		const before = snapshotState()
+		const count = doc.value.tracks.filter((t) => t.kind === 'video').length
+		doc.value.tracks.push({
+			id: newId('tr'),
+			kind: 'video',
+			name: `V${count + 1}`,
+			order: Math.max(...doc.value.tracks.map((t) => t.order)) + 1,
+			muted: false, locked: false, hidden: false, height: 64
+		})
+		commitStep({ before, label: 'Add video track' })
+	}
+
 	const addOverlayTrack = () => {
 		if (!doc.value) return
 		const before = snapshotState()
@@ -2641,6 +2690,9 @@ export const useEditorStore = defineStore('editor', () => {
 		hasTranscript,
 		setCaptionsEnabled,
 		toggleTrackMusic,
+		addVideoTrack,
+		overlaySegments,
+		baseVideoTrackId,
 		addTitle,
 		setTitle,
 		activeTitles,

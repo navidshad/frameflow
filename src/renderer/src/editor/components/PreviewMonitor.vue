@@ -81,6 +81,13 @@
 						<video ref="videoTRef" class="absolute inset-0 w-full h-full object-contain"
 							:style="{ opacity: edl.showCached.value ? 1 : 0 }"
 							preload="auto"></video>
+						<!-- The layer above the base track, drawn ON TOP of everything the
+						     pair does — including a transition, which is where the export
+						     puts it too. One element, so one extra layer previews; the
+						     export composites every track. -->
+						<video ref="videoORef" class="absolute inset-0 w-full h-full"
+							:style="{ opacity: edl.itemO.value ? 1 : 0, ...framingStyle(edl.itemO.value) }"
+							preload="auto" muted></video>
 						<!-- Titles. Position and size are fractions of the frame in both
 						     places, so this and the burned-in version land together
 						     without either side converting to the other's units. -->
@@ -188,7 +195,8 @@ const mode = ref<'source' | 'timeline'>('source')
 const videoARef = ref<HTMLVideoElement | null>(null)
 const videoBRef = ref<HTMLVideoElement | null>(null)
 const videoTRef = ref<HTMLVideoElement | null>(null)
-const edl = useEdlPlayback(videoARef, videoBRef, videoTRef)
+const videoORef = ref<HTMLVideoElement | null>(null)
+const edl = useEdlPlayback(videoARef, videoBRef, videoTRef, videoORef)
 
 onMounted(() => edl.start())
 

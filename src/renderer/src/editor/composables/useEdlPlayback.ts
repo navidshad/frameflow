@@ -42,7 +42,9 @@ export function useEdlPlayback(
 	videoA: Ref<HTMLVideoElement | null>,
 	videoB: Ref<HTMLVideoElement | null>,
 	/** Plays the pre-rendered transition window, when one is cached. */
-	videoT: Ref<HTMLVideoElement | null>
+	videoT: Ref<HTMLVideoElement | null>,
+	/** Draws the video track above the base one — picture-in-picture. */
+	videoO: Ref<HTMLVideoElement | null>
 ) {
 	const store = useEditorStore()
 
@@ -92,6 +94,7 @@ export function useEdlPlayback(
 	let preloadedFor: string | null = null
 
 	const segments = computed<EdlSegment[]>(() => store.videoSegments as EdlSegment[])
+	const overlays = computed<EdlSegment[]>(() => store.overlaySegments as EdlSegment[])
 	const audioSegments = computed<EdlSegment[]>(() => store.audioSegments as EdlSegment[])
 	const hasContent = computed(() => segments.value.length > 0 || audioSegments.value.length > 0)
 
@@ -163,6 +166,50 @@ export function useEdlPlayback(
 			}
 		}
 		audioActive.value = anyActive
+	}
+
+	// ---------- Overlay layer (picture-in-picture) ----------
+
+	/** The item the overlay element is showing, so the monitor can style it. */
+	const itemO = ref<string | null>(null)
+
+	/**
+	 * Position the overlay element for playhead `t`.
+	 *
+	 * Driven like an AUDIO element rather than like the A/B pair: one element,
+	 * seeked on entry to a segment and on an explicit seek, free-running in
+	 * between. The pair's machinery is for hiding the seek across a cut on ONE
+	 * track — an overlay has no cut to hide, it either covers the playhead or it
+	 * does not.
+	 */
+	const syncOverlay = (t: number, force = false) => {
+		const el = videoO.value
+		if (!el) return
+		const seg = overlays.value.find((s) => t >= s.tStart - 1e-6 && t < s.tEnd - 1e-6)
+		if (!seg) {
+			itemO.value = null
+			if (!el.paused) el.pause()
+			return
+		}
+		const changed = itemO.value !== seg.itemId
+		itemO.value = seg.itemId
+		// Compare the url we LAST SET, never el.src: reading it back returns the
+		// parser's re-serialisation, and a mismatch reloads the decoder every
+		// frame. The audio pool learned this first.
+		if (el.dataset.edlSrc !== seg.src) {
+			el.src = seg.src
+			el.dataset.edlSrc = seg.src
+		}
+		el.playbackRate = seg.speed
+		// The base track carries the sound; a second picture playing its own
+		// audio underneath it is just doubled talking.
+		el.muted = true
+		const target = seg.sourceIn + (t - seg.tStart) * seg.speed
+		if (changed || force || Math.abs(el.currentTime - target) > AUDIO_DRIFT_HARD) {
+			el.currentTime = target
+		}
+		if (store.isPlaying && el.paused) void el.play().catch(() => { /* autoplay guard */ })
+		if (!store.isPlaying && !el.paused) el.pause()
 	}
 
 	const activeEl = () => (activeIsA.value ? videoA.value : videoB.value)
@@ -494,6 +541,7 @@ export function useEdlPlayback(
 	// real drift — handled inside syncAudio with force=false.
 	watch(() => store.playheadSec, (t) => {
 		syncAudio(t, false)
+		syncOverlay(t, false)
 		// `tick` returns early while paused, so scrubbing through a window would
 		// otherwise freeze on whatever blend the last playing frame left behind.
 		if (!store.isPlaying) applyWindow(t)
@@ -528,14 +576,16 @@ export function useEdlPlayback(
 			videoT.value?.pause()
 		}
 		applyWindow(store.playheadSec)
-		// Force-anchor audio to the playhead on play/pause transitions.
+		// Force-anchor audio and the overlay on play/pause transitions.
 		syncAudio(store.playheadSec, true)
+		syncOverlay(store.playheadSec, true)
 	})
 
 	watch(() => store.seekRequest, (req) => {
 		suppressRafRead = true
 		activateAt(req.time)
 		syncAudio(req.time, true) // explicit seek: re-anchor audio
+		syncOverlay(req.time, true)
 	})
 
 	// Timeline edits can change/remove the current segment — re-resolve.
@@ -546,6 +596,7 @@ export function useEdlPlayback(
 		if (!store.isPlaying) {
 			activateAt(store.playheadSec)
 			syncAudio(store.playheadSec, true)
+			syncOverlay(store.playheadSec, true)
 		}
 	})
 
@@ -558,12 +609,14 @@ export function useEdlPlayback(
 		if (!ready) return
 		activateAt(store.playheadSec)
 		applyWindow(store.playheadSec)
+		syncOverlay(store.playheadSec, true)
 	})
 
 	const start = () => {
 		lastTick = performance.now()
 		rafId = requestAnimationFrame(tick)
 		activateAt(store.playheadSec)
+		syncOverlay(store.playheadSec, true)
 	}
 
 	onUnmounted(() => {
@@ -585,6 +638,7 @@ export function useEdlPlayback(
 		currentSegmentId,
 		itemA,
 		itemB,
+		itemO,
 		opacityA,
 		opacityB,
 		showCached,

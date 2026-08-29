@@ -309,11 +309,14 @@ export interface RegionGraph {
  * slack after a cover-scale, so the same `pan` drives both orientations: the
  * axis with no slack contributes zero.
  */
-export const vnorm = (w: number, h: number, fps: number, framing?: ItemFraming) => {
-	const tail = `setsar=1,fps=${fps},format=yuv420p`
+export const vnorm = (w: number, h: number, fps: number, framing?: ItemFraming, alpha = false) => {
+	// A compositing layer keeps an alpha channel, and letterboxes into
+	// TRANSPARENCY rather than black — otherwise a `fit` layer paints black bars
+	// over the picture it is supposed to sit on top of.
+	const tail = `setsar=1,fps=${fps},format=${alpha ? 'yuva420p' : 'yuv420p'}`
 	if (framing?.mode !== 'fill') {
 		return `scale=${w}:${h}:force_original_aspect_ratio=decrease,` +
-			`pad=${w}:${h}:(ow-iw)/2:(oh-ih)/2,${tail}`
+			`pad=${w}:${h}:(ow-iw)/2:(oh-ih)/2${alpha ? ':black@0' : ''},${tail}`
 	}
 	// The fraction of the overflow cut from the near edge — shared with the
 	// monitor, which spends the same number as an `object-position`.
@@ -330,10 +333,13 @@ export const vnorm = (w: number, h: number, fps: number, framing?: ItemFraming) 
  * `clone` holds the boundary frame, which is the repeated-frame behaviour a
  * transition falls back on when a clip has no handle media left.
  */
-function vpad(head: number, tail: number, mode: 'add' | 'clone'): string {
+function vpad(head: number, tail: number, mode: 'add' | 'clone', alpha = false): string {
 	const parts: string[] = []
-	if (head > PAD_EPS) parts.push(`start_mode=${mode}:start_duration=${t3(head)}`)
-	if (tail > PAD_EPS) parts.push(`stop_mode=${mode}:stop_duration=${t3(tail)}`)
+	// `add` fills with a colour; on a layer that colour has to be transparent,
+	// or the seconds before a late layer starts would black out the base.
+	const colour = mode === 'add' && alpha ? ':color=black@0' : ''
+	if (head > PAD_EPS) parts.push(`start_mode=${mode}${colour}:start_duration=${t3(head)}`)
+	if (tail > PAD_EPS) parts.push(`stop_mode=${mode}${colour}:stop_duration=${t3(tail)}`)
 	if (!parts.length) return ''
 	return `tpad=${parts.join(':')}${mode === 'add' ? ':color=black' : ''}`
 }
@@ -347,20 +353,23 @@ function adelay(seconds: number): string {
 
 /** One video slice → a labelled stream of exactly `regionDur`. */
 function videoStream(
-	slice: SourceSlice, plan: RegionPlan, regionDur: number, idx: number, label: string
+	slice: SourceSlice, plan: RegionPlan, regionDur: number, idx: number, label: string,
+	/** A layer composited ON TOP of another, so everything it does not cover
+	 *  must end up transparent rather than black. */
+	alpha = false
 ): { input: GraphInput; filter: string } {
 	const cut = t3(slice.out - slice.in)
 	const chain = [
 		...buildChain(videoBuilders, { slice, plan }),
-		vnorm(plan.width, plan.height, plan.fps, slice.item.framing),
+		vnorm(plan.width, plan.height, plan.fps, slice.item.framing, alpha),
 		// Frame space starts here: the picture is now exactly plan.width x
 		// plan.height, which is the only place a position or a scale means
 		// anything.
-		transformFilter(slice.item.transform, plan.width, plan.height),
+		transformFilter(slice.item.transform, plan.width, plan.height, alpha),
 		// Repeated frames first — they belong to the slice's own content — then
 		// black to position that content inside the region.
-		vpad(slice.freezeHead, slice.freezeTail, 'clone'),
-		vpad(slice.offset, regionDur - slice.offset - slice.duration, 'add')
+		vpad(slice.freezeHead, slice.freezeTail, 'clone', alpha),
+		vpad(slice.offset, regionDur - slice.offset - slice.duration, 'add', alpha)
 	].filter((f) => f !== '')
 	return {
 		input: { path: slice.srcPath, options: ['-ss', t3(slice.in), '-t', cut] },
@@ -447,11 +456,23 @@ export function buildRegionGraph(region: Region, plan: RegionPlan): RegionGraph 
 		return { inputs, filters, video: '[v]', audio }
 	}
 
-	// ---- Video: top layer's slice, or black of exactly `duration`.
-	// videoLayers[1..n] are the compositing seam (PiP/overlay, deferred). ----
-	const topLayer = region.videoLayers[0]
-	if (topLayer) {
-		add(videoStream(topLayer, plan, regionDur, inputs.length, '[v]'))
+	// ---- Video: every covering layer, composited bottom-up, or black ----
+	// videoLayers is TOP-most first, so the base is the LAST one. A single layer
+	// takes the same path it always did: opaque, no overlay, byte-identical.
+	if (region.videoLayers.length) {
+		const bottomUp = [...region.videoLayers].reverse()
+		add(videoStream(bottomUp[0], plan, regionDur, inputs.length, bottomUp.length > 1 ? '[vl0]' : '[v]'))
+		let below = '[vl0]'
+		for (let k = 1; k < bottomUp.length; k++) {
+			const layer = `[vl${k}]`
+			add(videoStream(bottomUp[k], plan, regionDur, inputs.length, layer, true))
+			const out = k === bottomUp.length - 1 ? '[v]' : `[vc${k}]`
+			// The layer is already frame-sized with everything it does not cover
+			// transparent, so it lands at the origin; `shortest=0` keeps the
+			// composite as long as the base, which IS the region.
+			filters.push(`${below}${layer}overlay=0:0:shortest=0:format=auto${out}`)
+			below = out
+		}
 	} else {
 		inputs.push({
 			path: `color=black:size=${plan.width}x${plan.height}:rate=${plan.fps}`,
