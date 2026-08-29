@@ -205,6 +205,12 @@ export interface EditorDocument {
 	historyRef: EditorHistoryRef      // pointer into the sidecar history file
 	selection?: { clipIds?: string[]; itemIds?: string[] }
 	markers?: EditorMarker[]    // renderer-owned; NOT undoable (outside TimelineDiff)
+	/**
+	 * Burn the transcript into the picture. A project-level switch rather than an
+	 * export option, because you have to be able to judge captions in the monitor
+	 * before paying for a render. NOT undoable, same as markers.
+	 */
+	captionsEnabled?: boolean
 	/** Pointer into the revisions sidecar (userData/editor-revisions/{id}.json). */
 	currentRevisionId?: string
 }

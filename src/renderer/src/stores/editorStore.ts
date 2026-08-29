@@ -12,6 +12,9 @@ import {
 	type TimelineState
 } from '@shared/timeline'
 import { computeScope } from '@shared/ai-scope'
+import {
+	captionsFromTimeline, type CaptionCue, type TranscriptEntry
+} from '@shared/captions'
 import { sequenceFrame as resolveSequenceFrame } from '@shared/framing'
 import { childrenByParent, collectSubtree, hasBranch } from '@shared/revision-tree'
 import { DEFAULT_PERSONA_ID } from '@shared/personas'
@@ -189,6 +192,58 @@ export const useEditorStore = defineStore('editor', () => {
 		}
 		return map
 	})
+
+	// ===== Captions =====
+
+	/** Transcripts by asset id, in SOURCE seconds. Fetched from the main process,
+	 *  which owns the files; refreshed whenever a transcript lands or moves. */
+	const transcripts = ref<Record<string, TranscriptEntry[]>>({})
+
+	const refreshTranscripts = async () => {
+		if (!threadId.value) return
+		try {
+			transcripts.value = await api.getEditorTranscripts(threadId.value) || {}
+		} catch (error) {
+			console.error('[editorStore] transcript fetch failed:', error)
+		}
+	}
+
+	/**
+	 * Every caption the sequence shows, from the SAME function the export burns
+	 * with — so what the monitor draws is what ends up in the file.
+	 */
+	const captionCues = computed<CaptionCue[]>(() => {
+		if (!doc.value?.captionsEnabled) return []
+		return captionsFromTimeline(doc.value, transcripts.value)
+	})
+
+	const captionsEnabled = computed(() => doc.value?.captionsEnabled === true)
+
+	/** Whether there is anything to caption — the toggle is dead weight without it. */
+	const hasTranscript = computed(() => {
+		const d = doc.value
+		if (!d) return false
+		return d.timeline.some((i) => transcripts.value[i.sourceAssetId]?.length)
+	})
+
+	/** Project-level, and NOT undoable: it is a setting, like markers. */
+	const setCaptionsEnabled = (enabled: boolean) => {
+		if (!doc.value) return
+		doc.value.captionsEnabled = enabled
+		markDirty()
+	}
+
+	// Transcripts live on disk and arrive from preprocessing, not from an edit —
+	// so the trigger is a transcript appearing, moving or being cleared. The
+	// preprocess state rides along because a RE-transcribe rewrites the same
+	// path, and the path alone would look unchanged.
+	watch(
+		() => (doc.value?.media || [])
+			.map((a) => `${a.id}:${a.preprocessing?.transcriptPath || ''}:${a.preprocessState || ''}`)
+			.join('|'),
+		() => { void refreshTranscripts() },
+		{ immediate: true }
+	)
 
 	/**
 	 * The shape this project exports in. Resolved through the same function the
@@ -566,6 +621,15 @@ export const useEditorStore = defineStore('editor', () => {
 			warnings.push({ id: 'overlay', text: "Overlay/text tracks won't appear in this export." })
 		}
 
+		// Not a mistake to fix — a cost to know about. Every other export stitches
+		// with a stream copy; painting captions onto the picture cannot.
+		if (doc.value.captionsEnabled && captionCues.value.length) {
+			warnings.push({
+				id: 'captions',
+				text: 'Captions are burned in, so the whole video is re-encoded. This export will take longer.'
+			})
+		}
+
 		return warnings
 	})
 
@@ -601,7 +665,11 @@ export const useEditorStore = defineStore('editor', () => {
 				// Undo pointer rides with the doc: state + pointer land atomically
 				historyRef: doc.value.historyRef,
 				markers: doc.value.markers,
-				currentRevisionId: doc.value.currentRevisionId
+				currentRevisionId: doc.value.currentRevisionId,
+				// `?? false` because JSON.stringify drops an undefined, and the main
+				// handler would then read the patch as "no opinion" and keep the old
+				// value — the same trap the cleared-transition bug fell into.
+				captionsEnabled: doc.value.captionsEnabled ?? false
 			}))
 			await api.saveEditorDoc({ threadId: threadId.value, patch })
 			dirty.value = false
@@ -2348,6 +2416,11 @@ export const useEditorStore = defineStore('editor', () => {
 		setItemFraming,
 		setSequenceFrame,
 		sequenceFrame,
+		captionCues,
+		captionsEnabled,
+		hasTranscript,
+		setCaptionsEnabled,
+		refreshTranscripts,
 		seams,
 		selectedSeamId,
 		selectedSeam,

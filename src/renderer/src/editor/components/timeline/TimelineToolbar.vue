@@ -33,6 +33,14 @@
 				:disabled="!store.hasGaps" @click="store.closeGaps()" />
 			<ToolButton icon="tabler--magnet" :title="store.snapEnabled ? 'Snapping on' : 'Snapping off'"
 				:active="store.snapEnabled" @click="store.snapEnabled = !store.snapEnabled" />
+			<ToolButton icon="tabler--badge-cc" :disabled="!store.hasTranscript"
+				:title="!store.hasTranscript
+					? 'Captions — transcribe a clip first'
+					: store.captionsEnabled
+						? 'Captions on — burned into the export'
+						: 'Captions off'"
+				:active="store.captionsEnabled"
+				@click="store.setCaptionsEnabled(!store.captionsEnabled)" />
 			<div class="w-px h-4 bg-zinc-200 dark:bg-zinc-800 mx-1"></div>
 
 			<!-- Marker / chapter jump list (§5.3) -->

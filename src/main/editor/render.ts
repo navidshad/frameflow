@@ -10,7 +10,8 @@ import type {
 } from '@shared/types'
 import { findOrphanItems, itemEnd } from '@shared/timeline'
 import { planTransitions, sourceDurationsFrom, type TransitionWindow } from '@shared/transitionPlan'
-import { sequenceFrame } from '@shared/framing'
+import { sequenceFrame, type FrameSource } from '@shared/framing'
+import { burnCaptions, cuesForDoc } from './captions'
 import { threadManager } from '../threads'
 import { assembleVideo, sanitizeFilename } from '../ffmpeg'
 import { THREAD_DIRS } from '../constants/paths'
@@ -368,6 +369,17 @@ function validateWindows(
 
 // ===== Fast path =====
 
+/**
+ * The same blind spot again, from the other side: `assembleVideo` emits no
+ * scaling filter, so its output is the SOURCE's dimensions. It can therefore
+ * only serve a sequence whose frame already matches — otherwise a project set
+ * to 9:16 would quietly export at the footage's 16:9 with no error and no log.
+ */
+export const fastPathMatchesFrame = (
+	source: FrameSource | undefined,
+	plan: { width: number; height: number }
+): boolean => !!source && source.width === plan.width && source.height === plan.height
+
 export function isFastPathEligible(items: TimelineItem[], track: Track, hasAudioItems = false): boolean {
 	if (items.length === 0) return false
 	if (hasAudioItems) return false // audio-track items need the mixing region path
@@ -567,6 +579,9 @@ export function startEditorRender(options: {
 	void (async () => {
 		const baseName = sanitizeFilename(thread.title || 'export')
 		let finalPath = path.join(exportsDir, `${baseName}_${renderId.slice(0, 8)}.mp4`)
+		// Held outside the try so the cleanup can remove a half-burned file too;
+		// it lives beside finalPath rather than inside workDir, which is swept.
+		let captionedPath: string | null = null
 		try {
 			progress(0, 'rendering')
 
@@ -590,9 +605,12 @@ export function startEditorRender(options: {
 				(i) => videoTrackIds.has(i.trackId) && i.trackId !== videoTrack?.id
 			)
 
+			const fastSource = doc.media.find((a) => a.id === items[0]?.sourceAssetId)?.metadata
+
 			// `!plan.hasOverlap` reads the walker's OWN output, so a future source of
 			// transitions the predicate does not know about still cannot slip through.
 			if (videoTrack && !hasOtherVideoItems && !plan.hasOverlap
+				&& fastPathMatchesFrame(fastSource, plan)
 				&& isFastPathEligible(items, videoTrack, hasAudioItems)) {
 				// ---- Fast path: single-source trim+concat via assembleVideo ----
 				// computeRegions' orphan pre-flight already ran, so this resolves —
@@ -651,12 +669,34 @@ export function startEditorRender(options: {
 				}
 			}
 
+			// ---- Captions ----
+			// One pass over the finished file, so it covers the fast path and the
+			// region path alike — both have assigned finalPath by here.
+			if (doc.captionsEnabled) {
+				const cues = cuesForDoc(doc)
+				if (cues.length) {
+					progress(97, 'stitching')
+					captionedPath = await burnCaptions({
+						sourcePath: finalPath,
+						workDir,
+						cues,
+						frame: { width: plan.width, height: plan.height },
+						signal,
+						onProgress: (pct) => progress(97 + pct * 0.03, 'stitching')
+					})
+					// Replace the uncaptioned render only once the burn has landed.
+					fs.renameSync(captionedPath, finalPath)
+					captionedPath = null
+				}
+			}
+
 			emitRenderProgress({ threadId, renderId, percent: 100, phase: 'done', outputPath: finalPath })
 		} catch (error: any) {
 			const message = signal.aborted ? 'aborted' : (error?.message || 'Export failed')
 			if (!signal.aborted) console.error('[render] Export failed:', error)
 			// Remove a partial final file
 			try { if (fs.existsSync(finalPath)) fs.unlinkSync(finalPath) } catch { /* ignore */ }
+			try { if (captionedPath && fs.existsSync(captionedPath)) fs.unlinkSync(captionedPath) } catch { /* ignore */ }
 			emitRenderProgress({ threadId, renderId, percent: 0, phase: 'error', error: message })
 		} finally {
 			try { fs.rmSync(workDir, { recursive: true, force: true }) } catch { /* ignore */ }

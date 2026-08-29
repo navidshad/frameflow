@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import type { EditorDocument, MediaAsset, TimelineItem, Track } from '@shared/types'
 import { DEFAULT_TRANSITION_SEC } from '@shared/transitionPlan'
-import { computeRegions, isFastPathEligible } from './render'
+import { computeRegions, fastPathMatchesFrame, isFastPathEligible } from './render'
 import { allSlices, type OverlapRegion, type RegionPlan } from './renderBuilders'
 
 // ===== Fixtures =====
@@ -395,5 +395,25 @@ describe('allSlices', () => {
 	it('enumerates the transitioning pair, so neither escapes the pre-flight', () => {
 		const region = overlaps(computeRegions(withTransition(), 'original'))[0]
 		expect(allSlices(region).map((s) => s.item.id).sort()).toEqual(['A', 'B'])
+	})
+})
+
+describe('fastPathMatchesFrame', () => {
+	// The fast path re-muxes the source untouched, so it can only serve a
+	// sequence that already has the source's shape.
+	const frame = { width: 1920, height: 1080 }
+
+	it('accepts a source that already is the frame', () => {
+		expect(fastPathMatchesFrame({ width: 1920, height: 1080 }, frame)).toBe(true)
+	})
+
+	it('declines a reframed sequence', () => {
+		expect(fastPathMatchesFrame({ width: 1920, height: 1080 }, { width: 1080, height: 1920 }))
+			.toBe(false)
+	})
+
+	it('declines a source whose shape is unknown', () => {
+		expect(fastPathMatchesFrame(undefined, frame)).toBe(false)
+		expect(fastPathMatchesFrame({}, frame)).toBe(false)
 	})
 })

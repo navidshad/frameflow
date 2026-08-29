@@ -10,6 +10,7 @@ import { TRANSITION_PRESETS } from '@shared/transitionPresets'
 import { computeRegions } from './render'
 import { buildRegionGraph, type OverlapRegion, type Region, type RegionPlan } from './renderBuilders'
 import { previewPlan, renderTransitionWindow } from './preview'
+import { burnCaptions } from './captions'
 
 /**
  * End-to-end against the REAL bundled binary: proves the filtergraph this module
@@ -51,6 +52,21 @@ const durationOf = async (file: string): Promise<number> => {
 	const { stdout } = await execFileAsync(ffprobe,
 		['-v', 'error', '-show_entries', 'format=duration', '-of', 'csv=p=0', file])
 	return Number(stdout.trim())
+}
+
+/**
+ * Brightest pixel in the frame at `t`.
+ *
+ * NOT the average: text covers a small share of the frame, and a 1x1 downscale
+ * rounds a line of white lettering on black straight down to zero — which is
+ * how "libass renders nothing" was once concluded from a working build.
+ */
+const maxLumaAt = async (file: string, t: number): Promise<number> => {
+	const { stdout } = await execFileAsync(ffmpeg,
+		['-v', 'error', '-ss', String(t), '-i', file, '-frames:v', '1',
+			'-vf', 'format=gray', '-f', 'rawvideo', '-'],
+		{ encoding: 'buffer', maxBuffer: 1 << 24 })
+	return (stdout as unknown as Buffer).reduce((max, v) => (v > max ? v : max), 0)
 }
 
 /** Average RGB of the frame at `t`, via a 1x1 downscale. */
@@ -270,6 +286,70 @@ describe('render pipeline — against the real ffmpeg', () => {
 		const file = await renderGraph(window, plan, 'freeze.mp4')
 		expect(await durationOf(file)).toBeCloseTo(window.duration, 1)
 	}, 60_000)
+})
+
+describe('captions vs the real binary', () => {
+	let capDir: string
+	let black: string
+
+	beforeAll(async () => {
+		// A colon, a comma and brackets in the directory name: the escaping has
+		// three parsers to satisfy, and a home directory really can contain them.
+		capDir = await fs.mkdtemp(join(tmpdir(), 'ff-cap-'))
+		capDir = join(capDir, "weird: dir, [x]'y")
+		await fs.mkdir(capDir, { recursive: true })
+		black = join(capDir, 'black.mp4')
+		await execFileAsync(ffmpeg, [
+			'-y', '-v', 'error',
+			'-f', 'lavfi', '-i', 'color=c=black:s=320x180:d=3:r=15',
+			'-f', 'lavfi', '-i', 'anullsrc=r=48000:cl=stereo',
+			'-shortest', '-c:v', 'libx264', '-preset', 'ultrafast', '-c:a', 'aac', '-t', '3', black
+		])
+	}, 60_000)
+
+	afterAll(async () => {
+		await fs.rm(capDir, { recursive: true, force: true })
+	})
+
+	it('burns a cue, and only inside its own window', async () => {
+		const out = await burnCaptions({
+			sourcePath: black,
+			workDir: capDir,
+			cues: [{ start: 1, end: 2, text: 'HELLO' }],
+			frame: { width: 320, height: 180 },
+			signal: new AbortController().signal
+		})
+
+		expect(await maxLumaAt(out, 1.5)).toBeGreaterThan(200)  // white text
+		expect(await maxLumaAt(out, 0.4)).toBeLessThan(24)      // still black
+		expect(await maxLumaAt(out, 2.6)).toBeLessThan(24)
+	}, 90_000)
+
+	it('renders right-to-left text', async () => {
+		// libass carries FriBidi and HarfBuzz inside it, not as an ffmpeg
+		// configure flag — which is why `-version` does not mention them and this
+		// is worth asserting rather than assuming.
+		const out = await burnCaptions({
+			sourcePath: black,
+			workDir: capDir,
+			cues: [{ start: 1, end: 2, text: 'سلام دنیا' }],
+			frame: { width: 320, height: 180 },
+			signal: new AbortController().signal
+		})
+		expect(await maxLumaAt(out, 1.5)).toBeGreaterThan(200)
+	}, 90_000)
+
+	it('leaves the source file alone', async () => {
+		const before = (await fs.stat(black)).size
+		await burnCaptions({
+			sourcePath: black,
+			workDir: capDir,
+			cues: [{ start: 0.5, end: 1, text: 'x' }],
+			frame: { width: 320, height: 180 },
+			signal: new AbortController().signal
+		})
+		expect((await fs.stat(black)).size).toBe(before)
+	}, 90_000)
 })
 
 describe('transition catalogue vs the real binary', () => {

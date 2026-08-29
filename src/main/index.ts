@@ -26,6 +26,7 @@ import * as editorHistory from './editor/history'
 import * as editorPrompt from './editor/prompt'
 import * as editorPreview from './editor/preview'
 import * as editorRender from './editor/render'
+import * as editorCaptions from './editor/captions'
 import * as editorRevisions from './editor/revisions'
 import { BUILTIN_PERSONAS } from './constants/personas'
 import { v4 as uuidv4 } from 'uuid'
@@ -395,6 +396,7 @@ app.whenReady().then(() => {
 			historyRef?: any
 			markers?: any[]
 			currentRevisionId?: string
+			captionsEnabled?: boolean
 		}
 	}) => {
 		return await threadManager.updateThreadWith(threadId, (thread) => {
@@ -425,6 +427,9 @@ app.whenReady().then(() => {
 			// state land in one atomic write (crash-consistent by construction).
 			if (patch.historyRef) editor.historyRef = patch.historyRef
 			if (patch.markers) editor.markers = patch.markers
+			// Explicitly against undefined: turning captions OFF is a false, which
+			// a truthiness check would silently refuse to save.
+			if (patch.captionsEnabled !== undefined) editor.captionsEnabled = patch.captionsEnabled
 			if (patch.currentRevisionId !== undefined) editor.currentRevisionId = patch.currentRevisionId
 
 			// Fold clip-selected flags into the matching clips (the one renderer-owned
@@ -633,6 +638,14 @@ app.whenReady().then(() => {
 		outgoingId: string
 		incomingId: string
 	}) => editorPreview.ensureTransitionPreview(data))
+
+	// The monitor draws captions itself, from the same mapper the export burns
+	// with — so it needs the transcripts, not a picture of them.
+	ipcMain.handle('get-editor-transcripts', (_event, threadId: string) => {
+		const thread = threadManager.getThread(threadId)
+		if (!thread || thread.type !== 'editor' || !thread.editor) return {}
+		return editorCaptions.transcriptsForAssets(thread.editor.media)
+	})
 
 	ipcMain.handle('abort-editor-render', (_event, { renderId }: { renderId: string }) => {
 		editorRender.abortEditorRender(renderId)

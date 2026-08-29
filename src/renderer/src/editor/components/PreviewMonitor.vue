@@ -81,6 +81,12 @@
 						<video ref="videoTRef" class="absolute inset-0 w-full h-full object-contain"
 							:style="{ opacity: edl.showCached.value ? 1 : 0 }"
 							preload="auto"></video>
+						<!-- Captions, laid out from the same metrics the burn uses, so
+						     this is a preview rather than an impression of one. -->
+						<div v-if="activeCue" class="absolute inset-x-0 bottom-0 flex justify-center
+							pointer-events-none" :style="captionBoxStyle">
+							<span :style="captionTextStyle">{{ activeCue.text }}</span>
+						</div>
 						<!-- Audio tracks play through an element pool in the composable
 						     (one per track), heard in parallel with the video. -->
 						<div v-if="edl.inGap.value"
@@ -124,6 +130,7 @@
 </template>
 
 <script setup lang="ts">
+import { captionMetrics, cueAt } from '@shared/captions'
 import { panObjectPosition } from '@shared/framing'
 import { toMediaUrl } from '@shared/media-url'
 import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue'
@@ -175,6 +182,46 @@ watch(stageRef, (el) => {
 }, { immediate: true })
 
 onBeforeUnmount(() => stageObserver?.disconnect())
+
+// ===== Captions =====
+
+const activeCue = computed(() =>
+	store.captionsEnabled ? cueAt(store.captionCues, store.playheadSec) : null
+)
+
+/** Metrics for the frame's CURRENT size on screen, not the sequence's — same
+ *  fractions, so the words sit where libass will put them. */
+const captionMetricsPx = computed(() => {
+	const { w, h } = stage.value
+	if (!w || !h) return captionMetrics({ width: seqWidth.value, height: seqHeight.value })
+	const scale = Math.min(w / seqWidth.value, h / seqHeight.value)
+	return captionMetrics({
+		width: Math.floor(seqWidth.value * scale),
+		height: Math.floor(seqHeight.value * scale)
+	})
+})
+
+const captionBoxStyle = computed(() => ({
+	paddingBottom: `${captionMetricsPx.value.marginV}px`,
+	paddingLeft: `${captionMetricsPx.value.marginH}px`,
+	paddingRight: `${captionMetricsPx.value.marginH}px`
+}))
+
+const captionTextStyle = computed(() => {
+	const m = captionMetricsPx.value
+	return {
+		fontFamily: 'Arial, Helvetica, sans-serif',
+		fontWeight: 700,
+		fontSize: `${m.fontSize}px`,
+		lineHeight: 1.2,
+		color: '#fff',
+		textAlign: 'center' as const,
+		// libass strokes the glyph outline; four shadows is the closest CSS gets
+		// without -webkit-text-stroke, which paints INSIDE the letter.
+		textShadow: [`${m.outline}px 0`, `-${m.outline}px 0`, `0 ${m.outline}px`, `0 -${m.outline}px`]
+			.map((offset) => `${offset} #000`).join(', ')
+	}
+})
 
 /**
  * How one element fills the frame. `object-position` comes from the same
