@@ -88,6 +88,58 @@ describe('buildRegionGraph — cut regions', () => {
 	})
 })
 
+// ===== Reframing =====
+
+describe('vnorm — framing', () => {
+	const chainOf = (framing?: { mode: 'fit' | 'fill'; pan?: number }) =>
+		graphOf(cut({ videoLayers: [slice({ item: item({ framing }) })] })).text
+
+	it('letterboxes by default, exactly as it always has', () => {
+		// Every existing project must render byte-identically: nothing has ever
+		// written a framing, so the absent case is the whole back catalogue.
+		expect(chainOf()).toContain('scale=1920:1080:force_original_aspect_ratio=decrease')
+		expect(chainOf()).toContain('pad=1920:1080:(ow-iw)/2:(oh-ih)/2')
+		expect(chainOf()).not.toContain('crop=')
+	})
+
+	it('treats an explicit fit the same as none', () => {
+		expect(chainOf({ mode: 'fit' })).toBe(chainOf())
+	})
+
+	it('covers and crops when told to fill', () => {
+		const chain = chainOf({ mode: 'fill' })
+		expect(chain).toContain('scale=1920:1080:force_original_aspect_ratio=increase')
+		expect(chain).toContain('crop=1920:1080:(iw-ow)/2:(ih-oh)/2')
+		expect(chain).not.toContain('pad=')
+	})
+
+	it('walks the crop toward an edge as the pan moves', () => {
+		// The offset is an expression over iw/ih — the SCALED image — so this needs
+		// no source dimensions and works for either orientation.
+		expect(chainOf({ mode: 'fill', pan: -1 })).toContain('(iw-ow)/2+(-1)*(iw-ow)/2')
+		expect(chainOf({ mode: 'fill', pan: 1 })).toContain('(iw-ow)/2+(1)*(iw-ow)/2')
+	})
+
+	it('clamps a pan beyond the frame', () => {
+		expect(chainOf({ mode: 'fill', pan: 5 })).toBe(chainOf({ mode: 'fill', pan: 1 }))
+		expect(chainOf({ mode: 'fill', pan: -5 })).toBe(chainOf({ mode: 'fill', pan: -1 }))
+	})
+
+	it('omits the pan term entirely when centred', () => {
+		expect(chainOf({ mode: 'fill', pan: 0 })).toBe(chainOf({ mode: 'fill' }))
+	})
+
+	it('normalizes both sides of a transition the same way', () => {
+		// xfade requires identical geometry; a framed clip must not break that.
+		const g = graphOf(overlap({
+			from: slice({ item: item({ id: 'A', framing: { mode: 'fill' } }), srcPath: '/tmp/A.mp4' }),
+			to: slice({ item: item({ id: 'B', framing: { mode: 'fill', pan: 1 } }), srcPath: '/tmp/B.mp4' })
+		}))
+		expect(g.text.match(/crop=1920:1080/g)).toHaveLength(2)
+		expect(g.text).toContain('xfade=')
+	})
+})
+
 // ===== Region-local placement (the Stage A regression) =====
 
 describe('buildRegionGraph — slice placement', () => {

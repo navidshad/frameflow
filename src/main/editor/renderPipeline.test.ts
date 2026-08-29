@@ -193,6 +193,33 @@ describe('render pipeline — against the real ffmpeg', () => {
 		expect(leftovers).toEqual([])
 	}, 60_000)
 
+	it('reframes a landscape source into a portrait sequence', async () => {
+		// The whole point of the feature: 16:9 footage exported 9:16. `fit` bars it,
+		// `fill` crops it, and the pan chooses which third of the frame survives.
+		// The sources are flat colours, so a letterbox is detectable as black.
+		const portrait = (framing?: { mode: 'fit' | 'fill'; pan?: number }) => {
+			const d = document()
+			d.timelineMeta = { fps: 30, width: 180, height: 320, duration: 0 }
+			d.timeline = [clip({ id: 'A', sourceAssetId: 'sa', timelineStart: 0, in: 1, out: 3, framing })]
+			return computeRegions(d, 'original')
+		}
+
+		const fitPlan = portrait({ mode: 'fit' })
+		expect([fitPlan.width, fitPlan.height]).toEqual([180, 320])
+		const fitFile = await renderGraph(fitPlan.regions[0], fitPlan, 'fit.mp4')
+		const [, fitG, fitB] = await colourAt(fitFile, 0.5)
+
+		const fillFile = await renderGraph(portrait({ mode: 'fill' }).regions[0], portrait({ mode: 'fill' }), 'fill.mp4')
+		const [fillR] = await colourAt(fillFile, 0.5)
+
+		// A is solid red. Filled, the frame is red edge to edge; fitted, most of it
+		// is the black padding, so the average is far darker.
+		expect(fillR).toBeGreaterThan(200)
+		const fitAvg = await colourAt(fitFile, 0.5)
+		expect(fitAvg[0]).toBeLessThan(fillR)
+		expect(fitG + fitB).toBeLessThan(60)
+	}, 60_000)
+
 	it('repeats frames instead of failing when neither clip has handles', async () => {
 		const doc = document({ kind: 'fade', duration: 1 })
 		// Untrimmed on both sides: no handle media anywhere.

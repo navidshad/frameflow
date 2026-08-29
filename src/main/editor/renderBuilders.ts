@@ -1,4 +1,4 @@
-import type { TimelineItem, Track, TransitionRef } from '@shared/types'
+import type { ItemFraming, TimelineItem, Track, TransitionRef } from '@shared/types'
 
 /**
  * Handler-based filter builders (PRD §7 — "Render engine is handler-based").
@@ -272,11 +272,36 @@ export interface RegionGraph {
 	audio: string   // …and the finished mix
 }
 
-/** Normalize to the sequence's frame size and rate. `xfade` requires its two
- *  inputs to match exactly, so both sides of a transition run this too. */
-export const vnorm = (w: number, h: number, fps: number) =>
-	`scale=${w}:${h}:force_original_aspect_ratio=decrease,` +
-	`pad=${w}:${h}:(ow-iw)/2:(oh-ih)/2,setsar=1,fps=${fps},format=yuv420p`
+/**
+ * Normalize to the sequence's frame size and rate. `xfade` requires its two
+ * inputs to match exactly, so both sides of a transition run this too.
+ *
+ * Two ways to reconcile a source with a frame of a different shape:
+ *
+ *   fit  — scale until it fits INSIDE the frame, pad the remainder black.
+ *          Nothing is lost; a 16:9 source in a 9:16 frame becomes a strip.
+ *   fill — scale until it COVERS the frame, then crop back to it. Nothing is
+ *          padded; whatever falls outside is gone, and `pan` chooses which part
+ *          survives.
+ *
+ * The crop offset is written as an ffmpeg expression over `iw`/`ih` — the scaled
+ * image, not the source — so this needs no asset metadata. Only one axis has
+ * slack after a cover-scale, so the same `pan` drives both orientations: the
+ * axis with no slack contributes zero.
+ */
+export const vnorm = (w: number, h: number, fps: number, framing?: ItemFraming) => {
+	const tail = `setsar=1,fps=${fps},format=yuv420p`
+	if (framing?.mode !== 'fill') {
+		return `scale=${w}:${h}:force_original_aspect_ratio=decrease,` +
+			`pad=${w}:${h}:(ow-iw)/2:(oh-ih)/2,${tail}`
+	}
+	const pan = Math.max(-1, Math.min(1, framing.pan ?? 0))
+	// (iw-ow)/2 is centred; adding pan * that same slack walks it to either edge.
+	const off = (i: string, o: string) =>
+		pan === 0 ? `(${i}-${o})/2` : `(${i}-${o})/2+(${fmt(pan)})*(${i}-${o})/2`
+	return `scale=${w}:${h}:force_original_aspect_ratio=increase,` +
+		`crop=${w}:${h}:${off('iw', 'ow')}:${off('ih', 'oh')},${tail}`
+}
 
 /**
  * Pad a video stream at either end. `add` fills with black — the slice starts
@@ -306,7 +331,7 @@ function videoStream(
 	const cut = t3(slice.out - slice.in)
 	const chain = [
 		...buildChain(videoBuilders, { slice, plan }),
-		vnorm(plan.width, plan.height, plan.fps),
+		vnorm(plan.width, plan.height, plan.fps, slice.item.framing),
 		// Repeated frames first — they belong to the slice's own content — then
 		// black to position that content inside the region.
 		vpad(slice.freezeHead, slice.freezeTail, 'clone'),

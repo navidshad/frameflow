@@ -304,6 +304,38 @@ describe('computeRegions — guards', () => {
 	})
 })
 
+// ===== Sequence geometry =====
+
+describe('computeRegions — sequence geometry', () => {
+	it('takes the frame from the sequence when the project has one', () => {
+		// This is what makes a 9:16 export from 16:9 footage possible at all.
+		const p = plan({
+			timeline: [item(0)],
+			timelineMeta: { fps: 30, width: 1080, height: 1920, duration: 0 }
+		})
+		expect([p.width, p.height]).toEqual([1080, 1920])
+	})
+
+	it('falls back to the largest source when the sequence has none', () => {
+		// Nothing has ever written these fields, so every existing project takes
+		// this branch and must render exactly as it did before.
+		const p = plan({
+			timeline: [item(0)],
+			timelineMeta: { fps: 30, width: 0, height: 0, duration: 0 } as never
+		})
+		expect([p.width, p.height]).toEqual([1920, 1080])
+	})
+
+	it('keeps frame dimensions even', () => {
+		const p = plan({
+			timeline: [item(0)],
+			timelineMeta: { fps: 30, width: 1081, height: 1921, duration: 0 }
+		})
+		expect(p.width % 2).toBe(0)
+		expect(p.height % 2).toBe(0)
+	})
+})
+
 // ===== The fast path =====
 
 describe('isFastPathEligible', () => {
@@ -319,6 +351,19 @@ describe('isFastPathEligible', () => {
 		// error and no log.
 		const items = [item(0, { id: 'A', transition: dissolve() }), item(10, { id: 'B' })]
 		expect(isFastPathEligible(items, track('v1'))).toBe(false)
+	})
+
+	it('rejects a clip asked to fill a differently-shaped frame', () => {
+		// assembleVideo emits no scale or crop filter at all, so a fill would come
+		// out letterboxed at the source's own size with no error.
+		const items = [item(0, { id: 'A', framing: { mode: 'fill', pan: 0.5 } }), item(10, { id: 'B' })]
+		expect(isFastPathEligible(items, track('v1'))).toBe(false)
+	})
+
+	it('still accepts a clip explicitly set to fit', () => {
+		// Fit IS what the fast path does, so it stays eligible.
+		const items = [item(0, { id: 'A', framing: { mode: 'fit' } }), item(10, { id: 'B' })]
+		expect(isFastPathEligible(items, track('v1'))).toBe(true)
 	})
 
 	it('rejects a timeline carrying an incoming transition', () => {

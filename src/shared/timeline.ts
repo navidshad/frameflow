@@ -219,6 +219,13 @@ const sameTransition = (a: TimelineItem['transition'], b: TimelineItem['transiti
 	return sameRef(a?.in, b?.in) && sameRef(a?.out, b?.out)
 }
 
+/** Same immutability contract as `transition` above — replace, never mutate. */
+const sameFraming = (a: TimelineItem['framing'], b: TimelineItem['framing']): boolean => {
+	if (a === b) return true
+	if (!a || !b) return false
+	return a.mode === b.mode && (a.pan ?? 0) === (b.pan ?? 0)
+}
+
 function changedFields<T extends { id: string }>(before: T, after: T, fields: (keyof T)[]): Partial<T> | null {
 	let changed: Partial<T> | null = null
 	for (const field of fields) {
@@ -264,11 +271,17 @@ export function diffTimelines(
 			// comparator is shared with TRACK_FIELDS and compares by identity, which
 			// is wrong for an object. Without this, applying a transition is invisible
 			// to undo and to revisions.
+			const objectChanged =
+				!sameTransition(beforeItem.transition, afterItem.transition) ||
+				!sameFraming(beforeItem.framing, afterItem.framing)
 			const fwd = changedFields(beforeItem, afterItem, ITEM_FIELDS)
-				?? (sameTransition(beforeItem.transition, afterItem.transition) ? null : {})
+				?? (objectChanged ? {} : null)
 			if (fwd) {
 				if (!sameTransition(beforeItem.transition, afterItem.transition)) {
 					fwd.transition = afterItem.transition
+				}
+				if (!sameFraming(beforeItem.framing, afterItem.framing)) {
+					fwd.framing = afterItem.framing
 				}
 				const keys = Object.keys(fwd) as (keyof TimelineItem)[]
 				;(forward.updateItems ||= []).push({ id, ...fwd })

@@ -120,8 +120,16 @@ export function computeRegions(doc: EditorDocument, quality: ExportQuality): Reg
 		const area = (a.metadata?.width || 0) * (a.metadata?.height || 0)
 		return area > best.area ? { area, w: a.metadata!.width, h: a.metadata!.height } : best
 	}, { area: 0, w: 1280, h: 720 })
-	const width = even(largest.w)
-	const height = even(largest.h)
+	// The SEQUENCE decides its own shape when the project has one — that is what
+	// makes a 9:16 export from 16:9 footage possible at all. Falling back to the
+	// largest source keeps every existing project rendering exactly as before,
+	// since nothing has ever written these fields.
+	const meta = doc.timelineMeta
+	const chosen = meta?.width && meta?.height
+		? { w: meta.width, h: meta.height }
+		: { w: largest.w, h: largest.h }
+	const width = even(chosen.w)
+	const height = even(chosen.h)
 	const fps = Math.min(60, Math.max(10,
 		usedVideoAssets.reduce((max, a) => Math.max(max, a.metadata?.fps || 0), 0) || 30
 	))
@@ -385,6 +393,10 @@ export function isFastPathEligible(items: TimelineItem[], track: Track, hasAudio
 	// than resolving the window: declining the fast path costs a re-encode, and
 	// resolving here would be a second place the geometry could disagree.
 	if (items.some((i) => i.transition?.in || i.transition?.out)) return false
+	// assembleVideo emits no scale/crop filter whatsoever — its output is the
+	// source's own dimensions. Any clip asked to fill a differently-shaped frame
+	// would silently come out letterboxed at the source size instead.
+	if (items.some((i) => i.framing && i.framing.mode !== 'fit')) return false
 	if (Math.abs(items[0].timelineStart) > SNAP_EPS) return false // leading gap needs black
 	for (let i = 1; i < items.length; i++) {
 		if (Math.abs(items[i].timelineStart - itemEnd(items[i - 1])) > SNAP_EPS) return false

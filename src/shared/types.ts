@@ -321,12 +321,29 @@ export interface TimelineItem {  // an instance of a clip placed on a track
 	muted?: boolean
 	// ---- Stubs (deferred: effects/transitions/transforms/text) ----
 	transform?: TimelineItemTransform
+	/** Reframing for a sequence of a different shape. Absent = 'fit' (letterbox). */
+	framing?: ItemFraming
 	effects?: EffectRef[]
 	transition?: { in?: TransitionRef; out?: TransitionRef }
 	text?: TextOverlaySpec
 }
 
 export interface TimelineItemTransform { x?: number; y?: number; scale?: number; rotation?: number }
+
+/**
+ * How a clip fills a sequence frame of a different shape.
+ *
+ * Deliberately NOT `TimelineItemTransform`, which is the Phase 3 free transform
+ * (arbitrary scale/position/rotation). This is the narrow reframing question —
+ * given a 16:9 source in a 9:16 sequence, letterbox it or crop it — and it needs
+ * exactly one number.
+ *
+ * `pan` is normalised to -1..1 across whichever axis has slack after the fill
+ * scale: -1 is hard left (or top), 0 centred, 1 hard right (or bottom). Only one
+ * axis ever has slack, so one value serves both orientations and the renderer
+ * resolves it from the frame at filter time rather than from source metadata.
+ */
+export interface ItemFraming { mode: 'fit' | 'fill'; pan?: number }
 export interface EffectRef { id: string; kind: string; params?: Record<string, unknown> } // stub
 export interface TransitionRef { kind: string; duration: number }                          // stub
 export interface TextOverlaySpec { content: string; style?: Record<string, unknown> }      // stub
