@@ -1,6 +1,7 @@
 import type {
 	Clip, EnrichedTimelineSegment, MediaAsset, TimelineDiff, TimelineItem, Track
 } from './types'
+import { sameTransform } from './transform'
 
 /**
  * Pure timeline helpers shared by renderer (manual editing, undo/redo) and
@@ -302,7 +303,8 @@ export function diffTimelines(
 				!sameTransition(beforeItem.transition, afterItem.transition) ||
 				!sameFraming(beforeItem.framing, afterItem.framing) ||
 				!sameEffects(beforeItem.effects, afterItem.effects) ||
-				!sameText(beforeItem.text, afterItem.text)
+				!sameText(beforeItem.text, afterItem.text) ||
+				!sameTransform(beforeItem.transform, afterItem.transform)
 			const fwd = changedFields(beforeItem, afterItem, ITEM_FIELDS)
 				?? (objectChanged ? {} : null)
 			if (fwd) {
@@ -317,6 +319,9 @@ export function diffTimelines(
 				}
 				if (!sameText(beforeItem.text, afterItem.text)) {
 					fwd.text = afterItem.text
+				}
+				if (!sameTransform(beforeItem.transform, afterItem.transform)) {
+					fwd.transform = afterItem.transform
 				}
 				const keys = Object.keys(fwd) as (keyof TimelineItem)[]
 				;(forward.updateItems ||= []).push({ id, ...fwd })

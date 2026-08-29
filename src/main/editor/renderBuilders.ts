@@ -2,6 +2,7 @@ import type { ItemFraming, TimelineItem, Track, TransitionRef } from '@shared/ty
 import { panFraction } from '@shared/framing'
 import { effectChain } from '@shared/effects'
 import { duckExpression, type Interval } from '@shared/ducking'
+import { transformFilter } from '@shared/transform'
 
 /**
  * Handler-based filter builders (PRD §7 — "Render engine is handler-based").
@@ -155,15 +156,6 @@ const speedV: FilterBuilder = {
 	build: ({ slice }) => `setpts=(PTS-STARTPTS)/${slice.item.speed || 1}`
 }
 
-/** Transform (scale/position/crop/rotation) — registered no-op until v2. */
-const transformV: FilterBuilder = {
-	id: 'transform', stream: 'video',
-	build: ({ slice }) => {
-		void slice.item.transform // seam: emit scale/crop/rotate fragments here
-		return ''
-	}
-}
-
 /**
  * Per-item visual effects, resolved through the shared catalogue.
  *
@@ -266,7 +258,10 @@ const effectsA: FilterBuilder = {
 // timeline-domain time; gain before fade so the envelope scales the final mix
 // level; effects last, just before conform) =====
 
-export const videoBuilders: FilterBuilder[] = [speedV, transformV, effectsV]
+// Transform is NOT here: it belongs after the conform, in frame space, and
+// `videoStream` emits it there. A scale applied in source pixels would simply
+// be undone by `vnorm` scaling back to the frame.
+export const videoBuilders: FilterBuilder[] = [speedV, effectsV]
 export const audioBuilders: FilterBuilder[] = [speedA, gainA, fadeA, duckA, effectsA]
 
 /** Fold a builder list into chain fragments, dropping no-ops. */
@@ -358,6 +353,10 @@ function videoStream(
 	const chain = [
 		...buildChain(videoBuilders, { slice, plan }),
 		vnorm(plan.width, plan.height, plan.fps, slice.item.framing),
+		// Frame space starts here: the picture is now exactly plan.width x
+		// plan.height, which is the only place a position or a scale means
+		// anything.
+		transformFilter(slice.item.transform, plan.width, plan.height),
 		// Repeated frames first — they belong to the slice's own content — then
 		// black to position that content inside the region.
 		vpad(slice.freezeHead, slice.freezeTail, 'clone'),

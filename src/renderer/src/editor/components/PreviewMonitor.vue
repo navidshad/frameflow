@@ -173,6 +173,7 @@
 <script setup lang="ts">
 import { captionMetrics, cueAt } from '@shared/captions'
 import { effectCss } from '@shared/effects'
+import { transformCss } from '@shared/transform'
 import { FRAME_PRESETS, panObjectPosition } from '@shared/framing'
 import { toMediaUrl } from '@shared/media-url'
 import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue'
@@ -312,10 +313,17 @@ const framingStyle = (itemId: string | null) => {
 	// graded clip and an ungraded one can sit either side of a transition and
 	// each show its own look.
 	const filter = effectCss(item?.effects)
+	// Exact, unlike the colour approximation above it: both this and the filter
+	// chain are affine transforms of the same frame.
+	const transform = transformCss(item?.transform)
 	const fit = item?.framing?.mode !== 'fill'
 		? { objectFit: 'contain' as const }
 		: { objectFit: 'cover' as const, objectPosition: panObjectPosition(item.framing.pan) }
-	return filter ? { ...fit, filter } : fit
+	return {
+		...fit,
+		...(filter ? { filter } : {}),
+		...(transform ? { transform } : {})
+	}
 }
 
 const activeSegmentLabel = computed(() => {

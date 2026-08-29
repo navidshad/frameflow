@@ -107,6 +107,36 @@
 						<span class="text-[11px] text-zinc-600 dark:text-zinc-300">Preserve audio pitch when retimed</span>
 					</label>
 
+					<!-- Transform: where the picture sits once it is the right shape.
+					     Separate from Framing, which is only about reconciling two
+					     different shapes. -->
+					<div>
+						<div class="flex items-baseline justify-between mb-1">
+							<label class="text-[10px] font-bold uppercase tracking-widest text-zinc-500">
+								Transform
+							</label>
+							<button v-if="transformActive"
+								class="text-[9px] font-semibold text-zinc-400 hover:text-primary transition"
+								@click="editorStore.setItemTransform(timelineItem!.id, TRANSFORM_DEFAULTS)">
+								reset
+							</button>
+						</div>
+						<div class="grid grid-cols-2 gap-x-2 gap-y-1.5">
+							<div v-for="knob in TRANSFORM_KNOBS" :key="knob.key">
+								<div class="flex items-baseline justify-between">
+									<span class="text-[9px] uppercase tracking-widest text-zinc-500">{{ knob.label }}</span>
+									<span class="font-mono text-[9px] text-primary">
+										{{ knob.format(transformValue(knob.key)) }}
+									</span>
+								</div>
+								<input type="range" class="w-full accent-primary"
+									:min="knob.min" :max="knob.max" :step="knob.step"
+									:value="transformValue(knob.key)"
+									@change="onTransform(knob.key, $event)" />
+							</div>
+						</div>
+					</div>
+
 					<!-- Framing: only meaningful when the clip and the sequence disagree -->
 					<div v-if="framingMatters">
 						<label class="text-[10px] font-bold uppercase tracking-widest text-zinc-500 block mb-1">
@@ -501,6 +531,7 @@
 
 <script setup lang="ts">
 import { effectDef, num, type EffectParam } from '@shared/effects'
+import { hasTransform, TRANSFORM_DEFAULTS } from '@shared/transform'
 import { toMediaUrl } from '@shared/media-url'
 import type { EffectRef } from '@shared/types'
 import {
@@ -624,6 +655,27 @@ const transcribe = async () => {
 		await editorStore.transcribeAsset(asset.value.id)
 	} finally {
 		transcribing.value = false
+	}
+}
+
+// ===== Transform =====
+
+const TRANSFORM_KNOBS = [
+	{ key: 'scale' as const, label: 'Scale', min: 0.05, max: 5, step: 0.01, format: (v: number) => `${Math.round(v * 100)}%` },
+	{ key: 'rotation' as const, label: 'Rotate', min: -180, max: 180, step: 1, format: (v: number) => `${Math.round(v)}°` },
+	{ key: 'x' as const, label: 'Across', min: -1, max: 1, step: 0.01, format: (v: number) => `${Math.round(v * 100)}%` },
+	{ key: 'y' as const, label: 'Down', min: -1, max: 1, step: 0.01, format: (v: number) => `${Math.round(v * 100)}%` }
+]
+
+const transformActive = computed(() => hasTransform(timelineItem.value?.transform))
+
+const transformValue = (key: 'x' | 'y' | 'scale' | 'rotation') =>
+	timelineItem.value?.transform?.[key] ?? TRANSFORM_DEFAULTS[key]
+
+const onTransform = (key: 'x' | 'y' | 'scale' | 'rotation', event: Event) => {
+	const value = parseFloat((event.target as HTMLInputElement).value)
+	if (timelineItem.value && Number.isFinite(value)) {
+		editorStore.setItemTransform(timelineItem.value.id, { [key]: value })
 	}
 }
 

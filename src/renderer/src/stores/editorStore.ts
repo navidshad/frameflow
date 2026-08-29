@@ -3,7 +3,7 @@ import { ref, computed, watch } from 'vue'
 import type {
 	BackgroundTask, Clip, EditorDocument, EditorHistoryStep, EditorMarker,
 	EditorPersona, EditorRevision, MediaAsset, PromptTurn, Thread, TimelineDiff,
-	TimelineItem, TimelineSnapshot, Track
+	TimelineItem, TimelineItemTransform, TimelineSnapshot, Track
 } from '@shared/types'
 import {
 	applyTimelineDiff, clampSpeed, clipToItem, computeContentEnd,
@@ -12,6 +12,7 @@ import {
 	type TimelineState
 } from '@shared/timeline'
 import { computeScope } from '@shared/ai-scope'
+import { hasTransform, TRANSFORM_DEFAULTS } from '@shared/transform'
 import { defaultParams, effectDef, registerEffects } from '@shared/effects'
 import { parsePack } from '@shared/packs'
 import {
@@ -1691,6 +1692,19 @@ export const useEditorStore = defineStore('editor', () => {
 	}
 
 	/**
+	 * Move, scale or rotate a clip inside the frame — the free transform, and
+	 * what PiP is built on. Replace, never mutate: the diff compares by value.
+	 */
+	const setItemTransform = (id: string, patch: Partial<TimelineItemTransform>) => {
+		const item = doc.value?.timeline.find((i) => i.id === id)
+		if (!item) return
+		const before = snapshotState()
+		const next = { ...TRANSFORM_DEFAULTS, ...item.transform, ...patch }
+		item.transform = hasTransform(next) ? next : undefined
+		commitStep({ before, label: 'Transform clip' })
+	}
+
+	/**
 	 * How a clip fills a sequence frame of a different shape: letterbox it (`fit`,
 	 * the default and today's behaviour) or crop it to the frame (`fill`), with a
 	 * pan choosing which part survives. Part of the timeline, so it undoes.
@@ -2610,6 +2624,7 @@ export const useEditorStore = defineStore('editor', () => {
 		setItemFade,
 		setTransition,
 		clearTransition,
+		setItemTransform,
 		setItemFraming,
 		effectsVersion,
 		loadEffectPacks,

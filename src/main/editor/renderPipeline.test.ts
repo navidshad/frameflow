@@ -13,6 +13,7 @@ import { previewPlan, renderTransitionWindow } from './preview'
 import { burnCaptions } from './captions'
 import { normaliseLoudness } from './loudness'
 import { duckExpression } from '@shared/ducking'
+import { transformFilter } from '@shared/transform'
 import { allEffects, effectChain } from '@shared/effects'
 import { parsePack, starterManifest, STARTER_LOOKS, toCube } from '@shared/packs'
 
@@ -394,6 +395,92 @@ describe('effects vs the real binary', () => {
 		expect(luma(negative)).toBeLessThan(255)
 		expect(Math.abs(negative[0] - (255 - base[0]))).toBeLessThan(40)
 	}, 120_000)
+})
+
+describe('transform vs the real binary', () => {
+	let trDir: string
+	let dot: string
+
+	/** Where the brightest pixel is, as a fraction of the frame. */
+	const brightestAt = async (file: string): Promise<{ x: number; y: number; max: number }> => {
+		const w = 160, h = 90
+		const { stdout } = await execFileAsync(ffmpeg,
+			['-v', 'error', '-i', file, '-frames:v', '1', '-vf', `scale=${w}:${h},format=gray`,
+				'-f', 'rawvideo', '-'],
+			{ encoding: 'buffer', maxBuffer: 1 << 24 })
+		const buf = stdout as unknown as Buffer
+		let best = -1, at = 0
+		for (let i = 0; i < buf.length; i++) if (buf[i] > best) { best = buf[i]; at = i }
+		return { x: (at % w) / w, y: Math.floor(at / w) / h, max: best }
+	}
+
+	const render = async (transform: Parameters<typeof transformFilter>[0], name: string) => {
+		const out = join(trDir, `${name}.mp4`)
+		const chain = transformFilter(transform, 320, 180)
+		await execFileAsync(ffmpeg, ['-y', '-v', 'error', '-i', dot, '-frames:v', '1',
+			...(chain ? ['-vf', chain] : []), out])
+		return out
+	}
+
+	beforeAll(async () => {
+		trDir = await fs.mkdtemp(join(tmpdir(), 'ff-tr-'))
+		// A small white square dead centre of a black frame: the one shape whose
+		// position after a transform can be measured rather than eyeballed.
+		dot = join(trDir, 'dot.mp4')
+		await execFileAsync(ffmpeg, ['-y', '-v', 'error',
+			'-f', 'lavfi', '-i', 'color=c=black:s=320x180:d=1:r=10',
+			'-vf', 'drawbox=x=150:y=80:w=20:h=20:color=white@1:t=fill',
+			'-c:v', 'libx264', '-preset', 'ultrafast', '-t', '1', dot])
+	}, 60_000)
+
+	afterAll(async () => { await fs.rm(trDir, { recursive: true, force: true }) })
+
+	it('leaves the picture alone when the transform is inert', async () => {
+		const untouched = await brightestAt(await render({ scale: 1 }, 'inert'))
+		expect(untouched.x).toBeCloseTo(0.5, 1)
+		expect(untouched.y).toBeCloseTo(0.5, 1)
+	}, 60_000)
+
+	it('moves the picture the way the numbers say, not the opposite way', async () => {
+		// The crop window moves opposite the content, which is exactly the sign
+		// error this test exists to catch.
+		const right = await brightestAt(await render({ x: 0.25 }, 'right'))
+		expect(right.x).toBeGreaterThan(0.68)
+		expect(right.y).toBeCloseTo(0.5, 1)
+
+		const up = await brightestAt(await render({ y: -0.25 }, 'up'))
+		expect(up.y).toBeLessThan(0.32)
+	}, 60_000)
+
+	it('shrinks into the frame and grows past it', async () => {
+		const corners = async (file: string) => {
+			const { stdout } = await execFileAsync(ffmpeg,
+				['-v', 'error', '-i', file, '-frames:v', '1',
+					'-vf', 'crop=40:40:0:0,format=gray', '-f', 'rawvideo', '-'],
+				{ encoding: 'buffer', maxBuffer: 1 << 20 })
+			return (stdout as unknown as Buffer).reduce((max, v) => (v > max ? v : max), 0)
+		}
+		// Small: the square is still one square, still centred, corners black.
+		const small = await brightestAt(await render({ scale: 0.4 }, 'small'))
+		expect(small.x).toBeCloseTo(0.5, 1)
+		expect(await corners(await render({ scale: 0.4 }, 'small'))).toBeLessThan(24)
+
+		// Big: the square fills more of the frame, so a fixed-size sample away
+		// from centre now catches it.
+		const bigFile = await render({ scale: 4 }, 'big')
+		const { stdout } = await execFileAsync(ffmpeg,
+			['-v', 'error', '-i', bigFile, '-frames:v', '1',
+				'-vf', 'crop=40:40:100:70,format=gray', '-f', 'rawvideo', '-'],
+			{ encoding: 'buffer', maxBuffer: 1 << 20 })
+		expect((stdout as unknown as Buffer).reduce((m, v) => (v > m ? v : m), 0)).toBeGreaterThan(200)
+	}, 60_000)
+
+	it('accepts a rotation', async () => {
+		const rotated = await brightestAt(await render({ rotation: 30 }, 'rot'))
+		// A centred square rotated about the centre is still centred.
+		expect(rotated.max).toBeGreaterThan(200)
+		expect(rotated.x).toBeCloseTo(0.5, 1)
+	}, 60_000)
 })
 
 describe('audio vs the real binary', () => {
