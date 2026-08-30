@@ -1941,19 +1941,38 @@ export const useEditorStore = defineStore('editor', () => {
 		gestureBefore = snapshotState()
 	}
 
-	/** Live update mid-gesture: no history, no autosave — just the picture. */
+	/**
+	 * Live update mid-gesture: no history, no autosave — just the picture.
+	 *
+	 * Serves the canvas handles AND the inspector's sliders on `input`, so a
+	 * value is seen the moment it moves rather than on release. Object fields
+	 * are REPLACED, never mutated, keeping the value-comparing diff honest for
+	 * the commit at the end.
+	 */
 	const updateItemGesture = (id: string, patch: {
 		transform?: TimelineItemTransform
 		text?: Partial<NonNullable<TimelineItem['text']>>
+		framing?: TimelineItem['framing']
+		generator?: Partial<NonNullable<TimelineItem['generator']>>
+		key?: TimelineItem['key']
+		effects?: TimelineItem['effects']
+		gain?: number
+		fadeInSec?: number
+		fadeOutSec?: number
 	}) => {
 		const item = doc.value?.timeline.find((i) => i.id === id)
 		if (!item) return
 		if (patch.transform) {
 			item.transform = hasTransform(patch.transform) ? { ...patch.transform } : undefined
 		}
-		if (patch.text && item.text) {
-			item.text = { ...item.text, ...patch.text }
-		}
+		if (patch.text && item.text) item.text = { ...item.text, ...patch.text }
+		if ('framing' in patch) item.framing = patch.framing ? { ...patch.framing } : undefined
+		if (patch.generator && item.generator) item.generator = { ...item.generator, ...patch.generator }
+		if ('key' in patch) item.key = patch.key ? { ...patch.key } : undefined
+		if (patch.effects) item.effects = patch.effects.map((e) => ({ ...e, params: { ...e.params } }))
+		if (patch.gain !== undefined) item.gain = patch.gain
+		if (patch.fadeInSec !== undefined) item.fadeInSec = patch.fadeInSec
+		if (patch.fadeOutSec !== undefined) item.fadeOutSec = patch.fadeOutSec
 	}
 
 	const endItemGesture = (label: string) => {

@@ -151,6 +151,7 @@
 								</div>
 								<input type="range" min="0" max="1" step="0.01" class="w-full accent-primary"
 									:value="keySpec[knob.key] ?? KEY_DEFAULTS[knob.key]"
+									@input="onKeyLive(knob.key, $event)"
 									@change="onKeyNumber(knob.key, $event)" />
 							</div>
 							<p class="mt-1 text-[9px] text-zinc-400 leading-snug">
@@ -198,6 +199,7 @@
 								<input type="range" class="w-full accent-primary"
 									:min="knob.min" :max="knob.max" :step="knob.step"
 									:value="transformValue(knob.key)"
+									@input="onTransformLive(knob.key, $event)"
 									@change="onTransform(knob.key, $event)" />
 							</div>
 						</div>
@@ -226,7 +228,7 @@
 								</span>
 							</label>
 							<input type="range" min="-1" max="1" step="0.05" :value="framingPan"
-								class="w-full accent-primary" @change="onPanInput" />
+								class="w-full accent-primary" @input="onPanLive" @change="onPanInput" />
 						</template>
 						<p class="mt-1 text-[9px] text-zinc-400 leading-snug">
 							{{ framingMode === 'fill'
@@ -282,7 +284,8 @@
 							</div>
 							<input type="range" min="0" max="0.2" step="0.005" class="w-full accent-primary"
 								:value="generatorSpec.speed ?? GENERATOR_DEFAULTS.speed"
-								@change="editorStore.setGenerator(timelineItem!.id, { speed: parseFloat(($event.target as HTMLInputElement).value) })" />
+								@input="paint({ generator: { speed: liveValue($event) } })"
+								@change="settle({ generator: { speed: liveValue($event) } }, 'Edit background')" />
 						</template>
 						<template v-if="generatorSpec.kind === 'noise'">
 							<div class="flex items-baseline justify-between">
@@ -293,7 +296,8 @@
 							</div>
 							<input type="range" min="0" max="1" step="0.02" class="w-full accent-primary"
 								:value="generatorSpec.amount ?? GENERATOR_DEFAULTS.amount"
-								@change="editorStore.setGenerator(timelineItem!.id, { amount: parseFloat(($event.target as HTMLInputElement).value) })" />
+								@input="paint({ generator: { amount: liveValue($event) } })"
+								@change="settle({ generator: { amount: liveValue($event) } }, 'Edit background')" />
 						</template>
 						<p class="mt-1 text-[9px] text-zinc-400 leading-snug">
 							Synthesised at export — no file, no proxy, and it costs nothing to change.
@@ -318,14 +322,14 @@
 									Across <span class="font-mono text-primary normal-case">{{ pct(titleSpec.x ?? 0.5) }}</span>
 								</label>
 								<input type="range" min="0" max="1" step="0.01" class="w-full accent-primary"
-									:value="titleSpec.x ?? 0.5" @change="onTitleNumber('x', $event)" />
+									:value="titleSpec.x ?? 0.5" @input="onTitleLive('x', $event)" @change="onTitleNumber('x', $event)" />
 							</div>
 							<div>
 								<label class="text-[10px] font-bold uppercase tracking-widest text-zinc-500 block mb-1">
 									Down <span class="font-mono text-primary normal-case">{{ pct(titleSpec.y ?? 0.85) }}</span>
 								</label>
 								<input type="range" min="0" max="1" step="0.01" class="w-full accent-primary"
-									:value="titleSpec.y ?? 0.85" @change="onTitleNumber('y', $event)" />
+									:value="titleSpec.y ?? 0.85" @input="onTitleLive('y', $event)" @change="onTitleNumber('y', $event)" />
 							</div>
 						</div>
 
@@ -334,7 +338,7 @@
 								Size <span class="font-mono text-primary normal-case">{{ pct(titleSpec.size ?? 0.07) }}</span>
 							</label>
 							<input type="range" min="0.02" max="0.3" step="0.005" class="w-full accent-primary"
-								:value="titleSpec.size ?? 0.07" @change="onTitleNumber('size', $event)" />
+								:value="titleSpec.size ?? 0.07" @input="onTitleLive('size', $event)" @change="onTitleNumber('size', $event)" />
 							<p class="mt-1 text-[9px] text-zinc-400 leading-snug">
 								Position and size are fractions of the frame, so a title survives a
 								change of sequence shape.
@@ -407,6 +411,7 @@
 									<input type="range" class="w-full accent-primary"
 										:min="param.min" :max="param.max" :step="param.step"
 										:value="paramValue(effect, param)"
+										@input="onEffectParamLive(effect.id, param.key, $event)"
 										@change="onEffectParam(effect.id, param.key, $event)" />
 								</div>
 							</template>
@@ -427,7 +432,8 @@
 						</label>
 						<input type="range" min="0" max="2" step="0.05" :value="gainValue"
 							class="w-full accent-accent"
-							@change="editorStore.setItemGain(timelineItem!.id, parseFloat(($event.target as HTMLInputElement).value))" />
+							@input="paint({ gain: liveValue($event) })"
+							@change="settle({ gain: liveValue($event) }, 'Set gain')" />
 						<p class="mt-1 text-[9px] text-zinc-400 leading-snug">
 							Level for this clip in the exported audio mix. 1.0× is unchanged.
 						</p>
@@ -838,11 +844,43 @@ const onKey = (field: 'colour', value: string) => {
 	}
 }
 
+const onKeyLive = (field: 'similarity' | 'blend' | 'despill' | 'threshold', event: Event) => {
+	const value = liveValue(event)
+	if (keySpec.value && Number.isFinite(value)) paint({ key: { ...keySpec.value, [field]: value } })
+}
+
 const onKeyNumber = (field: 'similarity' | 'blend' | 'despill' | 'threshold', event: Event) => {
-	const value = parseFloat((event.target as HTMLInputElement).value)
-	if (timelineItem.value && keySpec.value && Number.isFinite(value)) {
-		editorStore.setItemKey(timelineItem.value.id, { ...keySpec.value, [field]: value })
+	const value = liveValue(event)
+	if (keySpec.value && Number.isFinite(value)) {
+		settle({ key: { ...keySpec.value, [field]: value } }, 'Adjust key')
 	}
+}
+
+// ===== Live sliders =====
+
+/**
+ * Every slider paints on `input` and commits on `change`.
+ *
+ * The old handlers were `change`-only, so nothing moved until the mouse was
+ * released — a slider you drag blind. Live updates go through the gesture
+ * path (no history, no autosave), and the release commits ONE step, exactly
+ * like the canvas handles. The commit handler applies the value first, so
+ * even a change-without-input path (nothing fires that way today, but cheap
+ * insurance) still lands.
+ */
+type GesturePatch = Parameters<typeof editorStore.updateItemGesture>[1]
+
+const liveValue = (event: Event): number => parseFloat((event.target as HTMLInputElement).value)
+
+const paint = (patch: GesturePatch) => {
+	if (!timelineItem.value) return
+	editorStore.beginItemGesture()
+	editorStore.updateItemGesture(timelineItem.value.id, patch)
+}
+
+const settle = (patch: GesturePatch, label: string) => {
+	paint(patch)
+	editorStore.endItemGesture(label)
 }
 
 // ===== Transform =====
@@ -881,18 +919,30 @@ const transformValue = (key: 'x' | 'y' | 'scale' | 'rotation') => {
 	return track?.length ? valueAt(track, clipTime.value, still) : still
 }
 
+const nextTransform = (key: 'x' | 'y' | 'scale' | 'rotation', value: number) => ({
+	...TRANSFORM_DEFAULTS, ...timelineItem.value?.transform, [key]: value
+})
+
+const transformAnimated = (key: string) =>
+	!!timelineItem.value?.keyframes?.[`transform.${key}`]?.length
+
+const onTransformLive = (key: 'x' | 'y' | 'scale' | 'rotation', event: Event) => {
+	const value = liveValue(event)
+	// An animated parameter's slider edits the CURVE, which is a discrete
+	// keyframe write — that stays on `change` rather than painting per pixel.
+	if (!Number.isFinite(value) || transformAnimated(key)) return
+	paint({ transform: nextTransform(key, value) })
+}
+
 const onTransform = (key: 'x' | 'y' | 'scale' | 'rotation', event: Event) => {
-	const value = parseFloat((event.target as HTMLInputElement).value)
+	const value = liveValue(event)
 	const item = timelineItem.value
 	if (!item || !Number.isFinite(value)) return
-	const path = `transform.${key}`
-	// Once a parameter is animated, the slider edits the curve at the playhead.
-	// Writing the static value instead would move nothing and look broken.
-	if (item.keyframes?.[path]?.length) {
-		editorStore.setKeyframe(item.id, path, clipTime.value, value)
-	} else {
-		editorStore.setItemTransform(item.id, { [key]: value })
+	if (transformAnimated(key)) {
+		editorStore.setKeyframe(item.id, `transform.${key}`, clipTime.value, value)
+		return
 	}
+	settle({ transform: nextTransform(key, value) }, 'Transform clip')
 }
 
 // ===== Titles =====
@@ -905,11 +955,14 @@ const onTitle = (key: 'content' | 'color' | 'outline', value: string) => {
 	if (timelineItem.value) editorStore.setTitle(timelineItem.value.id, { [key]: value })
 }
 
+const onTitleLive = (key: 'x' | 'y' | 'size', event: Event) => {
+	const value = liveValue(event)
+	if (Number.isFinite(value)) paint({ text: { [key]: value } })
+}
+
 const onTitleNumber = (key: 'x' | 'y' | 'size', event: Event) => {
-	const value = parseFloat((event.target as HTMLInputElement).value)
-	if (timelineItem.value && Number.isFinite(value)) {
-		editorStore.setTitle(timelineItem.value.id, { [key]: value })
-	}
+	const value = liveValue(event)
+	if (Number.isFinite(value)) settle({ text: { [key]: value } }, 'Edit title')
 }
 
 // ===== Effects =====
@@ -921,13 +974,19 @@ const defFor = (kind: string) => effectDef(kind)
 const paramValue = (effect: EffectRef, param: EffectParam) =>
 	param.kind === 'number' ? num(effect.params ?? {}, param) : param.default
 
-// `@change`, never `@input`: every commit is a history step, and a dragged
-// slider would otherwise bury the undo stack under a step per pixel.
+const nextEffects = (effectId: string, key: string, value: number) =>
+	(timelineItem.value?.effects ?? []).map((e) =>
+		e.id === effectId ? { ...e, params: { ...(e.params ?? {}), [key]: value } } : e
+	)
+
+const onEffectParamLive = (effectId: string, key: string, event: Event) => {
+	const value = liveValue(event)
+	if (Number.isFinite(value)) paint({ effects: nextEffects(effectId, key, value) })
+}
+
 const onEffectParam = (effectId: string, key: string, event: Event) => {
-	const value = parseFloat((event.target as HTMLInputElement).value)
-	if (timelineItem.value && Number.isFinite(value)) {
-		editorStore.setEffectParam(timelineItem.value.id, effectId, key, value)
-	}
+	const value = liveValue(event)
+	if (Number.isFinite(value)) settle({ effects: nextEffects(effectId, key, value) }, 'Adjust effect')
 }
 
 // ===== Sequence frame =====
@@ -952,11 +1011,14 @@ const framingMatters = computed(() => {
 	return Math.abs(w / h - frameW.value / frameH.value) > 0.01
 })
 
+const onPanLive = (event: Event) => {
+	const value = liveValue(event)
+	if (Number.isFinite(value)) paint({ framing: { mode: 'fill', pan: value } })
+}
+
 const onPanInput = (event: Event) => {
-	const value = parseFloat((event.target as HTMLInputElement).value)
-	if (timelineItem.value && Number.isFinite(value)) {
-		editorStore.setItemFraming(timelineItem.value.id, 'fill', value)
-	}
+	const value = liveValue(event)
+	if (Number.isFinite(value)) settle({ framing: { mode: 'fill', pan: value } }, 'Fill frame')
 }
 
 // ===== Seam (transition) mode =====
