@@ -3,7 +3,7 @@ import type { TimelineItem } from '@shared/types'
 import type { TimelineState } from '@shared/timeline'
 import { itemEnd, itemDuration, solveTrim } from '@shared/timeline'
 import { useEditorStore } from '../../stores/editorStore'
-import { canHostItem } from '@shared/tracks'
+import { canHostItem, itemFamily, nextTrackName, nextTrackOrder, type TrackFamily } from '@shared/tracks'
 import type { TimelineViewport } from './useTimelineViewport'
 
 type GestureMode = 'idle' | 'movingItem' | 'trimmingEdge' | 'scrubbing'
@@ -30,6 +30,13 @@ export function useTimelineInteractions(viewport: TimelineViewport) {
 	 * lane reads this to say yes or no, and `reason` is the wording it shows.
 	 */
 	const dropTarget = ref<{ trackId: string; ok: boolean; reason?: string } | null>(null)
+
+	/**
+	 * Set while the pointer is dragging past the end of the stack, where letting
+	 * go makes a new lane. Reaching for the toolbar mid-drag is not something a
+	 * hand does; carrying the clip to where the track should be is.
+	 */
+	const newTrackZone = ref<{ family: TrackFamily; edge: 'above' | 'below' } | null>(null)
 
 	const SNAP_THRESHOLD_PX = 8
 
@@ -92,6 +99,7 @@ export function useTimelineInteractions(viewport: TimelineViewport) {
 		lastPointer = null
 		snapGuideSec.value = null
 		dropTarget.value = null
+		newTrackZone.value = null
 	}
 
 	const cancelGesture = () => {
@@ -177,6 +185,27 @@ export function useTimelineInteractions(viewport: TimelineViewport) {
 		const target = item()
 		if (!target) return
 		let start = applySnap(Math.max(0, pointerToTime(e) - grabOffsetSec), target.id)
+
+		// Past the end of the stack: the drop will make a lane rather than find
+		// one. Video grows upward (the front of the picture), audio downward,
+		// which is the direction each family already stacks.
+		const family = itemFamily(target, doc().media)
+		const y = contentY(e.clientY)
+		const first = laneRects[0]
+		const last = laneRects[laneRects.length - 1]
+		if (family === 'video' && first && y < first.top) {
+			newTrackZone.value = { family, edge: 'above' }
+			dropTarget.value = null
+			target.timelineStart = start
+			return
+		}
+		if (family === 'audio' && last && y > last.bottom) {
+			newTrackZone.value = { family, edge: 'below' }
+			dropTarget.value = null
+			target.timelineStart = start
+			return
+		}
+		newTrackZone.value = null
 
 		// Cross-track: the pointer picks the lane, and the lane's family decides
 		// whether it can have it. Anything you can SEE goes on any video lane,
@@ -356,7 +385,32 @@ export function useTimelineInteractions(viewport: TimelineViewport) {
 		}
 	}
 
+	/**
+	 * Make the lane the drop asked for. Pushed straight into the document rather
+	 * than through the store's own action so it lands INSIDE this gesture: the
+	 * snapshot taken at pointerdown covers tracks as well as items, so the track
+	 * and the move commit as one history step and Escape rolls back both.
+	 */
+	const materialiseTrack = (family: TrackFamily): string | null => {
+		const d = store.doc
+		if (!d) return null
+		const id = crypto.randomUUID ? crypto.randomUUID() : `tr-${Date.now()}`
+		d.tracks.push({
+			id,
+			kind: family,
+			name: nextTrackName(d.tracks, family),
+			order: nextTrackOrder(d.tracks, family),
+			muted: false, locked: false, hidden: false, height: 64
+		})
+		return id
+	}
+
 	const onPointerUp = () => {
+		if (mode.value === 'movingItem' && newTrackZone.value) {
+			const target = item()
+			const trackId = materialiseTrack(newTrackZone.value.family)
+			if (target && trackId) target.trackId = trackId
+		}
 		if (mode.value === 'movingItem' || mode.value === 'trimmingEdge') {
 			if (gestureBefore) {
 				const label = mode.value === 'movingItem' ? 'Move' : (trimRipple ? 'Ripple trim' : 'Trim')
@@ -374,6 +428,7 @@ export function useTimelineInteractions(viewport: TimelineViewport) {
 		snapGuideSec,
 		activeItemId,
 		dropTarget,
+		newTrackZone,
 		beginMove,
 		beginTrim,
 		beginScrub,
