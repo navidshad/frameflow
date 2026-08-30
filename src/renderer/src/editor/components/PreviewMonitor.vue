@@ -265,6 +265,18 @@
 								? 'tabler--loader-2 animate-spin'
 								: 'tabler--camera'"></span>
 					</button>
+					<button
+						class="w-7 h-7 shrink-0 flex items-center justify-center rounded-lg transition active:scale-95"
+						:class="exactPinned
+							? 'text-accent bg-accent/10'
+							: 'text-zinc-400 hover:text-primary hover:bg-primary/10'"
+						:title="exactPinned
+							? 'Exact frame pinned — re-renders whenever the playhead settles. Click to unpin.'
+							: 'Pin the exact frame — re-render it automatically when the playhead settles'"
+						@click="exactPinned = !exactPinned">
+						<span class="iconify tabler--pin w-4 h-4"
+							:class="exactPinned ? '' : 'rotate-45'"></span>
+					</button>
 
 					<div class="relative shrink-0">
 						<button
@@ -447,8 +459,34 @@ const clearExact = () => {
 	}
 }
 
-watch(() => store.playheadSec, clearExact)
-watch(() => store.doc?.historyRef.currentStepId, clearExact)
+/**
+ * Pinned mode: the truth follows the playhead, on the playhead's schedule.
+ *
+ * Justified by measurement — a graded, keyed, composited 1080p frame renders
+ * in 0.2–0.4s — but still debounced behind a settle, because the one thing
+ * this must never do is queue an encode per scrub tick. Playback keeps the
+ * live elements in charge; the frame only lands when everything is still.
+ */
+const exactPinned = ref(false)
+let settleTimer: ReturnType<typeof setTimeout> | null = null
+
+const scheduleExact = () => {
+	if (settleTimer) clearTimeout(settleTimer)
+	if (!exactPinned.value) return
+	settleTimer = setTimeout(() => {
+		if (!store.isPlaying && exactPinned.value) void renderExact()
+	}, 600)
+}
+
+watch(() => store.playheadSec, () => { clearExact(); scheduleExact() })
+watch(() => store.doc?.historyRef.currentStepId, () => { clearExact(); scheduleExact() })
+watch(exactPinned, (on) => (on ? scheduleExact() : clearExact()))
+watch(() => store.isPlaying, (playing) => {
+	if (playing) clearExact()
+	else scheduleExact()
+})
+
+onBeforeUnmount(() => { if (settleTimer) clearTimeout(settleTimer) })
 
 // ===== Guides =====
 
