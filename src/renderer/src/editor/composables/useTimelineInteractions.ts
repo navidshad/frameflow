@@ -3,6 +3,7 @@ import type { TimelineItem } from '@shared/types'
 import type { TimelineState } from '@shared/timeline'
 import { itemEnd, itemDuration, solveTrim } from '@shared/timeline'
 import { useEditorStore } from '../../stores/editorStore'
+import { canHostItem } from '@shared/tracks'
 import type { TimelineViewport } from './useTimelineViewport'
 
 type GestureMode = 'idle' | 'movingItem' | 'trimmingEdge' | 'scrubbing'
@@ -20,6 +21,15 @@ export function useTimelineInteractions(viewport: TimelineViewport) {
 	const mode = ref<GestureMode>('idle')
 	const snapGuideSec = ref<number | null>(null)
 	const activeItemId = ref<string | null>(null)
+
+	/**
+	 * The lane under the pointer mid-drag, and whether it will take this item.
+	 *
+	 * A refusal used to be invisible — the item simply stopped following the
+	 * pointer — which is indistinguishable from the feature being broken. The
+	 * lane reads this to say yes or no, and `reason` is the wording it shows.
+	 */
+	const dropTarget = ref<{ trackId: string; ok: boolean; reason?: string } | null>(null)
 
 	const SNAP_THRESHOLD_PX = 8
 
@@ -78,6 +88,7 @@ export function useTimelineInteractions(viewport: TimelineViewport) {
 		window.removeEventListener('pointerup', onPointerUp)
 		window.removeEventListener('keydown', onKeyDown)
 		snapGuideSec.value = null
+		dropTarget.value = null
 	}
 
 	const cancelGesture = () => {
@@ -105,17 +116,35 @@ export function useTimelineInteractions(viewport: TimelineViewport) {
 		return viewport.pxToSec(el.scrollLeft + (e.clientX - rect.left))
 	}
 
+	/**
+	 * Where each lane sits, in the SCROLL CONTAINER'S OWN coordinates.
+	 *
+	 * Deliberately not viewport pixels: those were captured once at pointerdown
+	 * and every one of them is wrong the moment the lanes scroll — which is
+	 * exactly what a drag that auto-scrolls does, and what adding a track
+	 * mid-gesture does too. `offsetTop` is measured against the same content box
+	 * that `scrollTop` moves through, so the two compose and the rects stay true.
+	 */
 	const captureLaneRects = () => {
 		const el = viewport.scrollEl.value
 		if (!el) return
-		laneRects = Array.from(el.querySelectorAll<HTMLElement>('[data-track-id]')).map((lane) => {
-			const rect = lane.getBoundingClientRect()
-			return { trackId: lane.dataset.trackId!, top: rect.top, bottom: rect.bottom }
-		})
+		laneRects = Array.from(el.querySelectorAll<HTMLElement>('[data-track-id]')).map((lane) => ({
+			trackId: lane.dataset.trackId!,
+			top: lane.offsetTop,
+			bottom: lane.offsetTop + lane.offsetHeight
+		}))
+	}
+
+	/** A pointer's viewport Y as a position inside the scrolled lane content. */
+	const contentY = (clientY: number): number => {
+		const el = viewport.scrollEl.value
+		if (!el) return clientY
+		return clientY - el.getBoundingClientRect().top + el.scrollTop
 	}
 
 	const trackAtY = (clientY: number): string | null => {
-		const hit = laneRects.find((l) => clientY >= l.top && clientY <= l.bottom)
+		const y = contentY(clientY)
+		const hit = laneRects.find((l) => y >= l.top && y <= l.bottom)
 		return hit?.trackId || null
 	}
 
@@ -146,17 +175,21 @@ export function useTimelineInteractions(viewport: TimelineViewport) {
 		if (!target) return
 		let start = applySnap(Math.max(0, pointerToTime(e) - grabOffsetSec), target.id)
 
-		// Cross-track: pointer Y picks the lane; validate kind + locked/hidden
-		const candidateTrackId = trackAtY(e.clientY)
+		// Cross-track: the pointer picks the lane, and the lane's family decides
+		// whether it can have it. Anything you can SEE goes on any video lane,
+		// anything you can HEAR on any audio one — one rule, in shared/tracks.ts.
+		const laneId = trackAtY(e.clientY)
+		const lane = laneId ? doc().tracks.find((t) => t.id === laneId) : undefined
 		let trackId = target.trackId
-		if (candidateTrackId && candidateTrackId !== target.trackId) {
-			const candidateTrack = doc().tracks.find((t) => t.id === candidateTrackId)
-			const sourceKind = doc().media.find((a) => a.id === target.sourceAssetId)?.kind || 'video'
-			const currentKind = doc().tracks.find((t) => t.id === target.trackId)?.kind
-			if (candidateTrack && !candidateTrack.locked && !candidateTrack.hidden &&
-				candidateTrack.kind === currentKind && (candidateTrack.kind === 'video' || candidateTrack.kind === sourceKind)) {
-				trackId = candidateTrackId
-			}
+		if (lane && lane.id !== target.trackId) {
+			const verdict = canHostItem(lane, target, doc().media)
+			dropTarget.value = { trackId: lane.id, ...verdict }
+			// A refused lane does not freeze the drag: the item keeps sliding along
+			// the track it came from, so the gesture stays useful while the pointer
+			// crosses somewhere it cannot land.
+			if (verdict.ok) trackId = lane.id
+		} else {
+			dropTarget.value = lane ? { trackId: lane.id, ok: true } : null
 		}
 
 		// Overlap forbidden: clamp against the nearer neighbor on the target track
@@ -184,7 +217,10 @@ export function useTimelineInteractions(viewport: TimelineViewport) {
 				if (!overlaps(target, trackId, Math.max(start, prevEnd))) {
 					start = Math.max(start, prevEnd)
 				} else {
-					return // no room — leave item where it was this tick
+					// No gap on this lane big enough. Say so instead of just going
+					// still, which reads as the drag having died.
+					dropTarget.value = { trackId, ok: false, reason: 'No room on this track.' }
+					return
 				}
 			}
 		}
@@ -275,6 +311,7 @@ export function useTimelineInteractions(viewport: TimelineViewport) {
 		mode,
 		snapGuideSec,
 		activeItemId,
+		dropTarget,
 		beginMove,
 		beginTrim,
 		beginScrub,

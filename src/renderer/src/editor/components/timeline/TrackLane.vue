@@ -2,7 +2,11 @@
 	<div class="relative border-b border-zinc-200/60 dark:border-zinc-800/60 transition-colors"
 		:data-track-id="track.id"
 		:style="{ height: `${track.height}px` }"
-		:class="[laneTint, { 'opacity-40': track.hidden, 'opacity-50 saturate-50': track.muted && !track.hidden, 'bg-zinc-500/5': dragOver }]"
+		:class="[laneTint, dropClass, {
+			'opacity-40': track.hidden,
+			'opacity-50 saturate-50': track.muted && !track.hidden,
+			'bg-zinc-500/5': dragOver
+		}]"
 		role="group" :aria-label="`${track.name} ${track.kind} track`"
 		@dragover="onDragOver" @dragleave="dragOver = false" @drop="onDrop"
 		@pointerdown="onLanePointerDown">
@@ -77,6 +81,15 @@
 		<div v-if="items.length === 0" class="absolute inset-0 flex items-center px-3 pointer-events-none">
 			<span class="text-[10px] text-zinc-400 dark:text-zinc-600">{{ emptyHint }}</span>
 		</div>
+
+		<!-- Why this lane will not take what is being dragged over it. Sits at the
+		     pointer's own lane, which is where the user is already looking. -->
+		<div v-if="dropVerdict && !dropVerdict.ok && dropVerdict.reason"
+			class="absolute inset-y-0 right-2 flex items-center z-40 pointer-events-none">
+			<span class="px-1.5 py-0.5 rounded bg-red-500/90 text-white text-[9px] font-medium whitespace-nowrap shadow">
+				{{ dropVerdict.reason }}
+			</span>
+		</div>
 	</div>
 </template>
 
@@ -88,13 +101,23 @@ import { itemEnd } from '@shared/timeline'
 import { DEFAULT_TRANSITION_SEC, type Seam } from '@shared/transitionPlan'
 import { transitionLabel } from '@shared/transitionPresets'
 import { useEditorStore } from '../../../stores/editorStore'
-import { TimelineViewportKey } from '../../composables/useTimelineViewport'
+import { TimelineInteractionsKey, TimelineViewportKey } from '../../composables/useTimelineViewport'
 import TimelineClip from './TimelineClip.vue'
 
 const props = defineProps<{ track: Track }>()
 
 const store = useEditorStore()
 const viewport = inject(TimelineViewportKey)!
+const interactions = inject(TimelineInteractionsKey)!
+
+/**
+ * What a drag over THIS lane is being told. `null` while nothing is being
+ * dragged, or while the pointer is over some other lane.
+ */
+const dropVerdict = computed<{ ok: boolean; reason?: string } | null>(() => {
+	const target = interactions.dropTarget.value
+	return target && target.trackId === props.track.id ? target : null
+})
 
 const dragOver = ref(false)
 const hoverSeamId = ref<string | null>(null)
@@ -172,6 +195,14 @@ const laneTint = computed(() =>
 		? 'bg-accent/[0.03] dark:bg-accent/[0.05]'
 		: 'bg-primary/[0.03] dark:bg-primary/[0.05]'
 )
+
+/** Accept and refuse, in the vocabulary the seam targets already use. */
+const dropClass = computed(() => {
+	if (!dropVerdict.value) return ''
+	return dropVerdict.value.ok
+		? 'ring-2 ring-inset ring-accent bg-accent/15'
+		: 'ring-2 ring-inset ring-red-500/70 bg-red-500/10'
+})
 
 const emptyHint = computed(() =>
 	trackFamily(props.track) === 'audio'

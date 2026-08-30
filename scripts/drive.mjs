@@ -200,6 +200,62 @@ const COMMANDS = {
 		return await evaluate(cdp, dragExpr(from, to))
 	},
 
+	/**
+	 * A real POINTER drag: press, move in steps, release — through the Input
+	 * domain, so pointer capture, `setPointerCapture` and the timeline's
+	 * pointerdown/move/up state machine all behave as they do for a person.
+	 *
+	 *   node scripts/drive.mjs pointer-drag 175 597 300 748
+	 *
+	 * Not the same thing as `drag`, which fires HTML5 DragEvents, and not the
+	 * same as dispatching pointer events from page script: those skip capture
+	 * entirely and will happily "pass" a gesture that is broken in the app.
+	 */
+	async pointerDrag(cdp, [fromX, fromY, toX, toY, steps = '14']) {
+		const [x0, y0, x1, y1, n] = [fromX, fromY, toX, toY, steps].map(Number)
+		const move = (x, y, extra) => cdp.send('Input.dispatchMouseEvent', {
+			type: 'mouseMoved', x, y, button: 'none', buttons: 1, ...extra
+		})
+		await cdp.send('Input.dispatchMouseEvent', {
+			type: 'mousePressed', x: x0, y: y0, button: 'left', clickCount: 1, buttons: 1
+		})
+		for (let i = 1; i <= n; i++) {
+			await move(x0 + ((x1 - x0) * i) / n, y0 + ((y1 - y0) * i) / n)
+			await new Promise((r) => setTimeout(r, 25))
+		}
+		await cdp.send('Input.dispatchMouseEvent', {
+			type: 'mouseReleased', x: x1, y: y1, button: 'left', clickCount: 1
+		})
+		await new Promise((r) => setTimeout(r, 300))
+		return { from: [x0, y0], to: [x1, y1], steps: n }
+	},
+
+	/**
+	 * Hold a drag still at a point for a while — what an auto-scroll needs, since
+	 * a stationary pointer fires no further move events.
+	 *
+	 *   node scripts/drive.mjs pointer-hold 175 597 300 740 2000
+	 */
+	async pointerHold(cdp, [fromX, fromY, toX, toY, ms = '1500']) {
+		const [x0, y0, x1, y1, hold] = [fromX, fromY, toX, toY, ms].map(Number)
+		await cdp.send('Input.dispatchMouseEvent', {
+			type: 'mousePressed', x: x0, y: y0, button: 'left', clickCount: 1, buttons: 1
+		})
+		for (let i = 1; i <= 8; i++) {
+			await cdp.send('Input.dispatchMouseEvent', {
+				type: 'mouseMoved', button: 'none', buttons: 1,
+				x: x0 + ((x1 - x0) * i) / 8, y: y0 + ((y1 - y0) * i) / 8
+			})
+			await new Promise((r) => setTimeout(r, 25))
+		}
+		await new Promise((r) => setTimeout(r, hold))
+		await cdp.send('Input.dispatchMouseEvent', {
+			type: 'mouseReleased', x: x1, y: y1, button: 'left', clickCount: 1
+		})
+		await new Promise((r) => setTimeout(r, 300))
+		return { heldAt: [x1, y1], ms: hold }
+	},
+
 	/** Console errors since the page loaded — cheap smoke test after a change. */
 	async errors(cdp) {
 		return await evaluate(cdp, `window.__driveErrors ?? 'not installed — run: drive.mjs watch'`)
@@ -238,9 +294,15 @@ function fail(message) {
 	process.exit(1)
 }
 
-const [command, ...args] = process.argv.slice(2)
+// `pointer-drag` on the command line, `pointerDrag` in the table — one hyphen
+// convention for multi-word commands so the shell reads naturally.
+const camel = (name) => name.replace(/-([a-z])/g, (_, c) => c.toUpperCase())
+
+const [raw, ...args] = process.argv.slice(2)
+const command = raw ? camel(raw) : raw
 if (!command || !COMMANDS[command]) {
-	fail(`usage: drive.mjs <${Object.keys(COMMANDS).join('|')}> [args]`)
+	const names = Object.keys(COMMANDS).map((n) => n.replace(/[A-Z]/g, (c) => `-${c.toLowerCase()}`))
+	fail(`usage: drive.mjs <${names.join('|')}> [args]`)
 }
 
 const cdp = await connect()

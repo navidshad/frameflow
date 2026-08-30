@@ -5,7 +5,8 @@
 				? 'border-primary ring-2 ring-primary/40 shadow-md shadow-primary/20 z-10'
 				: 'border-zinc-300/60 dark:border-zinc-700/80 hover:border-primary/40',
 			track?.locked ? 'pointer-events-none opacity-60' : 'cursor-grab active:cursor-grabbing',
-			effectHover ? 'ring-2 ring-accent border-accent' : ''
+			effectHover ? 'ring-2 ring-accent border-accent' : '',
+			dragging ? 'opacity-80 shadow-lg shadow-black/30 z-30' : ''
 		]"
 		:style="{ transform: `translateX(${viewport.secToPx(item.timelineStart)}px)`, width: `${Math.max(viewport.secToPx(item.duration), 6)}px` }"
 		role="option" :aria-selected="selected" tabindex="0"
@@ -107,6 +108,11 @@ const onEffectDrop = (e: DragEvent) => {
 const store = useEditorStore()
 const viewport = inject(TimelineViewportKey)!
 const interactions = inject(TimelineInteractionsKey)!
+
+/** Lifted while it is the one being dragged, so it reads as picked up. */
+const dragging = computed(() =>
+	interactions.mode.value === 'movingItem' && interactions.activeItemId.value === props.item.id
+)
 
 const hovering = ref(false)
 
