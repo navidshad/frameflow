@@ -18,9 +18,11 @@
 		     two thirds of the lane stays clip, where the handles live. -->
 		<div v-for="seam in placedSeams" :key="`t-${seam.junction.id}`"
 			class="absolute top-1.5 h-3 z-20 rounded border overflow-hidden cursor-pointer transition-shadow"
-			:class="seam.junction.id === store.selectedSeamId
-				? 'border-secondary ring-2 ring-secondary/40 bg-secondary/30'
-				: 'border-secondary/70 bg-secondary/20 hover:bg-secondary/30'"
+			:class="store.conflictedSeamIds.has(seam.junction.id)
+				? 'border-amber-500 bg-amber-500/25 ring-1 ring-amber-500/40'
+				: seam.junction.id === store.selectedSeamId
+					? 'border-secondary ring-2 ring-secondary/40 bg-secondary/30'
+					: 'border-secondary/70 bg-secondary/20 hover:bg-secondary/30'"
 			:style="blockStyle(seam)"
 			role="option" :aria-selected="seam.junction.id === store.selectedSeamId" tabindex="0"
 			:title="seamTitle(seam)"
@@ -140,6 +142,11 @@ const blockStyle = (seam: Seam) => {
 const previewStatus = (seam: Seam) => store.transitionPreviews.get(seam.junction.id)?.status
 
 const seamTitle = (seam: Seam) => {
+	// The export refuses this outright, so the ribbon says it here — while you
+	// are editing — rather than after you have waited for a render to fail.
+	if (store.conflictedSeamIds.has(seam.junction.id)) {
+		return 'A clip on another track crosses this transition. The export will refuse — move it clear, or remove the transition.'
+	}
 	const base = `${transitionLabel(seam.window!.kind)} — ${seam.window!.duration.toFixed(2)}s`
 	const status = previewStatus(seam)
 	if (status === 'rendering') return `${base}. Preparing an exact preview…`

@@ -406,6 +406,31 @@ export const useEditorStore = defineStore('editor', () => {
 		)
 	})
 
+	/**
+	 * Junction ids whose window a clip on ANOTHER video track crosses — the
+	 * exact condition the export refuses with a throw (render.ts). Computed
+	 * here so the timeline can say so while you are still editing, instead of
+	 * the export failing after you have waited for it.
+	 */
+	const conflictedSeamIds = computed<Set<string>>(() => {
+		const out = new Set<string>()
+		const d = doc.value
+		if (!d) return out
+		const videoTrackIds = new Set(
+			d.tracks.filter((t) => t.kind === 'video' && !t.hidden).map((t) => t.id)
+		)
+		for (const seam of seams.value) {
+			const w = seam.window
+			if (!w) continue
+			const clash = d.timeline.some((i) =>
+				i.trackId !== w.trackId && videoTrackIds.has(i.trackId) &&
+				i.timelineStart < w.end - 1e-6 && itemEnd(i) > w.start + 1e-6
+			)
+			if (clash) out.add(w.junctionId)
+		}
+		return out
+	})
+
 	/** Ephemeral, like silenceScan — a seam is not an item, so it stays out of
 	 *  doc.selection, which pruneSelection would strip of any non-item id. */
 	const selectedSeamId = ref<string | null>(null)
@@ -813,6 +838,13 @@ export const useEditorStore = defineStore('editor', () => {
 			warnings.push({
 				id: 'loudness',
 				text: 'The mix will be normalised to -14 LUFS, the level streaming platforms expect.'
+			})
+		}
+
+		if (conflictedSeamIds.value.size) {
+			warnings.push({
+				id: 'transition-clash',
+				text: `${conflictedSeamIds.value.size === 1 ? 'A clip on another track crosses' : 'Clips on other tracks cross'} a transition — the export will refuse until it is moved clear.`
 			})
 		}
 
@@ -3129,6 +3161,7 @@ export const useEditorStore = defineStore('editor', () => {
 		setLoudnessEnabled,
 		refreshTranscripts,
 		seams,
+		conflictedSeamIds,
 		selectedSeamId,
 		selectedSeam,
 		selectSeam,
