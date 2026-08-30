@@ -71,7 +71,9 @@
 					<!-- The sequence frame: what actually gets exported. Sized here
 					     rather than in CSS because letterboxing a plain element
 					     against BOTH axes is not something CSS can express. -->
-					<div class="relative overflow-hidden bg-black ring-1 ring-white/10" :style="frameStyle">
+					<div class="relative bg-black ring-1 ring-white/10" data-canvas-frame
+						:class="gizmoActive ? '' : 'overflow-hidden'"
+						:style="frameStyle">
 						<!-- Generated layers, UNDER the video elements because a
 					     background is what the pair sits on. Solid and gradient map
 					     onto CSS exactly; grain and bars get the notice instead. -->
@@ -127,6 +129,12 @@
 							pointer-events-none" :style="captionBoxStyle">
 							<span :style="captionTextStyle">{{ activeCue.text }}</span>
 						</div>
+						<!-- The selected item's handles, editable on the picture itself.
+						     Overflow unclips while they are up, so a corner dragged past
+						     the frame edge stays grabbable. -->
+						<CanvasGizmo v-if="gizmoActive"
+							:frame-width="frameBox.w" :frame-height="frameBox.h" />
+
 						<!-- Guides. Fractions of the frame, so they follow the sequence
 						     when its shape changes — the rule titles and framing follow.
 						     Above everything, because they are about what covers it. -->
@@ -339,6 +347,7 @@ import { toMediaUrl } from '@shared/media-url'
 import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { useEditorStore } from '../../stores/editorStore'
 import { useEdlPlayback } from '../composables/useEdlPlayback'
+import CanvasGizmo from './CanvasGizmo.vue'
 
 const store = useEditorStore()
 const api = (window as any).api
@@ -417,6 +426,31 @@ const onFullscreenEscape = (event: KeyboardEvent) => {
 }
 onMounted(() => window.addEventListener('keydown', onFullscreenEscape, true))
 onBeforeUnmount(() => window.removeEventListener('keydown', onFullscreenEscape, true))
+
+// ===== The canvas gizmo =====
+
+/** Only for a single selected item that has a picture on the frame, and only
+ *  while paused — during playback the handles would chase a moving target. */
+const gizmoActive = computed(() => {
+	if (store.isPlaying || store.selectedItemIds.length !== 1) return false
+	const item = store.doc?.timeline.find((i) => i.id === store.selectedItemIds[0])
+	if (!item) return false
+	if (item.text) {
+		// A title's anchor only makes sense while the title is on screen.
+		return store.playheadSec >= item.timelineStart &&
+			store.playheadSec < item.timelineStart + item.duration
+	}
+	const track = store.doc?.tracks.find((t) => t.id === item.trackId)
+	return track?.kind === 'video'
+})
+
+/** The frame box's px size, which the gizmo needs to turn deltas into fractions. */
+const frameBox = computed(() => {
+	const { w, h } = stage.value
+	if (!w || !h) return { w: 0, h: 0 }
+	const scale = Math.min(w / seqWidth.value, h / seqHeight.value)
+	return { w: Math.floor(seqWidth.value * scale), h: Math.floor(seqHeight.value * scale) }
+})
 
 // ===== The exact frame =====
 

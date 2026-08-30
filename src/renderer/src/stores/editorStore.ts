@@ -1927,6 +1927,42 @@ export const useEditorStore = defineStore('editor', () => {
 	}
 
 	/**
+	 * A continuous gesture — dragging a handle on the canvas — as ONE history
+	 * step. The snapshot is taken when the pointer goes down, the item is
+	 * updated live while it moves (replacing objects, never mutating, so the
+	 * value-comparing diff still works), and the step commits on release.
+	 * Without this a drag would bury the undo stack under a step per pixel —
+	 * the same reason the sliders commit on `change` rather than `input`.
+	 */
+	let gestureBefore: TimelineState | null = null
+
+	const beginItemGesture = () => {
+		if (!doc.value || gestureBefore) return
+		gestureBefore = snapshotState()
+	}
+
+	/** Live update mid-gesture: no history, no autosave — just the picture. */
+	const updateItemGesture = (id: string, patch: {
+		transform?: TimelineItemTransform
+		text?: Partial<NonNullable<TimelineItem['text']>>
+	}) => {
+		const item = doc.value?.timeline.find((i) => i.id === id)
+		if (!item) return
+		if (patch.transform) {
+			item.transform = hasTransform(patch.transform) ? { ...patch.transform } : undefined
+		}
+		if (patch.text && item.text) {
+			item.text = { ...item.text, ...patch.text }
+		}
+	}
+
+	const endItemGesture = (label: string) => {
+		if (!gestureBefore) return
+		commitStep({ before: gestureBefore, label })
+		gestureBefore = null
+	}
+
+	/**
 	 * Move, scale or rotate a clip inside the frame — the free transform, and
 	 * what PiP is built on. Replace, never mutate: the diff compares by value.
 	 */
@@ -3122,6 +3158,9 @@ export const useEditorStore = defineStore('editor', () => {
 		setTransition,
 		clearTransition,
 		setItemTransform,
+		beginItemGesture,
+		updateItemGesture,
+		endItemGesture,
 		setItemKey,
 		addGeneratedLayer,
 		setGenerator,

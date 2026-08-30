@@ -115,6 +115,7 @@ import type { FunctionalComponent } from 'vue'
 import { useEditorStore } from '../../../stores/editorStore'
 import { TimelineViewportKey } from '../../composables/useTimelineViewport'
 import { keysFor } from '../../shortcuts'
+import SlimTooltip from '../../../components/SlimTooltip.vue'
 
 const store = useEditorStore()
 const viewport = inject(TimelineViewportKey)!
@@ -133,23 +134,31 @@ const formatTime = (seconds: number) => {
 	return `${m}:${String(s).padStart(2, '0')}`
 }
 
+/**
+ * A toolbar icon in a STYLED tooltip. Native `title` tooltips take a second to
+ * appear and are easy to miss entirely, which made a toolbar of bare icons
+ * read as unlabelled — the tooltips existed, nobody saw them. SlimTooltip is
+ * what every panel already uses.
+ */
 const ToolButton: FunctionalComponent<
 	{ icon: string; title: string; disabled?: boolean; active?: boolean },
 	{ click: () => void }
 > = (props, { emit }) =>
-	h('button', {
-		class: [
-			'w-6 h-6 flex items-center justify-center rounded-lg transition active:scale-95',
-			props.disabled
-				? 'text-zinc-300 dark:text-zinc-700 cursor-not-allowed'
-				: props.active
-					? 'text-primary bg-primary/10'
-					: 'text-zinc-500 hover:text-primary hover:bg-primary/10'
-		],
-		title: props.title,
-		disabled: props.disabled,
-		onClick: () => { if (!props.disabled) emit('click') }
-	}, [h('span', { class: `iconify ${props.icon} w-3.5 h-3.5` })])
+	h(SlimTooltip, { text: props.title, placement: 'top' }, {
+		default: () => h('button', {
+			class: [
+				'w-6 h-6 flex items-center justify-center rounded-lg transition active:scale-95',
+				props.disabled
+					? 'text-zinc-300 dark:text-zinc-700 cursor-not-allowed'
+					: props.active
+						? 'text-primary bg-primary/10'
+						: 'text-zinc-500 hover:text-primary hover:bg-primary/10'
+			],
+			'aria-label': props.title,
+			disabled: props.disabled,
+			onClick: () => { if (!props.disabled) emit('click') }
+		}, [h('span', { class: `iconify ${props.icon} w-3.5 h-3.5` })])
+	})
 ToolButton.props = ['icon', 'title', 'disabled', 'active']
 ToolButton.emits = ['click']
 </script>
