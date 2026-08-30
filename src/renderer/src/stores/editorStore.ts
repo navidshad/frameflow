@@ -87,6 +87,9 @@ export const useEditorStore = defineStore('editor', () => {
 	const pxPerSecond = ref(40)
 	const timelineView = ref<'filmstrip' | 'context'>('filmstrip')
 	const snapEnabled = ref(true)
+	/** UI state the keyboard reaches but the timeline does not own. */
+	const shortcutsOpen = ref(false)
+	const monitorFullscreen = ref(false)
 	// Incremented on every external seek; the playback engine watches it.
 	const seekRequest = ref<{ n: number; time: number }>({ n: 0, time: 0 })
 	const selectedItemIds = ref<string[]>([])
@@ -1985,6 +1988,125 @@ export const useEditorStore = defineStore('editor', () => {
 		commitStep({ before, label: 'Remove transition' })
 	}
 
+	/**
+	 * Copy a selection, so it can be pasted somewhere else.
+	 *
+	 * The clipboard is a deep snapshot rather than a list of ids: paste has to
+	 * keep working after the originals are deleted, and a shallow copy would
+	 * hand the pasted clip the SAME effects and transition objects as the one it
+	 * came from — the diff compares those by value and two items sharing one
+	 * would make every later edit ambiguous.
+	 */
+	const clipboard = ref<TimelineItem[]>([])
+
+	const copyItems = (ids: string[] = selectedItemIds.value) => {
+		const wanted = new Set(ids)
+		const picked = (doc.value?.timeline ?? []).filter((i) => wanted.has(i.id))
+		if (!picked.length) return 0
+		clipboard.value = JSON.parse(JSON.stringify(picked))
+		return picked.length
+	}
+
+	/**
+	 * Paste at the playhead, keeping the selection's internal spacing.
+	 *
+	 * Relative to the EARLIEST item copied, so pasting a three-clip run puts it
+	 * back as a run rather than stacking all three on the playhead.
+	 */
+	const pasteItems = (atSec = playheadSec.value) => {
+		if (!doc.value || !clipboard.value.length) return []
+		const trackIds = new Set(doc.value.tracks.map((t) => t.id))
+		const origin = Math.min(...clipboard.value.map((i) => i.timelineStart))
+		const fallbackTrack = visibleVideoTracks.value[0]?.id
+			?? doc.value.tracks.find((t) => t.kind === 'video')?.id
+		const before = snapshotState()
+		const made: string[] = []
+		for (const source of clipboard.value) {
+			// A track the copy came from may be gone by now.
+			const trackId = trackIds.has(source.trackId) ? source.trackId : fallbackTrack
+			if (!trackId) continue
+			const id = newId('ti')
+			doc.value.timeline.push({
+				...JSON.parse(JSON.stringify(source)),
+				id,
+				trackId,
+				timelineStart: Math.max(0, atSec + (source.timelineStart - origin))
+			})
+			made.push(id)
+		}
+		if (!made.length) return []
+		// Pasting onto occupied time is normal; the existing repair decides.
+		repairOverlaps({ tracks: doc.value.tracks, timeline: doc.value.timeline })
+		commitStep({ before, label: made.length > 1 ? `Paste ${made.length} clips` : 'Paste' })
+		selectItems(made)
+		return made
+	}
+
+	/** Copy and paste in one step, landing each copy right after its original. */
+	const duplicateItems = (ids: string[] = selectedItemIds.value) => {
+		if (!doc.value) return []
+		const wanted = new Set(ids)
+		const picked = doc.value.timeline.filter((i) => wanted.has(i.id))
+		if (!picked.length) return []
+		const before = snapshotState()
+		const made: string[] = []
+		for (const source of picked) {
+			const id = newId('ti')
+			doc.value.timeline.push({
+				...JSON.parse(JSON.stringify(source)),
+				id,
+				timelineStart: itemEnd(source)
+			})
+			made.push(id)
+		}
+		repairOverlaps({ tracks: doc.value.tracks, timeline: doc.value.timeline })
+		commitStep({ before, label: made.length > 1 ? `Duplicate ${made.length} clips` : 'Duplicate' })
+		selectItems(made)
+		return made
+	}
+
+	/** Everything on unlocked tracks — locked means locked, including from here. */
+	const selectAllItems = () => {
+		if (!doc.value) return
+		const locked = new Set(doc.value.tracks.filter((t) => t.locked).map((t) => t.id))
+		selectItems(doc.value.timeline.filter((i) => !locked.has(i.trackId)).map((i) => i.id))
+	}
+
+	/**
+	 * Trim everything on one side of the playhead away from a clip.
+	 *
+	 * `side: 'left'` keeps what is AFTER the playhead — the gesture for "the
+	 * take starts here". Trims rather than splitting-and-deleting so it is one
+	 * history step and leaves no fragment behind.
+	 *
+	 * Ripples afterwards, like every other removal here. Leaving the hole would
+	 * be a different gesture from the delete key on the same timeline, and a
+	 * user who tightens a clip is not asking for a gap where it used to be.
+	 */
+	const trimToPlayhead = (side: 'left' | 'right') => {
+		if (!doc.value) return 0
+		const t = playheadSec.value
+		const candidates = (selectedItems.value.length ? selectedItems.value : doc.value.timeline)
+			.filter((i) => t > i.timelineStart + 0.01 && t < itemEnd(i) - 0.01)
+		if (!candidates.length) return 0
+		const before = snapshotState()
+		for (const item of candidates) {
+			const speed = item.speed || 1
+			const cut = item.in + (t - item.timelineStart) * speed
+			if (side === 'left') {
+				item.in = cut
+				item.timelineStart = t
+			} else {
+				item.out = cut
+			}
+			item.duration = (item.out - item.in) / speed
+			item.masterSegmentIndex = undefined
+		}
+		closeTimelineGaps({ tracks: doc.value.tracks, timeline: doc.value.timeline })
+		commitStep({ before, label: side === 'left' ? 'Trim start' : 'Trim end' })
+		return candidates.length
+	}
+
 	const nudgeItems = (ids: string[], deltaSec: number) => {
 		if (!doc.value || !ids.length) return
 		const before = snapshotState()
@@ -2866,6 +2988,8 @@ export const useEditorStore = defineStore('editor', () => {
 		pxPerSecond,
 		timelineView,
 		snapEnabled,
+		shortcutsOpen,
+		monitorFullscreen,
 		seekRequest,
 		selectedItemIds,
 		// computeds
@@ -2924,6 +3048,12 @@ export const useEditorStore = defineStore('editor', () => {
 		addItemFromAsset,
 		splitAtPlayhead,
 		removeRanges,
+		copyItems,
+		pasteItems,
+		duplicateItems,
+		selectAllItems,
+		trimToPlayhead,
+		clipboard,
 		deleteItems,
 		closeGaps,
 		hasGaps,

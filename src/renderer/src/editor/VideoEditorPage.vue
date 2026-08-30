@@ -102,6 +102,7 @@
 			</main>
 
 			<ExportDialog v-model="showExport" />
+			<ShortcutsOverlay />
 		</template>
 	</div>
 </template>
@@ -115,6 +116,7 @@ import { useEditorStore } from '../stores/editorStore'
 import LeftRail, { type LeftTab } from './components/LeftRail.vue'
 import PreviewMonitor from './components/PreviewMonitor.vue'
 import TimelinePanel from './components/TimelinePanel.vue'
+import ShortcutsOverlay from './components/ShortcutsOverlay.vue'
 import ChatColumn from './components/ChatColumn.vue'
 import InspectorColumn from './components/InspectorColumn.vue'
 import ExportDialog from './components/ExportDialog.vue'

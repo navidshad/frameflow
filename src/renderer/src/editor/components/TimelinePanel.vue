@@ -63,7 +63,13 @@ provide(TimelineInteractionsKey, interactions)
 
 // Global editor shortcuts (guarded against typing contexts) — the timeline
 // panel is always mounted on the editor page and owns the zoom functions.
-useEditorShortcuts((factor) => viewport.zoomBy(factor))
+// Help and fullscreen belong to surfaces this panel does not own, so they go
+// through the store rather than being plumbed up and back down.
+useEditorShortcuts({
+	zoomBy: (factor) => viewport.zoomBy(factor),
+	onHelp: () => { store.shortcutsOpen = !store.shortcutsOpen },
+	onFullscreen: () => { store.monitorFullscreen = !store.monitorFullscreen }
+})
 
 const scrollRef = ref<HTMLElement | null>(null)
 const vScroll = ref(0) // vertical scroll of the lanes, mirrored onto the headers
