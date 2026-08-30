@@ -113,6 +113,11 @@
 						<div class="flex items-baseline justify-between mb-1">
 							<label class="text-[10px] font-bold uppercase tracking-widest text-zinc-500">
 								Key out background
+								<span class="ml-1 px-1 py-px rounded text-[8px] font-mono normal-case tracking-wider
+								             text-amber-600 dark:text-amber-400 bg-amber-500/10"
+									title="CSS has no chroma key — use the exact-frame button on the monitor to check the edge, or export.">
+									export
+								</span>
 							</label>
 							<button v-if="keySpec"
 								class="text-[9px] font-semibold text-zinc-400 hover:text-primary transition"
@@ -236,6 +241,12 @@
 					<div v-if="generatorSpec">
 						<label class="text-[10px] font-bold uppercase tracking-widest text-zinc-500 block mb-1">
 							Background
+							<span v-if="generatorSpec && !hasGeneratorCss(generatorSpec)"
+								class="ml-1 px-1 py-px rounded text-[8px] font-mono normal-case tracking-wider
+								       text-amber-600 dark:text-amber-400 bg-amber-500/10"
+								title="The monitor cannot draw this kind — use the exact-frame button, or export.">
+								export
+							</span>
 						</label>
 						<div class="grid grid-cols-2 gap-1.5 mb-2">
 							<button v-for="g in GENERATORS" :key="g.kind"
@@ -363,6 +374,12 @@
 							<div class="flex items-center gap-1">
 								<span class="flex-1 text-[10px] font-semibold text-zinc-700 dark:text-zinc-200 truncate">
 									{{ defFor(effect.kind)?.label || effect.kind }}
+								</span>
+								<span v-if="defFor(effect.kind) && previewFidelity(defFor(effect.kind)!) === 'export-only'"
+									class="shrink-0 px-1 py-px rounded text-[8px] font-mono uppercase tracking-wider
+									       text-amber-600 dark:text-amber-400 bg-amber-500/10"
+									title="The live monitor cannot draw this — use the exact-frame button on the monitor to check it, or export.">
+									export
 								</span>
 								<button class="w-5 h-5 rounded text-zinc-400 hover:text-primary disabled:opacity-30 transition"
 									title="Move earlier in the chain" :disabled="index === 0"
@@ -649,10 +666,10 @@
 </template>
 
 <script setup lang="ts">
-import { effectDef, num, type EffectParam } from '@shared/effects'
+import { effectDef, num, previewFidelity, type EffectParam } from '@shared/effects'
 import { hasTransform, TRANSFORM_DEFAULTS } from '@shared/transform'
 import { KEY_DEFAULTS } from '@shared/keying'
-import { GENERATOR_DEFAULTS, GENERATORS } from '@shared/generators'
+import { GENERATOR_DEFAULTS, GENERATORS, hasGeneratorCss } from '@shared/generators'
 import { valueAt } from '@shared/keyframes'
 import { toMediaUrl } from '@shared/media-url'
 import type { EffectRef } from '@shared/types'

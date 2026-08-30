@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import {
 	allEffects, defaultParams, effectChain, effectCss, effectDef, effectGroups,
-	hasRenderableEffects, isEffectKind, registerEffects, type EffectDef
+	hasRenderableEffects, isEffectKind, previewFidelity, registerEffects, type EffectDef
 } from './effects'
 
 const applied = (kind: string, params?: Record<string, number | string>) =>
@@ -141,5 +141,23 @@ describe('registerEffects', () => {
 		// Registering the same kind again reports what it displaced, so an
 		// override is deliberate rather than silent.
 		expect(registerEffects([fake])).toEqual(['test-only-look'])
+	})
+})
+
+describe('previewFidelity', () => {
+	it('gives every registered kind a verdict, derived rather than listed', () => {
+		// A curated "what previews" list is the bug class the transition cache
+		// key fell into; this is derived from whether a CSS approximation
+		// exists, so it cannot go stale.
+		for (const def of allEffects()) {
+			expect(['approximate', 'export-only'], def.kind).toContain(previewFidelity(def))
+		}
+	})
+
+	it('matches the facts the catalogue states', () => {
+		expect(previewFidelity(effectDef('saturation')!)).toBe('approximate')
+		expect(previewFidelity(effectDef('gamma')!)).toBe('export-only')
+		expect(previewFidelity(effectDef('look-vintage')!)).toBe('export-only')
+		expect(previewFidelity(effectDef('denoise')!)).toBe('export-only')
 	})
 })

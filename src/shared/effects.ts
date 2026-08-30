@@ -301,6 +301,20 @@ export function effectCss(effects: AppliedEffect[] | undefined): string {
 	return parts.join(' ')
 }
 
+/**
+ * How honestly the monitor can show this effect.
+ *
+ * DERIVED from whether a CSS approximation exists, never hand-listed — a
+ * curated list of "what previews" is exactly the bug class the transition
+ * cache key fell into. 'approximate' means the monitor shows something matched
+ * at midtone; 'export-only' means the picture does not change until export
+ * (or until the exact frame is rendered), and the control should say so.
+ */
+export type PreviewFidelity = 'approximate' | 'export-only'
+
+export const previewFidelity = (def: EffectDef): PreviewFidelity =>
+	def.css ? 'approximate' : 'export-only'
+
 /** True when this clip needs the region path — the fast path applies no filters. */
 export const hasRenderableEffects = (effects: AppliedEffect[] | undefined): boolean =>
 	effectChain(effects, 'video').length > 0 || effectChain(effects, 'audio').length > 0
