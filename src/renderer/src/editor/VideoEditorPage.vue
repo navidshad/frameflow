@@ -53,16 +53,18 @@
 				<div class="flex-1 min-w-0 flex flex-col gap-3">
 					<!-- Top zones: media | preview | right rail — rails collapse to slim strips -->
 					<div class="flex-1 min-h-0 grid gap-3 transition-all duration-300"
-						:style="{ gridTemplateColumns: `${leftOpen ? leftW + 'px' : '36px'} minmax(0,1fr) auto` }">
+						:style="{ gridTemplateColumns: `${leftOpen ? leftW + 'px' : '40px'} minmax(0,1fr) auto` }">
 
-						<!-- Left rail: media (drag its right edge to resize) -->
-						<div v-if="leftOpen" class="relative min-h-0 flex">
+						<!-- Left rail. Unlike the other rails this one does NOT swap for a
+						     stub when collapsed: the tab strip stays, so a collapsed
+						     sidebar is still a row of things you can click rather than a
+						     button that only reopens whatever you last had. -->
+						<div class="relative min-h-0 flex">
 							<LeftRail v-model:collapsed="leftCollapsedProxy" v-model:tab="leftTab" />
-							<ResizeHandle direction="vertical" class="absolute inset-y-0 -right-2.5 z-20"
+							<ResizeHandle v-if="leftOpen" direction="vertical"
+								class="absolute inset-y-0 -right-2.5 z-20"
 								@resize="resizeLeft" @reset="resetLeft" />
 						</div>
-						<CollapsedRail v-else side="left" label="Media" icon="tabler--photo-video"
-							@open="leftOpen = true" />
 
 						<!-- Center: the monitor gets the full column now -->
 						<PreviewMonitor class="min-h-0" />

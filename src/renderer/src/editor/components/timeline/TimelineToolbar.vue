@@ -20,18 +20,23 @@
 
 		<div class="flex items-center gap-1">
 			<!-- Undo / Redo -->
-			<ToolButton icon="tabler--arrow-back-up" title="Undo (⌘Z)" :disabled="!store.canUndo" @click="store.undo()" />
-			<ToolButton icon="tabler--arrow-forward-up" title="Redo (⌘⇧Z)" :disabled="!store.canRedo" @click="store.redo()" />
+			<ToolButton icon="tabler--arrow-back-up" :title="`Undo (${keysFor('undo')})`" :disabled="!store.canUndo" @click="store.undo()" />
+			<ToolButton icon="tabler--arrow-forward-up" :title="`Redo (${keysFor('redo')})`" :disabled="!store.canRedo" @click="store.redo()" />
 			<div class="w-px h-4 bg-zinc-200 dark:bg-zinc-800 mx-1"></div>
 
 			<!-- Edit tools -->
-			<ToolButton icon="tabler--blade-filled" title="Split at playhead (S)" @click="store.splitAtPlayhead()" />
-			<ToolButton icon="tabler--trash" title="Ripple delete selection (⌫)"
+			<ToolButton icon="tabler--blade-filled" :title="`Split at the playhead (${keysFor('split')})`" @click="store.splitAtPlayhead()" />
+			<ToolButton icon="tabler--trash" :title="`Ripple delete the selection (${keysFor('delete')})`"
 				:disabled="!store.selectedItemIds.length"
 				@click="store.deleteItems(store.selectedItemIds)" />
 			<ToolButton icon="tabler--arrows-join" title="Close gaps — pull every clip left so the timeline runs back to back"
 				:disabled="!store.hasGaps" @click="store.closeGaps()" />
-			<ToolButton icon="tabler--magnet" :title="store.snapEnabled ? 'Snapping on' : 'Snapping off'"
+			<ToolButton icon="tabler--copy"
+				:title="`Duplicate the selection (${keysFor('duplicate')})`"
+				:disabled="!store.selectedItemIds.length"
+				@click="store.duplicateItems()" />
+			<ToolButton icon="tabler--magnet"
+				:title="`${store.snapEnabled ? 'Snapping on' : 'Snapping off'} (${keysFor('snapping')})`"
 				:active="store.snapEnabled" @click="store.snapEnabled = !store.snapEnabled" />
 			<ToolButton icon="tabler--badge-cc" :disabled="!store.hasTranscript"
 				:title="!store.hasTranscript
@@ -97,6 +102,9 @@
 				@click="store.addVideoTrack()" />
 			<ToolButton icon="tabler--bookmark-plus" title="Save revision checkpoint"
 				@click="store.saveCheckpoint()" />
+			<div class="w-px h-4 bg-zinc-200 dark:bg-zinc-800 mx-1"></div>
+			<ToolButton icon="tabler--keyboard" :title="`Keyboard shortcuts (${keysFor('help')})`"
+				:active="store.shortcutsOpen" @click="store.shortcutsOpen = !store.shortcutsOpen" />
 		</div>
 	</div>
 </template>
@@ -106,6 +114,7 @@ import { h, inject, ref } from 'vue'
 import type { FunctionalComponent } from 'vue'
 import { useEditorStore } from '../../../stores/editorStore'
 import { TimelineViewportKey } from '../../composables/useTimelineViewport'
+import { keysFor } from '../../shortcuts'
 
 const store = useEditorStore()
 const viewport = inject(TimelineViewportKey)!
