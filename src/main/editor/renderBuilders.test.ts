@@ -304,3 +304,40 @@ describe('effects in the region graph', () => {
 		expect(chain).toBe(chainOf())
 	})
 })
+
+// ===== Padding a compositing layer =====
+
+describe('vpad on a layer', () => {
+	/**
+	 * `color` is ONE ffmpeg option however many times it is written, and the last
+	 * assignment wins. Writing it per part AND again at the end made every alpha
+	 * pad opaque, so a layer that did not span its whole region blacked out
+	 * everything beneath it. These assert the option appears exactly once.
+	 */
+	const padOf = (chain: string) => chain.match(/tpad=[^,]*/)?.[0] ?? ''
+
+	const layerChain = (alpha: boolean) => graphOf(cut({
+		duration: 4,
+		videoLayers: [slice({ offset: 1, duration: 2, item: item({ timelineStart: 1, duration: 2 }) })]
+	})).text
+
+	it('names the fill colour once, not twice', () => {
+		const pad = padOf(layerChain(false))
+		expect(pad).toContain('tpad=')
+		expect(pad.match(/color=/g) ?? []).toHaveLength(1)
+	})
+
+	it('pads an ordinary clip with opaque black', () => {
+		expect(padOf(layerChain(false))).toContain('color=black')
+		expect(padOf(layerChain(false))).not.toContain('black@0')
+	})
+
+	it('emits no colour at all for a freeze, which repeats a frame', () => {
+		const chain = graphOf(cut({
+			duration: 4,
+			videoLayers: [slice({ freezeHead: 1, duration: 3 })]
+		})).text
+		const freeze = chain.match(/tpad=start_mode=clone[^,]*/)?.[0] ?? ''
+		expect(freeze).not.toContain('color=')
+	})
+})

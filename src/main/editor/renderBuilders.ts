@@ -367,13 +367,15 @@ export const vnorm = (w: number, h: number, fps: number, framing?: ItemFraming, 
  */
 function vpad(head: number, tail: number, mode: 'add' | 'clone', alpha = false): string {
 	const parts: string[] = []
-	// `add` fills with a colour; on a layer that colour has to be transparent,
-	// or the seconds before a late layer starts would black out the base.
-	const colour = mode === 'add' && alpha ? ':color=black@0' : ''
-	if (head > PAD_EPS) parts.push(`start_mode=${mode}${colour}:start_duration=${t3(head)}`)
-	if (tail > PAD_EPS) parts.push(`stop_mode=${mode}${colour}:stop_duration=${t3(tail)}`)
+	if (head > PAD_EPS) parts.push(`start_mode=${mode}:start_duration=${t3(head)}`)
+	if (tail > PAD_EPS) parts.push(`stop_mode=${mode}:stop_duration=${t3(tail)}`)
 	if (!parts.length) return ''
-	return `tpad=${parts.join(':')}${mode === 'add' ? ':color=black' : ''}`
+	if (mode !== 'add') return `tpad=${parts.join(':')}`
+	// `add` fills with a colour, and `color` is ONE option however many times it
+	// is written — the last assignment wins. Setting it per part and then again
+	// at the end silently made every alpha pad opaque, so a layer that did not
+	// span its whole region blacked out everything under it. One option, once.
+	return `tpad=${parts.join(':')}:color=${alpha ? 'black@0' : 'black'}`
 }
 
 /** Silence before an audio stream, in whole milliseconds. The tail is covered by

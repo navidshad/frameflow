@@ -357,6 +357,46 @@ describe('render pipeline — against the real ffmpeg', () => {
 			expect(bottomLeftR, 'and not down and to the left').toBeGreaterThan(150)
 		}, 90_000)
 
+		it('shows the base where a layer has already ended', async () => {
+			// A layer only needs padding when it does NOT span its region, and
+			// that only happens when the boundary collapse (SNAP_EPS) merges the
+			// layer's edge into a neighbouring cut. Here the layer ends 20ms after
+			// a base cut, so it spills 0.02s into a 1.8s region and the rest is
+			// PAD — and a pad that fills with opaque black rather than
+			// transparency blacks out the track underneath for 1.78 seconds.
+			//
+			// It did. `color` is one ffmpeg option however many times it is
+			// written, and writing it per part and again at the end made the last,
+			// opaque one win. Every other compositing test used a layer that
+			// exactly spanned its region, so nothing emitted a pad at all.
+			const v2: Track = { ...vtrack, id: 'v2', name: 'V2', order: 1 }
+			const d = document()
+			d.tracks = [vtrack, v2]
+			d.media = [asset('sa', A()), asset('sb', B())]
+			d.timeline = [
+				clip({ id: 'b1', sourceAssetId: 'sa', trackId: 'v1', timelineStart: 0, in: 0, out: 1.2, duration: 1.2 }),
+				clip({ id: 'b2', sourceAssetId: 'sa', trackId: 'v1', timelineStart: 1.2, in: 1.2, out: 3, duration: 1.8 }),
+				clip({ id: 'pip', sourceAssetId: 'sb', trackId: 'v2', timelineStart: 0.5, in: 0, out: 0.72, duration: 0.72 })
+			]
+			d.timelineMeta = { fps: 30, width: 320, height: 180, duration: 0, frameChosen: true }
+			const plan = computeRegions(d, 'original')
+
+			// The last region is the one carrying the spill and therefore the pad.
+			const padded = plan.regions[plan.regions.length - 1]
+			const graph = buildRegionGraph(padded, plan)
+			const pad = graph.filters.join(';').match(/tpad=[^,;\]]*/)?.[0]
+			expect(pad, 'this case must actually emit a pad').toBeDefined()
+			expect(pad!.match(/color=/g), 'colour named once, or the last wins').toHaveLength(1)
+
+			const file = await renderGraph(padded, plan, 'layer-pad.mp4')
+			const { stdout } = await execFileAsync(ffmpeg,
+				['-v', 'error', '-ss', '1', '-i', file, '-frames:v', '1',
+					'-vf', 'scale=1:1,format=rgb24', '-f', 'rawvideo', '-'],
+				{ encoding: 'buffer', maxBuffer: 1 << 20 })
+			const buf = stdout as unknown as Buffer
+			expect(buf[0], 'the base track under the layer’s pad').toBeGreaterThan(150)
+		}, 90_000)
+
 		it('encodes a pixel format h264 can actually take', async () => {
 			const plan = stacked({ scale: 0.4 })
 			const file = await renderGraph(plan.regions[0], plan, 'stack-fmt.mp4')
