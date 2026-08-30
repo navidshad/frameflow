@@ -90,6 +90,8 @@ export const useEditorStore = defineStore('editor', () => {
 	/** UI state the keyboard reaches but the timeline does not own. */
 	const shortcutsOpen = ref(false)
 	const monitorFullscreen = ref(false)
+	/** Which framing guide the monitor draws, if any. A view setting, not an edit. */
+	const activeGuideId = ref<string | null>(null)
 	// Incremented on every external seek; the playback engine watches it.
 	const seekRequest = ref<{ n: number; time: number }>({ n: 0, time: 0 })
 	const selectedItemIds = ref<string[]>([])
@@ -2990,6 +2992,7 @@ export const useEditorStore = defineStore('editor', () => {
 		snapEnabled,
 		shortcutsOpen,
 		monitorFullscreen,
+		activeGuideId,
 		seekRequest,
 		selectedItemIds,
 		// computeds

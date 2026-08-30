@@ -1,5 +1,11 @@
 <template>
-	<div class="glass-card rounded-2xl flex flex-col min-h-0 overflow-hidden">
+	<!-- Fullscreen is a CSS promotion, not a second monitor: the same element
+	     grows to fill the window, so playback, the guides and the caption
+	     overlay all carry on rather than being torn down and rebuilt. -->
+	<div class="glass-card flex flex-col min-h-0 overflow-hidden"
+		:class="store.monitorFullscreen
+			? 'fixed inset-0 z-[90] rounded-none'
+			: 'rounded-2xl'">
 		<!-- Mode switch -->
 		<div class="px-3 pt-2 pb-1 flex items-center justify-between shrink-0">
 			<div class="flex items-center bg-zinc-100/80 dark:bg-zinc-900/80 rounded-lg p-0.5 border border-zinc-200 dark:border-zinc-800">
@@ -108,6 +114,34 @@
 							pointer-events-none" :style="captionBoxStyle">
 							<span :style="captionTextStyle">{{ activeCue.text }}</span>
 						</div>
+						<!-- Guides. Fractions of the frame, so they follow the sequence
+						     when its shape changes — the rule titles and framing follow.
+						     Above everything, because they are about what covers it. -->
+						<template v-if="activeGuide">
+							<template v-if="activeGuide.kind === 'grid'">
+								<div v-for="line in gridLines" :key="line.key"
+									class="absolute bg-white/25 pointer-events-none" :style="line.style"></div>
+							</template>
+							<template v-else>
+								<div v-for="band in activeGuide.bands" :key="band.label"
+									class="absolute bg-black/45 border border-white/20 pointer-events-none
+									       flex items-end justify-start"
+									:style="{
+										left: `${band.x * 100}%`, top: `${band.y * 100}%`,
+										width: `${band.w * 100}%`, height: `${band.h * 100}%`
+									}">
+									<span class="px-1 text-[8px] font-mono uppercase tracking-widest text-white/50 truncate">
+										{{ band.label }}
+									</span>
+								</div>
+								<div v-if="safeRect" class="absolute border border-dashed border-accent/70 pointer-events-none"
+									:style="{
+										left: `${safeRect.x * 100}%`, top: `${safeRect.y * 100}%`,
+										width: `${safeRect.w * 100}%`, height: `${safeRect.h * 100}%`
+									}"></div>
+							</template>
+						</template>
+
 						<!-- Audio tracks play through an element pool in the composable
 						     (one per track), heard in parallel with the video. -->
 						<div v-if="edl.inGap.value"
@@ -181,16 +215,69 @@
 				<div class="px-4 py-2.5 flex items-center gap-3 border-t border-zinc-200 dark:border-zinc-800 shrink-0">
 					<button
 						class="w-8 h-8 rounded-full bg-primary text-white flex items-center justify-center shadow-md shadow-primary/20 hover:bg-primary-dark transition active:scale-95"
+						:title="store.isPlaying ? 'Pause (Space)' : 'Play (Space)'"
 						@click="store.isPlaying = !store.isPlaying">
 						<span :class="store.isPlaying ? 'iconify tabler--player-pause-filled' : 'iconify tabler--player-play-filled'"
 							class="w-3.5 h-3.5"></span>
 					</button>
-					<span class="text-[11px] font-mono text-zinc-600 dark:text-zinc-300">
-						{{ format(store.playheadSec) }} <span class="text-zinc-400">/ {{ format(store.contentEnd) }}</span>
+					<!-- Type a timecode to go there. A scrub bar cannot hit a frame. -->
+					<span class="text-[11px] font-mono text-zinc-600 dark:text-zinc-300 shrink-0">
+						<input :value="timecodeText" @focus="onTimecodeFocus" @blur="onTimecodeCommit"
+							@keydown.enter.prevent="($event.target as HTMLInputElement).blur()"
+							@keydown.esc.prevent="onTimecodeCancel"
+							class="w-[4.5rem] bg-transparent text-right outline-none rounded px-1
+							       hover:bg-zinc-500/10 focus:bg-zinc-500/10 focus:text-primary transition"
+							title="Type a time and press Enter" />
+						<span class="text-zinc-400">/ {{ format(store.contentEnd) }}</span>
 					</span>
 					<input type="range" class="flex-1 accent-primary h-1 cursor-pointer" min="0"
 						:max="store.contentEnd || 0" step="0.05" :value="store.playheadSec"
 						@input="onTimelineScrub" />
+
+					<div class="relative shrink-0">
+						<button
+							class="w-7 h-7 flex items-center justify-center rounded-lg transition active:scale-95"
+							:class="activeGuide
+								? 'text-primary bg-primary/10'
+								: 'text-zinc-400 hover:text-primary hover:bg-primary/10'"
+							:title="activeGuide ? `Guide: ${activeGuide.label}` : 'Guides — safe areas and grids'"
+							@click="guideMenuOpen = !guideMenuOpen">
+							<span class="iconify tabler--grid-dots w-4 h-4"></span>
+						</button>
+						<template v-if="guideMenuOpen">
+							<div class="fixed inset-0 z-40" @click="guideMenuOpen = false"></div>
+							<div class="absolute right-0 bottom-9 z-50 w-56 glass-card rounded-xl border
+							            border-zinc-200 dark:border-zinc-800 shadow-lg p-1 animate-menu">
+								<button v-for="guide in availableGuides" :key="guide.id"
+									class="w-full text-left px-2 py-1.5 rounded-lg transition"
+									:class="store.activeGuideId === guide.id
+										? 'bg-primary/10 text-primary'
+										: 'text-zinc-600 dark:text-zinc-300 hover:bg-primary/10'"
+									@click="chooseGuide(guide.id)">
+									<span class="block text-[11px] font-semibold">{{ guide.label }}</span>
+									<span class="block text-[9px] text-zinc-400 leading-snug">{{ guide.note }}</span>
+								</button>
+								<button v-if="store.activeGuideId"
+									class="w-full text-left px-2 py-1.5 mt-0.5 rounded-lg text-[11px]
+									       text-zinc-500 hover:bg-primary/10 transition"
+									@click="chooseGuide(null)">
+									None
+								</button>
+								<p v-if="!isVerticalFrame" class="px-2 pt-1.5 pb-1 text-[9px] text-zinc-400 leading-snug">
+									Platform safe areas appear when the sequence is vertical.
+								</p>
+							</div>
+						</template>
+					</div>
+
+					<button
+						class="w-7 h-7 shrink-0 flex items-center justify-center rounded-lg transition active:scale-95
+						       text-zinc-400 hover:text-primary hover:bg-primary/10"
+						:title="store.monitorFullscreen ? 'Leave fullscreen (F or Esc)' : 'Fullscreen (F)'"
+						@click="store.monitorFullscreen = !store.monitorFullscreen">
+						<span class="iconify w-4 h-4"
+							:class="store.monitorFullscreen ? 'tabler--minimize' : 'tabler--maximize'"></span>
+					</button>
 				</div>
 			</template>
 		</template>
@@ -199,6 +286,7 @@
 
 <script setup lang="ts">
 import { captionMetrics, cueAt } from '@shared/captions'
+import { guideById, guidesFor, isVertical, safeArea } from '@shared/guides'
 import { effectCss } from '@shared/effects'
 import { generatorCss, hasGeneratorCss } from '@shared/generators'
 import { transformCss } from '@shared/transform'
@@ -273,6 +361,103 @@ const keyedLayer = computed(() => {
 	const opaque = store.activeGenerators.some((g) => !hasGeneratorCss(g.generator))
 	return keyed || opaque
 })
+
+// Esc leaves fullscreen. The shortcut table's Esc is Deselect, and while the
+// monitor fills the window that is not what Esc should mean.
+const onFullscreenEscape = (event: KeyboardEvent) => {
+	if (event.key === 'Escape' && store.monitorFullscreen) {
+		event.stopPropagation()
+		store.monitorFullscreen = false
+	}
+}
+onMounted(() => window.addEventListener('keydown', onFullscreenEscape, true))
+onBeforeUnmount(() => window.removeEventListener('keydown', onFullscreenEscape, true))
+
+// ===== Guides =====
+
+const guideMenuOpen = ref(false)
+
+const isVerticalFrame = computed(() =>
+	isVertical({ width: seqWidth.value, height: seqHeight.value })
+)
+
+const availableGuides = computed(() =>
+	guidesFor({ width: seqWidth.value, height: seqHeight.value })
+)
+
+/** Only draw a guide that still applies — the sequence shape can change. */
+const activeGuide = computed(() => {
+	const guide = guideById(store.activeGuideId)
+	if (!guide) return null
+	return availableGuides.value.some((g) => g.id === guide.id) ? guide : null
+})
+
+const safeRect = computed(() => (activeGuide.value ? safeArea(activeGuide.value) : null))
+
+/** Thirds or a centre crosshair, as absolutely-positioned hairlines. */
+const gridLines = computed(() => {
+	if (activeGuide.value?.kind !== 'grid') return []
+	const fractions = activeGuide.value.id === 'centre' ? [0.5] : [1 / 3, 2 / 3]
+	return fractions.flatMap((f) => [
+		{ key: `v${f}`, style: { left: `${f * 100}%`, top: '0', width: '1px', height: '100%' } },
+		{ key: `h${f}`, style: { top: `${f * 100}%`, left: '0', height: '1px', width: '100%' } }
+	])
+})
+
+const chooseGuide = (id: string | null) => {
+	store.activeGuideId = id
+	guideMenuOpen.value = false
+}
+
+// ===== Timecode entry =====
+
+/**
+ * The playhead as text you can type into.
+ *
+ * A scrub bar cannot land on a frame, and "go to 1:23" is a thing people say.
+ * The field shows the live playhead until it is focused, then holds whatever is
+ * being typed so it does not fight the cursor.
+ */
+const editingTimecode = ref(false)
+const timecodeDraft = ref('')
+
+const timecodeText = computed(() =>
+	editingTimecode.value ? timecodeDraft.value : format(store.playheadSec)
+)
+
+const onTimecodeFocus = (event: FocusEvent) => {
+	editingTimecode.value = true
+	timecodeDraft.value = format(store.playheadSec)
+	requestAnimationFrame(() => (event.target as HTMLInputElement).select())
+}
+
+const onTimecodeCancel = (event: KeyboardEvent) => {
+	editingTimecode.value = false
+	;(event.target as HTMLInputElement).blur()
+}
+
+const onTimecodeCommit = (event: FocusEvent) => {
+	const field = event.target as HTMLInputElement
+	const seconds = parseTimecode(field.value)
+	editingTimecode.value = false
+	if (seconds !== null) store.seekTo(Math.max(0, Math.min(store.contentEnd, seconds)))
+	// Written back by hand: when the entry is rejected the bound value is
+	// unchanged from Vue's point of view, so it skips the patch and the field
+	// keeps showing whatever nonsense was typed.
+	requestAnimationFrame(() => { field.value = format(store.playheadSec) })
+}
+
+/** `1:23.4`, `83.4` or `1:02:03` — whatever someone actually types. */
+function parseTimecode(text: string): number | null {
+	const clean = text.trim().replace(',', '.')
+	if (!clean) return null
+	const parts = clean.split(':').map((p) => Number(p))
+	if (parts.some((p) => !Number.isFinite(p))) return null
+	if (parts.length === 1) return parts[0]
+	if (parts.length === 2) return parts[0] * 60 + parts[1]
+	if (parts.length === 3) return parts[0] * 3600 + parts[1] * 60 + parts[2]
+	return null
+}
 
 // ===== Captions =====
 
