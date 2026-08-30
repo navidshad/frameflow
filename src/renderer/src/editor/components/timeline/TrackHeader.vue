@@ -1,5 +1,9 @@
 <template>
+	<!-- `data-track-header` names which lane this row drives. The lane has
+	     `data-track-id`; the row that controls it had nothing, so anything
+	     addressing a track's controls had to guess from the label text. -->
 	<div class="flex items-center justify-between px-2 border-b border-zinc-200/60 dark:border-zinc-800/60"
+		:data-track-header="track.id"
 		:style="{ height: `${track.height}px` }">
 		<span class="text-[9px] font-bold uppercase tracking-widest"
 			:class="track.hidden ? 'text-zinc-300 dark:text-zinc-700' : 'text-zinc-500'">

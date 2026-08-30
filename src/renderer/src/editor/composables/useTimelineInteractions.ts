@@ -81,12 +81,15 @@ export function useTimelineInteractions(viewport: TimelineViewport) {
 		window.addEventListener('pointermove', onPointerMove)
 		window.addEventListener('pointerup', onPointerUp)
 		window.addEventListener('keydown', onKeyDown)
+		startAutoScroll()
 	}
 
 	const detach = () => {
 		window.removeEventListener('pointermove', onPointerMove)
 		window.removeEventListener('pointerup', onPointerUp)
 		window.removeEventListener('keydown', onKeyDown)
+		stopAutoScroll()
+		lastPointer = null
 		snapGuideSec.value = null
 		dropTarget.value = null
 	}
@@ -285,8 +288,67 @@ export function useTimelineInteractions(viewport: TimelineViewport) {
 		attach()
 	}
 
+	// ---------- edge auto-scroll ----------
+
+	/**
+	 * Drag toward an edge and the lanes come to you.
+	 *
+	 * Two things make this less trivial than it sounds. A pointer held still at
+	 * the edge fires NO further move events, so each frame has to re-run the
+	 * gesture with the last one we saw — hence `lastPointer`. And the ruler is
+	 * sticky over the top of the scroller, so a top zone measured from the
+	 * container's own edge would trigger while the pointer is on the ruler,
+	 * where the user is scrubbing, not dragging.
+	 */
+	const EDGE_PX = 28
+	const RULER_PX = 24
+	const MAX_SCROLL_PER_FRAME = 14
+
+	let lastPointer: PointerEvent | null = null
+	let scrollRaf: number | null = null
+
+	const stopAutoScroll = () => {
+		if (scrollRaf !== null) cancelAnimationFrame(scrollRaf)
+		scrollRaf = null
+	}
+
+	/** How fast to scroll on one axis, from how far into the edge zone we are. */
+	const edgeSpeed = (position: number, min: number, max: number): number => {
+		if (position < min + EDGE_PX) return -((min + EDGE_PX - position) / EDGE_PX) * MAX_SCROLL_PER_FRAME
+		if (position > max - EDGE_PX) return ((position - (max - EDGE_PX)) / EDGE_PX) * MAX_SCROLL_PER_FRAME
+		return 0
+	}
+
+	const autoScrollTick = () => {
+		scrollRaf = requestAnimationFrame(autoScrollTick)
+		const el = viewport.scrollEl.value
+		const e = lastPointer
+		if (!el || !e || mode.value === 'idle') return
+
+		const rect = el.getBoundingClientRect()
+		const dx = edgeSpeed(e.clientX, rect.left, rect.right)
+		// The lane area starts below the sticky ruler.
+		const dy = edgeSpeed(e.clientY, rect.top + RULER_PX, rect.bottom)
+		if (!dx && !dy) return
+
+		const before = { left: el.scrollLeft, top: el.scrollTop }
+		if (dx) el.scrollLeft += dx
+		if (dy) el.scrollTop += dy
+		if (el.scrollLeft === before.left && el.scrollTop === before.top) return
+
+		// The lanes moved under a pointer that did not, so the gesture has to be
+		// re-evaluated at the same screen position over new content.
+		viewport.onScroll()
+		onPointerMove(e)
+	}
+
+	const startAutoScroll = () => {
+		if (scrollRaf === null) scrollRaf = requestAnimationFrame(autoScrollTick)
+	}
+
 	// ---------- global handlers ----------
 	const onPointerMove = (e: PointerEvent) => {
+		lastPointer = e
 		switch (mode.value) {
 			case 'movingItem': moveTick(e); break
 			case 'trimmingEdge': trimTick(e); break
