@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import type { EditorDocument, MediaAsset, TimelineItem, Track } from '@shared/types'
 import { computeRegions } from './render'
-import { cacheKey, previewPlan } from './preview'
+import { graphKey, previewPlan } from './preview'
 import type { OverlapRegion, RegionPlan } from './renderBuilders'
 
 /**
@@ -50,7 +50,7 @@ const doc = (a: Partial<TimelineItem> = {}, b: Partial<TimelineItem> = {}): Edit
 const keyOf = (d: EditorDocument): string => {
 	const plan = computeRegions(d, 'preview')
 	const region = plan.regions.find((r): r is OverlapRegion => r.kind === 'overlap')!
-	return cacheKey(region, previewPlan(plan))
+	return graphKey(region, previewPlan(plan))
 }
 
 describe('previewPlan', () => {
@@ -75,7 +75,7 @@ describe('previewPlan', () => {
 	})
 })
 
-describe('cacheKey', () => {
+describe('graphKey', () => {
 	it('is stable for an unchanged window', () => {
 		expect(keyOf(doc())).toBe(keyOf(doc()))
 	})
@@ -110,5 +110,46 @@ describe('cacheKey', () => {
 	it('changes when a clip is muted', () => {
 		// The cached file carries the crossfaded audio, so mute state is part of it.
 		expect(keyOf(doc())).not.toBe(keyOf(doc({ muted: true })))
+	})
+
+	it('changes with EVERYTHING the window renders — the property the old key lacked', () => {
+		// The first key hashed a curated field list, and this suite tested
+		// exactly those fields — so it confirmed the list and could never catch
+		// the omission. Phase 2 and 3 then added effects, framing, transform,
+		// keyframes, keys, gain and fades to the window's graph, and none of
+		// them invalidated the cache: grading a clip beside a transition kept
+		// serving the stale render. Now the key IS the graph, and this is the
+		// test that would have caught it.
+		const edits: Partial<TimelineItem>[] = [
+			{ effects: [{ id: 'e', kind: 'saturation', params: { amount: 0 } }] },
+			{ effects: [{ id: 'e', kind: 'look-vintage' }] },
+			{ framing: { mode: 'fill', pan: 0.5 } },
+			{ transform: { scale: 0.5, x: 0.2 } },
+			{ keyframes: { 'transform.x': [{ t: 0, value: -0.3 }, { t: 2, value: 0.3 }] } },
+			{ key: { kind: 'chroma', colour: '#00B140' } },
+			{ gain: 0.4 }
+		]
+		const base = keyOf(doc())
+		for (const edit of edits) {
+			expect(keyOf(doc(edit)), `outgoing ${JSON.stringify(edit)}`).not.toBe(base)
+			expect(keyOf(doc({}, edit)), `incoming ${JSON.stringify(edit)}`).not.toBe(base)
+		}
+		// Fades are per-END, and the graph key knows which end the window shows:
+		// the outgoing clip contributes its TAIL, the incoming its HEAD.
+		expect(keyOf(doc({ fadeOutSec: 1 })), 'outgoing tail fade').not.toBe(base)
+		expect(keyOf(doc({}, { fadeInSec: 1 })), 'incoming head fade').not.toBe(base)
+	})
+
+	it('knows a fade the window never shows changes nothing', () => {
+		// A fade-IN on the outgoing clip sits at its head, far outside the
+		// window — the picture is identical, so the render is reused. A curated
+		// field list could never make this distinction; the graph makes it free.
+		expect(keyOf(doc({ fadeInSec: 1 }))).toBe(keyOf(doc()))
+	})
+
+	it('does NOT change for an edit outside the picture', () => {
+		// Over-triggering is the renderer's job and deduplication is this key's:
+		// a label edit re-requests, resolves to the same key, and costs nothing.
+		expect(keyOf(doc({ label: 'renamed' }))).toBe(keyOf(doc()))
 	})
 })

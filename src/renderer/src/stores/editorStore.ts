@@ -470,9 +470,18 @@ export const useEditorStore = defineStore('editor', () => {
 		}, 400)
 	}
 
-	// Re-render whenever a window's GEOMETRY changes — not on every doc edit,
-	// which `seams` rebuilds for regardless.
-	watch(() => seamFingerprint(seams.value), (next, previous) => {
+	// Re-request whenever a window's geometry OR either flanking clip's render
+	// state changes. The fingerprint deliberately includes the WHOLE items:
+	// enumerating "render-relevant" fields is how the main-side cache key went
+	// stale, and over-triggering costs nothing — main hashes the actual graph,
+	// so a no-op change (a label edit) resolves to the same file instantly.
+	watch(() => {
+		const flanks = seams.value
+			.filter((s) => s.window)
+			.map((s) => JSON.stringify([s.junction.outgoing, s.junction.incoming]))
+			.join('\u0000')
+		return `${seamFingerprint(seams.value)}#${flanks}`
+	}, (next, previous) => {
 		if (next === previous) return
 		transitionPreviews.value = new Map()
 		if (next) requestTransitionPreviews()

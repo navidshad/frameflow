@@ -35,27 +35,37 @@ const CACHE_LIMIT = 60
 const previewDir = (tempDir: string) => path.join(tempDir, THREAD_DIRS.PREVIEWS)
 
 /**
- * Everything that changes what the window looks like. Two documents with the
- * same key render identically, so a hit can be served from disk — and any edit
- * that would change the picture produces a different key, which is what makes
- * invalidation automatic rather than something to remember.
+ * Everything that changes what the window looks like — derived, not listed.
+ *
+ * The first version of this hashed a curated field list, and the list went
+ * stale the moment Phase 2 landed: effects, framing, transform, keyframes,
+ * keys, gain and fades all reached the window's filtergraph and none of them
+ * reached the key, so grading a clip beside a transition kept serving the old
+ * render. The audit caught it, and the fix is to stop maintaining a list at
+ * all: hash the GRAPH the render would run, plus each real input's identity on
+ * disk. The key cannot drift from the picture, because it IS the picture's
+ * recipe.
  */
-export function cacheKey(region: OverlapRegion, plan: RegionPlan): string {
-	const side = (s: OverlapRegion['from']) =>
-		[s.srcPath, s.in.toFixed(4), s.out.toFixed(4), s.offset.toFixed(4),
-			s.duration.toFixed(4), s.freezeHead.toFixed(4), s.freezeTail.toFixed(4),
-			s.item.speed || 1].join(':')
+export function graphKey(region: OverlapRegion, plan: RegionPlan): string {
+	const graph = buildRegionGraph(region, plan)
+	const inputs = graph.inputs.map((input) => {
+		let identity = ''
+		if (!input.format) {
+			// A re-exported or replaced file at the same path must re-render too.
+			try {
+				const stat = fs.statSync(input.path)
+				identity = `${stat.mtimeMs}:${stat.size}`
+			} catch { identity = 'missing' }
+		}
+		return `${input.path}|${input.options.join(' ')}|${identity}`
+	})
 	const parts = [
-		region.transition.kind,
-		region.duration.toFixed(4),
-		region.cutAt.toFixed(4),
-		side(region.from),
-		side(region.to),
-		region.fromAudioActive ? 'a1' : 'a0',
-		region.toAudioActive ? 'b1' : 'b0',
-		`${plan.width}x${plan.height}@${plan.fps}`
+		...graph.filters,
+		...inputs,
+		`${plan.width}x${plan.height}@${plan.fps}`,
+		intermediateOpts().join(' ')
 	]
-	return crypto.createHash('sha1').update(parts.join('|')).digest('hex').slice(0, 16)
+	return crypto.createHash('sha1').update(parts.join('\n')).digest('hex').slice(0, 16)
 }
 
 /** Shrink the export plan to something that encodes in about a second. */
@@ -149,7 +159,9 @@ export async function ensureTransitionPreview(options: {
 	if (!thread || thread.type !== 'editor') throw new Error('Not an editor project')
 
 	// Proxy quality: computeRegions already resolves proxyPath for 'preview'.
-	const full = computeRegions(doc, 'preview')
+	// Transcripts ride along so a bed inside the window ducks in the cached
+	// render exactly as it will in the export (it silently did not, before).
+	const full = computeRegions(doc, 'preview', transcriptsForDoc(doc))
 	const plan = previewPlan(full)
 	const region = full.regions.find(
 		(r): r is OverlapRegion =>
@@ -157,7 +169,7 @@ export async function ensureTransitionPreview(options: {
 	)
 	if (!region) throw new Error('No transition on that cut.')
 
-	const key = cacheKey(region, plan)
+	const key = graphKey(region, plan)
 	const dir = previewDir(thread.tempDir)
 	const outputPath = path.join(dir, `${key}.mp4`)
 
