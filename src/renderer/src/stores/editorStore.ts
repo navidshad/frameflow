@@ -523,6 +523,7 @@ export const useEditorStore = defineStore('editor', () => {
 
 	const segmentsForTracks = (trackIds: Set<string>) => {
 		if (!doc.value || !trackIds.size) return []
+		const trackById = new Map(doc.value.tracks.map((t) => [t.id, t]))
 		const trackMuted = new Map(doc.value.tracks.map((t) => [t.id, t.muted]))
 		const assetById = new Map(doc.value.media.map((a) => [a.id, a]))
 
@@ -540,7 +541,16 @@ export const useEditorStore = defineStore('editor', () => {
 					src: toMediaUrl(src),
 					sourceIn: item.in,
 					speed: item.speed || 1,
-					muted: !!item.muted || !!trackMuted.get(item.trackId)
+					muted: !!item.muted || !!trackMuted.get(item.trackId),
+					// The MIX state, so the monitor plays what the export mixes.
+					// These were simply absent, so a video clip's gain and fades
+					// were silently ignored in preview — while the inspector
+					// claimed otherwise. Gain multiplies item × track, the same
+					// product `effectiveGain` gives the export.
+					gain: (item.gain ?? 1) * (trackById.get(item.trackId)?.gain ?? 1),
+					fadeInSec: item.fadeInSec ?? 0,
+					fadeOutSec: item.fadeOutSec ?? 0,
+					preservePitch: item.preservePitch !== false
 				}]
 			})
 	}
@@ -597,7 +607,9 @@ export const useEditorStore = defineStore('editor', () => {
 					sourceIn: item.in,
 					speed: item.speed || 1,
 					muted: !!item.muted || !!trackMuted.get(item.trackId),
-					gain: item.gain ?? 1,
+					// Item × track, as the export mixes it — track gain was dropped.
+					gain: (item.gain ?? 1) * (doc.value!.tracks.find((t) => t.id === item.trackId)?.gain ?? 1),
+					preservePitch: item.preservePitch !== false,
 					fadeInSec: item.fadeInSec ?? 0,
 					fadeOutSec: item.fadeOutSec ?? 0
 				}]

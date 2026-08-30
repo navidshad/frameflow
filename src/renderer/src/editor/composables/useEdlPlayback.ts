@@ -13,6 +13,7 @@ interface EdlSegment {
 	gain?: number
 	fadeInSec?: number
 	fadeOutSec?: number
+	preservePitch?: boolean
 	trackId?: string
 }
 
@@ -145,6 +146,7 @@ export function useEdlPlayback(
 				el.dataset.edlSrc = seg.src
 			}
 			el.playbackRate = seg.speed
+			el.preservesPitch = seg.preservePitch !== false
 			// Gain × fade envelope, re-evaluated every tick so ramps are smooth.
 			el.volume = Math.max(0, Math.min(1, (seg.gain ?? 1) * fadeEnvelope(seg, t)))
 			const target = seg.sourceIn + (t - seg.tStart) * seg.speed
@@ -201,6 +203,7 @@ export function useEdlPlayback(
 			el.dataset.edlSrc = seg.src
 		}
 		el.playbackRate = seg.speed
+		el.preservesPitch = seg.preservePitch !== false
 		// The base track carries the sound; a second picture playing its own
 		// audio underneath it is just doubled talking.
 		el.muted = true
@@ -230,6 +233,10 @@ export function useEdlPlayback(
 	const sourceTime = (t: number, seg: EdlSegment) =>
 		seg.sourceIn + (t - seg.tStart) * seg.speed
 
+	/** The clip's mix level at `t` — gain × the fade envelope, like the export. */
+	const mixLevel = (seg: EdlSegment, t: number): number =>
+		Math.max(0, Math.min(1, (seg.gain ?? 1) * fadeEnvelope(seg, t)))
+
 	const applySegmentToEl = (el: HTMLVideoElement, seg: EdlSegment, t: number) => {
 		const wantedSrc = seg.src
 		setElItem(el, seg.itemId)
@@ -242,7 +249,10 @@ export function useEdlPlayback(
 			preloadedFor = null
 		}
 		el.playbackRate = seg.speed
+		el.preservesPitch = seg.preservePitch !== false
 		el.muted = seg.muted
+		// Heard as mixed: gain and fades were silently ignored on video clips.
+		el.volume = mixLevel(seg, t)
 		const target = sourceTime(t, seg)
 		if (Math.abs(el.currentTime - target) > 0.08) {
 			el.currentTime = target
@@ -273,10 +283,13 @@ export function useEdlPlayback(
 			// leaving the window marker means re-entering it never re-seeks.
 			for (const el of [videoA.value, videoB.value]) {
 				if (!el) continue
-				if (el.volume !== 1) el.volume = 1
 				const leftWindow = !!el.dataset.edlWindow
 				delete el.dataset.edlWindow
 				const seg = segments.value.find((sg) => sg.itemId === el.dataset.edlItem)
+				// Back to the clip's own mix level — not to 1, which threw away
+				// its gain and fades the moment any transition ended.
+				const level = seg ? mixLevel(seg, store.playheadSec) : 1
+				if (el.volume !== level) el.volume = level
 				if (!seg) continue
 				if (el.muted !== seg.muted) el.muted = seg.muted
 				// One-time handover: align the element that is about to become the
@@ -327,6 +340,7 @@ export function useEdlPlayback(
 			el.dataset.edlWindow = w.junctionId
 			if (el.dataset.edlSrc !== seg.src) { el.src = seg.src; el.dataset.edlSrc = seg.src }
 			el.playbackRate = seg.speed
+			el.preservesPitch = seg.preservePitch !== false
 			const target = Math.min(side.out, side.in + (t - w.start) * seg.speed)
 			// Hard-seek only on ENTRY, then let it free-run. Re-seeking a playing
 			// element every time it drifts a frame is itself the judder — the audio
@@ -347,7 +361,9 @@ export function useEdlPlayback(
 				const ramp = side.item.id === w.outgoing.item.id
 					? Math.cos((frame.progress * Math.PI) / 2)
 					: Math.sin((frame.progress * Math.PI) / 2)
-				el.volume = Math.max(0, Math.min(1, ramp))
+				// The ramp SCALES the clip's own mix level rather than replacing
+				// it — the export crossfades each side's audio after gainA runs.
+				el.volume = Math.max(0, Math.min(1, ramp * (seg.gain ?? 1)))
 			}
 			if (store.isPlaying) { if (el.paused) el.play().catch(() => { }) }
 			else if (!el.paused) el.pause()
@@ -500,6 +516,9 @@ export function useEdlPlayback(
 				return
 			}
 			if (el.paused) el.play().catch(() => { })
+			// Re-evaluated every tick so a fade ramps smoothly, exactly as the
+			// audio pool already does for its own elements.
+			el.volume = mixLevel(seg, store.playheadSec)
 			if (!suppressRafRead) {
 				// Derive the playhead from real media time (drift-free). Never let it
 				// run BACKWARDS: a decoder that is momentarily behind would otherwise
