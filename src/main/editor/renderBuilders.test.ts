@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import type { TimelineItem, Track } from '@shared/types'
 import {
-	allSlices, atempoChain, buildRegionGraph,
+	allSlices, atempoChain, buildRegionGraph, regionAtInstant, sliceAtInstant,
 	type CutRegion, type OverlapRegion, type RegionPlan, type SourceSlice
 } from './renderBuilders'
 
@@ -339,5 +339,101 @@ describe('vpad on a layer', () => {
 		})).text
 		const freeze = chain.match(/tpad=start_mode=clone[^,]*/)?.[0] ?? ''
 		expect(freeze).not.toContain('color=')
+	})
+})
+
+// ===== The exact frame =====
+
+describe('sliceAtInstant', () => {
+	const FPS = 30
+	/** A 10s slice of a clip trimmed to source [20,30], playing at 1x. */
+	const base = () => slice({
+		in: 20, out: 30, offset: 0, duration: 10,
+		item: item({ in: 20, out: 30, timelineStart: 5, duration: 10 })
+	})
+
+	it('advances the seek to the instant, which is the whole point', () => {
+		// The naive way — output-seek — decodes everything up to T. This must
+		// move slice.in instead, so a one-hour region costs one input seek.
+		const at = sliceAtInstant(base(), 7, FPS)!
+		expect(at.in).toBeCloseTo(27, 6)
+		expect(at.offset).toBe(0)
+		expect(at.duration).toBeCloseTo((at.out - at.in), 6)
+	})
+
+	it('keeps every time-dependent expression honest', () => {
+		// fadeA, duckA and the keyframe offset all derive their clock from
+		// slice.in relative to item.in — so the advanced slice must keep that
+		// relationship, not reset it.
+		const at = sliceAtInstant(base(), 7, FPS)!
+		expect((at.in - at.item.in) / (at.item.speed || 1)).toBeCloseTo(7, 6)
+	})
+
+	it('maps through a retime', () => {
+		const fast = slice({
+			in: 20, out: 30, offset: 0, duration: 5,
+			item: item({ in: 20, out: 30, speed: 2, duration: 5 })
+		})
+		// 2 timeline seconds at 2x is 4 source seconds.
+		expect(sliceAtInstant(fast, 2, FPS)!.in).toBeCloseTo(24, 6)
+	})
+
+	it('shows the FIRST frame inside a frozen head', () => {
+		const frozen = slice({ in: 20, out: 28, offset: 0, duration: 10, freezeHead: 2 })
+		const at = sliceAtInstant(frozen, 1, FPS)!
+		expect(at.in).toBe(20)
+		expect(at.freezeHead).toBe(0)
+	})
+
+	it('shows the LAST frame inside a frozen tail', () => {
+		const frozen = slice({ in: 20, out: 28, offset: 0, duration: 10, freezeTail: 2 })
+		const at = sliceAtInstant(frozen, 9.5, FPS)!
+		expect(at.out).toBe(28)
+		expect(at.in).toBeCloseTo(28 - (2 / FPS), 6)
+	})
+
+	it('accounts for the freeze when mapping content time', () => {
+		const frozen = slice({ in: 20, out: 28, offset: 0, duration: 10, freezeHead: 2 })
+		// T=5 is 3s into the CONTENT, which starts after 2s of freeze.
+		expect(sliceAtInstant(frozen, 5, FPS)!.in).toBeCloseTo(23, 6)
+	})
+
+	it('answers null for an instant the slice does not cover', () => {
+		// A layer that starts later in the region contributes nothing to this
+		// frame — exactly as the export composites.
+		const late = slice({ offset: 3, duration: 2 })
+		expect(sliceAtInstant(late, 1, FPS)).toBeNull()
+		expect(sliceAtInstant(late, 5.5, FPS)).toBeNull()
+		expect(sliceAtInstant(late, 4, FPS)).not.toBeNull()
+	})
+
+	it('still contains a frame at the very end of the content', () => {
+		const at = sliceAtInstant(base(), 10, FPS)!
+		expect(at.out - at.in).toBeGreaterThan(1 / FPS)
+		expect(at.out).toBeLessThanOrEqual(30)
+	})
+})
+
+describe('regionAtInstant', () => {
+	it('advances every covering layer and drops the rest', () => {
+		const region = cut({
+			duration: 6,
+			videoLayers: [
+				slice({ in: 0, out: 6, duration: 6 }),
+				slice({ in: 0, out: 2, offset: 3, duration: 2, item: item({ id: 'late' }) })
+			]
+		})
+		expect(regionAtInstant(region, 1, 30).videoLayers).toHaveLength(1)
+		expect(regionAtInstant(region, 4, 30).videoLayers).toHaveLength(2)
+	})
+
+	it('drops the audio — a still frame has no sound', () => {
+		const region = cut({ videoLayers: [slice()], audioSources: [slice()] })
+		expect(regionAtInstant(region, 1, 30).audioSources).toEqual([])
+	})
+
+	it('produces a graph the builder accepts', () => {
+		const g = graphOf(regionAtInstant(cut({ videoLayers: [slice()] }), 1, 30))
+		expect(g.text).toContain('[v]')
 	})
 })

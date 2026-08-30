@@ -516,8 +516,11 @@ async function renderRegion(
 	const command = ffmpeg()
 	for (const input of graph.inputs) {
 		const added = command.input(input.path)
-		if (input.format) added.inputFormat(input.format)
-		added.inputOptions(input.options)
+		// NOT `.inputFormat()`: fluent-ffmpeg validates that against `-formats`,
+		// and lavfi is a DEVICE, not a format — the check rejects it and the
+		// whole render dies with "Input format lavfi is not available". Passing
+		// `-f` as a plain option skips the misguided validation.
+		added.inputOptions(input.format ? ['-f', input.format, ...input.options] : input.options)
 	}
 
 	command

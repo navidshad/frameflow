@@ -8,7 +8,10 @@ import type { EditorDocument, MediaAsset, TimelineItem, Track } from '@shared/ty
 import { getFFmpegBinaryPath, getFFprobeBinaryPath } from '../ffmpeg/binaries'
 import { TRANSITION_PRESETS } from '@shared/transitionPresets'
 import { computeRegions } from './render'
-import { buildRegionGraph, type OverlapRegion, type Region, type RegionPlan } from './renderBuilders'
+import {
+	buildRegionGraph, regionAtInstant,
+	type CutRegion, type OverlapRegion, type Region, type RegionPlan
+} from './renderBuilders'
 import { previewPlan, renderTransitionWindow } from './preview'
 import { burnCaptions } from './captions'
 import { normaliseLoudness } from './loudness'
@@ -526,6 +529,110 @@ describe('render pipeline — against the real ffmpeg', () => {
 			const { stdout } = await execFileAsync(ffprobe, ['-v', 'error', '-select_streams', 'v:0',
 				'-show_entries', 'stream=pix_fmt', '-of', 'csv=p=0', file])
 			expect(stdout.trim()).toBe('yuv420p')
+		}, 90_000)
+	})
+
+	describe('the exact frame vs the real binary', () => {
+		// renderExactFrame itself needs the thread manager, but everything that can
+		// go wrong lives below it: regionAtInstant + buildRegionGraph must yield a
+		// one-frame graph this binary accepts, whose picture matches what the full
+		// region shows at that instant.
+
+		/** One PNG from an instant-region graph. */
+		const stillOf = async (region: Parameters<typeof buildRegionGraph>[0], plan: ReturnType<typeof computeRegions>, name: string) => {
+			const graph = buildRegionGraph(region, plan)
+			const out = join(dir, `${name}.png`)
+			const args: string[] = ['-y', '-v', 'error']
+			for (const input of graph.inputs) {
+				if (input.format) args.push('-f', input.format)
+				args.push(...input.options, '-i', input.path)
+			}
+			args.push(
+				'-filter_complex', [...graph.filters, `${graph.audio}anullsink`].join(';'),
+				'-map', graph.video, '-frames:v', '1', out
+			)
+			await execFileAsync(ffmpeg, args)
+			return out
+		}
+
+		const rgbOf = async (file: string): Promise<[number, number, number]> => {
+			const { stdout } = await execFileAsync(ffmpeg,
+				['-v', 'error', '-i', file, '-frames:v', '1', '-vf', 'crop=24:24:20:80,scale=1:1,format=rgb24',
+					'-f', 'rawvideo', '-'],
+				{ encoding: 'buffer', maxBuffer: 1 << 20 })
+			const buf = stdout as unknown as Buffer
+			return [buf[0], buf[1], buf[2]]
+		}
+
+		it('matches the full region render at the same instant, graded and keyed', async () => {
+			// The heart of the feature: a graded base under a keyed layer, sampled
+			// at T=1.5s two ways — the full region rendered and probed at 1.5s, and
+			// the instant-region rendered as one frame. They must show the same
+			// picture, or "exact" is a lie.
+			const v2: Track = { ...vtrack, id: 'v2', name: 'V2', order: 1 }
+			const d = document()
+			d.tracks = [vtrack, v2]
+			d.media = [asset('sa', A()), asset('sg', G())]
+			d.timeline = [
+				clip({
+					id: 'base', sourceAssetId: 'sa', trackId: 'v1', timelineStart: 0, in: 0, out: 3, duration: 3,
+					effects: [{ id: 'e', kind: 'saturation', params: { amount: 0.3 } }]
+				}),
+				clip({
+					id: 'fg', sourceAssetId: 'sg', trackId: 'v2', timelineStart: 0, in: 0, out: 3, duration: 3,
+					key: { kind: 'chroma', colour: '#00B140', similarity: 0.3, blend: 0.05, despill: 0.4 }
+				})
+			]
+			d.timelineMeta = { fps: 30, width: 320, height: 180, duration: 0, frameChosen: true }
+			const plan = computeRegions(d, 'original')
+			const region = plan.regions[0]
+			expect(region.kind).toBe('cut')
+
+			const full = await renderGraph(region, plan, 'exact-full.mp4')
+			const still = await stillOf(regionAtInstant(region as CutRegion, 1.5, plan.fps), plan, 'exact-still')
+
+			const probe = async (file: string, seek: string[]) => {
+				const { stdout } = await execFileAsync(ffmpeg,
+					['-v', 'error', ...seek, '-i', file, '-frames:v', '1',
+						'-vf', 'crop=24:24:20:80,scale=1:1,format=rgb24', '-f', 'rawvideo', '-'],
+					{ encoding: 'buffer', maxBuffer: 1 << 20 })
+				const buf = stdout as unknown as Buffer
+				return [buf[0], buf[1], buf[2]]
+			}
+			const [fr, fg2, fb] = await probe(full, ['-ss', '1.5'])
+			const [sr, sg2, sb] = await probe(still, [])
+			// Same pipeline, same instant — allow encoder wiggle, nothing more.
+			expect(Math.abs(fr - sr)).toBeLessThan(16)
+			expect(Math.abs(fg2 - sg2)).toBeLessThan(16)
+			expect(Math.abs(fb - sb)).toBeLessThan(16)
+		}, 90_000)
+
+		it('seeks the INPUT, so a frame deep in a long region stays cheap', async () => {
+			// The design trap this feature was built around: output-seeking decodes
+			// the whole region. The instant slice must carry the seek in its own
+			// `in`, which becomes `-ss` on the input.
+			const d = document()
+			d.timeline = [clip({ id: 'long', sourceAssetId: 'sa', timelineStart: 0, in: 0, out: 4, duration: 4 })]
+			d.timelineMeta = { fps: 30, width: 320, height: 180, duration: 0, frameChosen: true }
+			const plan = computeRegions(d, 'original')
+			const still = regionAtInstant(plan.regions[0] as CutRegion, 3.5, plan.fps)
+			const graph = buildRegionGraph(still, plan)
+			const seek = graph.inputs.find((i) => !i.format)!
+			expect(seek.options).toContain('-ss')
+			expect(Number(seek.options[seek.options.indexOf('-ss') + 1])).toBeCloseTo(3.5, 1)
+		})
+
+		it('renders a graded frame the binary accepts, with the audio leg sunk', async () => {
+			const d = document()
+			d.timeline = [clip({
+				id: 'x', sourceAssetId: 'sa', timelineStart: 0, in: 1, out: 3, duration: 2,
+				effects: [{ id: 'e', kind: 'look-vintage' }]
+			})]
+			d.timelineMeta = { fps: 30, width: 320, height: 180, duration: 0, frameChosen: true }
+			const plan = computeRegions(d, 'original')
+			const still = await stillOf(regionAtInstant(plan.regions[0] as CutRegion, 1, plan.fps), plan, 'exact-graded')
+			const [r] = await rgbOf(still)
+			expect(r).toBeGreaterThan(60) // A is red; vintage mutes it but leaves it red
 		}, 90_000)
 	})
 

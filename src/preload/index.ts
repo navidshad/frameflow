@@ -92,6 +92,8 @@ const api = {
 	getEditorTranscripts: (threadId: string) =>
 		ipcRenderer.invoke('get-editor-transcripts', threadId),
 	getEffectPacks: () => ipcRenderer.invoke('get-effect-packs'),
+	renderExactFrame: (data: { threadId: string; doc: unknown; timeSec: number }) =>
+		ipcRenderer.invoke('render-exact-frame', data),
 	ensureTransitionPreview: (data: {
 		threadId: string; doc: unknown; outgoingId: string; incomingId: string
 	}) => ipcRenderer.invoke('ensure-transition-preview', data),

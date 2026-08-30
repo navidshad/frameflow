@@ -301,6 +301,82 @@ export function buildChain(builders: FilterBuilder[], ctx: BuildCtx): string[] {
 	return builders.map((b) => b.build(ctx)).filter((f) => f !== '')
 }
 
+// ===== The exact frame =====
+
+/**
+ * The slice, advanced to a single instant.
+ *
+ * The exact-frame renderer wants ONE frame at region-local time `T` — but
+ * seeking on the OUTPUT decodes everything up to it, and regions are cut at
+ * item edges, so a one-hour clip is one region and the frame at 59:00 would
+ * take minutes. This advances the slice's own `in` instead, so the seek happens
+ * on the INPUT, which is indexed and cheap.
+ *
+ * It works because everything time-dependent downstream derives its clock from
+ * `slice.in` relative to `item.in` — `fadeA`'s localStart, `duckA`'s absolute
+ * start, `sliceOffset()` for keyframes — so a slice advanced by T evaluates
+ * every expression exactly as the export would at that instant.
+ *
+ * Returns null when the slice's content does not cover T (a layer that starts
+ * later or ended earlier in this region): that layer contributes nothing to
+ * the frame, which is also what the export composites.
+ */
+export function sliceAtInstant(slice: SourceSlice, T: number, fps: number): SourceSlice | null {
+	if (T < slice.offset - PAD_EPS || T > slice.offset + slice.duration + PAD_EPS) return null
+	const speed = slice.item.speed || 1
+	// Two frames of source, so the encoder always has a frame to take even when
+	// the instant falls on a boundary.
+	const span = (2 / fps) * speed
+	const local = Math.max(0, T - slice.offset)
+	const contentEnd = slice.duration - slice.freezeTail
+
+	let sIn: number
+	if (local < slice.freezeHead) {
+		// Inside the frozen head the export repeats the FIRST content frame.
+		sIn = slice.in
+	} else if (local > contentEnd) {
+		// Inside the frozen tail it repeats the LAST one.
+		sIn = Math.max(slice.in, slice.out - span)
+	} else {
+		sIn = slice.in + (local - slice.freezeHead) * speed
+	}
+	const sOut = Math.min(slice.out, sIn + span)
+	// The instant sits at the very end of the content: back the window off so it
+	// still contains a frame.
+	if (sOut - sIn < span / 2) sIn = Math.max(slice.in, sOut - span)
+	if (sOut <= sIn) return null
+
+	return {
+		...slice,
+		in: sIn,
+		out: sOut,
+		offset: 0,
+		duration: (sOut - sIn) / speed,
+		freezeHead: 0,
+		freezeTail: 0
+	}
+}
+
+/**
+ * A one-frame region: every video layer advanced to the instant, audio dropped.
+ *
+ * Only for CUT regions. An overlap's xfade progress depends on the filter's own
+ * `t`, so a window has to keep its full graph and seek on the output — which is
+ * fine, because windows are at most a few seconds by construction.
+ */
+export function regionAtInstant(region: CutRegion, T: number, fps: number): CutRegion {
+	return {
+		kind: 'cut',
+		duration: 2 / fps,
+		videoLayers: region.videoLayers
+			.map((slice) => sliceAtInstant(slice, T, fps))
+			.filter((s): s is SourceSlice => s !== null),
+		// A still frame has no sound; the graph fills the mandatory audio leg
+		// with silence, and the renderer sinks it.
+		audioSources: []
+	}
+}
+
 // ===== Region graph =====
 // The filtergraph for one region, built as DATA so it can be asserted in tests
 // without ffmpeg in the loop. renderRegion just feeds the result to

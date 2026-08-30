@@ -101,6 +101,19 @@
 						<video ref="videoORef" class="absolute inset-0 w-full h-full"
 							:style="{ opacity: edl.itemO.value ? 1 : 0, ...framingStyle(edl.itemO.value) }"
 							preload="auto" muted></video>
+						<!-- The exact frame: one frame rendered through the real export
+						     graph, shown over the live elements. Everything the monitor
+						     cannot draw honestly — keys, LUTs, gamma, full layer stacks —
+						     is in this picture. Titles and captions stay above it in the
+						     DOM, exactly where the export burns them. -->
+						<img v-if="exactFrame.src" :src="exactFrame.src"
+							class="absolute inset-0 w-full h-full object-contain pointer-events-none" />
+						<div v-if="exactFrame.src"
+							class="absolute top-2 left-2 px-1.5 py-0.5 rounded-md bg-accent/80
+							       pointer-events-none">
+							<span class="text-[8px] font-mono uppercase tracking-widest text-white">exact</span>
+						</div>
+
 						<!-- Titles. Position and size are fractions of the frame in both
 						     places, so this and the burned-in version land together
 						     without either side converting to the other's units. -->
@@ -234,6 +247,22 @@
 						:max="store.contentEnd || 0" step="0.05" :value="store.playheadSec"
 						@input="onTimelineScrub" />
 
+					<button
+						class="w-7 h-7 shrink-0 flex items-center justify-center rounded-lg transition active:scale-95"
+						:class="exactFrame.src
+							? 'text-accent bg-accent/10'
+							: 'text-zinc-400 hover:text-primary hover:bg-primary/10'"
+						:title="exactFrame.status === 'rendering'
+							? 'Rendering the exact frame…'
+							: 'Exact frame — render this instant through the real export pipeline'"
+						:disabled="exactFrame.status === 'rendering'"
+						@click="renderExact">
+						<span class="iconify w-4 h-4"
+							:class="exactFrame.status === 'rendering'
+								? 'tabler--loader-2 animate-spin'
+								: 'tabler--camera'"></span>
+					</button>
+
 					<div class="relative shrink-0">
 						<button
 							class="w-7 h-7 flex items-center justify-center rounded-lg transition active:scale-95"
@@ -297,6 +326,7 @@ import { useEditorStore } from '../../stores/editorStore'
 import { useEdlPlayback } from '../composables/useEdlPlayback'
 
 const store = useEditorStore()
+const api = (window as any).api
 
 const mode = ref<'source' | 'timeline'>('source')
 
@@ -372,6 +402,50 @@ const onFullscreenEscape = (event: KeyboardEvent) => {
 }
 onMounted(() => window.addEventListener('keydown', onFullscreenEscape, true))
 onBeforeUnmount(() => window.removeEventListener('keydown', onFullscreenEscape, true))
+
+// ===== The exact frame =====
+
+/**
+ * The truth, on demand. The live elements approximate; this asks the export
+ * pipeline for the one frame under the playhead and lays it over them. It
+ * clears the moment anything it depicts could have changed — a playhead move
+ * or an edit — because a stale "exact" frame is the one lie this feature must
+ * never tell.
+ */
+const exactFrame = ref<{ status: 'idle' | 'rendering' | 'error'; src: string | null }>({
+	status: 'idle', src: null
+})
+
+let exactRequest = 0
+
+const renderExact = async () => {
+	if (!store.threadId || !store.doc) return
+	const request = ++exactRequest
+	exactFrame.value = { status: 'rendering', src: exactFrame.value.src }
+	try {
+		const result = await api.renderExactFrame({
+			threadId: store.threadId,
+			doc: JSON.parse(JSON.stringify(store.doc)),
+			timeSec: store.playheadSec
+		})
+		// A move or an edit while rendering makes this frame already stale.
+		if (request !== exactRequest) return
+		exactFrame.value = { status: 'idle', src: toMediaUrl(result.path) }
+	} catch (error) {
+		console.warn('[monitor] exact frame failed:', error)
+		if (request === exactRequest) exactFrame.value = { status: 'error', src: null }
+	}
+}
+
+const clearExact = () => {
+	exactRequest++
+	if (exactFrame.value.src || exactFrame.value.status === 'rendering') {
+		exactFrame.value = { status: 'idle', src: null }
+	}
+}
+
+watch(() => store.playheadSec, clearExact)
+watch(() => store.doc?.historyRef.currentStepId, clearExact)
 
 // ===== Guides =====
 

@@ -643,6 +643,12 @@ app.whenReady().then(() => {
 		return editorRender.startEditorRender({ threadId, quality, doc, format })
 	})
 
+	ipcMain.handle('render-exact-frame', (_event, data: {
+		threadId: string
+		doc: EditorDocument
+		timeSec: number
+	}) => editorPreview.renderExactFrame(data))
+
 	ipcMain.handle('ensure-transition-preview', (_event, data: {
 		threadId: string
 		doc: EditorDocument
