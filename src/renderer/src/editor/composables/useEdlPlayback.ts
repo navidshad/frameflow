@@ -130,6 +130,13 @@ export function useEdlPlayback(
 			seen.add(trackId)
 			const el = getAudioEl(trackId)
 			const seg = segs.find((s) => t >= s.tStart - 1e-6 && t < s.tEnd - 1e-6)
+			// The cached transition file already carries the beds — its graph
+			// amixes them over the crossfade — so the live pool playing too is
+			// every bed doubled for the length of the window.
+			if (showCached.value) {
+				if (!el.paused) el.pause()
+				continue
+			}
 			if (!seg || seg.muted) {
 				activeAudioSeg.delete(trackId)
 				if (!el.paused) el.pause()
@@ -204,9 +211,12 @@ export function useEdlPlayback(
 		}
 		el.playbackRate = seg.speed
 		el.preservesPitch = seg.preservePitch !== false
-		// The base track carries the sound; a second picture playing its own
-		// audio underneath it is just doubled talking.
-		el.muted = true
+		// The export mixes EVERY layer's own audio (each video layer's slice
+		// joins audioSources), so the overlay is not silenced wholesale — it
+		// plays at its mix level and respects its own mute, like any clip. The
+		// old unconditional mute made a voiced PiP silent until export.
+		el.muted = seg.muted
+		el.volume = mixLevel(seg, t)
 		const target = seg.sourceIn + (t - seg.tStart) * seg.speed
 		if (changed || force || Math.abs(el.currentTime - target) > AUDIO_DRIFT_HARD) {
 			el.currentTime = target
@@ -275,7 +285,11 @@ export function useEdlPlayback(
 		previewPending.value = frame.pending
 
 		if (frame.mode === 'single') {
+			const wasCached = showCached.value
 			showCached.value = false
+			// The pool was silenced under the cached file; wake it exactly where
+			// the playhead is, or the beds stay paused until the next seek.
+			if (wasCached) syncAudio(store.playheadSec, true)
 			opacityA.value = activeIsA.value ? 1 : 0
 			opacityB.value = activeIsA.value ? 0 : 1
 			// Undo what the window did to these elements. Leaving the ramp or the

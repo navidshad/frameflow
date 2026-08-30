@@ -157,7 +157,10 @@
 
 						<!-- Audio tracks play through an element pool in the composable
 						     (one per track), heard in parallel with the video. -->
-						<div v-if="edl.inGap.value"
+						<!-- Not while the overlay has a picture: the base track being in
+						     a gap does not make the FRAME empty, and a "gap" placard
+						     over a live layer was the monitor calling itself blank. -->
+						<div v-if="edl.inGap.value && !edl.itemO.value"
 							class="absolute inset-0 flex flex-col items-center justify-center gap-2 pointer-events-none">
 							<template v-if="edl.audioActive.value">
 								<span class="iconify tabler--music w-6 h-6 text-white/40"></span>
