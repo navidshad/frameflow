@@ -121,16 +121,25 @@ export function useEditorShortcuts(options: {
 			case 'redo': store.redo(); return true
 
 			case 'select-all': store.selectAllItems(); return true
-			case 'deselect': store.clearItemSelection(); return true
+			case 'deselect':
+				// Esc closes what is in front first. Deselecting behind an open
+				// overlay would look like the key did nothing.
+				if (store.shortcutsOpen) { store.shortcutsOpen = false; return true }
+				store.clearItemSelection()
+				return true
 
 			case 'zoom-in': options.zoomBy?.(1.25); return true
 			case 'zoom-out': options.zoomBy?.(0.8); return true
 			case 'snapping': store.snapEnabled = !store.snapEnabled; return true
 			case 'fullscreen': options.onFullscreen?.(); return true
 			case 'help': options.onHelp?.(); return true
+			// Every other shortcut is off while the list is up: pressing a key to
+			// see what it does should not also do it.
 		}
 		return false
 	}
+
+	const blockedWhileHelpOpen = (id: string) => id !== 'help' && id !== 'deselect'
 
 	const onKeyDown = (event: KeyboardEvent) => {
 		// `instanceof` first: an event dispatched at `window` has `window` as its
@@ -143,6 +152,10 @@ export function useEditorShortcuts(options: {
 
 		const shortcut = matchShortcut(event)
 		if (!shortcut) return
+		if (store.shortcutsOpen && blockedWhileHelpOpen(shortcut.id)) {
+			event.preventDefault()
+			return
+		}
 		// `preventDefault` only once the action actually did something, so an
 		// unhandled Delete with nothing selected still behaves like a Delete.
 		if (run(shortcut.id, event)) event.preventDefault()
