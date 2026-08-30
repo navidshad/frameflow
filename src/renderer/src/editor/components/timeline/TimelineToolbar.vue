@@ -98,8 +98,10 @@
 			<ToolButton icon="tabler--color-swatch"
 				title="Add a generated background at the playhead — something for a keyed layer to sit in front of"
 				@click="store.addGeneratedLayer()" />
-			<ToolButton icon="tabler--plus" title="Add a video track — clips above the bottom one composite on top"
+			<ToolButton icon="tabler--movie" title="Add a video track — anything you can see, and the upper lanes render in front"
 				@click="store.addVideoTrack()" />
+			<ToolButton icon="tabler--music" title="Add an audio track — anything you can hear"
+				@click="store.addAudioTrack()" />
 			<ToolButton icon="tabler--bookmark-plus" title="Save revision checkpoint"
 				@click="store.saveCheckpoint()" />
 			<div class="w-px h-4 bg-zinc-200 dark:bg-zinc-800 mx-1"></div>

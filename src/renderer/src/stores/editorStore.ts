@@ -193,9 +193,13 @@ export const useEditorStore = defineStore('editor', () => {
 	}
 
 	// ===== Timeline computeds (M2) =====
-	const sortedTracks = computed<Track[]>(() =>
-		[...(doc.value?.tracks || [])].sort((a, b) => a.order - b.order)
-	)
+	/**
+	 * The lanes top to bottom: video family first with the FRONT-MOST layer at
+	 * the top, then audio. Sorting every track into one ascending list put a new
+	 * video lane underneath the audio — and had the timeline reading the picture
+	 * upside down, since the compositor takes the HIGHEST order as the front.
+	 */
+	const sortedTracks = computed<Track[]>(() => orderedTracks(doc.value?.tracks || []))
 
 	const itemsByTrack = computed<Record<string, TimelineItem[]>>(() => {
 		const map: Record<string, TimelineItem[]> = {}
@@ -1511,13 +1515,21 @@ export const useEditorStore = defineStore('editor', () => {
 
 	// ===== Timeline actions (each commits ONE history step) =====
 
-	const firstVideoTrackId = computed(() =>
-		sortedTracks.value.find((t) => t.kind === 'video' && !t.locked && !t.hidden)?.id || null
-	)
+	/**
+	 * Where a clip lands when nobody says which lane: the BASE of its family —
+	 * the bottom-most video lane, the first audio one. Deliberately not the top
+	 * of `sortedTracks`, which is now the front-most layer; dropping footage into
+	 * the layer in front of everything is not what "add this to the timeline"
+	 * means.
+	 */
+	const baseOfFamily = (family: 'video' | 'audio') =>
+		(doc.value?.tracks || [])
+			.filter((t) => trackFamily(t) === family && !t.locked && !t.hidden)
+			.sort((a, b) => a.order - b.order)[0]?.id || null
 
-	const firstAudioTrackId = computed(() =>
-		sortedTracks.value.find((t) => t.kind === 'audio' && !t.locked && !t.hidden)?.id || null
-	)
+	const firstVideoTrackId = computed(() => baseOfFamily('video'))
+
+	const firstAudioTrackId = computed(() => baseOfFamily('audio'))
 
 	const findClip = (clipId: string): Clip | null => {
 		for (const asset of doc.value?.media || []) {
