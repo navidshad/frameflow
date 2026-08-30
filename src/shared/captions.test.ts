@@ -260,7 +260,7 @@ describe('escapeSubtitlesPath', () => {
 // ===== Titles =====
 
 describe('titleCues', () => {
-	const ttrack: Track = { ...vtrack, id: 't1', kind: 'text', name: 'T1' }
+	const ttrack: Track = { ...vtrack, id: 't1', name: 'T1' }
 	const FRAME = { width: 1080, height: 1920 }
 	const title = (over: Partial<TimelineItem> = {}, text: TextOverlaySpec = { content: 'Hello' }): TimelineItem =>
 		item({ id: 'ttl', trackId: 't1', sourceAssetId: '', timelineStart: 2, in: 0, out: 3, duration: 3, text, ...over })
@@ -308,7 +308,7 @@ describe('titleCues', () => {
 })
 
 describe('allBurnedCues', () => {
-	const ttrack: Track = { ...vtrack, id: 't1', kind: 'text', name: 'T1' }
+	const ttrack: Track = { ...vtrack, id: 't1', name: 'T1' }
 	const FRAME = { width: 1920, height: 1080 }
 	const transcripts = { a1: [phrase()] }
 	const withTitle = doc(

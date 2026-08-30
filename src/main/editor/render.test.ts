@@ -304,6 +304,55 @@ describe('computeRegions — guards', () => {
 	})
 })
 
+// ===== Titles are not a picture layer =====
+//
+// A title lives on a VIDEO track now that tracks come in two families. It burns
+// over the finished file with the captions, so the compositor must not try to
+// build a layer out of it: `toSlice` would look up its empty `sourceAssetId`
+// and throw `Missing media asset`, which would fail the export of every project
+// containing a title.
+
+describe('computeRegions — titles', () => {
+	const title = (start: number, over: Partial<TimelineItem> = {}) => item(start, {
+		id: 'TTL', sourceAssetId: '', in: 0, out: 3,
+		label: 'Chapter One', text: { content: 'Chapter One' }, ...over
+	})
+
+	it('does not build a layer from a title sharing the base track', () => {
+		const p = plan({ timeline: [item(0, { in: 0, out: 10 }), title(10)] })
+		expect(total(p)).toBeCloseTo(10, 5)
+		expect(p.regions.flatMap(allSlices).some((s) => s.item.id === 'TTL')).toBe(false)
+	})
+
+	it('does not build a layer from a title on its own lane', () => {
+		const p = computeRegions(doc({
+			tracks: [track('v1'), track('t1', { name: 'T1', order: 1 })],
+			timeline: [item(0, { in: 0, out: 10 }), title(2, { trackId: 't1' })]
+		}), 'original')
+		expect(total(p)).toBeCloseTo(10, 5)
+		expect(p.regions.flatMap(allSlices).some((s) => s.item.id === 'TTL')).toBe(false)
+	})
+
+	it('leaves a title alone over a transition', () => {
+		// The layer-crosses-a-transition guard is about pictures. A title crossing
+		// a dissolve is ordinary, and refusing it would ban titles over cuts.
+		const base = withTransition()
+		expect(() => computeRegions(doc({
+			media: [...base.media],
+			tracks: [track('v1'), track('t1', { name: 'T1', order: 1 })],
+			timeline: [...base.timeline, title(9.5, { trackId: 't1', out: 2 })]
+		}), 'original')).not.toThrow()
+	})
+
+	it('refuses the fast path if a title reaches it as an item', () => {
+		const items = [item(0, { in: 0, out: 10 })]
+		expect(isFastPathEligible(items, track('v1'))).toBe(true)
+		// The caller already filters titles out; this is the belt to that braces,
+		// because the fast path re-muxes ONE source file and a title is not one.
+		expect(isFastPathEligible([...items, title(10)], track('v1'))).toBe(false)
+	})
+})
+
 // ===== Sequence geometry =====
 
 describe('computeRegions — sequence geometry', () => {

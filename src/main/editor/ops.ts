@@ -13,6 +13,7 @@ import { KEY_DEFAULTS } from '@shared/keying'
 import { GENERATOR_DEFAULTS, GENERATORS } from '@shared/generators'
 import { hasTransform, OFFSET_RANGE, SCALE_RANGE } from '@shared/transform'
 import { defaultParams, effectDef } from '@shared/effects'
+import { findTitleTrack, nextTrackOrder, TITLE_TRACK_NAME } from '@shared/tracks'
 import { isTransitionKind } from '@shared/transitionPresets'
 import {
 	DEFAULT_TRANSITION_SEC, MAX_TRANSITION_SEC, MIN_TRANSITION_SEC
@@ -1399,11 +1400,14 @@ export function opsToDiff(ops: EditorOps, doc: EditorDocument): OpsToDiffResult 
 	}
 
 	if (ops.addTitles?.length) {
-		let textTrack = doc.tracks.find((t) => t.kind === 'text')
+		// An ordinary video track, found by name — titles render from any lane, but
+		// they get one of their own so they can sit OVER a clip rather than having
+		// to fit beside it.
+		let textTrack = findTitleTrack(doc.tracks)
 		if (!textTrack) {
 			textTrack = {
-				id: uuidv4(), kind: 'text', name: 'T1',
-				order: Math.max(0, ...doc.tracks.map((t) => t.order)) + 1,
+				id: uuidv4(), kind: 'video', name: TITLE_TRACK_NAME,
+				order: nextTrackOrder(doc.tracks, 'video'),
 				muted: false, locked: false, hidden: false, height: 40
 			}
 			;(diff.addTracks ||= []).push(textTrack)

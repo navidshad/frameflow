@@ -138,7 +138,7 @@ export function chunkPhrase(entry: TranscriptEntry, options: CaptionOptions = {}
 
 /** Whether a track's items can be heard, and so should be captioned. */
 const trackAudible = (track: Track | undefined): boolean =>
-	!!track && !track.hidden && !track.muted && track.kind !== 'text' && track.kind !== 'overlay'
+	!!track && !track.hidden && !track.muted
 
 /**
  * Every cue the sequence should show, in timeline order.
@@ -169,6 +169,10 @@ export function captionsFromTimeline(
 
 	for (const item of doc.timeline) {
 		if (item.muted) continue
+		// A title or a generated layer carries no speech to caption. The kind of
+		// the track it sits on used to answer this; now that anything visible can
+		// share a video track, the ITEM has to.
+		if (item.text || item.generator) continue
 		if (!trackAudible(trackById.get(item.trackId))) continue
 		const entries = transcripts[item.sourceAssetId]
 		if (!entries?.length) continue

@@ -197,7 +197,8 @@ import type { GeneratorSpec } from './generators'
 // ============================================================
 
 export interface EditorDocument {
-	schemaVersion: 1
+	/** 1 = the four-kind track model; 2 = two families. See main's `migrateEditorTracks`. */
+	schemaVersion: 1 | 2
 	media: MediaAsset[]         // imported sources
 	tracks: Track[]             // lane definitions
 	timeline: TimelineItem[]    // placements across tracks — the live EDL
@@ -311,11 +312,16 @@ export interface Clip {        // a selectable scene piece
 	masterSegmentIndex?: number // back-reference into the enriched master timeline
 }
 
-export type TrackKind = 'video' | 'audio' | 'overlay' | 'text'
+/**
+ * Two families, and that is the whole model: video holds anything you can SEE
+ * (footage, stills, titles, generated layers), audio anything you can HEAR.
+ * See `shared/tracks.ts` for what follows from it.
+ */
+export type TrackKind = 'video' | 'audio'
 
 export interface Track {
 	id: string
-	kind: TrackKind             // 'overlay' | 'text' = "other objects for later"
+	kind: TrackKind
 	name: string
 	order: number               // stacking order (0 = bottom video)
 	muted: boolean

@@ -26,6 +26,10 @@ import { sequenceFrame as resolveSequenceFrame } from '@shared/framing'
 import { childrenByParent, collectSubtree, hasBranch } from '@shared/revision-tree'
 import { DEFAULT_PERSONA_ID } from '@shared/personas'
 import { toMediaUrl } from '@shared/media-url'
+import {
+	canHostItem, findTitleTrack, isCompositedItem, nextTrackName, nextTrackOrder,
+	orderedTracks, trackFamily, TITLE_TRACK_NAME
+} from '@shared/tracks'
 import { isTransitionKind, transitionLabel } from '@shared/transitionPresets'
 import { seamFingerprint, type PreviewEntry } from '@shared/previewFrame'
 import {
@@ -273,7 +277,12 @@ export const useEditorStore = defineStore('editor', () => {
 	const DEFAULT_TITLE_SEC = 3
 
 	/**
-	 * Add a title at the playhead, making a text track if there is not one.
+	 * Add a title at the playhead, making its lane if there is not one.
+	 *
+	 * The lane is an ordinary VIDEO track named `T1`, the same way a generated
+	 * background is the video track named `BG`. Titles burn over the finished
+	 * picture from wherever they sit, so the lane is only there to give a title
+	 * somewhere to be that is not already occupied by a clip.
 	 *
 	 * A title item carries no `sourceAssetId` — it references no media — which
 	 * is why `findOrphanItems` exempts anything holding a `text` spec. Without
@@ -283,11 +292,11 @@ export const useEditorStore = defineStore('editor', () => {
 	const addTitle = (content = 'Title') => {
 		if (!doc.value) return null
 		const before = snapshotState()
-		let track = doc.value.tracks.find((t) => t.kind === 'text')
+		let track = findTitleTrack(doc.value.tracks)
 		if (!track) {
 			track = {
-				id: newId('tr'), kind: 'text', name: 'T1',
-				order: Math.max(...doc.value.tracks.map((t) => t.order)) + 1,
+				id: newId('tr'), kind: 'video', name: TITLE_TRACK_NAME,
+				order: nextTrackOrder(doc.value.tracks, 'video'),
 				muted: false, locked: false, hidden: false, height: 40
 			}
 			doc.value.tracks.push(track)
@@ -537,7 +546,7 @@ export const useEditorStore = defineStore('editor', () => {
 	const playableVideoTracks = computed(() => {
 		const withMedia = new Set(
 			(doc.value?.timeline ?? [])
-				.filter((i) => !i.generator && !i.text && i.sourceAssetId)
+				.filter((i) => !i.generator && isCompositedItem(i))
 				.map((i) => i.trackId)
 		)
 		return visibleVideoTracks.value.filter((t) => withMedia.has(t.id))
@@ -769,15 +778,18 @@ export const useEditorStore = defineStore('editor', () => {
 
 	const canExport = computed(() => {
 		if (!doc.value || isRendering.value) return false
-		const videoTrack = sortedTracks.value.find((t) => t.kind === 'video')
-		if (!videoTrack || videoTrack.hidden) return false
-		return doc.value.timeline.some((i) => i.trackId === videoTrack.id)
+		// ANY visible video lane carrying a picture will do. Asking the lowest one
+		// specifically was already wrong the day generated backgrounds landed —
+		// `BG` sits below everything, so an export with a background and footage
+		// above it was judged on the wrong lane.
+		const lanes = new Set(visibleVideoTracks.value.map((t) => t.id))
+		return doc.value.timeline.some((i) => lanes.has(i.trackId) && isCompositedItem(i))
 	})
 
 	/**
 	 * Pre-flight export warnings (PRD §5.9): content that exists on the timeline
 	 * but will be missing from the render — muted/hidden tracks with clips,
-	 * individually muted clips, overlay/text items. Warnings with an `action`
+	 * individually muted clips. Warnings with an `action`
 	 * offer a one-click fix (e.g. Unmute) in the export dialog.
 	 */
 	const exportWarnings = computed<Array<{
@@ -795,7 +807,7 @@ export const useEditorStore = defineStore('editor', () => {
 
 		for (const track of doc.value.tracks) {
 			const count = itemsByTrack.get(track.id) || 0
-			if (count === 0 || track.kind === 'overlay' || track.kind === 'text') continue
+			if (count === 0) continue
 			if (track.hidden) {
 				warnings.push({
 					id: `hidden-${track.id}`,
@@ -816,22 +828,13 @@ export const useEditorStore = defineStore('editor', () => {
 		const trackById = new Map(doc.value.tracks.map((t) => [t.id, t]))
 		const mutedItems = doc.value.timeline.filter((i) => {
 			const track = trackById.get(i.trackId)
-			return i.muted && track && !track.muted && !track.hidden &&
-				(track.kind === 'video' || track.kind === 'audio')
+			return i.muted && track && !track.muted && !track.hidden
 		})
 		if (mutedItems.length > 0) {
 			warnings.push({
 				id: 'muted-items',
 				text: `${plural(mutedItems.length)} ${mutedItems.length === 1 ? 'has' : 'have'} muted audio and won't be heard in the export.`
 			})
-		}
-
-		const hasOverlayItems = doc.value.timeline.some((item) => {
-			const track = trackById.get(item.trackId)
-			return track && (track.kind === 'overlay' || track.kind === 'text')
-		})
-		if (hasOverlayItems) {
-			warnings.push({ id: 'overlay', text: "Overlay/text tracks won't appear in this export." })
 		}
 
 		if (doc.value.loudnessEnabled) {
@@ -1548,8 +1551,8 @@ export const useEditorStore = defineStore('editor', () => {
 			|| (asset?.kind === 'audio' ? firstAudioTrackId.value : firstVideoTrackId.value)
 		if (!targetTrackId) return null
 		const track = doc.value.tracks.find((t) => t.id === targetTrackId)
-		if (!track || track.locked || track.hidden) return null
-		if (track.kind !== 'video' && track.kind !== (asset?.kind || 'video')) return null
+		if (!track) return null
+		if (!canHostItem(track, { sourceAssetId: clip.sourceAssetId }, doc.value.media).ok) return null
 
 		const before = snapshotState()
 		const start = resolveFreePosition(targetTrackId, atSec ?? playheadSec.value, clip.duration)
@@ -1562,8 +1565,8 @@ export const useEditorStore = defineStore('editor', () => {
 
 	/**
 	 * Drop a WHOLE asset onto the timeline as a single full-span item. Defaults
-	 * the target track by kind (audio→A-lane, video→V-lane); kind must match
-	 * (audio assets only on audio tracks, video only on video tracks).
+	 * the target track by family (something you hear → an audio lane, anything
+	 * you see → a video lane), which is the same rule a drag across lanes obeys.
 	 */
 	const addItemFromAsset = (assetId: string, trackId?: string | null, atSec?: number): TimelineItem | null => {
 		if (!doc.value) return null
@@ -1572,9 +1575,8 @@ export const useEditorStore = defineStore('editor', () => {
 		const targetTrackId = trackId || (asset.kind === 'audio' ? firstAudioTrackId.value : firstVideoTrackId.value)
 		if (!targetTrackId) return null
 		const track = doc.value.tracks.find((t) => t.id === targetTrackId)
-		if (!track || track.locked || track.hidden) return null
-		const compatible = asset.kind === 'audio' ? track.kind === 'audio' : track.kind === 'video'
-		if (!compatible) return null
+		if (!track) return null
+		if (!canHostItem(track, { sourceAssetId: assetId }, doc.value.media).ok) return null
 		const duration = asset.metadata?.duration || 0
 		if (duration <= 0) return null
 
@@ -2401,32 +2403,45 @@ export const useEditorStore = defineStore('editor', () => {
 	const addVideoTrack = () => {
 		if (!doc.value) return
 		const before = snapshotState()
-		const count = doc.value.tracks.filter((t) => t.kind === 'video').length
 		doc.value.tracks.push({
 			id: newId('tr'),
 			kind: 'video',
-			name: `V${count + 1}`,
-			order: Math.max(...doc.value.tracks.map((t) => t.order)) + 1,
+			name: nextTrackName(doc.value.tracks, 'video'),
+			// Above its OWN family, not the end of a flat list — which is how a new
+			// lane used to land underneath the audio and off the bottom of a
+			// viewport this short.
+			order: nextTrackOrder(doc.value.tracks, 'video'),
 			muted: false, locked: false, hidden: false, height: 64
 		})
 		commitStep({ before, label: 'Add video track' })
 	}
 
+	/** The audio half of the same thing. There was no way to add one before. */
+	const addAudioTrack = () => {
+		if (!doc.value) return
+		const before = snapshotState()
+		doc.value.tracks.push({
+			id: newId('tr'),
+			kind: 'audio',
+			name: nextTrackName(doc.value.tracks, 'audio'),
+			order: nextTrackOrder(doc.value.tracks, 'audio'),
+			muted: false, locked: false, hidden: false, height: 64
+		})
+		commitStep({ before, label: 'Add audio track' })
+	}
+
 	/**
 	 * Delete a track and everything on it.
 	 *
-	 * There are four ways to ADD a track now — video, overlay, text, background —
-	 * and until this there was no way to remove one, so a project accumulated
-	 * empty lanes nobody could clear. The last video track is kept: a sequence
-	 * with nowhere to put a picture is not a state worth being able to reach.
+	 * The last video track is kept: a sequence with nowhere to put a picture is
+	 * not a state worth being able to reach. Audio has no such floor — a project
+	 * that only ever uses the sound its clips carry needs no audio lane at all.
 	 */
 	const removeTrack = (trackId: string) => {
 		if (!doc.value) return false
 		const track = doc.value.tracks.find((t) => t.id === trackId)
 		if (!track) return false
-		if (track.kind === 'video' && doc.value.tracks.filter((t) => t.kind === 'video').length < 2) {
-			return false
-		}
+		if (!canRemoveTrack(trackId)) return false
 		const before = snapshotState()
 		doc.value.tracks = doc.value.tracks.filter((t) => t.id !== trackId)
 		doc.value.timeline = doc.value.timeline.filter((i) => i.trackId !== trackId)
@@ -2439,24 +2454,8 @@ export const useEditorStore = defineStore('editor', () => {
 		const d = doc.value
 		const track = d?.tracks.find((t) => t.id === trackId)
 		if (!d || !track) return false
-		return track.kind !== 'video' || d.tracks.filter((t) => t.kind === 'video').length > 1
-	}
-
-	const addOverlayTrack = () => {
-		if (!doc.value) return
-		const before = snapshotState()
-		const count = doc.value.tracks.filter((t) => t.kind === 'overlay').length
-		doc.value.tracks.push({
-			id: (crypto as any).randomUUID ? crypto.randomUUID() : `tr-${Date.now()}`,
-			kind: 'overlay',
-			name: `OV${count + 1}`,
-			order: Math.max(...doc.value.tracks.map((t) => t.order)) + 1,
-			muted: false,
-			locked: false,
-			hidden: false,
-			height: 48
-		})
-		commitStep({ before, label: 'Add overlay track' })
+		return trackFamily(track) !== 'video' ||
+			d.tracks.filter((t) => trackFamily(t) === 'video').length > 1
 	}
 
 	// ===== Persona actions (M3) =====
@@ -3207,6 +3206,7 @@ export const useEditorStore = defineStore('editor', () => {
 		startExportBatch,
 		toggleTrackMusic,
 		addVideoTrack,
+		addAudioTrack,
 		removeTrack,
 		canRemoveTrack,
 		overlaySegments,
@@ -3242,7 +3242,6 @@ export const useEditorStore = defineStore('editor', () => {
 		sourceTimeToTimeline,
 		applySilenceRegions,
 		toggleTrackFlag,
-		addOverlayTrack,
 		// personas
 		personas,
 		activePersona,

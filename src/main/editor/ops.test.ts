@@ -892,19 +892,22 @@ describe('opsToDiff / transform', () => {
 describe('opsToDiff / titles and settings', () => {
 	const doc = () => makeDoc([makeAsset('a', uniform(2, 2))])
 
-	it('makes a text track when the project has none', () => {
+	it('makes a title track when the project has none', () => {
 		const { diff } = opsToDiff({ addTitles: [{ text: 'Chapter One', atSec: 4 }] }, doc())
 		expect(diff.addTracks).toHaveLength(1)
-		expect(diff.addTracks![0].kind).toBe('text')
+		// A named VIDEO lane: titles render from any track, and a kind of their
+		// own is what used to strand them somewhere nothing could move.
+		expect(diff.addTracks![0].kind).toBe('video')
+		expect(diff.addTracks![0].name).toBe('T1')
 		const title = diff.addItems!.find((i) => i.text)
 		expect(title!.text!.content).toBe('Chapter One')
 		expect(title!.timelineStart).toBe(4)
 		expect(title!.duration).toBe(3)
 	})
 
-	it('reuses a text track that already exists', () => {
+	it('reuses a title track that already exists', () => {
 		const withTrack = doc()
-		withTrack.tracks.push({ id: 't1', kind: 'text', name: 'T1', order: 1, muted: false, locked: false, hidden: false, height: 40 })
+		withTrack.tracks.push({ id: 't1', kind: 'video', name: 'T1', order: 1, muted: false, locked: false, hidden: false, height: 40 })
 		const { diff } = opsToDiff({ addTitles: [{ text: 'Hi', atSec: 0 }] }, withTrack)
 		expect(diff.addTracks).toBeUndefined()
 		expect(diff.addItems![0].trackId).toBe('t1')

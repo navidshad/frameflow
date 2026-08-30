@@ -10,6 +10,7 @@ import type {
 	TimelineItem, TimelineSegment, Track
 } from '@shared/types'
 import { findOrphanItems, itemEnd } from '@shared/timeline'
+import { isCompositedItem } from '@shared/tracks'
 import { planTransitions, sourceDurationsFrom, type TransitionWindow } from '@shared/transitionPlan'
 import { sequenceFrame, type FrameSource } from '@shared/framing'
 import { hasRenderableEffects } from '@shared/effects'
@@ -96,8 +97,12 @@ export function computeRegions(
 
 	const trackById = new Map(doc.tracks.map((t) => [t.id, t]))
 	const videoTrackIds = new Set(videoTracks.map((t) => t.id))
+	// `isCompositedItem` is what keeps a TITLE out of the picture pipeline. A
+	// title burns over the finished file with the captions, so it renders from
+	// whichever track it sits on; treated as a layer it would reach `toSlice`,
+	// which would look up its empty `sourceAssetId` and throw.
 	const videoItems = doc.timeline
-		.filter((i) => videoTrackIds.has(i.trackId))
+		.filter((i) => videoTrackIds.has(i.trackId) && isCompositedItem(i))
 		.sort((a, b) => a.timelineStart - b.timelineStart)
 	const audioItems = doc.timeline
 		.filter((i) => audioTrackById.has(i.trackId))
@@ -112,9 +117,9 @@ export function computeRegions(
 	// ---- Orphan pre-flight ----
 	// A clip whose media was removed cannot be rendered. Report EVERY offender
 	// at once with enough detail to find them, instead of dying on the first one
-	// with a bare label. Scoped to the items the render actually consumes:
-	// hidden tracks and overlay/text lanes never reach ffmpeg, so an orphan
-	// parked there must not block an export that would otherwise succeed.
+	// with a bare label. Scoped to the items the render actually consumes: a
+	// hidden track never reaches ffmpeg, so an orphan parked there must not
+	// block an export that would otherwise succeed.
 	const orphans = findOrphanItems([...videoItems, ...audioItems], new Set(assetById.keys()))
 	if (orphans.length) {
 		const at = (t: number) => `${Math.floor(t / 60)}:${String(Math.floor(t % 60)).padStart(2, '0')}`
@@ -447,7 +452,7 @@ export function isFastPathEligible(items: TimelineItem[], track: Track, hasAudio
 	if (items.some((i) => hasKeyframes(i.keyframes))) return false
 	if (items.some((i) => hasKey(i.key))) return false
 	// assembleVideo re-muxes ONE source file; a synthesised layer is not one.
-	if (items.some((i) => !!i.generator)) return false
+	if (items.some((i) => !isCompositedItem(i) || !!i.generator)) return false
 	if (Math.abs(items[0].timelineStart) > SNAP_EPS) return false // leading gap needs black
 	for (let i = 1; i < items.length; i++) {
 		if (Math.abs(items[i].timelineStart - itemEnd(items[i - 1])) > SNAP_EPS) return false
@@ -646,19 +651,21 @@ export function startEditorRender(options: {
 				.sort((a, b) => a.order - b.order)[0] || null
 			const items = videoTrack
 				? doc.timeline
-					.filter((i) => i.trackId === videoTrack.id)
+					.filter((i) => i.trackId === videoTrack.id && isCompositedItem(i))
 					.sort((a, b) => a.timelineStart - b.timelineStart)
 				: []
 			const audioTrackIds = new Set(
 				doc.tracks.filter((t) => t.kind === 'audio' && !t.hidden).map((t) => t.id)
 			)
 			const hasAudioItems = doc.timeline.some((i) => audioTrackIds.has(i.trackId))
-			// Items on a SECOND video track need the region path (layering).
+			// Items on a SECOND video track need the region path (layering). A title
+			// is not one of them — it burns over the finished file either way, so a
+			// project whose only other lane holds titles keeps the fast path.
 			const videoTrackIds = new Set(
 				doc.tracks.filter((t) => t.kind === 'video' && !t.hidden).map((t) => t.id)
 			)
 			const hasOtherVideoItems = doc.timeline.some(
-				(i) => videoTrackIds.has(i.trackId) && i.trackId !== videoTrack?.id
+				(i) => videoTrackIds.has(i.trackId) && i.trackId !== videoTrack?.id && isCompositedItem(i)
 			)
 
 			const fastSource = doc.media.find((a) => a.id === items[0]?.sourceAssetId)?.metadata

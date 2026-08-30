@@ -104,7 +104,7 @@ describe('cuesForDoc', () => {
 	it('burns a title whether or not captions are on', () => {
 		// A title is content the user placed by hand, not a setting.
 		const titled = doc({
-			tracks: [vtrack, { ...vtrack, id: 't1', kind: 'text', name: 'T1' }],
+			tracks: [vtrack, { ...vtrack, id: 't1', name: 'T1' }],
 			timeline: [item({ id: 'ttl', trackId: 't1', timelineStart: 2, duration: 3, text: { content: 'Chapter One' } })]
 		})
 		const cues = cuesForDoc(titled, FRAME)

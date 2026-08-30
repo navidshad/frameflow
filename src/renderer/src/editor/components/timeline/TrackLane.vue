@@ -82,6 +82,7 @@
 
 <script setup lang="ts">
 import { computed, inject, ref } from 'vue'
+import { trackFamily } from '@shared/tracks'
 import type { Track } from '@shared/types'
 import { itemEnd } from '@shared/timeline'
 import { DEFAULT_TRANSITION_SEC, type Seam } from '@shared/transitionPlan'
@@ -166,30 +167,24 @@ const onSeamClick = (seam: Seam, e: MouseEvent) => {
 
 // ===== Drag & drop =====
 
-const laneTint = computed(() => {
-	switch (props.track.kind) {
-		case 'video': return 'bg-primary/[0.03] dark:bg-primary/[0.05]'
-		case 'audio': return 'bg-accent/[0.03] dark:bg-accent/[0.05]'
-		default: return ''
-	}
-})
+const laneTint = computed(() =>
+	trackFamily(props.track) === 'audio'
+		? 'bg-accent/[0.03] dark:bg-accent/[0.05]'
+		: 'bg-primary/[0.03] dark:bg-primary/[0.05]'
+)
 
-const emptyHint = computed(() => {
-	switch (props.track.kind) {
-		case 'video': return 'Drag a file or pieces here'
-		case 'audio': return 'Drag an audio file or pieces here'
-		default: return 'Overlay authoring arrives later'
-	}
-})
+const emptyHint = computed(() =>
+	trackFamily(props.track) === 'audio'
+		? 'Drag an audio file or pieces here'
+		: 'Drag a file, pieces or a title here'
+)
 
-// A lane accepts video/audio drops when unlocked/visible AND the dragged item's
-// kind (from the readable kind-hint type) matches the lane. Overlay/text lanes
-// stay inert in v1.
+// A lane accepts a drop when it is unlocked and visible and the dragged thing
+// belongs to its family — read here from the readable kind-hint type, because
+// the payload itself cannot be read during `dragover`.
 const dropKind = computed<'video' | 'audio' | null>(() => {
 	if (props.track.locked || props.track.hidden) return null
-	if (props.track.kind === 'video') return 'video'
-	if (props.track.kind === 'audio') return 'audio'
-	return null
+	return trackFamily(props.track)
 })
 
 const canAcceptDrag = (dt: DataTransfer | null): boolean => {
