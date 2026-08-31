@@ -71,9 +71,14 @@
 					<!-- The sequence frame: what actually gets exported. Sized here
 					     rather than in CSS because letterboxing a plain element
 					     against BOTH axes is not something CSS can express. -->
-					<div class="relative bg-black ring-1 ring-white/10" data-canvas-frame
-						:class="gizmoActive ? '' : 'overflow-hidden'"
-						:style="frameStyle">
+					<div class="relative" data-canvas-frame :style="frameStyle">
+						<!-- Everything the export would crop lives in here, and it is
+						     ALWAYS clipped. The frame IS the export, so a clip pushed
+						     off its edge has to disappear here exactly as it does on
+						     disk — this once unclipped itself to let the gizmo's
+						     handles out, and the picture escaped with them. Handles
+						     are chrome; they hang outside as a SIBLING instead. -->
+						<div class="absolute inset-0 overflow-hidden bg-black ring-1 ring-white/10">
 						<!-- Generated layers, UNDER the video elements because a
 					     background is what the pair sits on. Solid and gradient map
 					     onto CSS exactly; grain and bars get the notice instead. -->
@@ -133,12 +138,6 @@
 							pointer-events-none" :style="captionBoxStyle">
 							<span :style="captionTextStyle">{{ activeCue.text }}</span>
 						</div>
-						<!-- The selected item's handles, editable on the picture itself.
-						     Overflow unclips while they are up, so a corner dragged past
-						     the frame edge stays grabbable. -->
-						<CanvasGizmo v-if="gizmoActive"
-							:frame-width="frameBox.w" :frame-height="frameBox.h" />
-
 						<!-- Guides. Fractions of the frame, so they follow the sequence
 						     when its shape changes — the rule titles and framing follow.
 						     Above everything, because they are about what covers it. -->
@@ -180,6 +179,13 @@
 							</template>
 							<span v-else class="text-[10px] font-mono text-white/30 uppercase tracking-widest">gap</span>
 						</div>
+						</div>
+
+						<!-- Outside the clip, so a corner or the rotation stalk dragged
+						     past the frame edge stays visible and grabbable — without
+						     the picture following it out. -->
+						<CanvasGizmo v-if="gizmoActive"
+							:frame-width="frameBox.w" :frame-height="frameBox.h" />
 					</div>
 					<!-- The monitor stacks <video> elements; CSS has no chroma key, so
 					     a keyed layer previews UNKEYED. Saying so beats a preview
