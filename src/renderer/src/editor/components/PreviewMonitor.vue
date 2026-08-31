@@ -89,7 +89,8 @@
 						class="absolute inset-0 pointer-events-none"
 						:style="{
 							background: generatorCss(layer.generator) || '#000',
-							zIndex: store.videoLayerDepth[layer.trackId] ?? 1
+							zIndex: store.videoLayerDepth[layer.trackId] ?? 1,
+							...layerLook(layer)
 						}"></div>
 
 					<!-- Opacity is a NUMBER written every tick, not a CSS transition:
@@ -365,6 +366,7 @@
 </template>
 
 <script setup lang="ts">
+import type { TimelineItem } from '@shared/types'
 import { captionMetrics, cueAt } from '@shared/captions'
 import { guideById, guidesFor, isVertical, safeArea } from '@shared/guides'
 import { effectCss } from '@shared/effects'
@@ -740,8 +742,16 @@ const titleStyle = (item: {
  * function that writes the export's crop offset, so what is on screen is what
  * burns in — the whole reason the transition cache exists.
  */
-const framingStyle = (itemId: string | null) => {
-	const item = itemId ? store.doc?.timeline.find((i) => i.id === itemId) : undefined
+/**
+ * What an item looks like wherever it is drawn — footage or synthesised.
+ *
+ * A generated layer is a composited item like any other (`isCompositedItem`
+ * counts it), so the export runs it through the same `transformFilter` and the
+ * same effect chain. Previewing it as a flat full-frame wash ignored both: a
+ * gradient nudged half off the frame still covered every pixel here while the
+ * render offset it, and its own gizmo box sat somewhere else entirely.
+ */
+const layerLook = (item: TimelineItem | undefined) => {
 	// The colour approximation rides along here rather than on the frame, so a
 	// graded clip and an ungraded one can sit either side of a transition and
 	// each show its own look.
@@ -752,14 +762,18 @@ const framingStyle = (itemId: string | null) => {
 		tracks: item?.keyframes,
 		t: item ? store.playheadSec - item.timelineStart : 0
 	})
-	const fit = item?.framing?.mode !== 'fill'
-		? { objectFit: 'contain' as const }
-		: { objectFit: 'cover' as const, objectPosition: panObjectPosition(item.framing.pan) }
 	return {
-		...fit,
 		...(filter ? { filter } : {}),
 		...(transform ? { transform } : {})
 	}
+}
+
+const framingStyle = (itemId: string | null) => {
+	const item = itemId ? store.doc?.timeline.find((i) => i.id === itemId) : undefined
+	const fit = item?.framing?.mode !== 'fill'
+		? { objectFit: 'contain' as const }
+		: { objectFit: 'cover' as const, objectPosition: panObjectPosition(item.framing.pan) }
+	return { ...fit, ...layerLook(item) }
 }
 
 const activeSegmentLabel = computed(() => {
