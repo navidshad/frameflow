@@ -254,44 +254,57 @@
 						:max="store.contentEnd || 0" step="0.05" :value="store.playheadSec"
 						@input="onTimelineScrub" />
 
-					<button
-						class="w-7 h-7 shrink-0 flex items-center justify-center rounded-lg transition active:scale-95"
-						:class="exactFrame.src
-							? 'text-accent bg-accent/10'
-							: 'text-zinc-400 hover:text-primary hover:bg-primary/10'"
-						:title="exactFrame.status === 'rendering'
+					<SlimTooltip placement="top"
+						:text="exactFrame.status === 'rendering'
 							? 'Rendering the exact frame…'
-							: 'Exact frame — render this instant through the real export pipeline'"
-						:disabled="exactFrame.status === 'rendering'"
-						@click="renderExact">
-						<span class="iconify w-4 h-4"
-							:class="exactFrame.status === 'rendering'
-								? 'tabler--loader-2 animate-spin'
-								: 'tabler--camera'"></span>
-					</button>
-					<button
-						class="w-7 h-7 shrink-0 flex items-center justify-center rounded-lg transition active:scale-95"
-						:class="exactPinned
-							? 'text-accent bg-accent/10'
-							: 'text-zinc-400 hover:text-primary hover:bg-primary/10'"
-						:title="exactPinned
+							: 'Exact frame — render this instant through the real export pipeline'">
+						<button
+							class="w-7 h-7 shrink-0 flex items-center justify-center rounded-lg transition active:scale-95"
+							:class="exactFrame.src
+								? 'text-accent bg-accent/10'
+								: 'text-zinc-400 hover:text-primary hover:bg-primary/10'"
+							aria-label="Exact frame"
+							:disabled="exactFrame.status === 'rendering'"
+							@click="renderExact">
+							<span class="iconify w-4 h-4"
+								:class="exactFrame.status === 'rendering'
+									? 'tabler--loader-2 animate-spin'
+									: 'tabler--camera'"></span>
+						</button>
+					</SlimTooltip>
+					<SlimTooltip placement="top"
+						:text="exactPinned
 							? 'Exact frame pinned — re-renders whenever the playhead settles. Click to unpin.'
-							: 'Pin the exact frame — re-render it automatically when the playhead settles'"
-						@click="exactPinned = !exactPinned">
-						<span class="iconify tabler--pin w-4 h-4"
-							:class="exactPinned ? '' : 'rotate-45'"></span>
-					</button>
+							: 'Pin the exact frame — re-render it automatically when the playhead settles'">
+						<button
+							class="w-7 h-7 shrink-0 flex items-center justify-center rounded-lg transition active:scale-95"
+							:class="exactPinned
+								? 'text-accent bg-accent/10'
+								: 'text-zinc-400 hover:text-primary hover:bg-primary/10'"
+							aria-label="Pin the exact frame"
+							@click="exactPinned = !exactPinned">
+							<span class="iconify tabler--pin w-4 h-4"
+								:class="exactPinned ? '' : 'rotate-45'"></span>
+						</button>
+					</SlimTooltip>
 
 					<div class="relative shrink-0">
-						<button
-							class="w-7 h-7 flex items-center justify-center rounded-lg transition active:scale-95"
-							:class="activeGuide
-								? 'text-primary bg-primary/10'
-								: 'text-zinc-400 hover:text-primary hover:bg-primary/10'"
-							:title="activeGuide ? `Guide: ${activeGuide.label}` : 'Guides — safe areas and grids'"
-							@click="guideMenuOpen = !guideMenuOpen">
-							<span class="iconify tabler--grid-dots w-4 h-4"></span>
-						</button>
+						<!-- No tooltip while the menu is open: it would sit on top of the
+						     very list the click just opened. -->
+						<SlimTooltip placement="top"
+							:text="guideMenuOpen
+								? ''
+								: activeGuide ? `Guide: ${activeGuide.label}` : 'Guides — safe areas and grids'">
+							<button
+								class="w-7 h-7 flex items-center justify-center rounded-lg transition active:scale-95"
+								:class="activeGuide
+									? 'text-primary bg-primary/10'
+									: 'text-zinc-400 hover:text-primary hover:bg-primary/10'"
+								aria-label="Guides"
+								@click="guideMenuOpen = !guideMenuOpen">
+								<span class="iconify tabler--grid-dots w-4 h-4"></span>
+							</button>
+						</SlimTooltip>
 						<template v-if="guideMenuOpen">
 							<div class="fixed inset-0 z-40" @click="guideMenuOpen = false"></div>
 							<div class="absolute right-0 bottom-9 z-50 w-56 glass-card rounded-xl border
@@ -318,14 +331,17 @@
 						</template>
 					</div>
 
-					<button
-						class="w-7 h-7 shrink-0 flex items-center justify-center rounded-lg transition active:scale-95
-						       text-zinc-400 hover:text-primary hover:bg-primary/10"
-						:title="store.monitorFullscreen ? 'Leave fullscreen (F or Esc)' : 'Fullscreen (F)'"
-						@click="store.monitorFullscreen = !store.monitorFullscreen">
-						<span class="iconify w-4 h-4"
-							:class="store.monitorFullscreen ? 'tabler--minimize' : 'tabler--maximize'"></span>
-					</button>
+					<SlimTooltip placement="top"
+						:text="store.monitorFullscreen ? 'Leave fullscreen (F or Esc)' : 'Fullscreen (F)'">
+						<button
+							class="w-7 h-7 shrink-0 flex items-center justify-center rounded-lg transition active:scale-95
+							       text-zinc-400 hover:text-primary hover:bg-primary/10"
+							:aria-label="store.monitorFullscreen ? 'Leave fullscreen' : 'Fullscreen'"
+							@click="store.monitorFullscreen = !store.monitorFullscreen">
+							<span class="iconify w-4 h-4"
+								:class="store.monitorFullscreen ? 'tabler--minimize' : 'tabler--maximize'"></span>
+						</button>
+					</SlimTooltip>
 				</div>
 			</template>
 		</template>
@@ -344,6 +360,7 @@ import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { useEditorStore } from '../../stores/editorStore'
 import { useEdlPlayback } from '../composables/useEdlPlayback'
 import CanvasGizmo from './CanvasGizmo.vue'
+import SlimTooltip from '../../components/SlimTooltip.vue'
 
 const store = useEditorStore()
 const api = (window as any).api
