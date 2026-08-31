@@ -416,6 +416,12 @@ export interface TextOverlaySpec {
 	y?: number
 	/** Cap height as a fraction of frame height. */
 	size?: number
+	/**
+	 * Degrees, CLOCKWISE — the same sense as a clip's `transform.rotation`, so
+	 * one number means one thing wherever it appears. libass counts the other
+	 * way, and `titleCues` is the single place that negates it.
+	 */
+	rotation?: number
 	/** '#RRGGBB'. */
 	color?: string
 	outline?: string

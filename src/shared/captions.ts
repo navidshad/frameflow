@@ -263,13 +263,19 @@ export function titleCues(
 			`\\3c${assColour(spec.outline, '&H00000000&')}`,
 			`\\bord${Math.max(1, Math.round(size * 0.06))}`,
 			`\\b${spec.bold === false ? 0 : 1}`
-		].join('')
+		]
+		// Negated because `\frz` turns anticlockwise while every rotation the user
+		// touches — the canvas handle, a clip's transform — turns clockwise.
+		// `\an5` with `\pos` already puts the origin on the text's centre, so this
+		// spins about the same point the monitor's `rotate()` does.
+		const rotation = Number.isFinite(spec.rotation) ? Number(spec.rotation) : 0
+		if (rotation) tags.push(`\\frz${(-rotation).toFixed(2).replace(/\.?0+$/, '')}`)
 
 		cues.push({
 			start: item.timelineStart,
 			end,
 			text: spec.content.trim(),
-			override: `{${tags}}`
+			override: `{${tags.join('')}}`
 		})
 	}
 

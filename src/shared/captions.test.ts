@@ -285,6 +285,20 @@ describe('titleCues', () => {
 		expect(wide[0].override).toContain('\\fs108')
 	})
 
+	it('turns a rotation the other way, because libass does', () => {
+		// The canvas handle and the inspector both speak clockwise degrees, the
+		// same as a clip's transform. libass counts anticlockwise, so the sign
+		// has to flip exactly once — here — or a title drawn tilted right in the
+		// monitor burns in tilted left.
+		const [cue] = titleCues(doc([title({}, { content: 'Hi', rotation: 30 })], [ttrack]), FRAME)
+		expect(cue.override).toContain('\\frz-30')
+	})
+
+	it('leaves the tag out when the title is upright', () => {
+		const [cue] = titleCues(doc([title({}, { content: 'Hi' })], [ttrack]), FRAME)
+		expect(cue.override).not.toContain('\\frz')
+	})
+
 	it('writes colours the way ASS wants them, which is backwards', () => {
 		const [cue] = titleCues(doc([title({}, { content: 'Hi', color: '#FF8000' })], [ttrack]), FRAME)
 		expect(cue.override).toContain('\\1c&H000080FF&')

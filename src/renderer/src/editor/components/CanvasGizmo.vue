@@ -24,25 +24,36 @@
 		</div>
 	</div>
 
-	<template v-else-if="mode === 'title'">
-		<!-- The title anchor: ring the text's centre, drag to place it. -->
-		<div class="absolute z-30 -translate-x-1/2 -translate-y-1/2 cursor-move"
-			:style="{ left: `${titleX * 100}%`, top: `${titleY * 100}%` }"
-			@pointerdown.stop.prevent="begin('move', $event)">
-			<div class="w-4 h-4 rounded-full border-2 border-primary bg-primary/20"></div>
+	<!-- A title gets the SAME handles as a clip — the user's point being that
+	     anything drawn on the frame should be editable on the frame the same
+	     way. Only the box differs: a clip's is the frame, a title's is whatever
+	     the text occupies, measured from the node the monitor actually rendered
+	     and carrying the same centre-origin rotation the burn applies. -->
+	<div v-else-if="mode === 'title' && titleBox"
+		class="absolute z-30"
+		:style="{
+			left: `${titleX * 100}%`,
+			top: `${titleY * 100}%`,
+			width: `${titleBox.w}px`,
+			height: `${titleBox.h}px`,
+			transform: `translate(-50%, -50%)${titleRotation ? ` rotate(${titleRotation}deg)` : ''}`
+		}">
+		<div class="absolute inset-0 cursor-move border-2 border-primary/70"
+			@pointerdown.stop.prevent="begin('move', $event)"></div>
+		<div v-for="corner in CORNERS" :key="corner.key"
+			class="absolute w-2.5 h-2.5 rounded-sm bg-primary border border-white/80 cursor-nwse-resize"
+			:style="corner.style"
+			@pointerdown.stop.prevent="begin('scale', $event)"></div>
+		<div class="absolute left-1/2 -top-6 -translate-x-1/2 flex flex-col items-center"
+			@pointerdown.stop.prevent="begin('rotate', $event)">
+			<div class="w-2.5 h-2.5 rounded-full bg-primary border border-white/80 cursor-grab"></div>
+			<div class="w-px h-3.5 bg-primary/70"></div>
 		</div>
-		<!-- The size handle, offset from the anchor so the two never overlap. -->
-		<div class="absolute z-30 -translate-x-1/2 -translate-y-1/2 cursor-nwse-resize"
-			:style="{ left: `calc(${titleX * 100}% + 26px)`, top: `calc(${titleY * 100}% + 26px)` }"
-			title="Drag to resize the text"
-			@pointerdown.stop.prevent="begin('scale', $event)">
-			<div class="w-2.5 h-2.5 rounded-sm bg-primary border border-white/80"></div>
-		</div>
-	</template>
+	</div>
 </template>
 
 <script setup lang="ts">
-import { computed, onBeforeUnmount } from 'vue'
+import { computed, nextTick, onBeforeUnmount, ref, watch } from 'vue'
 import { useEditorStore } from '../../stores/editorStore'
 import { transformCss, OFFSET_RANGE, SCALE_RANGE, TRANSFORM_DEFAULTS } from '@shared/transform'
 import { valueAt } from '@shared/keyframes'
@@ -105,6 +116,43 @@ const clipCss = computed(() =>
 
 const titleX = computed(() => selected.value?.text?.x ?? 0.5)
 const titleY = computed(() => selected.value?.text?.y ?? 0.85)
+const titleRotation = computed(() => selected.value?.text?.rotation ?? 0)
+
+/**
+ * The text's own box, in the frame's pixels.
+ *
+ * Measured from the rendered node rather than computed from the font size,
+ * because the width depends on the string, the wrapping and the face the
+ * browser actually resolved — none of which this component can predict. Layout
+ * size, not `getBoundingClientRect`: the rect of a rotated element is its
+ * bounding square, which would make the handles drift as the title turned.
+ */
+const titleBox = ref<{ w: number; h: number } | null>(null)
+
+const measureTitle = () => {
+	const item = selected.value
+	if (!item?.text) { titleBox.value = null; return }
+	const node = document.querySelector<HTMLElement>(`[data-title-id="${item.id}"]`)
+	// No node means the playhead is not inside the title, so there is nothing on
+	// the frame to put handles on.
+	titleBox.value = node ? { w: node.offsetWidth, h: node.offsetHeight } : null
+}
+
+// Re-measure whenever anything that changes the text's size changes — including
+// the frame itself, since the font scales with it.
+watch(
+	() => [
+		selected.value?.id,
+		selected.value?.text?.content,
+		selected.value?.text?.size,
+		selected.value?.text?.bold,
+		props.frameWidth,
+		props.frameHeight,
+		store.playheadSec
+	],
+	() => nextTick(measureTitle),
+	{ immediate: true }
+)
 
 const CORNERS = [
 	{ key: 'tl', style: { left: '-5px', top: '-5px' } },
@@ -122,7 +170,10 @@ interface Drag {
 	startX: number
 	startY: number
 	/** The values when the pointer went down — deltas apply to these. */
-	base: { x: number; y: number; scale: number; rotation: number; tx: number; ty: number; size: number }
+	base: {
+		x: number; y: number; scale: number; rotation: number
+		tx: number; ty: number; size: number; trotation: number
+	}
 	/** Centre of the frame box in viewport px, for scale/rotate geometry. */
 	centreX: number
 	centreY: number
@@ -147,16 +198,49 @@ const begin = (gesture: Gesture, event: PointerEvent) => {
 		startY: event.clientY,
 		base: {
 			x: t.x, y: t.y, scale: t.scale, rotation: t.rotation,
-			tx: item.text?.x ?? 0.5, ty: item.text?.y ?? 0.85, size: item.text?.size ?? 0.07
+			tx: item.text?.x ?? 0.5, ty: item.text?.y ?? 0.85,
+			size: item.text?.size ?? 0.07, trotation: item.text?.rotation ?? 0
 		},
-		// The clip may already be translated; the untransformed frame centre is
-		// what scale distances and rotation angles are measured from.
-		centreX: rect.left + rect.width / 2 - t.x * props.frameWidth,
-		centreY: rect.top + rect.height / 2 - t.y * props.frameHeight
+		// A title turns and grows about ITS centre, wherever that sits on the
+		// frame; a clip about the frame's, undoing any translation already
+		// applied. Same geometry below, different origin.
+		centreX: mode.value === 'title'
+			? rect.left + (item.text?.x ?? 0.5) * props.frameWidth
+			: rect.left + rect.width / 2 - t.x * props.frameWidth,
+		centreY: mode.value === 'title'
+			? rect.top + (item.text?.y ?? 0.85) * props.frameHeight
+			: rect.top + rect.height / 2 - t.y * props.frameHeight
 	}
 	store.beginItemGesture()
 	window.addEventListener('pointermove', onMove)
 	window.addEventListener('pointerup', onUp, { once: true })
+}
+
+/** Where the gesture pivots, in viewport pixels. */
+const pivot = () => ({
+	x: drag!.centreX + (mode.value === 'title' ? 0 : drag!.base.x * props.frameWidth),
+	y: drag!.centreY + (mode.value === 'title' ? 0 : drag!.base.y * props.frameHeight)
+})
+
+/** How much further from the pivot the pointer is now than when it went down. */
+const scaleRatio = (event: PointerEvent): number => {
+	const { x, y } = pivot()
+	const then = Math.hypot(drag!.startX - x, drag!.startY - y) || 1
+	return Math.hypot(event.clientX - x, event.clientY - y) / then
+}
+
+/** Degrees swept about the pivot since the pointer went down. */
+const angleDelta = (event: PointerEvent): number => {
+	const { x, y } = pivot()
+	const then = Math.atan2(drag!.startY - y, drag!.startX - x)
+	const now = Math.atan2(event.clientY - y, event.clientX - x)
+	return ((now - then) * 180) / Math.PI
+}
+
+/** A hair off square reads as a mistake, so the cardinals pull. */
+const snapAngle = (deg: number): number => {
+	const nearest = Math.round(deg / 90) * 90
+	return Math.abs(deg - nearest) < 3 ? nearest : deg
 }
 
 const onMove = (event: PointerEvent) => {
@@ -170,10 +254,15 @@ const onMove = (event: PointerEvent) => {
 			store.updateItemGesture(item.id, {
 				text: { x: clamp(drag.base.tx + dx, 0, 1), y: clamp(drag.base.ty + dy, 0, 1) }
 			})
-		} else {
-			// Down-right grows, up-left shrinks — the direction the handle sits in.
+		} else if (drag.gesture === 'scale') {
+			// The same ratio-of-distances a clip scales by, so a corner behaves
+			// identically whichever kind of thing it belongs to.
 			store.updateItemGesture(item.id, {
-				text: { size: clamp(drag.base.size + (dx + dy) / 2, 0.02, 0.3) }
+				text: { size: clamp(drag.base.size * scaleRatio(event), 0.02, 0.5) }
+			})
+		} else {
+			store.updateItemGesture(item.id, {
+				text: { rotation: clamp(snapAngle(drag.base.trotation + angleDelta(event)), -180, 180) }
 			})
 		}
 		return
@@ -190,27 +279,18 @@ const onMove = (event: PointerEvent) => {
 	} else if (drag.gesture === 'scale') {
 		// Uniform, about the centre: the ratio of the pointer's distance now to
 		// its distance when the drag began.
-		const cx = drag.centreX + drag.base.x * props.frameWidth
-		const cy = drag.centreY + drag.base.y * props.frameHeight
-		const then = Math.hypot(drag.startX - cx, drag.startY - cy) || 1
-		const now = Math.hypot(event.clientX - cx, event.clientY - cy)
 		store.updateItemGesture(item.id, {
 			transform: {
 				...drag.base,
-				scale: clamp(drag.base.scale * (now / then), SCALE_RANGE.min, SCALE_RANGE.max)
+				scale: clamp(drag.base.scale * scaleRatio(event), SCALE_RANGE.min, SCALE_RANGE.max)
 			}
 		})
 	} else {
-		const cx = drag.centreX + drag.base.x * props.frameWidth
-		const cy = drag.centreY + drag.base.y * props.frameHeight
-		const then = Math.atan2(drag.startY - cy, drag.startX - cx)
-		const now = Math.atan2(event.clientY - cy, event.clientX - cx)
-		let rotation = drag.base.rotation + ((now - then) * 180) / Math.PI
-		// Snap near the cardinal angles — a hair off square reads as a mistake.
-		const nearest = Math.round(rotation / 90) * 90
-		if (Math.abs(rotation - nearest) < 3) rotation = nearest
 		store.updateItemGesture(item.id, {
-			transform: { ...drag.base, rotation: clamp(rotation, -180, 180) }
+			transform: {
+				...drag.base,
+				rotation: clamp(snapAngle(drag.base.rotation + angleDelta(event)), -180, 180)
+			}
 		})
 	}
 }
@@ -218,9 +298,9 @@ const onMove = (event: PointerEvent) => {
 const onUp = () => {
 	window.removeEventListener('pointermove', onMove)
 	if (!drag) return
-	const label = mode.value === 'title'
-		? (drag.gesture === 'move' ? 'Move title' : 'Resize title')
-		: drag.gesture === 'move' ? 'Move clip' : drag.gesture === 'scale' ? 'Scale clip' : 'Rotate clip'
+	const noun = mode.value === 'title' ? 'title' : 'clip'
+	const verb = drag.gesture === 'move' ? 'Move' : drag.gesture === 'scale' ? 'Resize' : 'Rotate'
+	const label = `${verb} ${noun}`
 	drag = null
 	store.endItemGesture(label)
 }

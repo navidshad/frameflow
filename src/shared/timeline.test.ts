@@ -667,6 +667,31 @@ describe('segmentsToItems', () => {
 
 // ===== Transitions in the diff (ROADMAP Phase 1 §Transitions, item 3) =====
 
+describe('diffTimelines — text', () => {
+	const withText = (list: TimelineItem[], text: Record<string, unknown>) =>
+		list.map((i, n) => (n === 0 ? { ...i, text: { content: 'Hi', ...text } } : i))
+
+	it('records a change to ANY text field, including ones added later', () => {
+		// REGRESSION. `sameText` compared a hand-written list of keys, and
+		// `rotation` was not on it — so turning a title on the canvas produced no
+		// history step and one undo could not put it back. Every field of the
+		// object is compared now, so the next one cannot be forgotten either.
+		const before = state([[0, 10], [10, 10]])
+		const upright = { ...before, timeline: withText(before.timeline, {}) }
+		for (const field of ['rotation', 'x', 'y', 'size', 'color', 'outline', 'bold', 'content']) {
+			const turned = { ...before, timeline: withText(before.timeline, { [field]: field === 'bold' ? false : 42 }) }
+			expect(diffTimelines(upright, turned), `${field} must register`).not.toBeNull()
+		}
+	})
+
+	it('reports nothing when an equal spec is rebuilt', () => {
+		const before = state([[0, 10], [10, 10]])
+		const one = { ...before, timeline: withText(before.timeline, { rotation: 15 }) }
+		const two = { ...before, timeline: withText(before.timeline, { rotation: 15 }) }
+		expect(diffTimelines(one, two)).toBeNull()
+	})
+})
+
 describe('diffTimelines — transition', () => {
 	const withTransition = (list: TimelineItem[], kind: string, duration: number) =>
 		list.map((i, n) => (n === 0 ? { ...i, transition: { out: { kind, duration } } } : i))

@@ -345,6 +345,16 @@
 							</p>
 						</div>
 
+						<div>
+							<label class="text-[10px] font-bold uppercase tracking-widest text-zinc-500 block mb-1">
+								Rotation
+								<span class="font-mono text-primary normal-case">{{ Math.round(titleSpec.rotation ?? 0) }}°</span>
+							</label>
+							<input type="range" min="-180" max="180" step="1" class="w-full accent-primary"
+								:value="titleSpec.rotation ?? 0"
+								@input="onTitleLive('rotation', $event)" @change="onTitleNumber('rotation', $event)" />
+						</div>
+
 						<div class="flex items-center gap-3">
 							<label class="flex items-center gap-1.5">
 								<span class="text-[10px] font-bold uppercase tracking-widest text-zinc-500">Colour</span>
@@ -955,12 +965,14 @@ const onTitle = (key: 'content' | 'color' | 'outline', value: string) => {
 	if (timelineItem.value) editorStore.setTitle(timelineItem.value.id, { [key]: value })
 }
 
-const onTitleLive = (key: 'x' | 'y' | 'size', event: Event) => {
+type TitleKnob = 'x' | 'y' | 'size' | 'rotation'
+
+const onTitleLive = (key: TitleKnob, event: Event) => {
 	const value = liveValue(event)
 	if (Number.isFinite(value)) paint({ text: { [key]: value } })
 }
 
-const onTitleNumber = (key: 'x' | 'y' | 'size', event: Event) => {
+const onTitleNumber = (key: TitleKnob, event: Event) => {
 	const value = liveValue(event)
 	if (Number.isFinite(value)) settle({ text: { [key]: value } }, 'Edit title')
 }

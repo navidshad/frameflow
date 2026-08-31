@@ -248,13 +248,22 @@ const sameEffects = (a: TimelineItem['effects'], b: TimelineItem['effects']): bo
 	})
 }
 
-/** Same immutability contract; every field compared by value. */
+/**
+ * Same immutability contract as the rest — replace, never mutate.
+ *
+ * Every key of both objects, NOT a list written here: a curated list is a
+ * second place to remember, and the day `rotation` was added it was forgotten,
+ * so turning a title registered no history step and could not be undone. The
+ * fields are all primitives, so comparing whatever is actually present is both
+ * correct and immune to the next field.
+ */
 const sameText = (a: TimelineItem['text'], b: TimelineItem['text']): boolean => {
 	if (a === b) return true
 	if (!a || !b) return false
-	const keys: (keyof NonNullable<TimelineItem['text']>)[] =
-		['content', 'x', 'y', 'size', 'color', 'outline', 'bold']
-	return keys.every((k) => a[k] === b[k])
+	const keys = new Set([...Object.keys(a), ...Object.keys(b)])
+	return [...keys].every(
+		(k) => a[k as keyof typeof a] === b[k as keyof typeof b]
+	)
 }
 
 function changedFields<T extends { id: string }>(before: T, after: T, fields: (keyof T)[]): Partial<T> | null {

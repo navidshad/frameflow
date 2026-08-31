@@ -119,7 +119,11 @@
 						<!-- Titles. Position and size are fractions of the frame in both
 						     places, so this and the burned-in version land together
 						     without either side converting to the other's units. -->
+						<!-- `data-title-id` is how the gizmo finds this to measure it:
+						     a title's box is whatever the text happens to occupy, not
+						     the frame, so the handles have to come from the real node. -->
 						<div v-for="title in store.activeTitles" :key="title.id"
+							:data-title-id="title.id"
 							class="absolute pointer-events-none whitespace-pre-wrap text-center"
 							:style="titleStyle(title)">{{ title.text!.content }}</div>
 
@@ -670,7 +674,12 @@ const captionTextStyle = computed(() => {
  * is the CENTRE of the text, which is the only anchor that stays put when the
  * words change or the sequence changes shape.
  */
-const titleStyle = (item: { text?: { x?: number; y?: number; size?: number; color?: string; outline?: string; bold?: boolean } }) => {
+const titleStyle = (item: {
+	text?: {
+		x?: number; y?: number; size?: number; rotation?: number
+		color?: string; outline?: string; bold?: boolean
+	}
+}) => {
 	const spec = item.text ?? {}
 	const { w, h } = stage.value
 	const scale = w && h ? Math.min(w / seqWidth.value, h / seqHeight.value) : 0
@@ -678,10 +687,13 @@ const titleStyle = (item: { text?: { x?: number; y?: number; size?: number; colo
 	const size = Math.max(8, (spec.size ?? 0.07) * frameH)
 	const outline = Math.max(1, Math.round(size * 0.06))
 	const stroke = spec.outline ?? '#000000'
+	const rotation = Number.isFinite(spec.rotation) ? Number(spec.rotation) : 0
 	return {
 		left: `${(spec.x ?? 0.5) * 100}%`,
 		top: `${(spec.y ?? 0.85) * 100}%`,
-		transform: 'translate(-50%, -50%)',
+		// Centre-origin, matching the burn's `\an5` — the anchor that behaves
+		// when the text grows or the sequence changes shape.
+		transform: `translate(-50%, -50%)${rotation ? ` rotate(${rotation}deg)` : ''}`,
 		fontFamily: 'Arial, Helvetica, sans-serif',
 		fontWeight: spec.bold === false ? 400 : 700,
 		fontSize: `${size}px`,
