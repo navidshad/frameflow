@@ -236,14 +236,10 @@
 						</template>
 					</div>
 				</div>
+				<!-- No transport here: play and the frame steps live in the timeline
+				     toolbar, beside the thing they move. What stays is the monitor's
+				     own readout and the tools that change how the frame is shown. -->
 				<div class="px-4 py-2.5 flex items-center gap-3 border-t border-zinc-200 dark:border-zinc-800 shrink-0">
-					<button
-						class="w-8 h-8 rounded-full bg-primary text-white flex items-center justify-center shadow-md shadow-primary/20 hover:bg-primary-dark transition active:scale-95"
-						:title="store.isPlaying ? 'Pause (Space)' : 'Play (Space)'"
-						@click="store.isPlaying = !store.isPlaying">
-						<span :class="store.isPlaying ? 'iconify tabler--player-pause-filled' : 'iconify tabler--player-play-filled'"
-							class="w-3.5 h-3.5"></span>
-					</button>
 					<!-- Type a timecode to go there. A scrub bar cannot hit a frame. -->
 					<span class="text-[11px] font-mono text-zinc-600 dark:text-zinc-300 shrink-0">
 						<input :value="timecodeText" @focus="onTimecodeFocus" @blur="onTimecodeCommit"
@@ -352,7 +348,9 @@ import CanvasGizmo from './CanvasGizmo.vue'
 const store = useEditorStore()
 const api = (window as any).api
 
-const mode = ref<'source' | 'timeline'>('source')
+// The edit is the subject of this app, so the monitor opens on it. SOURCE is
+// somewhere you go to look at one piece of footage, not where you start.
+const mode = ref<'source' | 'timeline'>('timeline')
 
 // ===== EDL (timeline) mode =====
 const videoARef = ref<HTMLVideoElement | null>(null)
@@ -717,6 +715,12 @@ const onTimelineScrub = (event: Event) => {
 watch(() => store.selectedClipId, (id) => { if (id) mode.value = 'source' })
 watch(() => store.selectedItemIds, (ids) => { if (ids.length) mode.value = 'timeline' })
 watch(() => store.isPlaying, (playing) => { if (playing) mode.value = 'timeline' })
+
+// Moving the playhead is asking "what is here?", and the answer is the edit —
+// so a scrub, a click on the ruler or a frame step brings the timeline forward.
+// NOT while playing: the playhead advances on its own then, and it would drag
+// the user back every time they deliberately went to look at the source.
+watch(() => store.playheadSec, () => { if (!store.isPlaying) mode.value = 'timeline' })
 
 // ===== Source mode (single asset / piece preview, from M1) =====
 const sourceVideoRef = ref<HTMLVideoElement | null>(null)

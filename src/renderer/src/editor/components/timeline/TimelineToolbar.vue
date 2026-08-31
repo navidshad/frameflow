@@ -16,6 +16,30 @@
 					{{ view }}
 				</button>
 			</div>
+
+			<div class="w-px h-4 bg-zinc-200 dark:bg-zinc-800 mx-0.5"></div>
+
+			<!-- Transport. It sits here rather than under the monitor because these
+			     move the playhead, and the playhead is a timeline object — the
+			     picture is what happens as a result, not what is being driven. -->
+			<ToolButton icon="tabler--player-track-prev-filled"
+				:title="`Back one frame (${keysFor('step')})`"
+				@click="step(-1)" />
+			<SlimTooltip :text="store.isPlaying ? `Pause (${keysFor('play')})` : `Play (${keysFor('play')})`" placement="top">
+				<button
+					class="w-7 h-7 rounded-full bg-primary text-white flex items-center justify-center
+					       shadow-md shadow-primary/20 hover:bg-primary-dark transition active:scale-95"
+					:aria-label="store.isPlaying ? 'Pause' : 'Play'"
+					@click="store.isPlaying = !store.isPlaying">
+					<span class="w-3 h-3"
+						:class="store.isPlaying ? 'iconify tabler--player-pause-filled' : 'iconify tabler--player-play-filled'"></span>
+				</button>
+			</SlimTooltip>
+			<ToolButton icon="tabler--player-track-next-filled"
+				:title="`Forward one frame (${keysFor('step')})`"
+				@click="step(1)" />
+
+			<span class="text-[10px] font-mono text-zinc-500 tabular-nums pl-1">{{ timecode }}</span>
 		</div>
 
 		<div class="flex items-center gap-1">
@@ -112,7 +136,7 @@
 </template>
 
 <script setup lang="ts">
-import { h, inject, ref } from 'vue'
+import { computed, h, inject, ref } from 'vue'
 import type { FunctionalComponent } from 'vue'
 import { useEditorStore } from '../../../stores/editorStore'
 import { TimelineViewportKey } from '../../composables/useTimelineViewport'
@@ -123,6 +147,19 @@ const store = useEditorStore()
 const viewport = inject(TimelineViewportKey)!
 
 const markersOpen = ref(false)
+
+/** One frame, at the sequence's own rate — the same step the arrow keys take. */
+const step = (direction: 1 | -1) => {
+	const fps = store.doc?.timelineMeta.fps || 30
+	store.seekTo(store.playheadSec + direction / fps)
+}
+
+const timecode = computed(() => {
+	const total = store.playheadSec
+	const m = Math.floor(total / 60)
+	const s = Math.floor(total % 60)
+	return `${m}:${String(s).padStart(2, '0')}`
+})
 
 const jumpToMarker = (time: number) => {
 	store.seekTo(time)
