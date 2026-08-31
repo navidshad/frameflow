@@ -79,34 +79,40 @@
 						     handles out, and the picture escaped with them. Handles
 						     are chrome; they hang outside as a SIBLING instead. -->
 						<div class="absolute inset-0 overflow-hidden bg-black ring-1 ring-white/10">
-						<!-- Generated layers, UNDER the video elements because a
-					     background is what the pair sits on. Solid and gradient map
-					     onto CSS exactly; grain and bars get the notice instead. -->
+						<!-- Generated layers, stacked by THEIR OWN track like every other
+					     layer. They used to be pinned under the video elements on the
+					     assumption that a generator is a background; a gradient on a
+					     lane above the footage is not, and previewing it underneath
+					     hid it completely. Solid and gradient map onto CSS exactly;
+					     grain and bars get the notice instead. -->
 					<div v-for="layer in store.activeGenerators" :key="layer.id"
 						class="absolute inset-0 pointer-events-none"
-						:style="{ background: generatorCss(layer.generator) || '#000' }"></div>
+						:style="{
+							background: generatorCss(layer.generator) || '#000',
+							zIndex: store.videoLayerDepth[layer.trackId] ?? 1
+						}"></div>
 
 					<!-- Opacity is a NUMBER written every tick, not a CSS transition:
 						     inside a transition the blend has to hold its exact frame
 						     when you pause or scrub, which a CSS ramp cannot do. -->
 						<video ref="videoARef" class="absolute inset-0 w-full h-full"
-							:style="{ opacity: edl.inGap.value ? 0 : edl.opacityA.value, ...framingStyle(edl.itemA.value) }"
+							:style="{ opacity: edl.inGap.value ? 0 : edl.opacityA.value, zIndex: baseDepth, ...framingStyle(edl.itemA.value) }"
 							preload="auto"></video>
 						<video ref="videoBRef" class="absolute inset-0 w-full h-full"
-							:style="{ opacity: edl.inGap.value ? 0 : edl.opacityB.value, ...framingStyle(edl.itemB.value) }"
+							:style="{ opacity: edl.inGap.value ? 0 : edl.opacityB.value, zIndex: baseDepth, ...framingStyle(edl.itemB.value) }"
 							preload="auto"></video>
 						<!-- The exact transition, pre-rendered by the main process with the
 						     real filter. Already at sequence geometry with the framing
 						     baked in, so it fills the frame flat. -->
 						<video ref="videoTRef" class="absolute inset-0 w-full h-full object-contain"
-							:style="{ opacity: edl.showCached.value ? 1 : 0 }"
+							:style="{ opacity: edl.showCached.value ? 1 : 0, zIndex: baseDepth }"
 							preload="auto"></video>
 						<!-- The layer above the base track, drawn ON TOP of everything the
 						     pair does — including a transition, which is where the export
 						     puts it too. One element, so one extra layer previews; the
 						     export composites every track. -->
 						<video ref="videoORef" class="absolute inset-0 w-full h-full"
-							:style="{ opacity: edl.itemO.value ? 1 : 0, ...framingStyle(edl.itemO.value) }"
+							:style="{ opacity: edl.itemO.value ? 1 : 0, zIndex: overlayDepth, ...framingStyle(edl.itemO.value) }"
 							preload="auto" muted></video>
 						<!-- The exact frame: one frame rendered through the real export
 						     graph, shown over the live elements. Everything the monitor
@@ -114,10 +120,10 @@
 						     is in this picture. Titles and captions stay above it in the
 						     DOM, exactly where the export burns them. -->
 						<img v-if="exactFrame.src" :src="exactFrame.src"
-							class="absolute inset-0 w-full h-full object-contain pointer-events-none" />
+							class="absolute inset-0 w-full h-full object-contain pointer-events-none z-20" />
 						<div v-if="exactFrame.src"
 							class="absolute top-2 left-2 px-1.5 py-0.5 rounded-md bg-accent/80
-							       pointer-events-none">
+							       pointer-events-none z-20">
 							<span class="text-[8px] font-mono uppercase tracking-widest text-white">exact</span>
 						</div>
 
@@ -129,13 +135,13 @@
 						     the frame, so the handles have to come from the real node. -->
 						<div v-for="title in store.activeTitles" :key="title.id"
 							:data-title-id="title.id"
-							class="absolute pointer-events-none whitespace-pre-wrap text-center"
+							class="absolute pointer-events-none whitespace-pre-wrap text-center z-30"
 							:style="titleStyle(title)">{{ title.text!.content }}</div>
 
 						<!-- Captions, laid out from the same metrics the burn uses, so
 						     this is a preview rather than an impression of one. -->
 						<div v-if="activeCue" class="absolute inset-x-0 bottom-0 flex justify-center
-							pointer-events-none" :style="captionBoxStyle">
+							pointer-events-none z-30" :style="captionBoxStyle">
 							<span :style="captionTextStyle">{{ activeCue.text }}</span>
 						</div>
 						<!-- Guides. Fractions of the frame, so they follow the sequence
@@ -144,11 +150,11 @@
 						<template v-if="activeGuide">
 							<template v-if="activeGuide.kind === 'grid'">
 								<div v-for="line in gridLines" :key="line.key"
-									class="absolute bg-white/25 pointer-events-none" :style="line.style"></div>
+									class="absolute bg-white/25 pointer-events-none z-40" :style="line.style"></div>
 							</template>
 							<template v-else>
 								<div v-for="band in activeGuide.bands" :key="band.label"
-									class="absolute bg-black/45 border border-white/20 pointer-events-none
+									class="absolute bg-black/45 border border-white/20 pointer-events-none z-40
 									       flex items-end justify-start"
 									:style="{
 										left: `${band.x * 100}%`, top: `${band.y * 100}%`,
@@ -158,7 +164,7 @@
 										{{ band.label }}
 									</span>
 								</div>
-								<div v-if="safeRect" class="absolute border border-dashed border-accent/70 pointer-events-none"
+								<div v-if="safeRect" class="absolute border border-dashed border-accent/70 pointer-events-none z-40"
 									:style="{
 										left: `${safeRect.x * 100}%`, top: `${safeRect.y * 100}%`,
 										width: `${safeRect.w * 100}%`, height: `${safeRect.h * 100}%`
@@ -172,7 +178,7 @@
 						     a gap does not make the FRAME empty, and a "gap" placard
 						     over a live layer was the monitor calling itself blank. -->
 						<div v-if="edl.inGap.value && !edl.itemO.value"
-							class="absolute inset-0 flex flex-col items-center justify-center gap-2 pointer-events-none">
+							class="absolute inset-0 flex flex-col items-center justify-center gap-2 pointer-events-none z-30">
 							<template v-if="edl.audioActive.value">
 								<span class="iconify tabler--music w-6 h-6 text-white/40"></span>
 								<span class="text-[10px] font-mono text-white/30 uppercase tracking-widest">audio only</span>
@@ -196,7 +202,7 @@
 						<span class="iconify tabler--eye-off w-3 h-3 text-white/60"></span>
 						<span class="text-[9px] font-mono uppercase tracking-widest text-white/50">
 							{{ store.activeGenerators.some((g) => !hasGeneratorCss(g.generator))
-								? 'background renders on export'
+								? 'generated layer renders on export'
 								: 'key applies on export' }}
 						</span>
 					</div>
@@ -467,6 +473,25 @@ const gizmoActive = computed(() => {
 	}
 	const track = store.doc?.tracks.find((t) => t.id === item.trackId)
 	return track?.kind === 'video'
+})
+
+/**
+ * How deep the video elements sit, from the same map the generated layers read.
+ *
+ * The pair (and the cached transition, which stands in for it) plays the base
+ * track; the overlay element plays the top one. Giving all three the depth of
+ * the track they are actually showing is what lets a generated layer land
+ * between them, or in front, the way the export composites it.
+ */
+const baseDepth = computed(() =>
+	store.videoLayerDepth[store.baseVideoTrackId ?? ''] ?? 1
+)
+
+const overlayDepth = computed(() => {
+	const id = edl.itemO.value
+		? store.doc?.timeline.find((i) => i.id === edl.itemO.value)?.trackId
+		: null
+	return store.videoLayerDepth[id ?? ''] ?? baseDepth.value + 1
 })
 
 /** The frame box's px size, which the gizmo needs to turn deltas into fractions. */

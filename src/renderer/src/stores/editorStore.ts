@@ -559,6 +559,23 @@ export const useEditorStore = defineStore('editor', () => {
 	/** The layer everything else composites onto, and the monitor's timebase. */
 	const baseVideoTrackId = computed(() => playableVideoTracks.value[0]?.id ?? null)
 
+	/**
+	 * How deep each video track sits, 1 = furthest back.
+	 *
+	 * The export composites by `order`, higher in front (`render.ts` sorts the
+	 * tracks by it). The monitor used to draw generated layers under every video
+	 * element unconditionally, on the assumption that a generator is a
+	 * background — which stopped being true when anything visible could share a
+	 * video track: a gradient on the TOP lane belongs in front of the footage,
+	 * and previewing it behind hid it completely. One number, read by every
+	 * layer the monitor stacks, so the picture agrees with the render.
+	 */
+	const videoLayerDepth = computed<Record<string, number>>(() => {
+		const depth: Record<string, number> = {}
+		visibleVideoTracks.value.forEach((track, i) => { depth[track.id] = i + 1 })
+		return depth
+	})
+
 	const segmentsForTracks = (trackIds: Set<string>) => {
 		if (!doc.value || !trackIds.size) return []
 		const trackById = new Map(doc.value.tracks.map((t) => [t.id, t]))
@@ -3223,6 +3240,7 @@ export const useEditorStore = defineStore('editor', () => {
 		canRemoveTrack,
 		overlaySegments,
 		baseVideoTrackId,
+		videoLayerDepth,
 		addTitle,
 		setTitle,
 		activeTitles,
