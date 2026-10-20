@@ -154,3 +154,14 @@ Fonts distributed with style packs are licensed under the SIL Open Font
 License 1.1. Each pack includes its own `OFL.txt`. OFL permits bundling and
 commercial use; the fonts themselves are not sold, and any modified font is
 renamed as the license requires.
+
+Motion templates embed two fonts into every motion page, so a page renders the
+same in the preview and the export without reaching the network:
+
+| Font | Copyright | License | Where |
+|---|---|---|---|
+| Inter (variable, latin) | © The Inter Project Authors | SIL OFL 1.1 | `src/shared/motion-templates/fonts/OFL.txt` |
+| Outfit (variable, latin; Google Fonts v15) | © 2021 The Outfit Project Authors (https://github.com/Outfitio/Outfit-Fonts) | SIL OFL 1.1 | `src/shared/motion-templates/fonts/OFL-Outfit.txt` |
+
+Both are unmodified subsets as Google Fonts serves them, under their reserved
+names. `scripts/embed-motion-fonts.mjs` turns them into data URLs.
