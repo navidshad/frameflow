@@ -4,7 +4,7 @@
 		<div class="px-4 pt-4 pb-2 flex items-center justify-between shrink-0">
 			<span class="text-[10px] font-bold uppercase tracking-widest text-zinc-500">
 				Motion
-				<span class="text-zinc-400 normal-case tracking-normal font-mono font-normal ml-1">{{ MOTION_TEMPLATES.length }}</span>
+				<span class="text-zinc-400 normal-case tracking-normal font-mono font-normal ml-1">{{ tileCount }}</span>
 			</span>
 			<SlimTooltip text="Collapse panel" placement="bottom">
 				<button
@@ -73,39 +73,98 @@
 							{{ template.id === activeTemplateId ? motionSummary(template.definition) : `${template.definition.duration.toFixed(1)}s` }}
 						</span>
 					</button>
-
-					<!-- A blank page to write into. Authoring is stage 5; for now it
-					     makes a layer you (or the AI) can fill in. -->
-					<button v-if="g === sections.length - 1"
-						class="motion-tile flex flex-col items-start gap-1.5 p-2 rounded-xl border border-dashed text-left transition active:scale-95 cursor-grab"
-						:class="activeTemplateId === 'custom'
-							? 'border-primary bg-primary/10'
-							: 'border-zinc-200/70 dark:border-zinc-700/70 hover:border-primary/40 hover:bg-primary/5'"
-						draggable="true"
-						data-motion-template="custom"
-						title="Custom HTML — a page you or the AI writes. Drag onto the timeline, or double-click to add it at the playhead."
-						@dragstart="onDragStart('custom', $event)"
-						@dragend="store.draggingMotionTemplate = null"
-						@dblclick="store.addMotionLayer(null)"
-						@keydown.enter.prevent="store.addMotionLayer(null)">
-						<div class="w-full h-11 rounded-lg bg-zinc-800/50 flex items-center justify-center text-zinc-400" aria-hidden="true">
-							<span class="iconify tabler--code w-[18px] h-[18px]"></span>
-						</div>
-						<span class="text-[10px] font-semibold leading-tight text-zinc-700 dark:text-zinc-300">Custom HTML</span>
-						<span class="font-mono text-[8px] text-zinc-500 -mt-1">you or the AI writes it</span>
-					</button>
 				</div>
 			</template>
+
+			<!-- Templates people saved: here in every project -->
+			<template v-if="saved.length">
+				<div class="px-1 pb-1.5 pt-3">
+					<span class="text-[9px] font-bold uppercase tracking-widest text-zinc-400">Saved</span>
+				</div>
+				<div class="grid grid-cols-2 gap-1.5" data-motion-saved>
+					<div v-for="template in saved" :key="template.id" class="relative group/tile">
+						<button class="motion-tile w-full flex flex-col items-start gap-1.5 p-2 rounded-xl border text-left transition active:scale-95 cursor-grab
+						               border-zinc-200/70 dark:border-zinc-700/70 hover:border-primary/40 hover:bg-primary/5"
+							draggable="true" :data-motion-template="template.id"
+							:title="`${template.label} — ${template.description} Drag onto the timeline, or double-click to add it at the playhead.`"
+							@dragstart="onDragStart(template.id, $event)" @dragend="store.draggingMotionTemplate = null"
+							@dblclick="store.addMotionLayer(template.id)" @keydown.enter.prevent="store.addMotionLayer(template.id)">
+							<MotionThumb :html="template.html" :definition="template.definition" />
+							<span class="text-[10px] font-semibold leading-tight text-zinc-700 dark:text-zinc-300 truncate max-w-full">{{ template.label }}</span>
+							<span class="font-mono text-[8px] text-zinc-500 -mt-1">saved · {{ template.definition.duration.toFixed(1) }}s</span>
+						</button>
+						<button class="absolute top-1 right-1 w-4 h-4 rounded-full bg-zinc-900/80 text-zinc-300 hover:text-red-400 hidden group-hover/tile:flex items-center justify-center"
+							:aria-label="`Remove template ${template.label}`" title="Remove from the library"
+							@click.stop="store.deleteMotionTemplate(template.id)">
+							<span class="iconify tabler--x w-2.5 h-2.5"></span>
+						</button>
+					</div>
+				</div>
+			</template>
+
+			<!-- This project: custom layers live here until one is saved as a template -->
+			<div class="px-1 pb-1.5 pt-3">
+				<span class="text-[9px] font-bold uppercase tracking-widest text-zinc-400">This project</span>
+			</div>
+			<div class="grid grid-cols-2 gap-1.5" data-motion-project>
+				<button v-for="layer in projectLayers" :key="layer.itemId"
+					class="motion-tile flex flex-col items-start gap-1.5 p-2 rounded-xl border text-left transition active:scale-95 cursor-grab"
+					:class="layer.itemId === activeItemId
+						? 'border-primary bg-primary/10'
+						: 'border-zinc-200/70 dark:border-zinc-700/70 hover:border-primary/40 hover:bg-primary/5'"
+					draggable="true" :data-motion-template="`project:${layer.itemId}`"
+					:title="`${layer.name} — click to select it on the timeline, drag or double-click to add another copy.`"
+					@click="store.selectItems([layer.itemId])"
+					@dragstart="onDragStart(`project:${layer.itemId}`, $event)" @dragend="store.draggingMotionTemplate = null"
+					@dblclick="store.addMotionLayer(`project:${layer.itemId}`)"
+					@keydown.enter.prevent="store.selectItems([layer.itemId])">
+					<MotionThumb :html="layer.html" :definition="layer.definition" />
+					<span class="text-[10px] font-semibold leading-tight text-zinc-700 dark:text-zinc-300 truncate max-w-full">{{ layer.name }}</span>
+					<span class="font-mono text-[8px] text-zinc-500 -mt-1 truncate max-w-full">{{ layer.by }}</span>
+				</button>
+
+				<button class="motion-tile flex flex-col items-start gap-1.5 p-2 rounded-xl border border-dashed text-left transition active:scale-95"
+					:class="creating ? 'border-primary bg-primary/5' : 'border-zinc-300/90 dark:border-zinc-700/90 hover:border-primary/40 hover:bg-primary/5'"
+					data-motion-template="custom" :aria-expanded="creating"
+					title="New custom layer — a blank page, or describe it and the AI writes it."
+					@click="creating = !creating">
+					<div class="w-full h-11 rounded-lg bg-zinc-200/60 dark:bg-zinc-800/50 flex items-center justify-center text-zinc-400" aria-hidden="true">
+						<span class="iconify tabler--plus w-[18px] h-[18px]"></span>
+					</div>
+					<span class="text-[10px] font-semibold leading-tight text-zinc-700 dark:text-zinc-300">New custom layer</span>
+					<span class="font-mono text-[8px] text-zinc-500 -mt-1">blank, or describe it</span>
+				</button>
+			</div>
+
+			<form v-if="creating" class="mt-2 p-2 rounded-xl border border-zinc-200/70 dark:border-zinc-700/70 flex flex-col gap-1.5"
+				data-motion-new @submit.prevent="describe">
+				<label class="text-[9px] font-bold uppercase tracking-widest text-zinc-400" for="motion-describe">Describe it</label>
+				<textarea id="motion-describe" v-model="description" rows="3" class="motion-inp resize-none"
+					placeholder="A big number that counts up to 3×, with “faster triage” beneath it"></textarea>
+				<div class="flex gap-1.5 justify-end">
+					<button type="button" class="px-2.5 py-1 rounded-lg border border-zinc-300 dark:border-zinc-700 text-[10px] font-bold
+					        text-zinc-500 dark:text-zinc-300 hover:border-primary/40 hover:text-primary transition"
+						@click="blank">Blank page</button>
+					<button type="submit" class="px-2.5 py-1 rounded-lg bg-secondary text-white text-[10px] font-bold transition disabled:opacity-50"
+						:disabled="!description.trim() || store.promptRunning">Write it with AI</button>
+				</div>
+			</form>
+
+			<p class="mt-2.5 px-1 text-[10px] leading-snug text-zinc-500 dark:text-zinc-400">
+				Custom layers stay in this project until you save one as a template. Then it joins the library above for every project.
+			</p>
 		</div>
 	</div>
 </template>
 
 <script setup lang="ts">
-import { computed } from 'vue'
+import { computed, onMounted, ref } from 'vue'
 import { MOTION_TEMPLATES, motionSummary } from '@shared/motion'
 import { motionSections } from '@shared/motionTemplates'
+import { projectCustomLayers } from '@shared/motionCode'
 import { useEditorStore } from '../../stores/editorStore'
 import SlimTooltip from '../../components/SlimTooltip.vue'
+import MotionThumb from './MotionThumb.vue'
 
 /**
  * The motion library — board 1's Motion tab.
@@ -122,12 +181,48 @@ defineEmits<{ (e: 'update:collapsed', value: boolean): void }>()
 const store = useEditorStore()
 const sections = motionSections()
 
+onMounted(() => { void store.loadMotionTemplates() })
+
+const saved = computed(() => store.motionUserTemplates)
+const projectLayers = computed(() => projectCustomLayers(store.doc?.timeline ?? []))
+const tileCount = computed(() => MOTION_TEMPLATES.length + saved.value.length + projectLayers.value.length)
+
+// ===== New custom layer: blank, or described =====
+
+const creating = ref(false)
+const description = ref('')
+
+const blank = () => {
+	store.addMotionLayer(null)
+	creating.value = false
+}
+
+const describe = () => {
+	if (!description.value.trim()) return
+	store.describeMotionLayer(description.value)
+	description.value = ''
+	creating.value = false
+}
+
 /** The template the selected motion layer uses, so its tile reads as current. */
 const activeTemplateId = computed(() => {
 	if (store.selectedItemIds.length !== 1) return null
 	const item = store.doc?.timeline.find((i) => i.id === store.selectedItemIds[0])
 	if (!item?.motion) return null
 	return item.motion.template ?? 'custom'
+})
+
+/** The selected custom layer, so its tile in This project reads as current. */
+const activeItemId = computed(() => {
+	if (store.selectedItemIds.length !== 1) return null
+	const item = store.doc?.timeline.find((i) => i.id === store.selectedItemIds[0])
+	if (!item?.motion || item.motion.template) return null
+	// Several placements of one page share a tile: match by the page they draw.
+	const page = item.motion.passed?.html ?? item.motion.html
+	return projectLayers.value.find((l) => {
+		const placed = store.doc?.timeline.find((i) => i.id === l.itemId)?.motion
+		return (placed?.passed?.html ?? placed?.html) === page
+	})?.itemId ?? null
 })
 
 const onDragStart = (templateId: string, event: DragEvent) => {

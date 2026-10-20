@@ -141,6 +141,10 @@ No dependency imposes copyleft obligations on this application's own source.
 of the binary it downloads — see section 2; the wrapper itself is not linked
 into the application.
 
+The custom-HTML code view (Motion layer → HTML) is CodeMirror 6 — `@codemirror/state`,
+`view`, `language`, `commands`, `lang-html` and `@lezer/highlight`, all MIT, © Marijn
+Haverbeke and others. They are in the table above.
+
 The complete per-package attribution list is generated at build time and ships
 inside the installer. Regenerate with:
 

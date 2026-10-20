@@ -83,9 +83,9 @@
 							<CollapsedRail v-if="!chatColOpen" side="right" label="Chat" icon="tabler--message-circle"
 								:badge="chatBadge || revisionsBadge" @open="chatColOpen = true" />
 
-							<InspectorColumn v-if="inspectorOpen && !inspectorFull" :width="inspectorW"
+							<InspectorColumn v-if="inspectorOpen && !inspectorFullNow" :width="inspectorWidthNow"
 								@collapse="inspectorOpen = false" @toggle-full="inspectorFull = true"
-								@resize="resizeInspector" @reset-size="resetInspector" />
+								@resize="resizeInspectorUnlessCustom" @reset-size="resetInspector" />
 							<CollapsedRail v-if="!inspectorOpen" side="right" label="Inspector" icon="tabler--adjustments"
 								@open="inspectorOpen = true" />
 						</div>
@@ -102,9 +102,9 @@
 					:revisions-badge="revisionsBadge"
 					@collapse="chatColOpen = false" @toggle-full="chatFull = false"
 					@resize="resizeChat" @reset-size="resetChat" />
-				<InspectorColumn v-if="inspectorOpen && inspectorFull" full :width="inspectorW"
+				<InspectorColumn v-if="inspectorOpen && inspectorFullNow" full :width="inspectorWidthNow"
 					@collapse="inspectorOpen = false" @toggle-full="inspectorFull = false"
-					@resize="resizeInspector" @reset-size="resetInspector" />
+					@resize="resizeInspectorUnlessCustom" @reset-size="resetInspector" />
 			</main>
 
 			<ExportDialog v-model="showExport" />
@@ -180,6 +180,20 @@ const { size: chatW, resize: resizeChat, reset: resetChat } =
 	persistedSize('editor.chatW', 300, 240, () => 560)
 const { size: inspectorW, resize: resizeInspector, reset: resetInspector } =
 	persistedSize('editor.inspectorW', 280, 240, () => 480)
+
+// A custom HTML motion layer needs room for its code: while one is selected the
+// inspector is 520px and full height (board 5). The saved width and mode are
+// untouched, so deselecting puts the column back the way the person had it.
+const CUSTOM_LAYER_INSPECTOR_W = 520
+const customLayerSelected = computed(() => {
+	const ids = editorStore.selectedItemIds
+	if (ids.length !== 1 || editorStore.selectedSeamId) return false
+	const item = editorStore.doc?.timeline.find((i) => i.id === ids[0])
+	return !!item?.motion && !item.motion.template
+})
+const inspectorFullNow = computed(() => inspectorFull.value || customLayerSelected.value)
+const inspectorWidthNow = computed(() => customLayerSelected.value ? CUSTOM_LAYER_INSPECTOR_W : inspectorW.value)
+const resizeInspectorUnlessCustom = (delta: number) => { if (!customLayerSelected.value) resizeInspector(delta) }
 
 /** Slim vertical strip shown in place of a collapsed rail. */
 const CollapsedRail: FunctionalComponent<

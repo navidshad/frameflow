@@ -16,6 +16,8 @@ describe('AgentServer over Streamable HTTP', () => {
 	let editor: FakeEditor
 	let server: AgentServer
 	let permissions: AgentPermissions
+	/** Stands in for the hidden-window probe; the real one is tested in Electron. */
+	let probe: (input: any) => Promise<any>
 	let events: AgentServerEvent[]
 	let url: URL
 	const clients: Client[] = []
@@ -35,9 +37,11 @@ describe('AgentServer over Streamable HTTP', () => {
 	beforeEach(async () => {
 		editor = new FakeEditor()
 		permissions = { ...DEFAULT_AGENT_PERMISSIONS }
+		probe = async () => ({ determinism: 'pass' })
 		events = []
 		server = new AgentServer({
 			bridge: editor, token: () => TOKEN, permissions: () => permissions, version: 'test',
+			probeMotion: (input) => probe(input),
 			onEvent: (e) => events.push(e)
 		})
 		const port = await server.start(0)
@@ -183,6 +187,137 @@ describe('AgentServer over Streamable HTTP', () => {
 		expect(edit.content[0].text).toMatch(/Edit the timeline/)
 		const refused = events.filter((e) => e.type === 'activity' && e.activity.status === 'refused')
 		expect(refused).toHaveLength(2)
+	})
+
+	describe('custom HTML motion layers', () => {
+		const PAGE = [
+			'<div id="n"></div>',
+			'<script>frameflow.define({ duration: 3, settings: [{ key: "value", type: "number", default: 3 }],',
+			'  moments: [{ name: "in", duration: 0.5 }, { name: "hold", duration: 2, flex: true }, { name: "out", duration: 0.5 }],',
+			'  seek(t, s) { n.textContent = String(s.value) } })</script>'
+		].join('\n')
+		const custom = { addMotion: [{ template: 'custom', atSec: 4, html: PAGE, label: 'Triage stat' }] }
+
+		it('refuses a page without the “Write custom HTML motion layers” permission, and changes nothing', async () => {
+			permissions = { ...permissions, html: false }
+			const client = await connect()
+			const refused: any = await client.callTool({ name: 'apply_ops', arguments: custom })
+			expect(refused.isError).toBe(true)
+			expect(refused.content[0].text).toMatch(/not allowed agents to write custom HTML motion layers/)
+			expect(refused.content[0].text).toMatch(/Use a built-in template/)
+			expect(editor.commits).toHaveLength(0)
+			const row = events.filter((e) => e.type === 'activity' && e.activity.status === 'refused').pop() as any
+			expect(row.activity.detail).toBe('refused · HTML motion is off')
+
+			// A rewrite of an existing layer is the same permission.
+			const update: any = await client.callTool({ name: 'apply_ops', arguments: { updateMotion: [{ id: 'x', html: PAGE }] } })
+			expect(update.isError).toBe(true)
+			expect(update.content[0].text).toMatch(/custom HTML motion layers/)
+			expect(editor.commits).toHaveLength(0)
+		})
+
+		it('still lets the same agent place a built-in template with HTML off', async () => {
+			permissions = { ...permissions, html: false }
+			const client = await connect()
+			const ok: any = await client.callTool({
+				name: 'apply_ops',
+				arguments: { addMotion: [{ template: 'lower-third', atSec: 2, settings: [{ key: 'name', value: 'Sara' }] }] }
+			})
+			expect(ok.isError).toBeFalsy()
+			expect(editor.doc.timeline.some((i) => i.motion?.template === 'lower-third')).toBe(true)
+		})
+
+		it('writes the page with the permission, labelled with the client and its turn', async () => {
+			const client = await connect()
+			const ok: any = await client.callTool({ name: 'apply_ops', arguments: custom })
+			expect(ok.isError).toBeFalsy()
+			const layer = editor.doc.timeline.find((i) => i.motion)!
+			expect(layer.motion!.html).toBe(PAGE)
+			expect(layer.motion!.passed!.html).toBe(PAGE)
+			expect(layer.motion!.author).toEqual({ by: 'Claude Code', turnId: editor.commits[0].turn.id })
+		})
+
+		it('rejects a page that fails the lint, changes nothing, and says which line', async () => {
+			const client = await connect()
+			const result: any = await client.callTool({
+				name: 'apply_ops',
+				arguments: { addMotion: [{ template: 'custom', atSec: 4, html: PAGE.replace('String(s.value)', 'String(Date.now())') }] }
+			})
+			expect(result.isError).toBe(true)
+			const message = result.content[0].text
+			expect(message).toMatch(/Nothing was changed/)
+			expect(message).toMatch(/addMotion\[0\] \(custom page\) rejected, nothing was added: line 4/)
+			expect(message).toMatch(/wall clock/)
+			expect(editor.commits).toHaveLength(0)
+			expect(editor.doc.timeline.some((i) => i.motion)).toBe(false)
+		})
+
+		it('rejects a page that lints clean but fails the probe: the earlier page stays, and the agent is told why', async () => {
+			const client = await connect()
+			await client.callTool({ name: 'apply_ops', arguments: { addMotion: [{ template: 'custom', atSec: 4, html: PAGE }] } })
+			const layer = editor.doc.timeline.find((i) => i.motion)!
+			const before = JSON.stringify(layer.motion)
+			const commits = editor.commits.length
+
+			// Clean as far as the text goes — but drawn twice, it differs.
+			const STATEFUL = PAGE.replace('seek(t, s) { n.textContent = String(s.value) }', 'seek(t, s) { n.textContent = String((window.k = (window.k || 0) + 1)) }')
+			expect(STATEFUL).not.toBe(PAGE)
+			probe = async (input) => (input.html === STATEFUL ? { determinism: 'fail', differsAt: 1.5 } : { determinism: 'pass' })
+			const result: any = await client.callTool({
+				name: 'apply_ops',
+				arguments: { rationale: 'Count the frames', updateMotion: [{ id: layer.id, html: STATEFUL }] }
+			})
+
+			expect(result.isError).toBe(true)
+			const message = result.content[0].text
+			expect(message).toMatch(new RegExp(`updateMotion ${layer.id} rejected, the layer keeps its previous page`))
+			expect(message).toMatch(/drawing the same frame twice gave different pixels at t = 1\.50s/)
+			expect(message).toMatch(/pure function of t and settings/)
+			// Nothing reached the editor: no new turn, and the earlier page is untouched.
+			expect(editor.commits).toHaveLength(commits)
+			expect(JSON.stringify(editor.doc.timeline.find((i) => i.id === layer.id)!.motion)).toBe(before)
+			expect(editor.doc.timeline.find((i) => i.id === layer.id)!.motion!.html).toBe(PAGE)
+		})
+
+		it('hands the probe the page, its definition and the frame', async () => {
+			const seen: any[] = []
+			probe = async (input) => { seen.push(input); return { determinism: 'pass' } }
+			const client = await connect()
+			await client.callTool({ name: 'apply_ops', arguments: { addMotion: [{ template: 'custom', atSec: 4, html: PAGE }] } })
+			expect(seen).toHaveLength(1)
+			expect(seen[0].html).toBe(PAGE)
+			expect(seen[0].definition.duration).toBe(3)
+			expect(seen[0].frame).toEqual({ width: 1920, height: 1080 })
+		})
+
+		it('reports a page that throws when it runs', async () => {
+			probe = async () => ({ determinism: 'fail', error: 'thisFunctionDoesNotExist is not defined' })
+			const client = await connect()
+			const result: any = await client.callTool({ name: 'apply_ops', arguments: { addMotion: [{ template: 'custom', atSec: 4, html: PAGE }] } })
+			expect(result.isError).toBe(true)
+			expect(result.content[0].text).toMatch(/the page throws when it runs: thisFunctionDoesNotExist is not defined/)
+		})
+
+		it('applies the rest of a call when only one page is rejected, and lists the rejection', async () => {
+			probe = async () => ({ determinism: 'fail', differsAt: 0 })
+			const client = await connect()
+			const result: any = await client.callTool({
+				name: 'apply_ops',
+				arguments: { addMotion: [{ template: 'lower-third', atSec: 2 }, { template: 'custom', atSec: 4, html: PAGE }] }
+			})
+			expect(result.isError).toBeFalsy()
+			const body = text(result)
+			expect(body.droppedOps.join(' ')).toMatch(/addMotion\[1\] \(custom page\) rejected/)
+			const layers = editor.doc.timeline.filter((i) => i.motion)
+			expect(layers.map((l) => l.motion!.template)).toEqual(['lower-third'])
+		})
+
+		it('lists the motion templates in get_project, with saved ones marked', async () => {
+			const client = await connect()
+			const project = text(await client.callTool({ name: 'get_project', arguments: {} }))
+			expect(project.catalog.motionTemplates.map((t: any) => t.id)).toContain('lower-third')
+			expect(project.catalog.motionTemplates.find((t: any) => t.id === 'lower-third').settings).toContain('name')
+		})
 	})
 
 	it('returns an image from render_frame and reverts by V number', async () => {

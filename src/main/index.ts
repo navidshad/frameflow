@@ -37,6 +37,7 @@ import { electronApp, optimizer, is } from '@electron-toolkit/utils'
 import { registerMediaProtocol } from './media-protocol'
 import { initAgentAccess } from './mcp'
 import { isCliEngine, type CliEngineId } from '@shared/engines'
+import { initMotionIpc } from './motion/ipc'
 import { abortEngineTurn, cliEngineSelected, initEngines, runCliEditorPrompt } from './engine'
 
 const activePipelines = new Map<string, Pipeline>()
@@ -121,6 +122,7 @@ app.whenReady().then(() => {
 
 	// MCP agent access: off unless the user turned it on in Settings.
 	initAgentAccess()
+	initMotionIpc()
 	initEngines()
 
 	createWindow()

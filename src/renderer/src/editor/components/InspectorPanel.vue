@@ -1,6 +1,7 @@
 <template>
 	<div class="glass-card rounded-2xl flex flex-col min-h-0 overflow-hidden">
-		<div class="px-4 pt-4 pb-2 shrink-0 flex items-center justify-between">
+		<!-- A custom motion layer draws its own header (name, chip, Settings | HTML). -->
+		<div v-if="!ownHeader" class="px-4 pt-4 pb-2 shrink-0 flex items-center justify-between">
 			<span class="text-[10px] font-bold uppercase tracking-widest text-zinc-500">Inspector</span>
 			<span v-if="!seam && keyframeMode"
 				class="px-1.5 py-0.5 rounded bg-primary/[0.12] text-blue-400 text-[9px] font-bold uppercase tracking-widest">
@@ -736,6 +737,8 @@ const trackName = computed(() =>
 /** A key is selected in the open lanes: the inspector describes the key, not the clip. */
 const keyframeLanes = useKeyframeLanesStore()
 const keyframeMode = computed(() => keyframeLanes.expanded && !!keyframeLanes.primary)
+/** A custom motion layer draws its own header, so the generic one steps aside. */
+const ownHeader = computed(() => !seam.value && !keyframeMode.value && !!timelineItem.value?.motion && !timelineItem.value.motion.template)
 
 const gainValue = computed(() => timelineItem.value?.gain ?? 1)
 const fadeInValue = computed(() => timelineItem.value?.fadeInSec ?? 0)

@@ -46,6 +46,10 @@ function captureSession(): Session {
 export interface MotionCapture {
 	/** Draw one instant and return it as premultiplied BGRA, width × height × 4. */
 	frame(state: MotionFrameState): Promise<Buffer>
+	/** Errors the page logged or threw so far (uncaught exceptions, console.error). */
+	errors(): string[]
+	/** What the page passed to `frameflow.define`, as it reported it. */
+	reportedDefinition(): Promise<unknown>
 	close(): void
 }
 
@@ -62,7 +66,8 @@ function withTimeout<T>(promise: Promise<T>, ms: number, message: string): Promi
 
 export async function openMotionCapture(
 	html: string,
-	frame: { width: number; height: number }
+	frame: { width: number; height: number },
+	options: { readyTimeoutMs?: number } = {}
 ): Promise<MotionCapture> {
 	const { width, height } = frame
 	const win = new BrowserWindow({
@@ -95,6 +100,17 @@ export async function openMotionCapture(
 	let crashed: string | null = null
 	contents.on('render-process-gone', (_event, details) => { crashed = details.reason })
 
+	// An uncaught exception in the page surfaces here as an error-level console
+	// message — the one place a failure at LOAD (before the runtime can report
+	// anything) is visible. Electron changed this event's shape between versions.
+	const logged: string[] = []
+	contents.on('console-message', (...args: any[]) => {
+		const first = args[0]
+		const level = first && typeof first === 'object' && 'level' in first ? first.level : args[1]
+		const message = first && typeof first === 'object' && 'message' in first ? first.message : args[2]
+		if ((level === 'error' || level === 3) && typeof message === 'string') logged.push(message)
+	})
+
 	const close = () => { if (!win.isDestroyed()) win.destroy() }
 
 	try {
@@ -110,7 +126,7 @@ export async function openMotionCapture(
 		win.setContentSize(Math.round(width / scale), Math.round(height / scale))
 		await withTimeout(
 			contents.executeJavaScript('window.frameflow ? window.frameflow.ready : Promise.reject(new Error("no runtime"))'),
-			READY_TIMEOUT_MS,
+			options.readyTimeoutMs ?? READY_TIMEOUT_MS,
 			'The motion page never called frameflow.define(), so it cannot be rendered.'
 		)
 		// The resize and the zoom land asynchronously and independently — read
@@ -129,6 +145,9 @@ export async function openMotionCapture(
 		}
 	} catch (error) {
 		close()
+		// A script that threw while loading never reached define(); what it threw
+		// is the useful answer, not that define() went uncalled.
+		if (logged.length) throw new Error(logged[0])
 		throw error
 	}
 
@@ -146,6 +165,14 @@ export async function openMotionCapture(
 				image = image.resize({ width, height, quality: 'best' })
 			}
 			return image.toBitmap()
+		},
+		errors: () => [...logged],
+		reportedDefinition: async () => {
+			try {
+				return JSON.parse(await contents.executeJavaScript('JSON.stringify(window.frameflow && window.frameflow.own || null)'))
+			} catch {
+				return null
+			}
 		},
 		close
 	}

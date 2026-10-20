@@ -145,14 +145,22 @@
 						     DOM, exactly where the export burns them. -->
 						<img v-if="exactFrame.src" :src="exactFrame.src"
 							class="absolute inset-0 w-full h-full object-contain pointer-events-none z-20" />
-						<div v-if="exactFrame.src"
+						<!-- A custom motion page that fails its checks is never drawn: the
+						     last version that passed is, and this says so (board 5). -->
+						<div v-if="motionWarning"
+							class="absolute top-2 left-2 px-1.5 py-0.5 rounded-md bg-amber-500/85 pointer-events-none z-40"
+							data-motion-warning
+							:title="`${motionWarning.layer}: its HTML fails a check. Open the HTML tab to see which.`">
+							<span class="text-[8px] font-mono uppercase text-white">{{ motionWarning.text }}</span>
+						</div>
+						<div v-else-if="exactFrame.src"
 							class="absolute top-2 left-2 px-1.5 py-0.5 rounded-md bg-accent/80
 							       pointer-events-none z-20">
 							<span class="text-[8px] font-mono uppercase tracking-widest text-white">exact</span>
 						</div>
 						<!-- A motion layer is never an approximation: this IS the page
 						     the export captures, seeked to this instant. -->
-						<div v-else-if="store.activeMotion.length"
+						<div v-else-if="store.activeMotion.length && !motionWarning"
 							class="absolute top-2 left-2 px-1.5 py-0.5 rounded-md bg-accent/80 pointer-events-none z-40"
 							title="Motion layers preview exactly: the export captures this same page.">
 							<span class="text-[8px] font-mono uppercase text-white">Motion · exact</span>
@@ -422,6 +430,7 @@ import { useEdlPlayback } from '../composables/useEdlPlayback'
 import CanvasGizmo from './CanvasGizmo.vue'
 import MotionLayer from './MotionLayer.vue'
 import KeyframeMotionPath from './KeyframeMotionPath.vue'
+import { motionBadge } from '@shared/motionCode'
 import { useKeyframeLanesStore } from '../../stores/keyframeLanesStore'
 import { useAgentStore } from '../../stores/agentStore'
 import { clock } from '@shared/agentFeed'
@@ -437,6 +446,14 @@ const agentLookedHere = computed(() => {
 })
 const keyframeLanes = useKeyframeLanesStore()
 /** The header says why a dashed path is on the picture (board 2). */
+/** A motion layer under the playhead whose page fails its checks, if any. */
+const motionWarning = computed(() => {
+	for (const layer of store.activeMotion) {
+		const text = motionBadge(layer.motion)
+		if (text) return { text, layer: layer.label || 'Motion layer' }
+	}
+	return null
+})
 const motionPathShown = computed(() =>
 	keyframeLanes.expanded && (keyframeLanes.primary?.path === 'transform.x' || keyframeLanes.primary?.path === 'transform.y'))
 const api = (window as any).api

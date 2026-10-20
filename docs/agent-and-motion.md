@@ -66,3 +66,25 @@ exposes `apply_ops` generically.
 Typecheck and the full test suite pass; any code that shells out has a test that really shells
 out; every renderer change is driven and screenshotted with `scripts/drive.mjs` and compared
 against its design board; one PR per stage into `main`.
+
+## Stage 5: custom HTML authoring (built)
+
+- **The drawn page is not the edited page.** A custom layer keeps its working text (`motion.html`)
+  and the last version that passed every check (`motion.passed`). `renderVersion()` — behind
+  `motionSource` and `resolveDefinition` — is the one place that says which is drawn, so the
+  monitor, the export, the keyframe lanes and the export cache key all agree. A failing page is
+  never drawn; with no passing version, nothing is. (`null` = none has passed, absent = a layer
+  from before the checks, trusted only if it lints clean.)
+- **Checks** (`src/shared/motionCode.ts`): the lint, then the determinism probe
+  (`src/main/motion/probe.ts`) — the page is drawn at five instants in the export's hidden window,
+  then again in reverse order, and every pair must match to the pixel. A page that throws fails too.
+- **Edits** debounce (700ms), are checked, and become ONE history step. Pages an AI or an agent
+  writes (`addMotion`/`updateMotion` with `html`) are drawn at once if they lint clean, and probed
+  in the background (`verified`); a probe failure draws nothing.
+- **Permission:** MCP `apply_ops` with `html` additionally needs "Write custom HTML motion layers"
+  (`ToolDef.alsoNeeds`); templates and settings stay ordinary editing.
+- **Saved templates** live in `<userData>/motion-templates/*.json`, appear in the Motion tab, in
+  the AI context and in MCP `get_project`'s `catalog.motionTemplates`. Using one copies its page
+  into the layer, so a project never depends on the library.
+- The contract accepts the board's authoring shapes too: `settings` as a map, `moments` as
+  `name: [start, end]` ranges (the gaps become the flexible hold).
