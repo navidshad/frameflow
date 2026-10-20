@@ -63,6 +63,14 @@ function request<T>(kind: string, payload: unknown, timeoutMs = 10_000): Promise
 	return answer
 }
 
+/**
+ * `engineTurnId` is set when FrameFlow's own CLI engine asks: the editor lets
+ * the turn that is running switch revisions, which it refuses anyone else.
+ */
+export function switchRevisionFor(revisionId: string, engineTurnId?: string): Promise<{ ok: true } | { ok: false; error: string }> {
+	return request('switch-revision', { revisionId, engineTurnId }, 20_000)
+}
+
 /** Agent-sized: big enough to read a lower third, small enough to send every few steps. */
 const AGENT_FRAME_WIDTH = 1280
 const THUMB_WIDTH = 224
@@ -104,7 +112,7 @@ export const rendererBridge: EditorBridge = {
 	},
 
 	switchRevision(revisionId) {
-		return request('switch-revision', { revisionId }, 20_000)
+		return switchRevisionFor(revisionId)
 	},
 
 	startExport() {

@@ -47,7 +47,15 @@
 					<span class="text-sm leading-none mt-1 shrink-0">{{ personaIcon(turn.personaId) }}</span>
 					<div class="flex-1 min-w-0">
 						<!-- Running -->
-						<div v-if="turn.status === 'pending' || turn.status === 'running'"
+						<div v-if="(turn.status === 'pending' || turn.status === 'running') && turn.engine"
+							class="px-3 py-2 rounded-2xl rounded-tl-md bg-zinc-100 dark:bg-zinc-900 space-y-1.5">
+							<div class="inline-flex items-center gap-2">
+								<div class="w-3 h-3 rounded-full border-2 border-violet-400 border-t-transparent animate-spin"></div>
+								<span class="text-[11px] text-zinc-500">{{ turn.engine.label }} is working…</span>
+							</div>
+							<EngineSteps :steps="turn.engine.steps" />
+						</div>
+						<div v-else-if="turn.status === 'pending' || turn.status === 'running'"
 							class="px-3 py-2 rounded-2xl rounded-tl-md bg-zinc-100 dark:bg-zinc-900 inline-flex items-center gap-2">
 							<div class="w-3 h-3 rounded-full border-2 border-primary border-t-transparent animate-spin"></div>
 							<span class="text-[11px] text-zinc-500">Working on it…</span>
@@ -83,7 +91,10 @@
 									class="px-1.5 py-px rounded bg-zinc-200/70 dark:bg-zinc-800 text-[9px] font-bold text-zinc-500">
 									{{ chip }}
 								</span>
-								<span v-if="turn.cost" class="text-[9px] font-mono text-zinc-400 ml-auto">
+								<span v-if="turn.engine" class="text-[9px] font-mono text-zinc-400 ml-auto">
+									{{ engineFooter(turn) }}
+								</span>
+								<span v-else-if="turn.cost" class="text-[9px] font-mono text-zinc-400 ml-auto">
 									${{ turn.cost.toFixed(4) }}
 								</span>
 							</div>
@@ -112,14 +123,20 @@ import type { PromptTurn } from '@shared/types'
 import { useEditorStore } from '../../stores/editorStore'
 import PromptBar from './PromptBar.vue'
 import AiResultCard from './AiResultCard.vue'
+import EngineSteps from './EngineSteps.vue'
+import { ENGINES } from '@shared/engines'
 
 const store = useEditorStore()
 
 const scrollRef = ref<HTMLElement | null>(null)
 
+// A CLI engine's edits are agent turns that belong to its chat turn: the
+// chat shows them inside it, not as turns of their own.
 const turns = computed<PromptTurn[]>(() =>
-	[...(store.doc?.turns || [])].sort((a, b) => a.createdAt - b.createdAt)
+	[...(store.doc?.turns || [])].filter((t) => !t.agent?.engineTurnId).sort((a, b) => a.createdAt - b.createdAt)
 )
+
+const engineFooter = (turn: PromptTurn) => (turn.engine ? ENGINES[turn.engine.id]?.footer || turn.engine.label : '')
 
 const personaIcon = (personaId: string) => store.findPersona(personaId)?.icon || '🤖'
 
@@ -129,6 +146,13 @@ const revisionSeq = (turn: PromptTurn) => {
 }
 
 const opChips = (turn: PromptTurn) => {
+	const c = turn.engine?.counts
+	if (c) {
+		return [
+			c.added ? `+${c.added} added` : '', c.removed ? `−${c.removed} removed` : '',
+			c.updated ? `${c.updated} changed` : '', c.markers ? `${c.markers} marker${c.markers === 1 ? '' : 's'}` : ''
+		].filter(Boolean)
+	}
 	const d = turn.diff
 	if (!d) return []
 	const chips: string[] = []

@@ -77,7 +77,7 @@ export async function persistTurn(threadId: string, turn: PromptTurn): Promise<v
 	})
 }
 
-function resolvePersona(doc: EditorDocument, personaId: string): EditorPersona {
+export function resolvePersona(doc: EditorDocument, personaId: string): EditorPersona {
 	return (
 		doc.customPersonas?.find((p) => p.id === personaId) ||
 		settingsManager.getPersonas().find((p) => p.id === personaId) ||

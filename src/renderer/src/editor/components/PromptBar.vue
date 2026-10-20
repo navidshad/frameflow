@@ -20,6 +20,10 @@
 
 			<!-- Meta row: quiet text controls left, send right -->
 			<div class="flex items-center gap-1 mt-0.5">
+				<EngineChip />
+
+				<span class="text-zinc-300 dark:text-zinc-700 text-[9px]">·</span>
+
 				<PersonaPicker />
 
 				<span class="text-zinc-300 dark:text-zinc-700 text-[9px]">·</span>
@@ -67,7 +71,7 @@
 		<div v-if="store.promptRunning" class="mt-1.5 flex items-center gap-2 px-2">
 			<div class="w-3 h-3 rounded-full border-2 border-primary border-t-transparent animate-spin"></div>
 			<span class="text-[10px] font-medium text-zinc-500">
-				{{ store.activePersona?.name || 'AI' }} is working on your edit…
+				{{ engine.isCli ? engine.current.label : store.activePersona?.name || 'AI' }} is working on your edit…
 			</span>
 		</div>
 	</div>
@@ -77,8 +81,11 @@
 import { computed, nextTick, onMounted, onUnmounted, ref, watch } from 'vue'
 import { useEditorStore } from '../../stores/editorStore'
 import PersonaPicker from './PersonaPicker.vue'
+import EngineChip from './EngineChip.vue'
+import { useEngineStore } from '../../stores/engineStore'
 
 const store = useEditorStore()
+const engine = useEngineStore()
 
 // The draft lives in the store: Home pre-fills it before this mounts, and this
 // component is v-if'd away when the rail collapses.
