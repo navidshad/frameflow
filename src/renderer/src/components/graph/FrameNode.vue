@@ -1,106 +1,73 @@
 <template>
-  <div 
-    class="frame-node rounded-[2rem] border-2 border-dashed relative group"
+  <div
+    class="frame-node rounded border border-dashed relative group"
     :class="[
-      selected ? 'border-primary bg-primary/5 ring-4 ring-primary/10' : 'border-zinc-300 dark:border-zinc-700 bg-zinc-400/5 dark:bg-zinc-400/5',
+      selected ? 'border-primary bg-primary/[0.04]' : 'border-[color:var(--ff-hairline-strong)] bg-transparent',
       isResizing ? 'cursor-nwse-resize' : (data.isLocked ? 'cursor-default' : 'cursor-move')
     ]"
-    :style="{ 
-      width: `${nodeWidth}px`, 
+    :style="{
+      width: `${nodeWidth}px`,
       height: `${nodeHeight}px`,
     }"
   >
-    <!-- Zoom-Sensitive Title -->
-    <div 
-      class="absolute -top-10 left-0 flex items-center gap-2 px-1"
-      :style="{ 
-        transform: `scale(${1 / Math.max(0.4, viewport.zoom)})`, 
-        transformOrigin: 'bottom left' 
+    <!-- Zoom-sensitive title -->
+    <div
+      class="absolute -top-8 left-0 flex items-center gap-2 px-0.5"
+      :style="{
+        transform: `scale(${1 / Math.max(0.4, viewport.zoom)})`,
+        transformOrigin: 'bottom left'
       }"
     >
-      <div 
-        v-if="isEditing" 
-        class="flex items-center bg-white dark:bg-zinc-800 rounded-lg shadow-xl ring-1 ring-black/5 dark:ring-white/10 overflow-hidden"
-      >
-        <input 
-          ref="inputRef"
-          v-model="editTitle"
-          class="bg-transparent border-none outline-none px-3 py-1 font-bold text-sm text-zinc-900 dark:text-zinc-100 min-w-[120px]"
-          @blur="saveTitle"
-          @keydown.enter="saveTitle"
-          @keydown.esc="cancelEditing"
-        />
-      </div>
-      <div 
-        v-else 
-        class="flex items-center gap-2 cursor-text group/title"
-        @dblclick="startEditing"
-      >
-        <div class="px-3 py-1 bg-zinc-100/80 dark:bg-zinc-900/80 backdrop-blur-md rounded-lg border border-zinc-200 dark:border-zinc-800 shadow-sm flex items-center gap-2 hover:border-primary/50 transition-colors">
-          <div class="w-2 h-2 rounded-full bg-primary shadow-[0_0_8px_rgba(var(--primary),0.5)]"></div>
-          <span class="text-xs font-black uppercase tracking-widest text-zinc-600 dark:text-zinc-300 whitespace-nowrap">
-            {{ data.title || 'Untitled Group' }}
-          </span>
-        </div>
-        <button 
-          class="p-1 opacity-0 group-hover/title:opacity-100 text-zinc-400 hover:text-primary transition-all duration-200"
+      <input
+        v-if="isEditing"
+        ref="inputRef"
+        v-model="editTitle"
+        class="bg-transparent border-b border-primary outline-none px-0.5 py-0.5 font-semibold text-xs text-zinc-900 dark:text-zinc-100 min-w-[120px]"
+        @blur="saveTitle"
+        @keydown.enter="saveTitle"
+        @keydown.esc="cancelEditing"
+      />
+      <div v-else class="flex items-center gap-1.5 cursor-text group/title" @dblclick="startEditing">
+        <span class="text-[11px] font-semibold text-zinc-600 dark:text-zinc-300 whitespace-nowrap">
+          {{ data.title || 'Untitled Group' }}
+        </span>
+        <button
+          class="opacity-0 group-hover/title:opacity-100 text-zinc-400 hover:text-primary transition-colors"
+          aria-label="Rename frame"
           @click="startEditing"
         >
-          <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2.5" d="M15.232 5.232l3.536 3.536m-2.036-5.036a2.5 2.5 0 113.536 3.536L6.5 21.036H3v-3.572L16.732 3.732z" />
-          </svg>
+          <span class="iconify tabler--pencil w-3 h-3"></span>
         </button>
       </div>
     </div>
 
-    <!-- Actions Container -->
-    <div 
+    <!-- Actions -->
+    <div
       v-if="selected"
-      class="absolute top-4 right-4 flex items-center gap-2 opacity-0 group-hover:opacity-100 transition-all z-50 pointer-events-auto"
+      class="absolute top-2 right-2 flex items-center gap-1 opacity-0 group-hover:opacity-100 transition-opacity z-50 pointer-events-auto"
     >
-      <!-- Lock Button -->
       <SlimTooltip :text="data.isLocked ? 'Unlock Frame' : 'Lock Frame (prevents move/resize)'" placement="left">
-        <button 
-          class="p-1.5 backdrop-blur-md rounded-lg transition-all"
-          :class="data.isLocked ? 'bg-primary text-white shadow-lg' : 'bg-zinc-200/50 dark:bg-zinc-800/50 text-zinc-500 hover:text-zinc-900 dark:hover:text-zinc-100 hover:bg-zinc-300/50 dark:hover:bg-zinc-700/50'"
-          @click.stop="toggleLock"
-        >
-          <svg v-if="data.isLocked" class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2.5" d="M12 15v2m-6 4h12a2 2 0 002-2v-6a2 2 0 00-2-2H6a2 2 0 00-2 2v6a2 2 0 002 2zm10-10V7a4 4 0 00-8 0v4h8z" />
-          </svg>
-          <svg v-else class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2.5" d="M8 11V7a4 4 0 118 0m-4 8v2m-6 4h12a2 2 0 002-2v-6a2 2 0 00-2-2H6a2 2 0 00-2 2v6a2 2 0 002 2z" />
-          </svg>
+        <button class="node-icon-btn" :class="data.isLocked ? '!text-primary' : ''"
+          :aria-label="data.isLocked ? 'Unlock Frame' : 'Lock Frame'" @click.stop="toggleLock">
+          <span class="iconify w-3.5 h-3.5" :class="data.isLocked ? 'tabler--lock' : 'tabler--lock-open'"></span>
         </button>
       </SlimTooltip>
 
-      <!-- Delete Button (only if not locked) -->
+      <!-- Delete (only if not locked) -->
       <SlimTooltip v-if="!data.isLocked" text="Delete Frame (ungroup children)" placement="left">
-        <button 
-          class="p-1.5 bg-red-500/10 hover:bg-red-500 text-red-500 hover:text-white rounded-lg transition-all"
-          @click.stop="data.onDelete"
-        >
-          <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2.5" d="M6 18L18 6M6 6l12 12" />
-          </svg>
+        <button class="node-icon-btn hover:!text-red-500" aria-label="Delete Frame" @click.stop="data.onDelete">
+          <span class="iconify tabler--x w-3.5 h-3.5"></span>
         </button>
       </SlimTooltip>
     </div>
 
-    <!-- Resize Handle -->
-    <div 
+    <!-- Resize handle -->
+    <div
       v-if="selected && !data.isLocked"
-      class="absolute bottom-4 right-4 w-6 h-6 flex items-center justify-center cursor-nwse-resize text-zinc-400 dark:text-zinc-600 hover:text-primary transition-colors opacity-0 group-hover:opacity-100"
+      class="absolute bottom-1.5 right-1.5 w-5 h-5 flex items-center justify-center cursor-nwse-resize text-zinc-400 dark:text-zinc-600 hover:text-primary transition-colors opacity-0 group-hover:opacity-100"
       @mousedown.stop.prevent="startResizing"
     >
-      <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2.5" d="M19 9l-7 7-7-7" />
-      </svg>
-    </div>
-
-    <!-- Selection Area Label -->
-    <div class="absolute inset-0 flex items-center justify-center pointer-events-none opacity-10 select-none">
-      <span class="text-4xl font-black uppercase tracking-[1em] text-zinc-400 dark:text-zinc-600 rotate-12">Frame</span>
+      <span class="iconify tabler--arrow-down-right w-4 h-4"></span>
     </div>
   </div>
 </template>

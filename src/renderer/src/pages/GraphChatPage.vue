@@ -1,13 +1,5 @@
 <template>
-  <div class="h-full w-full flex flex-col relative bg-zinc-50 dark:bg-zinc-950 overflow-hidden">
-    <!-- Ambient Backgrounds -->
-    <div
-      class="absolute top-[-10%] left-[-10%] w-[60%] h-[60%] bg-primary/20 dark:bg-primary/10 rounded-full blur-[140px] pointer-events-none transition-all duration-1000 animate-pulse-soft">
-    </div>
-    <div
-      class="absolute bottom-[-10%] right-[-10%] w-[60%] h-[60%] bg-secondary/20 dark:bg-secondary/10 rounded-full blur-[140px] pointer-events-none transition-all duration-1000 animate-pulse-soft">
-    </div>
-
+  <div class="h-full w-full flex flex-col relative bg-ground overflow-hidden">
     <GraphHeader 
       :title="videoStore.currentVideoName" 
       :total-cost="totalCost"
@@ -34,7 +26,7 @@
         :zoom-on-scroll="true"
         :pan-on-scroll-mode="PanOnScrollMode.Free"
         :selection-mode="SelectionMode.Partial">
-        <Background pattern-color="#888" :gap="20" />
+        <Background pattern-color="#888" :gap="24" :size="1" />
         <Controls />
 
         <template #node-conversation="props">
@@ -59,14 +51,14 @@
       </VueFlow>
 
       <!-- Frame Creation Overlay -->
-      <div v-if="frameCreationRect" class="absolute border-2 border-dashed border-secondary bg-secondary/5 pointer-events-none z-50 rounded-xl"
+      <div v-if="frameCreationRect" class="absolute border border-dashed border-primary bg-primary/[0.04] pointer-events-none z-50 rounded"
         :style="{ 
           left: `${frameCreationRect.x}px`, 
           top: `${frameCreationRect.y}px`, 
           width: `${frameCreationRect.width}px`, 
           height: `${frameCreationRect.height}px` 
         }">
-        <div class="absolute -top-6 left-0 text-[10px] font-bold text-secondary uppercase tracking-widest bg-white/80 dark:bg-zinc-900/80 px-2 py-0.5 rounded">Creating Frame...</div>
+        <div class="absolute -top-5 left-0 lbl !text-primary">Creating Frame...</div>
       </div>
     </div>
   </div>
@@ -357,6 +349,38 @@ onUnmounted(() => {
 .vue-flow-custom {
   --vf-bg: transparent;
 }
+
+/* Dots and lines are quiet: the nodes are the content. */
+.vue-flow-custom .vue-flow__background { opacity: 0.35; }
+.vue-flow-custom .vue-flow__edge-path {
+  stroke: rgb(113 113 122 / 0.6);
+  stroke-width: 1.2;
+}
+.vue-flow-custom .vue-flow__edge.selected .vue-flow__edge-path { stroke: rgb(var(--primary)); }
+
+/* Zoom controls: a flat column at the bottom-left, no box. */
+.vue-flow-custom .vue-flow__controls {
+  box-shadow: none;
+  left: 16px;
+  bottom: 16px;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+.vue-flow-custom .vue-flow__controls-button {
+  width: 32px;
+  height: 32px;
+  border: 0;
+  border-radius: 6px;
+  background: transparent;
+  color: rgb(113 113 122);
+  transition: color 0.15s, background-color 0.15s;
+}
+.vue-flow-custom .vue-flow__controls-button:hover {
+  background: rgb(113 113 122 / 0.12);
+  color: rgb(var(--primary));
+}
+.vue-flow-custom .vue-flow__controls-button svg { fill: currentColor; max-width: 14px; max-height: 14px; }
 
 .vue-flow__node {
   border: none;

@@ -1,36 +1,35 @@
 <template>
-  <div class="glass-card glass-card-hover p-0 rounded-3xl min-w-[280px] max-w-[320px] overflow-hidden flex flex-col group cursor-move">
-    <Handle type="target" :position="Position.Top" class="w-3 h-3 bg-zinc-500 border-2 border-white dark:border-zinc-800" />
-    
-    <!-- Header -->
-    <div class="px-4 py-3 bg-black/5 dark:bg-white/5 border-b border-black/5 dark:border-white/5 flex items-center justify-between cursor-move">
-        <div class="flex items-center gap-2">
-            <div class="w-2 h-2 rounded-full bg-accent animate-pulse shadow-[0_0_8px_rgba(var(--accent),0.5)]"></div>
-            <span class="text-[10px] font-black uppercase tracking-widest text-zinc-500">AI Summary</span>
-        </div>
-        <SlimTooltip text="Delete node and branches" placement="bottom">
-          <button @click="data.onDelete" class="p-1 hover:bg-red-500/10 rounded-md text-zinc-400 hover:text-red-500 transition-colors nodrag cursor-pointer">
-            <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16"></path></svg>
-          </button>
-        </SlimTooltip>
+  <div class="node-panel min-w-[280px] max-w-[320px] group cursor-move">
+    <Handle type="target" :position="Position.Top" class="node-handle" />
+
+    <!-- Header (AI: violet) -->
+    <div class="node-head cursor-move">
+      <span class="node-dot bg-secondary"></span>
+      <span class="lbl !text-zinc-800 dark:!text-zinc-200">AI summary</span>
+      <div class="flex-1"></div>
+      <SlimTooltip text="Delete node and branches" placement="bottom">
+        <button @click="data.onDelete" aria-label="Delete node and branches" class="node-icon-btn hover:!text-red-500 nodrag">
+          <span class="iconify tabler--trash w-3.5 h-3.5"></span>
+        </button>
+      </SlimTooltip>
     </div>
 
-    <!-- Summary Content -->
-    <div 
-        class="p-5 max-h-96 overflow-y-auto custom-scrollbar prose prose-sm dark:prose-invert prose-p:my-2 prose-ul:my-2 prose-li:my-0 pb-12 nodrag select-text cursor-text"
-        v-html="renderMarkdown(data.content)"
+    <!-- Summary content -->
+    <div
+      class="p-3 max-h-96 overflow-y-auto custom-scrollbar text-xs leading-relaxed text-zinc-700 dark:text-zinc-300 prose prose-sm dark:prose-invert prose-p:my-2 prose-ul:my-2 prose-li:my-0 nodrag select-text cursor-text"
+      v-html="renderMarkdown(data.content)"
     ></div>
-    
-    <BaseMessageInput 
+
+    <BaseMessageInput
       v-model="input"
       v-model:attachedImages="attachedImages"
       placeholder="Adjust or follow up..."
       compact
-      class="p-2 border-t border-black/5 dark:border-white/5 bg-black/[0.02] dark:bg-white/[0.02] nodrag interactive-in-pan"
+      class="nodrag interactive-in-pan"
       @send="submit"
     />
 
-    <Handle type="source" :position="Position.Bottom" class="w-3 h-3 bg-blue-500 border-2 border-white dark:border-zinc-800" />
+    <Handle type="source" :position="Position.Bottom" class="node-handle node-handle-out" />
   </div>
 </template>
 
@@ -53,16 +52,3 @@ const submit = (text: string, images: string[], count: number, isThinkingMode: b
   }
 }
 </script>
-
-<style scoped>
-.custom-scrollbar::-webkit-scrollbar {
-  width: 4px;
-}
-.custom-scrollbar::-webkit-scrollbar-track {
-  background: transparent;
-}
-.custom-scrollbar::-webkit-scrollbar-thumb {
-  background: rgba(128, 128, 128, 0.2);
-  border-radius: 10px;
-}
-</style>

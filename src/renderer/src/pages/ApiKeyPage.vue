@@ -1,24 +1,28 @@
 <template>
-  <div class="flex items-center justify-center h-full bg-transparent p-4">
-    <div
-      class="w-full max-w-md bg-white dark:bg-zinc-900 rounded-lg border border-zinc-200 dark:border-zinc-800 p-8 shadow-xl dark:shadow-2xl transition-colors">
-      <h1 class="text-2xl font-bold text-center mb-6 text-zinc-900 dark:text-white transition-colors">Gemini API Key
-      </h1>
-      <p class="text-zinc-500 dark:text-zinc-400 text-center mb-8 transition-colors">Please provide your Gemini API key
-        to get started.</p>
+  <div class="h-full flex flex-col bg-ground overflow-hidden">
+    <!-- Every other page sends you here until a key is saved, so no Settings button. -->
+    <AppTopBar brand :show-settings="false" />
 
-      <div class="space-y-4">
-        <div class="space-y-2">
-          <Input v-model="apiKey" type="password" placeholder="Enter API Key..."
-            class="font-mono text-sm !bg-zinc-50 dark:!bg-zinc-950 !border-zinc-200 dark:!border-zinc-800 !text-zinc-900 dark:!text-white placeholder:text-zinc-400 focus:!border-blue-500 transition-all" />
-          <p class="text-xs text-center text-zinc-400">
-            <a href="https://aistudio.google.com/app/apikey" target="_blank"
-              class="hover:text-blue-500 underline decoration-dotted underline-offset-2">Get your key here</a>
-          </p>
-        </div>
+    <div class="flex-1 overflow-y-auto custom-scrollbar">
+      <form class="mx-auto w-full max-w-[400px] px-6 pt-[18vh] pb-16" @submit.prevent="saveKey">
+        <h1 class="font-heading font-bold text-[26px] tracking-tight">Gemini API Key</h1>
+        <p class="mt-2 text-sm leading-relaxed text-zinc-500 dark:text-zinc-400">Please provide your Gemini API key to get started.</p>
 
-        <Button @click="saveKey" :disabled="!apiKey" class="w-full disabled:!bg-zinc-100 dark:disabled:!bg-zinc-800 disabled:!text-zinc-400 dark:disabled:!text-zinc-600 transition-all" label="Continue" />
-      </div>
+        <label for="api-key" class="sr-only">Gemini API key</label>
+        <input id="api-key" v-model="apiKey" type="password" placeholder="Enter API Key…" autocomplete="off" autofocus
+          class="field mt-7 !h-9 !text-sm font-mono" />
+
+        <p class="mt-2.5 text-xs">
+          <a href="https://aistudio.google.com/app/apikey" target="_blank" rel="noreferrer"
+            class="text-primary hover:text-primary-dark border-b border-dotted border-primary transition-colors">Get your key here</a>
+        </p>
+
+        <button type="submit" :disabled="!apiKey" class="btn-fill mt-[26px] w-full !h-[38px] !text-[13px]">Continue</button>
+
+        <p class="mt-3 text-[11px] leading-relaxed text-zinc-500">
+          Continue stays dimmed until there is a key. The key is stored on this computer.
+        </p>
+      </form>
     </div>
   </div>
 </template>
@@ -26,8 +30,7 @@
 <script setup lang="ts">
 import { ref, onMounted } from 'vue'
 import { useRouter } from 'vue-router'
-import { Input } from 'pilotui/form'
-import { Button } from 'pilotui/elements'
+import AppTopBar from '../components/AppTopBar.vue'
 
 const apiKey = ref('')
 const router = useRouter()

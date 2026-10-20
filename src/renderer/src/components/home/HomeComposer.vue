@@ -1,91 +1,89 @@
 <template>
-  <div class="w-full max-w-3xl mx-auto space-y-3">
+  <div class="w-full">
     <!-- Purpose. First, because it re-labels and re-validates everything below. -->
-    <div class="flex bg-zinc-100/50 dark:bg-zinc-900/50 rounded-xl p-1.5 w-full max-w-xs border border-zinc-200 dark:border-zinc-800 backdrop-blur-sm shadow-sm">
-      <button v-for="option in PURPOSES" :key="option.value" @click="purpose = option.value"
-        class="flex-1 py-2 text-sm font-bold rounded-lg transition-all flex items-center justify-center gap-2"
-        :class="purpose === option.value
-          ? 'bg-white dark:bg-zinc-800 shadow-sm text-zinc-900 dark:text-white scale-[1.02]'
-          : 'text-zinc-500 hover:text-zinc-700 dark:hover:text-zinc-300 scale-100'">
+    <div class="flex gap-[22px] hair-b" role="tablist" aria-label="What are you making">
+      <button v-for="option in PURPOSES" :key="option.value" role="tab" :aria-selected="purpose === option.value"
+        class="tab-u !text-[13px] flex items-center gap-2" :class="{ 'tab-u-active': purpose === option.value }"
+        @click="purpose = option.value">
         <span class="iconify w-4 h-4" :class="option.icon"></span>
         {{ option.label }}
       </button>
     </div>
 
-    <p class="text-xs text-zinc-500 dark:text-zinc-400 px-1">{{ hint }}</p>
+    <p class="mt-3 text-xs text-zinc-500 dark:text-zinc-400">{{ hint }}</p>
 
     <!-- Attachments -->
-    <div v-if="videoPath || imagePaths.length" class="flex flex-wrap items-center gap-2 px-1">
+    <div v-if="videoPath || imagePaths.length" class="mt-4 flex flex-wrap items-center gap-2">
       <!-- Video chip -->
-      <div v-if="videoPath"
-        class="flex items-center gap-2 pl-3 pr-2 py-1.5 rounded-xl bg-white dark:bg-zinc-800 border border-zinc-200 dark:border-zinc-700 shadow-sm max-w-xs">
-        <span class="iconify tabler--movie w-4 h-4 text-primary shrink-0"></span>
-        <span class="text-xs font-bold text-zinc-700 dark:text-zinc-200 truncate">{{ videoName }}</span>
-        <span v-if="purpose === 'image'"
-          class="text-[9px] font-black uppercase tracking-widest text-zinc-400 border border-zinc-300 dark:border-zinc-600 rounded px-1 py-0.5 shrink-0">Ref</span>
-        <button @click="clearVideo" class="text-zinc-400 hover:text-red-500 transition shrink-0">
+      <div v-if="videoPath" class="flex items-center gap-2 h-7 pl-2.5 pr-1.5 rounded-md max-w-xs"
+        :style="{ border: '1px solid var(--ff-hairline-strong)' }">
+        <span class="iconify tabler--movie w-3.5 h-3.5 text-primary shrink-0"></span>
+        <span class="text-xs font-semibold text-zinc-700 dark:text-zinc-200 truncate">{{ videoName }}</span>
+        <span v-if="purpose === 'image'" class="lbl shrink-0 !text-[9px]">Ref</span>
+        <button @click="clearVideo" aria-label="Remove video" class="text-zinc-400 hover:text-red-500 transition-colors shrink-0">
           <span class="iconify tabler--x w-3.5 h-3.5"></span>
         </button>
       </div>
 
       <!-- Image thumbnails (image purpose only — the editor's prompt is text-only) -->
       <div v-for="(img, idx) in visibleImages" v-show="purpose === 'image'" :key="img"
-        class="relative w-16 h-16 rounded-xl group shadow-md border border-zinc-200 dark:border-zinc-800 transition-all hover:scale-105">
-        <img :src="toMediaUrl(img)" class="w-full h-full object-cover rounded-xl" />
-        <div class="absolute -top-1 -right-1 opacity-0 group-hover:opacity-100 transition-all z-30">
-          <button @click.stop="removeImage(idx)"
-            class="flex items-center justify-center w-4 h-4 bg-red-500 text-white rounded-full shadow-lg hover:bg-red-600 active:scale-90 transition-all">
-            <span class="iconify tabler--x w-2.5 h-2.5"></span>
-          </button>
-        </div>
+        class="relative w-14 h-14 rounded-[3px] group" :style="{ border: '1px solid var(--ff-hairline-strong)' }">
+        <img :src="toMediaUrl(img)" class="w-full h-full object-cover rounded-[2px]" />
+        <button @click.stop="removeImage(idx)" aria-label="Remove image"
+          class="absolute -top-1.5 -right-1.5 w-4 h-4 flex items-center justify-center rounded-full bg-zinc-900 text-white dark:bg-zinc-100 dark:text-zinc-900 opacity-0 group-hover:opacity-100 transition-opacity hover:!bg-red-500 hover:!text-white">
+          <span class="iconify tabler--x w-2.5 h-2.5"></span>
+        </button>
       </div>
       <div v-if="hiddenImageCount > 0 && purpose === 'image'"
-        class="w-16 h-16 rounded-xl border border-dashed border-zinc-300 dark:border-zinc-700 flex items-center justify-center text-xs font-bold text-zinc-500">
+        class="w-14 h-14 rounded-[3px] flex items-center justify-center text-xs font-semibold text-zinc-500"
+        :style="{ border: '1px dashed var(--ff-hairline-strong)' }">
         +{{ hiddenImageCount }}
       </div>
     </div>
 
     <!-- Prompt. BaseMessageInput carries the textarea, Cmd+Enter, samples,
          thinking toggle and send button; only the attach slot is ours. -->
-    <BaseMessageInput
-      v-model="prompt"
-      v-model:autoUseImages="autoUseImages"
-      :placeholder="placeholder"
-      :send-disabled="!!blockedReason || !!busy"
-      :send-disabled-reason="busy ? 'Setting up your project…' : (blockedReason || undefined)"
-      :show-samples="purpose === 'image'"
-      :show-thinking="purpose === 'image'"
-      :show-auto-images="purpose === 'image'"
-      :allow-empty-send="purpose === 'video' && !!videoPath"
-      @send="submit">
-      <template #attach>
-        <SlimTooltip :text="primaryAttachLabel" placement="top">
-          <button @click="pickPrimary" :disabled="busy"
-            class="flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg bg-zinc-100 dark:bg-white/5 border border-black/5 dark:border-white/10 text-[11px] font-bold text-zinc-600 dark:text-zinc-300 hover:text-primary transition active:scale-95 disabled:opacity-50">
-            <span class="iconify tabler--paperclip w-3.5 h-3.5"></span>
-            {{ primaryAttachLabel }}
-          </button>
-        </SlimTooltip>
-        <SlimTooltip v-if="purpose === 'image'" :text="secondaryAttachLabel" placement="top">
-          <button @click="pickSecondary" :disabled="busy"
-            class="flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg bg-zinc-100 dark:bg-white/5 border border-black/5 dark:border-white/10 text-[11px] font-bold text-zinc-500 dark:text-zinc-400 hover:text-primary transition active:scale-95 disabled:opacity-50">
-            <span class="iconify tabler--photo-plus w-3.5 h-3.5"></span>
-            {{ secondaryAttachLabel }}
-          </button>
-        </SlimTooltip>
-        <SlimTooltip text="Add a video from a link" placement="top">
-          <button @click="$emit('pick-link')" :disabled="busy"
-            class="flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg bg-zinc-100 dark:bg-white/5 border border-black/5 dark:border-white/10 text-[11px] font-bold text-zinc-500 dark:text-zinc-400 hover:text-primary transition active:scale-95 disabled:opacity-50">
-            <span class="iconify tabler--link w-3.5 h-3.5"></span>
-            From link
-          </button>
-        </SlimTooltip>
-      </template>
-    </BaseMessageInput>
+    <div class="mt-[18px]">
+      <BaseMessageInput
+        v-model="prompt"
+        v-model:autoUseImages="autoUseImages"
+        :placeholder="placeholder"
+        :send-disabled="!!blockedReason || !!busy"
+        :send-disabled-reason="busy ? 'Setting up your project…' : (blockedReason || undefined)"
+        :show-samples="purpose === 'image'"
+        :show-thinking="purpose === 'image'"
+        :show-auto-images="purpose === 'image'"
+        :allow-empty-send="purpose === 'video' && !!videoPath"
+        @send="submit">
+        <template #attach>
+          <SlimTooltip :text="primaryAttachLabel" placement="top">
+            <button @click="pickPrimary" :disabled="busy" class="btn-text !text-zinc-700 dark:!text-zinc-200 !px-2.5">
+              <span class="iconify tabler--paperclip w-4 h-4"></span>
+              {{ primaryAttachLabel }}
+            </button>
+          </SlimTooltip>
+          <SlimTooltip v-if="purpose === 'image'" :text="secondaryAttachLabel" placement="top">
+            <button @click="pickSecondary" :disabled="busy" class="btn-text !text-zinc-700 dark:!text-zinc-200 !px-2.5">
+              <span class="iconify tabler--movie w-4 h-4"></span>
+              {{ secondaryAttachLabel }}
+            </button>
+          </SlimTooltip>
+          <SlimTooltip text="Add a video from a link" placement="top">
+            <button @click="$emit('pick-link')" :disabled="busy" class="btn-text !text-zinc-700 dark:!text-zinc-200 !px-2.5">
+              <span class="iconify tabler--link w-4 h-4"></span>
+              From link
+            </button>
+          </SlimTooltip>
+        </template>
+      </BaseMessageInput>
+    </div>
 
-    <p v-if="blockedReason" class="text-[11px] text-amber-600 dark:text-amber-400 px-1">
-      {{ blockedReason }}
-    </p>
+    <!-- Why Send is off, and the way round the composer -->
+    <div class="mt-2.5 flex items-center gap-4 min-h-[18px]">
+      <p v-if="blockedReason" class="text-xs text-amber-600 dark:text-amber-400">{{ blockedReason }}</p>
+      <div class="flex-1"></div>
+      <slot name="aside" />
+    </div>
   </div>
 </template>
 

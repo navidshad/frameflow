@@ -24,6 +24,9 @@
 
 		<div class="flex-1"></div>
 
+		<!-- Background exports of OTHER projects (this project's own is the Export button) -->
+		<GlobalRenderPill />
+
 		<span v-if="agent.access?.enabled" class="flex items-center gap-1.5 text-[11px] text-zinc-500"
 			title="Agents can reach this project over MCP">
 			<span class="w-1.5 h-1.5 rounded-full bg-accent-light"></span>Agent access on
@@ -61,6 +64,7 @@
 import { nextTick, ref } from 'vue'
 import { useRouter } from 'vue-router'
 import SlimTooltip from '../../components/SlimTooltip.vue'
+import GlobalRenderPill from '../../components/GlobalRenderPill.vue'
 import { useAgentStore } from '../../stores/agentStore'
 import { useTheme } from '../../composables/useTheme'
 

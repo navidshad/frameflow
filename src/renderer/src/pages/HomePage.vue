@@ -1,45 +1,50 @@
 <template>
-	<div class="h-screen flex flex-col bg-transparent transition-colors duration-300 overflow-hidden relative">
-		<div class="container mx-auto px-6 py-12 max-w-7xl flex flex-col h-full z-10 relative">
-			<PageHeader title="FrameFlow" subtitle="Describe what you want to make, attach your files, and go." />
+	<div class="h-full flex flex-col bg-ground overflow-hidden">
+		<AppTopBar brand />
 
-			<div class="flex-1 overflow-y-auto -mx-6 px-6 pb-8 custom-scrollbar">
+		<div class="flex-1 overflow-y-auto custom-scrollbar">
+			<div class="mx-auto w-full max-w-[880px] px-10 pt-11 pb-20">
 				<!-- Dependency warnings must be seen BEFORE a file is committed -->
 				<SystemRequirementsBanner @ffmpeg-available="ffmpegAvailable = $event" />
 
-				<HomeComposer ref="composerRef" :ffmpeg-available="ffmpegAvailable" :busy="isCreating"
-					@submit="handleComposerSubmit" @pick-link="showLinkModal = true" />
+				<h1 class="font-heading font-black text-[44px] tracking-[-0.025em] leading-[1.05]">FrameFlow</h1>
+				<p class="mt-2 text-base text-zinc-500 dark:text-zinc-400">Describe what you want to make, attach your files, and go.</p>
 
-				<!-- Always visible, not empty-state-only: a blank multi-source timeline
-				     is otherwise unreachable without first making an AI thread. -->
-				<div class="w-full max-w-3xl mx-auto mt-3 flex justify-end">
-					<button @click="handleCreateEditorProject"
-						class="text-xs font-bold text-zinc-500 dark:text-zinc-400 hover:text-primary transition flex items-center gap-1.5">
-						or start a blank timeline project
-						<span class="iconify tabler--arrow-right w-3.5 h-3.5"></span>
-					</button>
+				<div class="mt-[30px]">
+					<HomeComposer ref="composerRef" :ffmpeg-available="ffmpegAvailable" :busy="isCreating"
+						@submit="handleComposerSubmit" @pick-link="showLinkModal = true">
+						<!-- Always visible, not empty-state-only: a blank multi-source timeline
+						     is otherwise unreachable without first making an AI thread. -->
+						<template #aside>
+							<button @click="handleCreateEditorProject"
+								class="text-xs font-semibold text-zinc-600 dark:text-zinc-300 hover:text-primary transition-colors flex items-center gap-1.5">
+								or start a blank timeline project
+								<span class="iconify tabler--arrow-right w-3.5 h-3.5"></span>
+							</button>
+						</template>
+					</HomeComposer>
 				</div>
 
-				<!-- Recent projects -->
-				<div class="mt-14">
-					<h2 class="text-[10px] font-black uppercase tracking-[0.2em] text-zinc-400 dark:text-zinc-500 mb-6">
-						Recent projects
-					</h2>
-
-					<div v-if="loading" class="flex justify-center py-20">
-						<div class="animate-spin rounded-lg h-10 w-10 border-4 border-primary border-t-transparent"></div>
+				<!-- Recent projects: a list, not cards -->
+				<section class="mt-11">
+					<div class="flex items-baseline gap-2.5">
+						<h2 class="lbl !text-zinc-900 dark:!text-zinc-50">Recent projects</h2>
+						<span v-if="!loading && videoStore.threads.length" class="font-mono text-[11px] text-zinc-500">{{ videoStore.threads.length }}</span>
 					</div>
 
-					<p v-else-if="videoStore.threads.length === 0"
-						class="text-sm text-zinc-500 dark:text-zinc-400 py-8">
+					<div v-if="loading" class="flex justify-center py-16">
+						<span class="iconify tabler--loader-2 w-5 h-5 animate-spin text-primary"></span>
+					</div>
+
+					<p v-else-if="videoStore.threads.length === 0" class="mt-3 text-sm text-zinc-500 dark:text-zinc-400 py-6 hair-t">
 						Nothing here yet — your projects will show up in this list.
 					</p>
 
-					<div v-else class="grid gap-10 md:grid-cols-2 lg:grid-cols-3 pb-20">
+					<div v-else class="mt-2.5 hair-t">
 						<ThreadCard v-for="thread in videoStore.threads" :key="thread.id" :thread="thread"
 							@open="openThread" @delete="handleDeleteThread" />
 					</div>
-				</div>
+				</section>
 			</div>
 		</div>
 
@@ -58,7 +63,8 @@ import HomeComposer from '../components/home/HomeComposer.vue'
 import SystemRequirementsBanner from '../components/home/SystemRequirementsBanner.vue'
 import VideoLinkModal from '../components/home/VideoLinkModal.vue'
 import ThreadCard from '../components/home/ThreadCard.vue'
-import PageHeader from '../components/PageHeader.vue'
+import AppTopBar from '../components/AppTopBar.vue'
+import { dialog } from '../composables/useDialog'
 
 const router = useRouter()
 const videoStore = useVideoStore()
@@ -105,10 +111,10 @@ const createVideoProject = async (payload: { videoPath?: string; videoName?: str
 	const thread = await (window as any).api.createEditorProject('Untitled Project')
 	if (!thread) {
 		isCreating.value = false
-		await (window as any).api.showConfirmation({
+		await dialog.notify({
 			title: 'Could not create the project',
 			message: 'The timeline project could not be created.',
-			type: 'error', buttons: ['OK'], defaultId: 0, cancelId: 0
+			tone: 'error'
 		})
 		return
 	}
@@ -125,10 +131,10 @@ const createVideoProject = async (payload: { videoPath?: string; videoName?: str
 	} catch (e: any) {
 		// The project exists and is in Recent now — still navigate. Stranding the
 		// user on Home beside a phantom entry is worse than an empty media panel.
-		await (window as any).api.showConfirmation({
+		await dialog.notify({
 			title: 'Could not read that video',
 			message: e?.message || 'The file could not be imported. You can add it again from the editor.',
-			type: 'warning', buttons: ['OK'], defaultId: 0, cancelId: 0
+			tone: 'warning'
 		})
 	}
 
@@ -190,21 +196,22 @@ const handleComposerSubmit = async (payload: {
 	} catch (e: any) {
 		// Only reset on failure — on success we navigate away.
 		isCreating.value = false
-		await (window as any).api.showConfirmation({
+		await dialog.notify({
 			title: 'Could not create the project',
 			message: e?.message || 'Something went wrong while setting up your project.',
-			type: 'error',
-			buttons: ['OK'],
-			defaultId: 0,
-			cancelId: 0
+			tone: 'error'
 		})
 	}
 }
 
 const handleDeleteThread = async (id: string) => {
-	if (confirm('Are you sure you want to delete this project and all its messages?')) {
-		await videoStore.deleteThread(id)
-	}
+	const confirmed = await dialog.confirm({
+		title: 'Delete project',
+		message: 'Are you sure you want to delete this project and all its messages?',
+		confirmLabel: 'Delete',
+		danger: true
+	})
+	if (confirmed) await videoStore.deleteThread(id)
 }
 
 onMounted(async () => {

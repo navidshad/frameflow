@@ -1,69 +1,51 @@
 <template>
-	<Modal :model-value="modelValue" title="Import media from URL" size="md"
+	<AppDialog :model-value="modelValue" title="Import media from URL" size="md"
 		@update:model-value="$emit('update:modelValue', $event)">
-		<div class="space-y-4 py-2">
+		<div class="space-y-3">
 			<div>
-				<label class="text-[10px] font-bold uppercase tracking-widest text-zinc-500 block mb-1.5">
-					Video URL
-				</label>
-				<Input v-model="url" placeholder="https://youtube.com/watch?v=… or direct link"
+				<label for="import-url" class="lbl block">Video URL</label>
+				<input id="import-url" v-model="url" class="field !text-[13px]" placeholder="https://youtube.com/watch?v=… or direct link"
 					:disabled="importing" @keyup.enter="fetchFormats" />
 			</div>
 
 			<!-- Resolution picker (after formats fetched) -->
-			<div v-if="resolutions.length > 0">
-				<label class="text-[10px] font-bold uppercase tracking-widest text-zinc-500 block mb-1.5">
-					Resolution
-				</label>
-				<select v-model="resolution"
-					class="w-full px-3 py-2 rounded-xl border border-zinc-200 dark:border-zinc-700 bg-white dark:bg-zinc-900 text-sm text-zinc-800 dark:text-zinc-200 input-focus-ring"
-					:disabled="importing">
+			<div v-if="resolutions.length > 0" class="flex items-center gap-3">
+				<label for="import-res" class="lbl shrink-0">Resolution</label>
+				<select id="import-res" v-model="resolution" class="field flex-1" :disabled="importing">
 					<option v-for="res in resolutions" :key="res" :value="res">{{ res }}</option>
 				</select>
 			</div>
 
 			<!-- Progress -->
 			<div v-if="importing">
-				<div class="h-1.5 rounded-full bg-zinc-200 dark:bg-zinc-800 overflow-hidden">
-					<div class="h-full rounded-full transition-all duration-300"
+				<div class="h-[3px] bg-zinc-200 dark:bg-white/10 overflow-hidden">
+					<div class="h-full transition-all duration-300"
 						:class="phase === 'updating-ytdlp' ? 'bg-amber-500 animate-pulse w-full' : 'bg-primary'"
 						:style="phase === 'updating-ytdlp' ? undefined : { width: `${progress}%` }"></div>
 				</div>
-				<p class="mt-1.5 text-[10px] font-mono text-center"
-					:class="phase ? 'text-amber-500' : 'text-zinc-400'">
+				<p class="mt-1.5 text-[11px] font-mono" :class="phase ? 'text-amber-600 dark:text-amber-400' : 'text-zinc-500'">
 					{{ progressLabel }}
 				</p>
 			</div>
 
-			<p v-if="error" class="text-xs text-red-500 font-medium leading-snug">{{ error }}</p>
+			<p v-if="error" class="text-xs text-red-500 leading-snug">{{ error }}</p>
 		</div>
 
 		<template #footer>
-			<div class="flex justify-end gap-2">
-				<button
-					class="px-4 py-2 rounded-xl border border-zinc-200 dark:border-zinc-700 text-xs font-bold text-zinc-600 dark:text-zinc-300 hover:bg-zinc-100 dark:hover:bg-zinc-800 transition"
-					:disabled="importing" @click="close">
-					Cancel
-				</button>
-				<button v-if="resolutions.length === 0"
-					class="px-4 py-2 rounded-xl bg-primary text-white text-xs font-bold shadow-md shadow-primary/20 hover:bg-primary-dark transition disabled:opacity-50 disabled:cursor-not-allowed"
-					:disabled="!url.trim() || fetching" @click="fetchFormats">
-					{{ fetching ? 'Checking…' : 'Continue' }}
-				</button>
-				<button v-else
-					class="px-4 py-2 rounded-xl bg-primary text-white text-xs font-bold shadow-md shadow-primary/20 hover:bg-primary-dark transition disabled:opacity-50 disabled:cursor-not-allowed"
-					:disabled="importing" @click="startImport">
-					{{ importing ? 'Importing…' : 'Import' }}
-				</button>
-			</div>
+			<button class="btn-text" :disabled="importing" @click="close">Cancel</button>
+			<button v-if="resolutions.length === 0" class="btn-fill" :disabled="!url.trim() || fetching" @click="fetchFormats">
+				{{ fetching ? 'Checking…' : 'Continue' }}
+			</button>
+			<button v-else class="btn-fill" :disabled="importing" @click="startImport">
+				{{ importing ? 'Importing…' : 'Import' }}
+			</button>
 		</template>
-	</Modal>
+	</AppDialog>
 </template>
 
 <script setup lang="ts">
 import { computed, ref, watch } from 'vue'
-import { Modal } from 'pilotui/complex'
-import { Input } from 'pilotui/form'
+import AppDialog from '../../components/AppDialog.vue'
 import { useEditorStore } from '../../stores/editorStore'
 
 const props = defineProps<{ modelValue: boolean }>()

@@ -1,5 +1,6 @@
 import { watch } from 'vue'
 import { MessageRole } from '@shared/types'
+import { dialog } from './useDialog'
 
 export function useGraphLayout(videoStore: any, graphStore: any) {
   const syncGraph = () => {
@@ -110,13 +111,14 @@ export function useGraphLayout(videoStore: any, graphStore: any) {
             isLocked,
             onUpdate: (fid: string, updates: any) => videoStore.updateNodeMetadata(fid, updates),
             onDelete: async () => {
-              const result = await (window as any).api.showConfirmation({
+              const confirmed = await dialog.confirm({
                 title: 'Delete Frame',
                 message: 'Are you sure you want to delete this frame?',
                 detail: 'Children nodes will be ungrouped but NOT deleted.',
-                type: 'warning'
+                confirmLabel: 'Delete',
+                danger: true
               })
-              if (result.response === 1) {
+              if (confirmed) {
                 // We use the store method for deletion logic
                 await videoStore.deleteFrame(id)
               }
@@ -219,12 +221,13 @@ export function useGraphLayout(videoStore: any, graphStore: any) {
             progress: null,
             steps: [{ name: msg.content || 'Processing...', status: 'active' }],
             onDelete: async () => {
-              const result = await (window as any).api.showConfirmation({
+              const confirmed = await dialog.confirm({
                 title: 'Delete Task Node',
                 message: 'Are you sure you want to delete this running task and all its branches?',
-                type: 'warning'
+                confirmLabel: 'Delete',
+                danger: true
               })
-              if (result.response === 1) {
+              if (confirmed) {
                 await videoStore.removeMessageBranch(strand.id)
               }
             },
@@ -249,12 +252,13 @@ export function useGraphLayout(videoStore: any, graphStore: any) {
             cost: msg.cost,
             showDetails: videoStore.currentThread?.nodePositions?.[strand.id]?.showDetails || false,
             onDelete: async () => {
-              const result = await (window as any).api.showConfirmation({
+              const confirmed = await dialog.confirm({
                 title: 'Delete Node',
                 message: 'Are you sure you want to delete this result and all its branches?',
-                type: 'warning'
+                confirmLabel: 'Delete',
+                danger: true
               })
-              if (result.response === 1) {
+              if (confirmed) {
                 await videoStore.removeMessageBranch(strand.id)
               }
             },
@@ -286,12 +290,13 @@ export function useGraphLayout(videoStore: any, graphStore: any) {
             hasInputInitially: (childMap[lastId] || []).length === 0,
             width: videoStore.currentThread?.nodePositions?.[strand.id]?.width || 380,
             onDelete: async () => {
-              const result = await (window as any).api.showConfirmation({
+              const confirmed = await dialog.confirm({
                 title: 'Delete Node',
                 message: 'Are you sure you want to delete this conversation and all its branches?',
-                type: 'warning'
+                confirmLabel: 'Delete',
+                danger: true
               })
-              if (result.response === 1) {
+              if (confirmed) {
                 await videoStore.removeMessageBranch(strand.id)
               }
             },
