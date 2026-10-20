@@ -20,6 +20,15 @@
  * So `transform.scale` is absent from the animatable set for now, and says so
  * where the UI would otherwise offer it. It needs `zoompan`, which resamples
  * every frame, and that belongs with speed ramps rather than bolted on here.
+ *
+ * ## Motion layers
+ *
+ * A motion item (shared/motion.ts) can also animate `opacity` and
+ * `motion.<setting>` for every numeric setting its page marks `animate`. Neither
+ * goes through an ffmpeg expression: both are evaluated by `motionFrameState`
+ * and handed to the page, which the monitor and the export both run — so they
+ * are honoured identically by construction. They are only valid ON a motion
+ * item; `isAnimatableOn` is the per-item check the editor uses.
  */
 
 export type Ease = 'linear' | 'hold' | 'ease'
@@ -47,6 +56,18 @@ export type AnimatablePath = typeof ANIMATABLE[number]
 
 export const isAnimatable = (path: string): path is AnimatablePath =>
 	(ANIMATABLE as readonly string[]).includes(path)
+
+/** `opacity` and `motion.*` — paths only a motion layer's page can honour. */
+export const isMotionPath = (path: string): boolean =>
+	path === 'opacity' || /^motion\.[A-Za-z0-9_-]+$/.test(path)
+
+/**
+ * Whether `path` can be keyed on this particular item: the transform paths on
+ * anything, the motion paths only where `motionPaths` (the item's own list,
+ * from `motionAnimatablePaths`) names them.
+ */
+export const isAnimatableOn = (path: string, motionPaths: readonly string[] = []): boolean =>
+	isAnimatable(path) || (isMotionPath(path) && motionPaths.includes(path))
 
 const TIME_EPS = 1e-6
 
@@ -133,7 +154,7 @@ export function keyframeExpression(
 export function hasKeyframes(tracks: KeyframeTracks | undefined): boolean {
 	if (!tracks) return false
 	return Object.entries(tracks).some(([path, track]) =>
-		isAnimatable(path) && normalise(track).length >= 2
+		(isAnimatable(path) || isMotionPath(path)) && normalise(track).length >= 2
 	)
 }
 

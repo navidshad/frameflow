@@ -33,16 +33,17 @@ export const familyForMedia = (kind: MediaKind | undefined): TrackFamily =>
 /**
  * Which family an ITEM belongs to.
  *
- * A title and a generated layer carry their own content and reference no media
- * (`sourceAssetId` is empty for both), so they are answered before the lookup —
+ * A title, a generated layer and a motion layer carry their own content and
+ * reference no media (`sourceAssetId` is empty for all three), so they are
+ * answered before the lookup —
  * otherwise the missing asset would read as "unknown" for the two item types
  * whose family is the most certain thing about them.
  */
 export function itemFamily(
-	item: Pick<TimelineItem, 'text' | 'generator' | 'sourceAssetId'>,
+	item: Pick<TimelineItem, 'text' | 'generator' | 'motion' | 'sourceAssetId'>,
 	assets: Pick<MediaAsset, 'id' | 'kind'>[] = []
 ): TrackFamily {
-	if (item.text || item.generator) return 'video'
+	if (item.text || item.generator || item.motion) return 'video'
 	return familyForMedia(assets.find((a) => a.id === item.sourceAssetId)?.kind)
 }
 
@@ -53,7 +54,7 @@ export function itemFamily(
  */
 export function canHostItem(
 	track: Pick<Track, 'kind' | 'locked' | 'hidden'>,
-	item: Pick<TimelineItem, 'text' | 'generator' | 'sourceAssetId'>,
+	item: Pick<TimelineItem, 'text' | 'generator' | 'motion' | 'sourceAssetId'>,
 	assets: Pick<MediaAsset, 'id' | 'kind'>[] = []
 ): { ok: boolean; reason?: string } {
 	if (track.locked) return { ok: false, reason: 'This track is locked.' }
@@ -81,8 +82,8 @@ export function canHostItem(
  * video tracks unsafe before this rule was written down once, here.
  */
 export const isCompositedItem = (
-	item: Pick<TimelineItem, 'text' | 'generator' | 'sourceAssetId'>
-): boolean => !item.text && (!!item.generator || !!item.sourceAssetId)
+	item: Pick<TimelineItem, 'text' | 'generator' | 'motion' | 'sourceAssetId'>
+): boolean => !item.text && (!!item.generator || !!item.motion || !!item.sourceAssetId)
 
 /**
  * The lanes top to bottom, the way an editor stacks them: the video family

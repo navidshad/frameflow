@@ -1,0 +1,60 @@
+<!--
+  Lower third — a name and a role, sliding in from the left.
+  Drawn entirely in seek(t): nothing here runs on its own clock.
+-->
+<style>
+	:root { font-size: calc(100vmin / 108); }
+	.lt { position: absolute; left: 6%; top: 70.3%; display: flex; align-items: stretch; }
+	.bar { width: 1.5rem; }
+	.panel { padding: 2.7rem 5.4rem 2.7rem 3.9rem; }
+	.name { font: 700 6.2rem/1.1 Outfit, Inter, sans-serif; color: #18181b; white-space: nowrap; }
+	.role { font: 600 3.9rem/1.2 Inter, sans-serif; margin-top: 0.8rem; white-space: nowrap; }
+	.pill .panel { border-radius: 999rem; padding-left: 5.4rem; }
+	.pill .bar { display: none; }
+	.glass .panel { background: rgba(24, 24, 27, 0.78) !important; border-radius: 1.6rem; }
+	.glass .name { color: #fafafa; }
+</style>
+<div class="lt" id="lt" data-ff-bounds>
+	<div class="bar" id="bar"></div>
+	<div class="panel" id="panel">
+		<div class="name" id="name"></div>
+		<div class="role" id="role"></div>
+	</div>
+</div>
+<script>
+	const lt = document.getElementById('lt')
+	const bar = document.getElementById('bar')
+	const panel = document.getElementById('panel')
+	const nameEl = document.getElementById('name')
+	const roleEl = document.getElementById('role')
+
+	/** The accent, pulled a little toward black so small text stays legible on white. */
+	const deepen = (hex) => {
+		const n = parseInt(hex.slice(1), 16)
+		const c = [n >> 16, (n >> 8) & 255, n & 255].map((v) => Math.round(v * 0.86))
+		return `rgb(${c.join(',')})`
+	}
+
+	frameflow.define({
+		seek(t, s) {
+			const ease = frameflow.ease
+			const enter = ease.out(frameflow.progress('in', t))
+			const leave = ease.in(frameflow.progress('out', t))
+			const shown = enter * (1 - leave)
+			const slide = Number(s.slide) || 0
+
+			lt.className = `lt ${s.style}`
+			nameEl.textContent = s.name
+			roleEl.textContent = s.role
+			bar.style.background = s.accent
+			roleEl.style.color = s.style === 'glass' ? s.accent : deepen(s.accent)
+			// Glass overrides this in CSS; bar and pill share the light panel.
+			panel.style.background = 'rgba(250, 250, 250, 0.96)'
+
+			lt.style.opacity = String(shown)
+			lt.style.transform = `translateX(${(-slide * (1 - enter) - slide * leave).toFixed(3)}px)`
+			// The panel unrolls from the bar, so the entrance reads as a reveal.
+			panel.style.clipPath = `inset(0 ${((1 - enter) * 100).toFixed(3)}% 0 0)`
+		}
+	})
+</script>

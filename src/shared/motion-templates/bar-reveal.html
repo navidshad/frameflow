@@ -1,0 +1,62 @@
+<!-- Bar reveal — a short bar chart that grows bar by bar; the biggest bar takes the accent. -->
+<style>
+	:root { font-size: calc(100vmin / 108); }
+	.chart { position: absolute; left: 50%; top: 50%; transform: translate(-50%, -50%); }
+	.title { font: 700 4.6rem/1.2 Outfit, Inter, sans-serif; color: #fafafa; margin-bottom: 4rem; }
+	.bars { display: flex; align-items: flex-end; gap: 4rem; height: 44rem; }
+	.col { display: flex; flex-direction: column; align-items: center; justify-content: flex-end; height: 100%; width: 14rem; }
+	.bar { width: 100%; border-radius: 1rem 1rem 0 0; transform-origin: 50% 100%; }
+	.num { font: 700 4rem/1 Inter, sans-serif; color: #fafafa; margin-bottom: 1.4rem; font-variant-numeric: tabular-nums; }
+	.lab { font: 600 3.4rem/1 Inter, sans-serif; color: #a1a1aa; margin-top: 1.8rem; }
+</style>
+<div class="chart" id="chart" data-ff-bounds>
+	<div class="title" id="title"></div>
+	<div class="bars" id="bars"></div>
+</div>
+<script>
+	const chart = document.getElementById('chart')
+	const title = document.getElementById('title')
+	const bars = document.getElementById('bars')
+	let lastShape = null
+	let cols = []
+
+	const list = (text) => String(text).split(',').map((part) => part.trim()).filter(Boolean)
+
+	frameflow.define({
+		seek(t, s) {
+			const ease = frameflow.ease
+			const values = list(s.values).map(Number).map((n) => (Number.isFinite(n) ? n : 0))
+			const labels = list(s.labels)
+			const shape = `${values.length}`
+			if (shape !== lastShape) {
+				lastShape = shape
+				bars.textContent = ''
+				cols = values.map(() => {
+					const col = document.createElement('div')
+					col.className = 'col'
+					col.innerHTML = '<div class="num"></div><div class="bar"></div><div class="lab"></div>'
+					bars.appendChild(col)
+					return col
+				})
+			}
+			const max = Math.max(1, ...values)
+			const grow = frameflow.progress('in', t)
+			const leave = ease.in(frameflow.progress('out', t))
+			cols.forEach((col, i) => {
+				const n = cols.length
+				// Staggered: each bar starts a little after the last.
+				const u = ease.out(frameflow.clamp(grow * (1 + 0.5 * (n - 1)) - 0.5 * i, 0, 1))
+				const bar = col.children[1]
+				bar.style.height = `${((values[i] / max) * 36).toFixed(3)}rem`
+				bar.style.transform = `scaleY(${u.toFixed(4)})`
+				bar.style.background = values[i] === max ? s.accent : i % 2 ? '#71717a' : '#52525b'
+				col.children[0].textContent = `${Math.round(values[i] * u)}${s.unit}`
+				col.children[0].style.opacity = String(u)
+				col.children[2].textContent = labels[i] ?? ''
+			})
+			title.textContent = s.title
+			title.style.display = s.title ? 'block' : 'none'
+			chart.style.opacity = String(frameflow.clamp(grow * 5, 0, 1) * (1 - leave))
+		}
+	})
+</script>

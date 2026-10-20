@@ -1,0 +1,38 @@
+<!-- Title card — one big line, an optional subtitle, an accent rule that draws itself. -->
+<style>
+	:root { font-size: calc(100vmin / 108); }
+	.card { position: absolute; left: 50%; top: 50%; transform: translate(-50%, -50%); text-align: center; }
+	.title { font: 900 13rem/1 Outfit, Inter, sans-serif; letter-spacing: -0.02em; white-space: nowrap; }
+	.rule { height: 0.9rem; margin: 3.2rem auto 0; border-radius: 1rem; }
+	.subtitle { font: 500 4.4rem/1.25 Inter, sans-serif; margin-top: 3rem; color: #d4d4d8; white-space: nowrap; }
+</style>
+<div class="card" id="card" data-ff-bounds>
+	<div class="title" id="title"></div>
+	<div class="rule" id="rule"></div>
+	<div class="subtitle" id="subtitle"></div>
+</div>
+<script>
+	const card = document.getElementById('card')
+	const title = document.getElementById('title')
+	const rule = document.getElementById('rule')
+	const subtitle = document.getElementById('subtitle')
+
+	frameflow.define({
+		seek(t, s) {
+			const ease = frameflow.ease
+			const enter = ease.out(frameflow.progress('in', t))
+			const leave = ease.in(frameflow.progress('out', t))
+			const scale = (Number(s.scale) || 1) * (0.94 + 0.06 * enter) * (1 + 0.04 * leave)
+
+			title.textContent = s.title
+			title.style.color = s.colour
+			subtitle.textContent = s.subtitle
+			subtitle.style.display = s.subtitle ? 'block' : 'none'
+			rule.style.background = s.accent
+			rule.style.width = `${(28 * ease.inOut(frameflow.progress('in', t))).toFixed(3)}rem`
+
+			card.style.opacity = String(enter * (1 - leave))
+			card.style.transform = `translate(-50%, -50%) scale(${scale.toFixed(4)})`
+		}
+	})
+</script>

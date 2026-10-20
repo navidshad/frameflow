@@ -189,6 +189,7 @@ export interface Thread {
 // ============================================================
 import type { KeySpec } from './keying'
 import type { GeneratorSpec } from './generators'
+import type { MotionSpec } from './motion'
 
 // Timeline Video Editor (see video-editor-prd.md §6)
 // Canonical time unit is SECONDS. SRT strings appear only at the boundary
@@ -376,6 +377,12 @@ export interface TimelineItem {  // an instance of a clip placed on a track
 	 * behind it. `sourceAssetId` is empty for these, the same as a title.
 	 */
 	generator?: GeneratorSpec
+	/**
+	 * A motion layer: an HTML page drawn as a pure function of time, from the
+	 * template library or written by hand. `sourceAssetId` is empty, like a
+	 * title's; `in` is 0 and `out` is the clip's length. See shared/motion.ts.
+	 */
+	motion?: MotionSpec
 	/**
 	 * What this clip is FOR, in a composited shot. Purely descriptive today —
 	 * it is what lets "put this behind the subject" be a field rather than an

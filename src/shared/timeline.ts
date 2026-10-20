@@ -5,6 +5,7 @@ import { sameTransform } from './transform'
 import { sameKeyframes } from './keyframes'
 import { sameKey } from './keying'
 import { sameGenerator } from './generators'
+import { sameMotion } from './motion'
 
 /**
  * Pure timeline helpers shared by renderer (manual editing, undo/redo) and
@@ -319,7 +320,8 @@ export function diffTimelines(
 				!sameTransform(beforeItem.transform, afterItem.transform) ||
 				!sameKeyframes(beforeItem.keyframes, afterItem.keyframes) ||
 				!sameKey(beforeItem.key, afterItem.key) ||
-				!sameGenerator(beforeItem.generator, afterItem.generator)
+				!sameGenerator(beforeItem.generator, afterItem.generator) ||
+				!sameMotion(beforeItem.motion, afterItem.motion)
 			const fwd = changedFields(beforeItem, afterItem, ITEM_FIELDS)
 				?? (objectChanged ? {} : null)
 			if (fwd) {
@@ -346,6 +348,9 @@ export function diffTimelines(
 				}
 				if (!sameGenerator(beforeItem.generator, afterItem.generator)) {
 					fwd.generator = afterItem.generator
+				}
+				if (!sameMotion(beforeItem.motion, afterItem.motion)) {
+					fwd.motion = afterItem.motion
 				}
 				const keys = Object.keys(fwd) as (keyof TimelineItem)[]
 				;(forward.updateItems ||= []).push({ id, ...fwd })
@@ -569,13 +574,17 @@ export function findOrphanItems(
 	items: readonly TimelineItem[],
 	assetIds: ReadonlySet<string>
 ): TimelineItem[] {
-	// A title or a generated layer carries its own content and references no
-	// media, so it has no asset id to match. Without this exemption both would
-	// be pruned by the next autosave — main treats an unknown id as media that
-	// was removed.
+	// A title, a generated layer or a motion layer carries its own content and
+	// references no media, so it has no asset id to match. Without this
+	// exemption each would be pruned by the next autosave — main treats an
+	// unknown id as media that was removed.
 	return items.filter((item) =>
-		!item.text && !item.generator && !assetIds.has(item.sourceAssetId))
+		!carriesOwnContent(item) && !assetIds.has(item.sourceAssetId))
 }
+
+/** Items that draw something of their own rather than playing a media asset. */
+export const carriesOwnContent = (item: Pick<TimelineItem, 'text' | 'generator' | 'motion'>): boolean =>
+	!!item.text || !!item.generator || !!item.motion
 
 /**
  * Drops orphan items from a state IN PLACE; returns what was removed.
@@ -774,7 +783,7 @@ export function applyTimelineDiff(
 			// so undoing an edit made BEFORE a media removal would otherwise put
 			// orphans straight back. Adds only — updates on an existing orphan
 			// still apply, so a pre-fix doc stays editable.
-			if (assetById && !assetById.has(item.sourceAssetId)) {
+			if (assetById && !carriesOwnContent(item) && !assetById.has(item.sourceAssetId)) {
 				errors.push(`addItems ${item.id}: media asset ${item.sourceAssetId} is not in the project`)
 				continue
 			}
