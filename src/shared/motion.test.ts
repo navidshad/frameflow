@@ -345,7 +345,8 @@ describe('the rendering recipe (export cache key)', () => {
 
 	it('ignores what does not reach the page: where the clip sits, its label', () => {
 		const recipe = motionRenderRecipe(base, frame)
-		expect(motionRenderRecipe({ ...base, timelineStart: 99, label: 'Other' }, frame)).toBe(recipe)
+		const moved: TimelineItem = { ...base, timelineStart: 99, label: 'Other' }
+		expect(motionRenderRecipe(moved, frame)).toBe(recipe)
 	})
 })
 

@@ -9,10 +9,10 @@
 	.panel { padding: 2.7rem 5.4rem 2.7rem 3.9rem; }
 	.name { font: 700 6.2rem/1.1 Outfit, Inter, sans-serif; color: #18181b; white-space: nowrap; }
 	.role { font: 600 3.9rem/1.2 Inter, sans-serif; margin-top: 0.8rem; white-space: nowrap; }
-	.pill .panel { border-radius: 999rem; padding-left: 5.4rem; }
-	.pill .bar { display: none; }
-	.glass .panel { background: rgba(24, 24, 27, 0.78) !important; border-radius: 1.6rem; }
-	.glass .name { color: #fafafa; }
+	.style-pill .panel { border-radius: 999rem; padding-left: 5.4rem; }
+	.style-pill .bar { display: none; }
+	.style-glass .panel { background: rgba(24, 24, 27, 0.78) !important; border-radius: 1.6rem; }
+	.style-glass .name { color: #fafafa; }
 </style>
 <div class="lt" id="lt" data-ff-bounds>
 	<div class="bar" id="bar"></div>
@@ -43,7 +43,9 @@
 			const shown = enter * (1 - leave)
 			const slide = Number(s.slide) || 0
 
-			lt.className = `lt ${s.style}`
+			// Namespaced: a bare `bar` class on the container would match `.bar` and
+			// squeeze the real accent bar to nothing.
+			lt.className = `lt style-${s.style}`
 			nameEl.textContent = s.name
 			roleEl.textContent = s.role
 			bar.style.background = s.accent
