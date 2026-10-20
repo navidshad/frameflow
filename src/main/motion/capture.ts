@@ -48,6 +48,8 @@ export interface MotionCapture {
 	frame(state: MotionFrameState): Promise<Buffer>
 	/** Errors the page logged or threw so far (uncaught exceptions, console.error). */
 	errors(): string[]
+	/** What the page passed to `frameflow.define`, as it reported it. */
+	reportedDefinition(): Promise<unknown>
 	close(): void
 }
 
@@ -165,6 +167,13 @@ export async function openMotionCapture(
 			return image.toBitmap()
 		},
 		errors: () => [...logged],
+		reportedDefinition: async () => {
+			try {
+				return JSON.parse(await contents.executeJavaScript('JSON.stringify(window.frameflow && window.frameflow.own || null)'))
+			} catch {
+				return null
+			}
+		},
 		close
 	}
 }

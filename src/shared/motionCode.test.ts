@@ -4,7 +4,7 @@ import {
 	motionSource, newMotionSpec, renderVersion, resolveDefinition, sameMotion, type MotionSpec
 } from './motion'
 import {
-	buildChecks, bundledFontsUsed, coerceDefinition, describePrompt, editedSpec, exposedSettings, extractMotionDefinition,
+	buildChecks, bundledFontsUsed, failedSpec, unverifiedPage, verifiedSpec, coerceDefinition, describePrompt, editedSpec, exposedSettings, extractMotionDefinition,
 	fixPrompt, htmlHash, humaniseKey, lastPassingOf, motionBadge, motionStatus, parseDefineCall, projectCustomLayers,
 	provenanceLabel, saveAsTemplateBlocker, templateId, writtenSpec
 } from './motionCode'
@@ -335,6 +335,33 @@ describe('writing a page from the ops path', () => {
 		const a = writtenSpec(newMotionSpec(), GOOD_PAGE, { by: 'Claude Code', turnId: 't8' })
 		const b = writtenSpec(newMotionSpec(), GOOD_PAGE, { by: 'Claude Code', turnId: 't8' })
 		expect(sameMotion(a, b)).toBe(true)
+	})
+})
+
+describe('pages nobody has probed yet', () => {
+	it('lands unverified from the ops path, and verified from the editor', () => {
+		const written = writtenSpec(newMotionSpec(), GOOD_PAGE, { by: 'Claude Code' })
+		expect(unverifiedPage(written)!.html).toBe(GOOD_PAGE)
+		expect(unverifiedPage(editedSpec(newMotionSpec(), GOOD_PAGE, { passed: true }))).toBeNull()
+		expect(unverifiedPage(newMotionSpec())).toBeNull()
+		expect(unverifiedPage({ template: 'lower-third' })).toBeNull()
+	})
+
+	it('is verified once the probe passes', () => {
+		const written = writtenSpec(newMotionSpec(), GOOD_PAGE, { by: 'Claude Code' })
+		const verified = verifiedSpec(written, GOOD_PAGE)
+		expect(unverifiedPage(verified)).toBeNull()
+		// A probe of some older text says nothing about this one.
+		expect(verifiedSpec(written, 'old')).toBe(written)
+	})
+
+	it('draws nothing when the probe fails, and keeps the text to fix', () => {
+		const written = writtenSpec(newMotionSpec(), GOOD_PAGE, { by: 'Claude Code' })
+		const failed = failedSpec(written, GOOD_PAGE)
+		expect(failed.passed).toBeNull()
+		expect(failed.html).toBe(GOOD_PAGE)
+		expect(motionStatus(failed)).toEqual({ state: 'nothing' })
+		expect(failedSpec(written, 'old')).toBe(written)
 	})
 })
 

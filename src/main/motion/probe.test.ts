@@ -92,10 +92,16 @@ describe.skipIf(!canOpenWindows)('the determinism probe, in real Electron', () =
 			// 5. The clock is pinned to zero by the runtime, so reading it is still deterministic.
 			input(page('box.style.opacity = Date.now() % 2 ? 1 : 0.5')),
 			// 6. Never defines itself: nothing to draw.
-			input('<div>hello</div>')
+			input('<div>hello</div>'),
+			// 7. A define call the text reader cannot evaluate (a variable duration).
+			input(page('box.style.left = "1px"', 'var LEN = 1.25;').replace('duration: 2,', 'duration: LEN,'))
 		])
 
-		expect(results[0]).toEqual({ determinism: 'pass' })
+		expect(results[0].determinism).toBe('pass')
+		// The page's own report of its definition comes back, for pages whose
+		// define call the text reader cannot evaluate.
+		expect(results[0].definition!.duration).toBe(2)
+		expect(results[0].definition!.settings.map((s) => s.key)).toEqual(['x'])
 
 		expect(results[1].determinism).toBe('fail')
 		expect(results[1].differsAt).toBeGreaterThanOrEqual(0)
@@ -107,7 +113,10 @@ describe.skipIf(!canOpenWindows)('the determinism probe, in real Electron', () =
 		expect(results[3].determinism).toBe('fail')
 		expect(results[3].error).toMatch(/nowhere is not defined/)
 
-		expect(results[4]).toEqual({ determinism: 'pass' })
+		expect(results[4].determinism).toBe('pass')
 		expect(results[5]).toEqual({ determinism: 'skipped' })
+
+		expect(results[6].determinism).toBe('pass')
+		expect(results[6].definition!.duration).toBe(1.25)
 	}, 90_000)
 })

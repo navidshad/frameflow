@@ -472,6 +472,11 @@ export interface RuntimeReport {
 	differsAt?: number
 	/** The page threw while loading or seeking. */
 	error?: string
+	/**
+	 * The definition the page itself passed to `define`, read at run time. The
+	 * truth when its `define` call is not a literal the text reader can evaluate.
+	 */
+	definition?: MotionDefinition
 }
 
 export interface CheckRow {
@@ -624,7 +629,7 @@ export function editedSpec(
 		...spec,
 		html: text,
 		definition,
-		passed: outcome.passed ? { html: text, definition } : previous,
+		passed: outcome.passed ? { html: text, definition, verified: true } : previous,
 		author: authorAfterYourEdit(spec.author)
 	}
 }
@@ -652,6 +657,27 @@ export function writtenSpec(
 		passed: ok ? { html: text, definition } : (lastPassingOf(base) ?? null),
 		author: { by: author.by, turnId: author.turnId }
 	}
+}
+
+/** The page this layer draws, if it has not been probed yet. */
+export function unverifiedPage(spec: MotionSpec | undefined): MotionSnapshot | null {
+	if (!spec || spec.template || !spec.passed || spec.passed.verified) return null
+	return spec.passed
+}
+
+/** The probe passed on `html`: mark the version that draws it as verified. */
+export function verifiedSpec(spec: MotionSpec, html: string): MotionSpec {
+	if (!spec.passed || spec.passed.html !== html || spec.passed.verified) return spec
+	return { ...spec, passed: { ...spec.passed, verified: true } }
+}
+
+/**
+ * The probe failed on `html`, the page this layer draws: draw nothing rather
+ * than a page that fails. The text stays, as the working copy to fix.
+ */
+export function failedSpec(spec: MotionSpec, html: string): MotionSpec {
+	if (!spec.passed || spec.passed.html !== html) return spec
+	return { ...spec, passed: null }
 }
 
 export type MotionStatus =

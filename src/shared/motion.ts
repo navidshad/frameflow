@@ -90,6 +90,12 @@ export interface MotionDefinition {
 export interface MotionSnapshot {
 	html: string
 	definition?: MotionDefinition
+	/**
+	 * The page has been drawn twice in the hidden window and matched. A page an
+	 * AI or agent writes lands unverified (the ops path has no window) and the
+	 * editor probes it afterwards.
+	 */
+	verified?: boolean
 }
 
 /**
@@ -345,13 +351,13 @@ export function newMotionSpec(templateId?: string): MotionSpec {
 	if (saved) {
 		return {
 			html: saved.html, definition: saved.definition,
-			passed: { html: saved.html, definition: saved.definition },
+			passed: { html: saved.html, definition: saved.definition, verified: true },
 			author: { by: saved.author ?? 'you' }
 		}
 	}
 	return {
 		html: BLANK_MOTION_HTML, definition: BLANK_MOTION_DEFINITION,
-		passed: { html: BLANK_MOTION_HTML, definition: BLANK_MOTION_DEFINITION },
+		passed: { html: BLANK_MOTION_HTML, definition: BLANK_MOTION_DEFINITION, verified: true },
 		author: { by: 'you' }
 	}
 }
@@ -724,7 +730,7 @@ var ff = {
     if (defined) return;
     defined = true;
     var own = d ? { duration: d.duration, settings: d.settings, moments: d.moments } : null;
-    try { post({ type: 'frameflow:defined', definition: JSON.parse(JSON.stringify(own)) }); } catch (e) {}
+    try { ff.own = JSON.parse(JSON.stringify(own)); post({ type: 'frameflow:defined', definition: ff.own }); } catch (e) {}
     var fonts = document.fonts && document.fonts.ready ? document.fonts.ready : Promise.resolve();
     fonts.then(function () { resolveReady(true); }, function () { resolveReady(true); });
   },

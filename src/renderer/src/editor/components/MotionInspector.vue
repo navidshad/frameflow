@@ -1,8 +1,31 @@
 <template>
-	<div class="flex flex-col gap-3.5">
+	<div class="flex flex-col gap-3.5" :class="isCustom ? 'min-h-full' : ''">
+		<!-- A custom page: its name, and the switch between its settings and its code (board 5) -->
+		<div v-if="isCustom" class="flex items-center gap-2 pt-3.5">
+			<h3 class="m-0 text-sm font-bold text-zinc-800 dark:text-zinc-200 font-heading truncate min-w-0">{{ title }}</h3>
+			<span class="shrink-0 px-1.5 py-0.5 rounded bg-pink-500/[0.12] text-pink-400 text-[9px] font-bold uppercase tracking-widest">
+				Motion · custom HTML
+			</span>
+			<span class="flex-1"></span>
+			<div class="flex p-0.5 rounded-lg bg-zinc-100 dark:bg-zinc-800/60 shrink-0" role="tablist" aria-label="Layer view">
+				<button v-for="option in TABS" :key="option.id" role="tab" :aria-selected="tab === option.id"
+					class="py-[3px] px-2.5 rounded-md text-[10px] font-semibold transition"
+					:class="tab === option.id
+						? 'bg-white dark:bg-zinc-700 text-zinc-800 dark:text-white shadow-sm'
+						: 'text-zinc-500 dark:text-zinc-400 hover:text-zinc-700 dark:hover:text-zinc-200'"
+					:data-motion-tab="option.id" @click="tab = option.id">{{ option.label }}</button>
+			</div>
+		</div>
+
+		<MotionCodeTab v-if="isCustom && tab === 'html'" :key="item.id" :item="item" class="flex-1" />
+
+		<template v-else>
 		<!-- What it is, where it is -->
 		<div>
-			<h3 class="mb-2 text-sm font-bold text-zinc-800 dark:text-zinc-200 font-heading truncate">{{ title }}</h3>
+			<p v-if="badge" class="mb-2 px-2 py-1 rounded-lg bg-amber-500/[0.12] text-amber-600 dark:text-amber-400 text-[10px] font-semibold leading-snug" role="status">
+				{{ badge }} — open the HTML tab to see why.
+			</p>
+			<h3 v-if="!isCustom" class="mb-2 text-sm font-bold text-zinc-800 dark:text-zinc-200 font-heading truncate">{{ title }}</h3>
 			<dl class="flex flex-col gap-1.5">
 				<MetaRow label="Track" :value="trackName" />
 				<MetaRow label="Start" :value="formatTime(item.timelineStart)" />
@@ -135,7 +158,7 @@
 				</div>
 			</div>
 			<p class="mt-1.5 text-[9px] leading-snug text-zinc-400">
-				Pink rows are the template's own settings. Open the keyframe lanes on the timeline to move keys and set easing.
+				Pink rows are the {{ isCustom ? 'page’s' : 'template’s' }} own settings. Open the keyframe lanes on the timeline to move keys and set easing.
 			</p>
 		</div>
 
@@ -164,8 +187,8 @@
 			</form>
 		</div>
 
-		<!-- The page itself. Read-only here; authoring is its own stage. -->
-		<div>
+		<!-- A template's page, read-only. A custom page has the HTML tab instead. -->
+		<div v-if="!isCustom">
 			<button class="w-full flex items-center justify-between pt-2 border-t border-zinc-200 dark:border-zinc-800
 			               text-[10px] font-bold uppercase tracking-widest text-zinc-500 dark:text-zinc-400 hover:text-primary transition"
 				:aria-expanded="showSource" @click="showSource = !showSource">
@@ -187,11 +210,12 @@
 				            p-2 font-mono text-[9px] leading-snug text-zinc-600 dark:text-zinc-400 whitespace-pre">{{ source }}</pre>
 			</template>
 		</div>
+		</template>
 	</div>
 </template>
 
 <script setup lang="ts">
-import { computed, h, ref, type FunctionalComponent } from 'vue'
+import { computed, h, ref, watch, type FunctionalComponent } from 'vue'
 import type { TimelineItem } from '@shared/types'
 import { normalise, valueAt, type Keyframe } from '@shared/keyframes'
 import { OFFSET_RANGE, TRANSFORM_DEFAULTS } from '@shared/transform'
@@ -200,7 +224,9 @@ import {
 	resolveMoments, sanitiseSetting, settingValues, OPACITY_PATH,
 	type MotionSettingDef, type MotionSettingValue, type MotionSpec, type ResolvedMoment
 } from '@shared/motion'
+import { motionBadge } from '@shared/motionCode'
 import { useEditorStore } from '../../stores/editorStore'
+import MotionCodeTab from './MotionCodeTab.vue'
 
 /**
  * The inspector for a selected motion layer — board 1's right column.
@@ -215,6 +241,17 @@ const props = defineProps<{ item: TimelineItem }>()
 const store = useEditorStore()
 
 const spec = computed<MotionSpec>(() => props.item.motion ?? {})
+
+// ===== Custom pages: Settings | HTML =====
+
+const isCustom = computed(() => !spec.value.template)
+const TABS = [{ id: 'settings', label: 'Settings' }, { id: 'html', label: 'HTML' }] as const
+type Tab = typeof TABS[number]['id']
+const stored = (): Tab => (localStorage.getItem('editor.motionTab') === 'settings' ? 'settings' : 'html')
+const tab = ref<Tab>(stored())
+watch(tab, (value) => localStorage.setItem('editor.motionTab', value))
+/** Amber when the page fails its checks and an older version is being drawn. */
+const badge = computed(() => (isCustom.value ? motionBadge(spec.value) : null))
 const def = computed(() => resolveDefinition(spec.value))
 const values = computed(() => settingValues(spec.value, def.value))
 const title = computed(() => props.item.label || motionName(spec.value))

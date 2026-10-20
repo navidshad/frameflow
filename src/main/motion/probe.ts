@@ -1,5 +1,6 @@
 import type { MotionDefinition, MotionFrameState } from '@shared/motion'
 import { composeMotionPage, settingValues } from '@shared/motion'
+import { coerceDefinition } from '@shared/motionCode'
 import { openMotionCapture } from './capture'
 
 /**
@@ -30,6 +31,8 @@ export interface MotionProbeResult {
 	differsAt?: number
 	/** The page threw, or logged an error, while it loaded or drew. */
 	error?: string
+	/** What the page passed to `define`, read at run time (see RuntimeReport). */
+	definition?: MotionDefinition
 }
 
 const PROBE_WIDTH = 640
@@ -42,6 +45,11 @@ export function probeMotionPage(input: MotionProbeInput): Promise<MotionProbeRes
 	const run = chain.then(() => probeNow(input), () => probeNow(input))
 	chain = run.catch(() => undefined)
 	return run
+}
+
+const reportedOrUndefined = async (capture: { reportedDefinition(): Promise<unknown> }) => {
+	const reported = await capture.reportedDefinition()
+	return reported ? coerceDefinition(reported).definition : undefined
 }
 
 const tidyError = (message: string): string =>
@@ -71,11 +79,13 @@ async function probeNow(input: MotionProbeInput): Promise<MotionProbeResult> {
 		// Reverse order, so a page that remembers where it was last seeked shows it.
 		for (let k = instants.length - 1; k >= 0; k--) {
 			const again = await capture.frame(instants[k])
-			if (!again.equals(first[k])) return { determinism: 'fail', differsAt: instants[k].t }
+			if (!again.equals(first[k])) return { determinism: 'fail', differsAt: instants[k].t, definition: await reportedOrUndefined(capture) }
 		}
+		const reported = await capture.reportedDefinition()
+		const definition = reported ? coerceDefinition(reported).definition : undefined
 		const logged = capture.errors()
-		if (logged.length) return { determinism: 'fail', error: tidyError(logged[0]) }
-		return { determinism: 'pass' }
+		if (logged.length) return { determinism: 'fail', error: tidyError(logged[0]), definition }
+		return { determinism: 'pass', definition }
 	} catch (error: any) {
 		return { determinism: 'fail', error: tidyError(String(error?.message || error)) }
 	} finally {
