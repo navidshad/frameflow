@@ -451,6 +451,22 @@ export function cuesToAss(
  * Verified against the bundled binary with a directory named `weird: dir,
  * [x]'y` — see the round-trip test in renderPipeline.test.ts.
  */
+/**
+ * The cues on screen at one instant, re-timed so a short clip of a still
+ * frame can burn them: the clip starts at the earliest of their starts, so
+ * each cue keeps its own timing (its fade is as far along as in the export),
+ * and the frame to grab sits `at` seconds into the clip.
+ */
+export function cuesAtInstant(cues: CaptionCue[], timeSec: number): { cues: CaptionCue[]; at: number } {
+	const active = cues.filter((c) => c.start <= timeSec && timeSec < c.end)
+	if (!active.length) return { cues: [], at: 0 }
+	const offset = Math.min(...active.map((c) => c.start))
+	return {
+		cues: active.map((c) => ({ ...c, start: c.start - offset, end: c.end - offset })),
+		at: timeSec - offset
+	}
+}
+
 export function escapeSubtitlesPath(filePath: string): string {
 	// ffmpeg wants forward slashes on Windows, where a backslash inside a filter
 	// argument is an escape character. Only touched for a `C:\...` path, so a

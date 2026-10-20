@@ -1,6 +1,7 @@
 import { defineStore } from 'pinia'
 import { computed, ref } from 'vue'
 import type { AgentAccessState, AgentActivity, AgentSessionInfo } from '@shared/agentFeed'
+import type { AgentFocus } from '@shared/engines'
 import type { EditorRevision } from '@shared/types'
 import { useEditorStore } from './editorStore'
 
@@ -72,6 +73,59 @@ export const useAgentStore = defineStore('agent', () => {
 		return made ? editor.revisions.find((r) => r.id === made.parentId) || null : null
 	}
 
+	// ===== Where the agent is acting (board 3) =====
+	// External agents and FrameFlow's own CLI engine alike.
+
+	/** The latest focus, with when it happened and, for a look, whether it finished. */
+	const focus = ref<{ focus: AgentFocus; at: number; done: boolean; activityId: string } | null>(null)
+	/** How long a focus stays shown once the agent moves on or goes quiet. */
+	const FOCUS_WINDOW_MS = 60_000
+	const engineRunning = computed(() => {
+		const editor = useEditorStore()
+		const id = editor.activeTurnId
+		return !!id && !!editor.doc?.turns.find((t) => t.id === id)?.engine
+	})
+	const agentActive = computed(() => !!editingSession.value || engineRunning.value)
+
+	const readKey = 'frameflow.followAgent'
+	const followAgent = ref<boolean>((() => {
+		try { return localStorage.getItem(readKey) !== '0' } catch { return true }
+	})())
+	const setFollowAgent = (on: boolean) => {
+		followAgent.value = on
+		try { localStorage.setItem(readKey, on ? '1' : '0') } catch { /* per-viewer nicety */ }
+	}
+
+	const fresh = () => !!focus.value && agentActive.value && now.value - focus.value.at < FOCUS_WINDOW_MS
+
+	/** The media the agent is reading: an asset id or a file name, as the agent gave it. */
+	const readingAsset = computed<string | null>(() =>
+		fresh() && focus.value!.focus.kind === 'read' ? (focus.value!.focus as { asset: string }).asset : null
+	)
+	/** The timeline time of the agent's last finished render_frame. */
+	const lookedAt = computed<number | null>(() =>
+		fresh() && focus.value!.focus.kind === 'look' && focus.value!.done ? (focus.value!.focus as { timeSec: number }).timeSec : null
+	)
+
+	const isReading = (asset: { id: string; name: string }): boolean => {
+		const ref = readingAsset.value
+		if (!ref) return false
+		const stem = (n: string) => n.toLowerCase().replace(/\.[^.]+$/, '')
+		return ref === asset.id || ref.toLowerCase() === asset.name.toLowerCase() || stem(ref) === stem(asset.name)
+	}
+
+	const onFocus = (activity: AgentActivity) => {
+		if (!activity.focus) return
+		const done = activity.status !== 'running'
+		focus.value = { focus: activity.focus, at: Date.now(), done, activityId: activity.id }
+		now.value = Date.now()
+		// Follow agent: the playhead goes where the agent looks or edits.
+		if (followAgent.value && activity.focus.kind !== 'read' && (done || activity.focus.kind === 'edit')) {
+			const editor = useEditorStore()
+			if (editor.doc && !editor.isPlaying) editor.seekTo(activity.focus.timeSec)
+		}
+	}
+
 	const refresh = async () => {
 		access.value = await api.getAgentAccess()
 	}
@@ -102,13 +156,14 @@ export const useAgentStore = defineStore('agent', () => {
 			}
 			case 'switch-revision': {
 				if (!open) return { ok: false, error: 'No project is open in the editor.' }
-				if (editor.promptRunning) {
+				// FrameFlow's own engine may switch inside the turn it is running.
+				if (editor.promptRunning && !(payload.engineTurnId && payload.engineTurnId === editor.activeTurnId)) {
 					return { ok: false, error: 'FrameFlow’s own AI is in the middle of an edit. Try again when it finishes.' }
 				}
 				// Never strand the user's unsaved work: checkpoint it, then switch
 				// without the confirmation dialog an agent cannot answer.
 				if (editor.revisionDirty) await editor.createRevision({ origin: 'manual', label: 'Auto checkpoint' })
-				const ok = await editor.switchRevision(payload.revisionId, { force: true })
+				const ok = await editor.switchRevision(payload.revisionId, { force: true, engineTurnId: payload.engineTurnId })
 				return ok ? { ok: true } : { ok: false, error: 'The editor could not switch to that revision.' }
 			}
 			case 'export': {
@@ -137,19 +192,22 @@ export const useAgentStore = defineStore('agent', () => {
 			for (const session of state.sessions) next[session.id] = session
 			known.value = next
 		})
+		api.onEngineActivity?.((activity: AgentActivity) => onFocus(activity))
 		api.onAgentActivity((activity: AgentActivity) => {
+			onFocus(activity)
 			const index = activities.value.findIndex((a) => a.id === activity.id)
 			if (index === -1) activities.value = [...activities.value, activity].slice(-MAX_ACTIVITIES)
 			else activities.value = activities.value.map((a, i) => (i === index ? activity : a))
 		})
 		setInterval(() => {
-			if (sessions.value.length) now.value = Date.now()
+			if (sessions.value.length || focus.value) now.value = Date.now()
 		}, 1000)
 		void refresh()
 	}
 
 	return {
 		access, activities, sessions, liveSession, editingSession, shownSession, isLive, now,
-		feedFor, baselineRevision, refresh, disconnect
+		feedFor, baselineRevision, refresh, disconnect,
+		focus, followAgent, setFollowAgent, readingAsset, lookedAt, isReading, agentActive
 	}
 })

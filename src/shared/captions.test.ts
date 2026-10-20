@@ -359,3 +359,22 @@ describe('cuesToAss with a title', () => {
 		expect(ass).toContain('Default,,0,0,0,,Hi')
 	})
 })
+
+describe('cuesAtInstant (render_frame burns text too)', () => {
+	it('keeps only the cues on screen, re-timed to the earliest start', async () => {
+		const { cuesAtInstant } = await import('./captions')
+		const cues = [
+			{ start: 0, end: 3, text: 'Germany 2025', override: '{\\an8}' },
+			{ start: 1, end: 2, text: 'hello' },
+			{ start: 5, end: 6, text: 'later' }
+		]
+		expect(cuesAtInstant(cues, 1.5)).toEqual({
+			cues: [{ start: 0, end: 3, text: 'Germany 2025', override: '{\\an8}' }, { start: 1, end: 2, text: 'hello' }],
+			at: 1.5
+		})
+		expect(cuesAtInstant(cues, 5.25)).toEqual({ cues: [{ start: 0, end: 1, text: 'later' }], at: 0.25 })
+		expect(cuesAtInstant(cues, 4)).toEqual({ cues: [], at: 0 })
+		expect(cuesAtInstant(cues, 3).cues.map((c) => c.text)).toEqual([])
+	})
+})
+

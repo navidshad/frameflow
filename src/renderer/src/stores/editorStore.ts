@@ -2785,12 +2785,17 @@ export const useEditorStore = defineStore('editor', () => {
 	 * Resets the fine-grained undo ring (its diffs were computed against
 	 * pre-switch states — redo onto the switched snapshot would corrupt it).
 	 */
-	const switchRevision = async (id: string, options: { force?: boolean } = {}): Promise<boolean> => {
+	const switchRevision = async (id: string, options: { force?: boolean; engineTurnId?: string } = {}): Promise<boolean> => {
 		if (!doc.value || !threadId.value) return false
 		if (id === doc.value.currentRevisionId) return true
 		const target = revisions.value.find((r) => r.id === id)
 		if (!target) return false
-		if (promptRunning.value) return false // blocked: completing turn would land on the wrong parent
+		// Blocked: a completing Gemini turn would land its diff on the wrong
+		// parent. A CLI engine's turn carries no diff (its edits are revisions
+		// already), so the engine running it may switch inside it.
+		const engineTurn = !!options.engineTurnId && options.engineTurnId === activeTurnId.value &&
+			!!doc.value.turns.find((t) => t.id === activeTurnId.value)?.engine
+		if (promptRunning.value && !engineTurn) return false
 
 		if (!options.force && revisionDirty.value) {
 			const confirmed = await api.showConfirmation({
@@ -3047,6 +3052,32 @@ export const useEditorStore = defineStore('editor', () => {
 
 		if (turn.id !== activeTurnId.value && turn.status === 'running') return
 
+		if (turn.status === 'completed' && turn.engine && !isAgent) {
+			// A CLI engine's turn: its edits already landed as their own agent
+			// turns (apply_ops), each a revision. This closes the chat turn and
+			// points the result card at the last of them.
+			if (turn.id === activeTurnId.value) activeTurnId.value = null
+			const engine = turn.engine
+			const lastId = engine.finalRevisionId || engine.revisionIds?.[engine.revisionIds.length - 1]
+			const rev = lastId ? revisions.value.find((r) => r.id === lastId) : undefined
+			if (rev) {
+				lastResult.value = {
+					turnId: turn.id,
+					revisionId: rev.id,
+					revisionSeq: rev.seq,
+					parentRevisionId: engine.parentRevisionId ?? rev.parentId ?? null,
+					counts: engine.counts || { added: 0, removed: 0, updated: 0, markers: 0 },
+					rationale: turn.rationale,
+					droppedOps: [],
+					thinContext: false,
+					truncated: false
+				}
+			} else if (turn.answer) {
+				lastAnswer.value = { turnId: turn.id, text: turn.answer }
+			}
+			return
+		}
+
 		if (turn.status === 'completed') {
 			// An agent's turn must not end the user's own prompt still in flight.
 			if (!isAgent || turn.id === activeTurnId.value) activeTurnId.value = null
@@ -3122,7 +3153,9 @@ export const useEditorStore = defineStore('editor', () => {
 					patch: { resultStepId: doc.value.historyRef.currentStepId, revisionId: rev.id }
 				}).catch(() => { /* non-critical */ })
 
-				lastResult.value = {
+				// A CLI engine's own edits wait for its turn to end: that turn's card
+				// shows them all at once, with its steps.
+				if (!turn.agent?.engineTurnId) lastResult.value = {
 					turnId: turn.id,
 					revisionId: rev.id,
 					revisionSeq: rev.seq,

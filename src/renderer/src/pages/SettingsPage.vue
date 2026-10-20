@@ -54,6 +54,9 @@
             </div>
           </Card>
 
+          <!-- AI engine — board 4's upper card -->
+          <AiEngineCard />
+
           <!-- Agent access (MCP) — board 4's lower card -->
           <AgentAccessCard />
 
@@ -250,6 +253,7 @@ import { Input } from 'pilotui/form'
 import { useVideoStore } from '../stores/videoStore'
 import PageHeader from '../components/PageHeader.vue'
 import AgentAccessCard from '../components/settings/AgentAccessCard.vue'
+import AiEngineCard from '../components/settings/AiEngineCard.vue'
 import { ModelSettings } from '../../../shared/types'
 // In a real scenario we'd import constants, but we can also use the IPC-returned defaults if we added a method.
 // For now, we'll manually ensure the new model and selection are present if missing.
