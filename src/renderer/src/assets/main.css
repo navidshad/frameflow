@@ -131,17 +131,27 @@
   .strip-ok { border-top-color: rgba(16, 185, 129, 0.45); }
   .strip-info { border-top-color: rgba(59, 130, 246, 0.45); }
 
+  /* ---- Graph nodes: a flat panel, a 30px header with a colour dot ---- */
+  .node-panel {
+    @apply flex flex-col overflow-hidden bg-white dark:bg-[#0d0d10] text-zinc-900 dark:text-zinc-50;
+    border: 1px solid var(--ff-hairline-strong);
+    border-radius: 3px;
+  }
+  .vue-flow__node.selected .node-panel { border-color: rgb(var(--primary) / 0.6); }
+  .node-head {
+    @apply h-[30px] shrink-0 flex items-center gap-2 px-3;
+    border-bottom: 1px solid var(--ff-hairline);
+  }
+  .node-dot { @apply w-1.5 h-1.5 rounded-full shrink-0; }
+  .node-icon-btn {
+    @apply inline-flex items-center justify-center w-5 h-5 text-zinc-400 transition-colors
+      hover:text-zinc-800 dark:hover:text-zinc-100 disabled:opacity-40;
+  }
+  .node-handle { @apply !w-2 !h-2 !rounded-full !border-0 !bg-zinc-400 dark:!bg-zinc-500; }
+  .node-handle-out { @apply !bg-primary; }
+
   .no-scrollbar { scrollbar-width: none; }
   .no-scrollbar::-webkit-scrollbar { display: none; }
-
-  .glass-card {
-    @apply bg-white/70 dark:bg-zinc-900/80 backdrop-blur-xl border border-white/40 dark:border-white/10 shadow-premium;
-  }
-  
-  .glass-card-hover {
-    @apply hover:shadow-premium-hover hover:border-primary/30;
-    transition: box-shadow 0.5s cubic-bezier(0.4, 0, 0.2, 1), border-color 0.5s cubic-bezier(0.4, 0, 0.2, 1);
-  }
 
   .input-focus-ring {
     @apply border-zinc-200 dark:border-zinc-700/50 transition-all duration-300;

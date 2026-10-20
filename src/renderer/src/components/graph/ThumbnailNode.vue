@@ -1,191 +1,131 @@
 <template>
-  <div class="glass-card glass-card-hover p-0 rounded-3xl min-w-[280px] max-w-[320px] overflow-hidden flex flex-col group transition-all duration-300 cursor-move">
-    <Handle type="target" :position="Position.Top" class="w-3 h-3 bg-zinc-500 border-2 border-white dark:border-zinc-800" />
-    
-    <!-- Main Image Container -->
-    <div class="relative aspect-video bg-black overflow-hidden group/player">
-      <!-- Controls Overlay (Hover) -->
-      <div class="absolute top-2 right-2 flex flex-col gap-2 z-20 opacity-0 group-hover/player:opacity-100 transition-opacity">
-        <SlimTooltip v-if="mediaContentUrl" key="full-screen" text="Full Screen View" placement="left">
-          <button @click="isFullScreen = true" class="p-1.5 bg-black/50 backdrop-blur-md rounded-lg hover:bg-black/80 text-white transition-all shadow-lg">
-            <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 8V4m0 0h4M4 4l5 5m11-1V4m0 0h-4m4 0l-5 5M4 16v4m0 0h4m-4 0l5-5m11 5l-5-5m5 5v-4m0 4h-4"></path></svg>
-          </button>
-        </SlimTooltip>
-        <SlimTooltip key="details" text="Toggle Details" placement="left">
-          <button @click="toggleDetails" class="p-1.5 bg-black/50 backdrop-blur-md rounded-lg hover:bg-black/80 transition-all shadow-lg" :class="{'text-blue-400': showDetails, 'text-white': !showDetails}">
-            <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13 16h-1v-4h-1m1-4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z"></path></svg>
-          </button>
-        </SlimTooltip>
-        <SlimTooltip key="save" text="Save Image" placement="left">
-          <button @click="() => handleSave()" class="p-1.5 bg-black/50 backdrop-blur-md rounded-lg hover:bg-black/80 text-white transition-all shadow-lg">
-            <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path d="M8 17H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h10a2 2 0 0 1 2 2v3m-1 7l-4 4-4-4m4 4V10" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg>
-          </button>
-        </SlimTooltip>
-        <SlimTooltip key="refine" text="Refine using all references" placement="left">
-          <button @click="addReferencesToInput" class="p-1.5 bg-black/50 backdrop-blur-md rounded-lg hover:bg-primary/80 text-white transition-all shadow-lg group-hover:scale-110 active:scale-95">
-            <svg xmlns="http://www.w3.org/2000/svg" class="w-4 h-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 11l-5 5" /><path d="M17 6l-5 5" /><path d="M5 20l14 -14" /><path d="M19 19v-11" /><path d="M11 19h8" /></svg>
-          </button>
-        </SlimTooltip>
-        <SlimTooltip key="attachment" :text="isAvailableForAttachment ? 'Remove from attachments' : 'Add to available attachments'" placement="left">
-          <button @click="toggleAttachment" class="p-1.5 bg-black/50 backdrop-blur-md rounded-lg hover:bg-black/80 transition-all shadow-lg" :class="{'text-primary-light': isAvailableForAttachment, 'text-white': !isAvailableForAttachment}">
-            <svg v-if="isAvailableForAttachment" xmlns="http://www.w3.org/2000/svg" class="w-4 h-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M15 8h.01" /><path d="M11.5 21h-5.5a3 3 0 0 1 -3 -3v-12a3 3 0 0 1 3 -3h12a3 3 0 0 1 3 3v5" /><path d="M3 16l5 -5c.928 -.893 2.072 -.893 3 0l3 3" /><path d="M14 14l1 -1c.928 -.893 2.072 -.893 3 0l0 0" /><path d="M15 19l2 2l4 -4" /></svg>
-            <svg v-else xmlns="http://www.w3.org/2000/svg" class="w-4 h-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M15 8h.01" /><path d="M12.5 21h-6.5a3 3 0 0 1 -3 -3v-12a3 3 0 0 1 3 -3h12a3 3 0 0 1 3 3v6.5" /><path d="M3 16l5 -5c.928 -.893 2.072 -.893 3 0l3 3" /><path d="M14 14l1 -1c.67 -.644 1.45 -.824 2.182 -.54" /><path d="M16 19h6" /><path d="M19 16v6" /></svg>
-          </button>
-        </SlimTooltip>
-        <SlimTooltip key="delete" text="Delete node and branches" placement="left">
-          <button @click="data.onDelete" class="p-1.5 bg-black/50 backdrop-blur-md rounded-lg hover:bg-red-500/80 text-white transition-all shadow-lg">
-            <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16"></path></svg>
-          </button>
-        </SlimTooltip>
-      </div>
+  <div class="node-panel min-w-[280px] max-w-[320px] group cursor-move">
+    <Handle type="target" :position="Position.Top" class="node-handle" />
 
-      <!-- Image Content -->
-      <img 
-        :src="mediaContentUrl" 
-        class="w-full h-full object-contain cursor-move transition-transform duration-500 hover:scale-105" 
-        @click="isFullScreen = true"
-        draggable="false"
-      />
-    </div>
-
-    <!-- Node Info Tags (Unified Variation) -->
-    <div class="px-4 py-2.5 bg-zinc-50/50 dark:bg-white/[0.02] border-b border-black/5 dark:border-white/5 flex items-center gap-3 cursor-move">
-      <!-- Version -->
-      <div v-if="data.version" class="text-[10px] font-bold text-primary dark:text-primary-light font-mono leading-none">
-         {{ data.version }}
-      </div>
-
-      <div v-if="data.version" class="w-px h-3 bg-black/10 dark:bg-white/10"></div>
-
-      <!-- Media Type -->
-      <div class="text-[9px] font-black uppercase tracking-[0.15em] text-zinc-500 dark:text-zinc-400 leading-none">
-        {{ displayType }}
-      </div>
-      
-      <div class="w-px h-3 bg-black/10 dark:bg-white/10"></div>
-
-      <!-- Preview Type -->
-      <div class="text-[9px] font-black uppercase tracking-widest text-accent dark:text-accent-light leading-none">
-        {{ activeFileType }}
+    <!-- Header: the actions are a small icon row -->
+    <div class="node-head cursor-move">
+      <span class="node-dot bg-accent-light"></span>
+      <span class="lbl !text-zinc-800 dark:!text-zinc-200">Result · {{ displayType.toLowerCase() }}</span>
+      <div class="flex-1"></div>
+      <div class="node-actions nodrag flex items-center gap-2">
+        <SlimTooltip v-if="mediaContentUrl" key="full-screen" text="Full Screen View" placement="bottom">
+          <button @click="isFullScreen = true" aria-label="Full Screen View" class="node-icon-btn">
+            <span class="iconify tabler--arrows-maximize w-3.5 h-3.5"></span>
+          </button>
+        </SlimTooltip>
+        <SlimTooltip key="details" text="Toggle Details" placement="bottom">
+          <button @click="toggleDetails" aria-label="Toggle Details" class="node-icon-btn" :class="{ '!text-primary': showDetails }">
+            <span class="iconify tabler--info-circle w-3.5 h-3.5"></span>
+          </button>
+        </SlimTooltip>
+        <SlimTooltip key="save" text="Save Image" placement="bottom">
+          <button @click="() => handleSave()" aria-label="Save Image" class="node-icon-btn">
+            <span class="iconify tabler--download w-3.5 h-3.5"></span>
+          </button>
+        </SlimTooltip>
+        <SlimTooltip key="refine" text="Refine using all references" placement="bottom">
+          <button @click="addReferencesToInput" aria-label="Refine using all references" class="node-icon-btn hover:!text-primary">
+            <span class="iconify tabler--wand w-3.5 h-3.5"></span>
+          </button>
+        </SlimTooltip>
+        <SlimTooltip key="attachment" :text="isAvailableForAttachment ? 'Remove from attachments' : 'Add to available attachments'" placement="bottom">
+          <button @click="toggleAttachment" aria-label="Toggle attachment" class="node-icon-btn" :class="{ '!text-primary': isAvailableForAttachment }">
+            <span class="iconify w-3.5 h-3.5" :class="isAvailableForAttachment ? 'tabler--photo-check' : 'tabler--photo-plus'"></span>
+          </button>
+        </SlimTooltip>
+        <SlimTooltip key="delete" text="Delete node and branches" placement="bottom">
+          <button @click="data.onDelete" aria-label="Delete node and branches" class="node-icon-btn hover:!text-red-500">
+            <span class="iconify tabler--trash w-3.5 h-3.5"></span>
+          </button>
+        </SlimTooltip>
       </div>
     </div>
 
-    <!-- Reference Frames Gallery (Visible by default if present) -->
-    <div v-if="referenceFrames.length > 0" class="px-3 py-2 bg-black/10 dark:bg-black/40 border-b border-black/5 dark:border-white/5 nodrag">
-        <div class="flex items-center justify-between mb-2">
-            <div class="flex items-center gap-2">
-                <span class="text-[8px] font-black uppercase tracking-widest text-zinc-500">{{ displayReferenceLabel }}</span>
-                <button @click="addReferencesToInput" class="p-1 rounded bg-white/5 hover:bg-white/10 text-zinc-400 hover:text-primary transition-all shadow-sm" title="Use as refinement attachments">
-                    <svg class="w-2.5 h-2.5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="3" d="M12 4v16m8-8H4"></path></svg>
-                </button>
-            </div>
-            <span class="text-[8px] font-bold text-zinc-400">{{ referenceFrames.length }} detected</span>
+    <!-- Image -->
+    <div class="relative aspect-video bg-black overflow-hidden">
+      <img :src="mediaContentUrl" class="w-full h-full object-contain cursor-move" @click="isFullScreen = true" draggable="false" />
+    </div>
+
+    <!-- Version / kind / which file is showing -->
+    <div class="px-3 py-1.5 hair-b flex items-center gap-3 cursor-move font-mono text-[10px]">
+      <span v-if="data.version" class="text-zinc-700 dark:text-zinc-200">{{ data.version }}</span>
+      <span class="uppercase tracking-wide text-zinc-500 dark:text-zinc-400">{{ displayType }}</span>
+      <span class="uppercase tracking-wide text-accent">{{ activeFileType }}</span>
+    </div>
+
+    <!-- Reference frames (visible by default when present) -->
+    <div v-if="referenceFrames.length > 0" class="px-3 py-2 hair-b nodrag">
+      <div class="flex items-center gap-2 mb-2">
+        <span class="lbl !text-[9px]">{{ displayReferenceLabel }}</span>
+        <div class="flex-1"></div>
+        <button @click="addReferencesToInput" class="text-[10px] font-semibold text-primary hover:text-primary-dark transition-colors"
+          title="Use as refinement attachments">Use as attachments</button>
+        <span class="text-[10px] text-zinc-500">{{ referenceFrames.length }} detected</span>
+      </div>
+      <div class="flex gap-1.5 overflow-x-auto pb-1 custom-scrollbar scroll-smooth">
+        <button v-for="(frame, idx) in referenceFrames" :key="idx" type="button"
+          class="shrink-0 w-16 aspect-video rounded-[2px] overflow-hidden transition"
+          :class="previewUrl === mediaUrl(frame.url) ? 'ring-2 ring-primary' : 'ring-1 ring-[color:var(--ff-hairline-strong)] opacity-70 hover:opacity-100'"
+          @click="previewUrl = mediaUrl(frame.url)">
+          <img :src="mediaUrl(frame.url)" class="w-full h-full object-cover" />
+        </button>
+        <!-- Reset to actual toggle -->
+        <button v-if="previewUrl !== mediaUrl(actualFile?.url)" type="button"
+          class="shrink-0 w-16 aspect-video rounded-[2px] flex items-center justify-center text-accent ring-1 ring-accent/50 hover:bg-accent/10 transition"
+          title="Back to Generated Thumbnail" @click="previewUrl = mediaUrl(actualFile?.url)">
+          <span class="iconify tabler--arrow-back-up w-4 h-4"></span>
+        </button>
+      </div>
+    </div>
+
+    <!-- Details -->
+    <div v-if="showDetails" class="px-3 py-3 hair-b space-y-3 nodrag cursor-text">
+      <!-- Model content / explanation -->
+      <div v-if="data.content">
+        <div class="lbl !text-primary">Model feedback</div>
+        <div class="mt-1.5 prose prose-xs dark:prose-invert prose-p:my-0 prose-pre:my-2 prose-ul:my-1 text-zinc-700 dark:text-zinc-300 leading-relaxed select-text"
+          v-html="renderMarkdown(data.content)"></div>
+      </div>
+
+      <div v-if="metadata || isMetadataLoading">
+        <div v-if="isMetadataLoading" class="flex items-center gap-2 text-[10px] text-zinc-500 uppercase tracking-wide">
+          <span class="iconify tabler--loader-2 w-3 h-3 animate-spin text-primary"></span>Loading media info...
         </div>
-        <div class="flex gap-2 overflow-x-auto pb-1 custom-scrollbar scroll-smooth">
-            <div 
-                v-for="(frame, idx) in referenceFrames" 
-                :key="idx"
-                class="flex-shrink-0 w-16 aspect-video rounded-md overflow-hidden border transition-all cursor-pointer hover:border-primary/60 active:scale-95 group/ref"
-                :class="[
-                  previewUrl === mediaUrl(frame.url) ? 'border-primary ring-1 ring-primary/20 scale-95 shadow-lg' : 'border-black/10 dark:border-white/10 grayscale-[0.5] hover:grayscale-0'
-                ]"
-                @click="previewUrl = mediaUrl(frame.url)"
-            >
-                <img :src="mediaUrl(frame.url)" class="w-full h-full object-cover" />
-            </div>
-            <!-- Reset to actual toggle -->
-             <div 
-                v-if="previewUrl !== mediaUrl(actualFile?.url)"
-                class="flex-shrink-0 w-16 aspect-video rounded-md overflow-hidden border border-accent/40 bg-accent/10 flex items-center justify-center cursor-pointer hover:bg-accent/20 transition-all text-accent-light group/reset"
-                @click="previewUrl = mediaUrl(actualFile?.url)"
-                title="Back to Generated Thumbnail"
-            >
-                <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="3" d="M3 10h10a8 8 0 018 8v2M3 10l4 4m-4-4l4-4"></path></svg>
-            </div>
+        <div v-else-if="metadata" class="flex gap-4 text-[11px] text-zinc-500 dark:text-zinc-400 font-mono select-text">
+          <span>{{ metadata?.width }}×{{ metadata?.height }}</span>
+          <span class="uppercase">{{ (metadata?.format?.split(',')[0] || 'Image').replace('image2', 'PNG') }}</span>
+          <span>{{ formatFileSize(metadata?.size) }}</span>
         </div>
+      </div>
+
+      <!-- High-res upscaling -->
+      <div v-if="!isMetadataLoading" class="space-y-1.5 cursor-default">
+        <div class="flex items-center">
+          <span class="lbl !text-primary">High-res upscaling</span>
+          <div class="flex-1"></div>
+          <span class="text-[10px] text-zinc-500">Nano Banana</span>
+        </div>
+        <div class="flex gap-4 text-xs font-semibold">
+          <!-- Upscale x2 or Download 2K -->
+          <button v-if="!isAtLeast2K" @click="handleUpscale('x2')" :disabled="!!isUpscaling"
+            class="btn-text btn-text-primary !px-0 !h-6">
+            <span v-if="isUpscaling === 'x2'" class="iconify tabler--loader-2 w-3 h-3 animate-spin"></span>
+            {{ isUpscaling === 'x2' ? 'Upscaling...' : 'Upscale ×2' }}
+          </button>
+          <button v-else @click="() => handleSave(mediaUrl(actualFile.upscale2k))" class="btn-text !px-0 !h-6 !text-accent">Download 2K</button>
+
+          <!-- Upscale x4 or Download 4K -->
+          <button v-if="!isAtLeast4K" @click="handleUpscale('x4')" :disabled="!!isUpscaling"
+            class="btn-text btn-text-primary !px-0 !h-6">
+            <span v-if="isUpscaling === 'x4'" class="iconify tabler--loader-2 w-3 h-3 animate-spin"></span>
+            {{ isUpscaling === 'x4' ? 'Upscaling...' : 'Upscale ×4' }}
+          </button>
+          <button v-else @click="() => handleSave(mediaUrl(actualFile.upscale4k))" class="btn-text !px-0 !h-6 !text-accent">Download 4K</button>
+        </div>
+      </div>
     </div>
 
-    <!-- Details Metadata Section -->
-    <div v-if="showDetails" class="px-4 py-3 bg-white/5 border-b border-white/5 space-y-4 animate-in slide-in-from-top duration-300 nodrag cursor-text">
-      <!-- Model Content / Explanation -->
-      <div v-if="data.content" class="pb-4 border-b border-white/5">
-          <div class="text-[8px] font-black uppercase tracking-widest text-primary-light mb-2">Model Feedback</div>
-          <div 
-              class="prose prose-xs dark:prose-invert prose-p:my-0 prose-pre:my-2 prose-ul:my-1 text-zinc-800 dark:text-zinc-300/90 leading-relaxed font-medium select-text"
-              v-html="renderMarkdown(data.content)"
-          ></div>
-      </div>
-      
-      <div v-if="metadata || isMetadataLoading" class="grid grid-cols-2 gap-3 pb-4">
-        <div v-if="isMetadataLoading" class="col-span-2 py-4 flex items-center justify-center space-x-2">
-           <div class="w-3 h-3 border-2 border-primary border-t-transparent animate-spin rounded-full"></div>
-           <span class="text-[10px] text-zinc-500 font-bold uppercase tracking-widest">Loading Media Info...</span>
-        </div>
-        <template v-else-if="metadata">
-          <div class="flex flex-col gap-0.5 select-text">
-            <span class="text-[9px] font-bold text-zinc-500 dark:text-zinc-500 uppercase tracking-widest">Resolution</span>
-            <span class="text-[11px] text-zinc-700 dark:text-zinc-200 font-mono">{{ metadata?.width }}x{{ metadata?.height }}</span>
-          </div>
-          <div class="flex flex-col gap-0.5 select-text">
-            <span class="text-[9px] font-bold text-zinc-500 dark:text-zinc-500 uppercase tracking-widest">File Size</span>
-            <span class="text-[11px] text-zinc-700 dark:text-zinc-200 font-mono">{{ formatFileSize(metadata?.size) }}</span>
-          </div>
-          <div class="flex flex-col gap-0.5 select-text">
-            <span class="text-[9px] font-bold text-zinc-500 dark:text-zinc-500 uppercase tracking-widest">Format</span>
-            <span class="text-[11px] text-zinc-700 dark:text-zinc-200 font-mono uppercase">{{ (metadata?.format?.split(',')[0] || 'Image').replace('image2', 'PNG') }}</span>
-          </div>
-        </template>
-      </div>
-
-      <!-- High-Res Upscaling Section -->
-      <div v-if="!isMetadataLoading" class="pt-4 border-t border-white/5 space-y-3 nodrag cursor-default">
-          <div class="flex items-center justify-between">
-              <span class="text-[9px] font-black uppercase tracking-widest text-primary-light">High-Res Upscaling</span>
-              <span class="text-[8px] font-bold text-zinc-500 italic">Nano Banana</span>
-          </div>
-          <div class="flex gap-2">
-            <!-- Upscale x2 or Download 2K -->
-            <button 
-                v-if="!isAtLeast2K"
-                @click="handleUpscale('x2')" 
-                :disabled="!!isUpscaling"
-                class="flex-1 px-3 py-2 rounded-xl bg-primary/10 hover:bg-primary/20 border border-primary/20 text-[10px] font-bold text-primary-light transition-all disabled:opacity-50 disabled:cursor-not-allowed flex items-center justify-center gap-2"
-            >
-                <div v-if="isUpscaling === 'x2'" class="w-3 h-3 border-2 border-primary border-t-transparent animate-spin rounded-full"></div>
-                {{ isUpscaling === 'x2' ? 'Upscaling...' : 'Upscale x2' }}
-            </button>
-            <button 
-                v-else
-                @click="() => handleSave(mediaUrl(actualFile.upscale2k))"
-                class="flex-1 px-3 py-2 rounded-xl bg-green-500/10 hover:bg-green-500/20 border border-green-500/20 text-[10px] font-bold text-green-500 transition-all flex items-center justify-center gap-2"
-            >
-                <svg class="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-4l-4 4m0 0l-4-4m4 4V4" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"/></svg>
-                Download 2K
-            </button>
-
-            <!-- Upscale x4 or Download 4K -->
-            <button 
-                v-if="!isAtLeast4K"
-                @click="handleUpscale('x4')" 
-                :disabled="!!isUpscaling"
-                class="flex-1 px-3 py-2 rounded-xl bg-accent/10 hover:bg-accent/20 border border-accent/20 text-[10px] font-bold text-accent-light transition-all disabled:opacity-50 disabled:cursor-not-allowed flex items-center justify-center gap-2"
-            >
-                <div v-if="isUpscaling === 'x4'" class="w-3 h-3 border-2 border-accent border-t-transparent animate-spin rounded-full"></div>
-                {{ isUpscaling === 'x4' ? 'Upscaling...' : 'Upscale x4' }}
-            </button>
-            <button 
-                v-else
-                @click="() => handleSave(mediaUrl(actualFile.upscale4k))"
-                class="flex-1 px-3 py-2 rounded-xl bg-green-500/10 hover:bg-green-500/20 border border-green-500/20 text-[10px] font-bold text-green-500 transition-all flex items-center justify-center gap-2"
-            >
-                <svg class="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-4l-4 4m0 0l-4-4m4 4V4" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"/></svg>
-                Download 4K
-            </button>
-          </div>
-      </div>
-    </div>
-    
-    <BaseMessageInput 
+    <BaseMessageInput
       v-if="showInput"
       ref="messageInput"
       v-model="input"
@@ -193,22 +133,23 @@
       v-model:autoUseImages="localAutoUseImages"
       placeholder="Adjust or follow up..."
       compact
-      class="p-2 border-t border-black/5 dark:border-white/5 bg-black/[0.02] dark:bg-white/[0.02] nodrag interactive-in-pan animate-in slide-in-from-bottom duration-300"
+      class="nodrag interactive-in-pan"
       @send="submit"
     />
 
-    <!-- Full Screen Modal -->
+    <!-- Full screen -->
     <Teleport to="body">
-      <div v-if="isFullScreen" class="fixed inset-0 z-[9999] bg-black/95 flex flex-col items-center justify-center p-8 backdrop-blur-3xl animate-in fade-in duration-300">
-        <button @click="isFullScreen = false" class="absolute top-8 right-8 p-3 bg-white/10 hover:bg-white/20 rounded-full text-white transition-all active:scale-90 z-50">
-          <svg class="w-8 h-8" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12"></path></svg>
+      <div v-if="isFullScreen" class="fixed inset-0 z-[9999] bg-black/90 flex flex-col items-center justify-center p-8">
+        <button @click="isFullScreen = false" aria-label="Close preview"
+          class="absolute top-6 right-6 w-8 h-8 flex items-center justify-center rounded-md text-white/80 hover:text-white hover:bg-white/10 transition z-50">
+          <span class="iconify tabler--x w-5 h-5"></span>
         </button>
-        <img :src="mediaContentUrl" class="max-w-full max-h-full rounded-2xl shadow-2xl ring-1 ring-white/20 object-contain" />
-        <div class="mt-6 text-xl font-bold text-white opacity-80 italic tracking-tight">Result: Thumbnail (V{{ props.data.version || 1 }})</div>
+        <img :src="mediaContentUrl" class="max-w-full max-h-full rounded-[3px] object-contain" />
+        <div class="mt-4 text-sm font-semibold text-white/80">Result: Thumbnail (V{{ props.data.version || 1 }})</div>
       </div>
     </Teleport>
 
-    <Handle type="source" :position="Position.Bottom" class="w-3 h-3 bg-blue-500 border-2 border-white dark:border-zinc-800" />
+    <Handle type="source" :position="Position.Bottom" class="node-handle node-handle-out" />
   </div>
 </template>
 
@@ -408,16 +349,3 @@ const formatFileSize = (bytes?: number) => {
   return `${mb.toFixed(1)} MB`
 }
 </script>
-
-<style scoped>
-.custom-scrollbar::-webkit-scrollbar {
-  height: 4px;
-}
-.custom-scrollbar::-webkit-scrollbar-track {
-  background: transparent;
-}
-.custom-scrollbar::-webkit-scrollbar-thumb {
-  background: rgba(128, 128, 128, 0.2);
-  border-radius: 10px;
-}
-</style>

@@ -21,9 +21,9 @@
 	<Teleport to="body">
 		<div v-if="visible && text"
 			ref="bubble"
-			class="fixed z-[200] pointer-events-none px-2 py-1 rounded bg-zinc-900/90 backdrop-blur-md
+			class="fixed z-[200] pointer-events-none px-2 py-1 rounded bg-zinc-900
 			       border border-white/10 text-white text-[9px] font-black uppercase tracking-[0.05em]
-			       whitespace-nowrap shadow-2xl flex items-center gap-1.5 transition-opacity duration-150"
+			       whitespace-nowrap shadow-lg flex items-center gap-1.5 transition-opacity duration-150"
 			:style="style">
 			{{ text }}
 		</div>
