@@ -4,7 +4,9 @@
 			selected
 				? 'border-primary ring-2 ring-primary/40 shadow-md shadow-primary/20 z-10'
 				: 'border-zinc-300/60 dark:border-zinc-700/80 hover:border-primary/40',
-			track?.locked ? 'pointer-events-none opacity-60' : 'cursor-grab active:cursor-grabbing'
+			track?.locked ? 'pointer-events-none opacity-60' : 'cursor-grab active:cursor-grabbing',
+			effectHover ? 'ring-2 ring-accent border-accent' : '',
+			dragging ? 'opacity-80 shadow-lg shadow-black/30 z-30' : ''
 		]"
 		:style="{ transform: `translateX(${viewport.secToPx(item.timelineStart)}px)`, width: `${Math.max(viewport.secToPx(item.duration), 6)}px` }"
 		role="option" :aria-selected="selected" tabindex="0"
@@ -12,7 +14,10 @@
 		@pointerenter="hovering = true"
 		@pointerleave="hovering = false"
 		@pointerdown.stop="onPointerDown"
-		@click.stop="onClick">
+		@click.stop="onClick"
+		@dragover.stop="onEffectDragOver"
+		@dragleave.stop="effectHover = false"
+		@drop.stop="onEffectDrop">
 
 		<!-- Body: filmstrip (scene thumbnail) or context (visual text) -->
 		<div class="absolute inset-0 bg-zinc-200 dark:bg-zinc-800">
@@ -75,9 +80,39 @@ import { TimelineViewportKey, TimelineInteractionsKey } from '../../composables/
 
 const props = defineProps<{ item: TimelineItem }>()
 
+/**
+ * An effect's drop target is the clip BODY, where a transition's is the cut.
+ * `.stop` on all three keeps the event off the lane, whose own handler would
+ * set dropEffect='none' and cancel the drop this element just accepted — the
+ * lesson the seam targets already learned.
+ */
+const effectHover = ref(false)
+
+const onEffectDragOver = (e: DragEvent) => {
+	if (!e.dataTransfer?.types.includes('application/x-frameflow-kind-effect')) return
+	e.preventDefault()
+	e.dataTransfer.dropEffect = 'copy'
+	effectHover.value = true
+}
+
+const onEffectDrop = (e: DragEvent) => {
+	effectHover.value = false
+	const kind = e.dataTransfer?.getData('application/x-frameflow-effect')
+	if (!kind) return
+	e.preventDefault()
+	store.addEffect(props.item.id, kind)
+	store.selectItems([props.item.id])
+	store.draggingEffectKind = null
+}
+
 const store = useEditorStore()
 const viewport = inject(TimelineViewportKey)!
 const interactions = inject(TimelineInteractionsKey)!
+
+/** Lifted while it is the one being dragged, so it reads as picked up. */
+const dragging = computed(() =>
+	interactions.mode.value === 'movingItem' && interactions.activeItemId.value === props.item.id
+)
 
 const hovering = ref(false)
 

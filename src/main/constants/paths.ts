@@ -10,7 +10,9 @@ export const THREAD_DIRS = {
 	// Timeline editor: per-asset artifact root (tempDir/media/<assetId>/...)
 	MEDIA: 'media',
 	// Timeline editor: export workdirs + final renders (tempDir/exports/...)
-	EXPORTS: 'exports'
+	EXPORTS: 'exports',
+	// Timeline editor: cached transition previews for the monitor (tempDir/previews/...)
+	PREVIEWS: 'previews'
 } as const
 
 // Subdirectories inside tempDir/media/<assetId>/ for the timeline editor.

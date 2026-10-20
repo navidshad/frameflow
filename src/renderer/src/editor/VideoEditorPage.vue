@@ -53,16 +53,18 @@
 				<div class="flex-1 min-w-0 flex flex-col gap-3">
 					<!-- Top zones: media | preview | right rail — rails collapse to slim strips -->
 					<div class="flex-1 min-h-0 grid gap-3 transition-all duration-300"
-						:style="{ gridTemplateColumns: `${leftOpen ? leftW + 'px' : '36px'} minmax(0,1fr) auto` }">
+						:style="{ gridTemplateColumns: `${leftOpen ? leftW + 'px' : '40px'} minmax(0,1fr) auto` }">
 
-						<!-- Left rail: media (drag its right edge to resize) -->
-						<div v-if="leftOpen" class="relative min-h-0 flex">
-							<MediaPanel v-model:collapsed="leftCollapsedProxy" class="flex-1 min-w-0" />
-							<ResizeHandle direction="vertical" class="absolute inset-y-0 -right-2.5 z-20"
+						<!-- Left rail. Unlike the other rails this one does NOT swap for a
+						     stub when collapsed: the tab strip stays, so a collapsed
+						     sidebar is still a row of things you can click rather than a
+						     button that only reopens whatever you last had. -->
+						<div class="relative min-h-0 flex">
+							<LeftRail v-model:collapsed="leftCollapsedProxy" v-model:tab="leftTab" />
+							<ResizeHandle v-if="leftOpen" direction="vertical"
+								class="absolute inset-y-0 -right-2.5 z-20"
 								@resize="resizeLeft" @reset="resetLeft" />
 						</div>
-						<CollapsedRail v-else side="left" label="Media" icon="tabler--photo-video"
-							@open="leftOpen = true" />
 
 						<!-- Center: the monitor gets the full column now -->
 						<PreviewMonitor class="min-h-0" />
@@ -102,6 +104,7 @@
 			</main>
 
 			<ExportDialog v-model="showExport" />
+			<ShortcutsOverlay />
 		</template>
 	</div>
 </template>
@@ -112,9 +115,10 @@ import type { FunctionalComponent } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import GraphHeader from '../components/graph/GraphHeader.vue'
 import { useEditorStore } from '../stores/editorStore'
-import MediaPanel from './components/MediaPanel.vue'
+import LeftRail, { type LeftTab } from './components/LeftRail.vue'
 import PreviewMonitor from './components/PreviewMonitor.vue'
 import TimelinePanel from './components/TimelinePanel.vue'
+import ShortcutsOverlay from './components/ShortcutsOverlay.vue'
 import ChatColumn from './components/ChatColumn.vue'
 import InspectorColumn from './components/InspectorColumn.vue'
 import ExportDialog from './components/ExportDialog.vue'
@@ -129,6 +133,8 @@ const showExport = ref(false)
 
 // ===== Collapsible rails (persisted per machine) =====
 const leftOpen = ref(localStorage.getItem('editor.leftRail') !== 'closed')
+const leftTab = ref<LeftTab>((localStorage.getItem('editor.leftTab') as LeftTab) || 'media')
+watch(leftTab, (v) => localStorage.setItem('editor.leftTab', v))
 // Right region = two independently-collapsible COLUMNS. Closing a column frees
 // its horizontal space, widening the player.
 const chatColOpen = ref(localStorage.getItem('editor.chatCol') !== 'closed')
@@ -214,6 +220,11 @@ watch(chatColOpen, (open) => { if (open) chatBadge.value = false })
 // Selecting a clip reveals the Inspector row so its details are visible.
 watch(() => editorStore.selectedItemIds.length, (n) => {
 	if (n > 0 && !inspectorOpen.value) inspectorOpen.value = true
+})
+
+// Same courtesy for a transition: its whole inspector is where you set the length.
+watch(() => editorStore.selectedSeamId, (id) => {
+	if (id && !inspectorOpen.value) inspectorOpen.value = true
 })
 
 const totalCost = computed(() =>

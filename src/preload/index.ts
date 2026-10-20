@@ -83,10 +83,20 @@ const api = {
 	getPersonas: () => ipcRenderer.invoke('get-personas'),
 	setPersonas: (personas: any[]) => ipcRenderer.invoke('set-personas', personas),
 	// `doc` = in-memory timeline snapshot at click time (render detaches from the live doc)
-	exportEditorTimeline: (data: { threadId: string, quality: 'original' | 'preview', doc?: unknown }) =>
+	exportEditorTimeline: (data: {
+		threadId: string, quality: 'original' | 'preview', doc?: unknown, format?: 'h264' | 'prores'
+	}) =>
 		ipcRenderer.invoke('export-editor-timeline', data),
 	abortEditorRender: (data: { renderId: string }) =>
 		ipcRenderer.invoke('abort-editor-render', data),
+	getEditorTranscripts: (threadId: string) =>
+		ipcRenderer.invoke('get-editor-transcripts', threadId),
+	getEffectPacks: () => ipcRenderer.invoke('get-effect-packs'),
+	renderExactFrame: (data: { threadId: string; doc: unknown; timeSec: number }) =>
+		ipcRenderer.invoke('render-exact-frame', data),
+	ensureTransitionPreview: (data: {
+		threadId: string; doc: unknown; outgoingId: string; incomingId: string
+	}) => ipcRenderer.invoke('ensure-transition-preview', data),
 	onEditorRenderProgress: (callback: (data: any) => void) => {
 		const listener = (_event: any, data: any) => callback(data)
 		ipcRenderer.on('editor-render-progress', listener)

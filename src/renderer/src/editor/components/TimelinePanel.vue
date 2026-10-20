@@ -23,7 +23,25 @@
 					<div class="sticky top-0 z-30 bg-zinc-50/95 dark:bg-zinc-950/95 backdrop-blur-sm">
 						<TimelineRuler />
 					</div>
+					<!-- Drag past the top of the stack and a video lane is offered.
+					     Overlaid rather than inserted: adding a row here mid-drag
+					     would shift every lane out from under the pointer. -->
+					<div v-if="newTrackZone?.edge === 'above'"
+						class="absolute inset-x-0 top-6 h-8 z-40 pointer-events-none flex items-center justify-center
+						       rounded border-2 border-dashed border-accent bg-accent/15">
+						<span class="text-[10px] font-semibold text-accent">Drop to add a video track</span>
+					</div>
+
 					<TrackLane v-for="track in store.sortedTracks" :key="track.id" :track="track" />
+
+					<!-- The audio half, appended after the lanes so it takes its own
+					     space without moving any of them. -->
+					<div v-if="newTrackZone?.edge === 'below'"
+						class="h-8 mx-px pointer-events-none flex items-center justify-center
+						       rounded border-2 border-dashed border-accent bg-accent/15">
+						<span class="text-[10px] font-semibold text-accent">Drop to add an audio track</span>
+					</div>
+
 					<TimelinePlayhead />
 					<!-- Snap guide -->
 					<div v-if="interactions.snapGuideSec.value !== null"
@@ -58,12 +76,21 @@ const store = useEditorStore()
 const viewport = useTimelineViewport()
 const interactions = useTimelineInteractions(viewport)
 
+/** Shown only mid-drag: where letting go would put a brand-new lane. */
+const newTrackZone = computed(() => interactions.newTrackZone.value)
+
 provide(TimelineViewportKey, viewport)
 provide(TimelineInteractionsKey, interactions)
 
 // Global editor shortcuts (guarded against typing contexts) — the timeline
 // panel is always mounted on the editor page and owns the zoom functions.
-useEditorShortcuts((factor) => viewport.zoomBy(factor))
+// Help and fullscreen belong to surfaces this panel does not own, so they go
+// through the store rather than being plumbed up and back down.
+useEditorShortcuts({
+	zoomBy: (factor) => viewport.zoomBy(factor),
+	onHelp: () => { store.shortcutsOpen = !store.shortcutsOpen },
+	onFullscreen: () => { store.monitorFullscreen = !store.monitorFullscreen }
+})
 
 const scrollRef = ref<HTMLElement | null>(null)
 const vScroll = ref(0) // vertical scroll of the lanes, mirrored onto the headers

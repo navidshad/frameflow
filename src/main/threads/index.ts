@@ -170,10 +170,12 @@ class ThreadManager {
 		const editor: EditorDocument = {
 			schemaVersion: 1,
 			media: [],
+			// One lane of each family. More are a click (or a drag past the edge)
+			// away, and an empty lane nobody asked for is just a place work goes
+			// to be forgotten — which is what the seeded overlay lane became.
 			tracks: [
 				seedTrack('video', 'V1', 0),
-				seedTrack('audio', 'A1', 1),
-				seedTrack('overlay', 'OV', 2)
+				seedTrack('audio', 'A1', 0)
 			],
 			timeline: [],
 			timelineMeta: { fps: 30, width: 1920, height: 1080, duration: 0 },
@@ -366,8 +368,10 @@ class ThreadManager {
 				// Try to repair paths if they seem broken/moved
 				thread = this.repairThreadPaths(thread)
 				
-				// Migrate usage if needed
-				if (this.migrateThreadUsage(thread)) {
+				// Migrate if needed. Both run — `||` would short-circuit the
+				// second away on any thread the first one touched.
+				const migrated = [this.migrateThreadUsage(thread), this.migrateEditorTracks(thread)]
+				if (migrated.some(Boolean)) {
 					this.saveThread(thread)
 				}
 				
@@ -396,8 +400,10 @@ class ThreadManager {
 			const content = fs.readFileSync(filePath, 'utf-8')
 			const thread = JSON.parse(content) as Thread
 			
-			// Migrate usage if needed
-			if (this.migrateThreadUsage(thread)) {
+			// Migrate if needed. Both run — `||` would short-circuit the
+			// second away on any thread the first one touched.
+			const migrated = [this.migrateThreadUsage(thread), this.migrateEditorTracks(thread)]
+			if (migrated.some(Boolean)) {
 				this.saveThread(thread)
 			}
 			
@@ -845,6 +851,39 @@ class ThreadManager {
 		}
 
 		return false
+	}
+
+	/**
+	 * Bring an editor document up to the two-family track model.
+	 *
+	 * Tracks used to come in four kinds, with `overlay` and `text` reserved for
+	 * "other objects, later". The export never collected either, so anything
+	 * parked on one rendered nowhere; the timeline would not let an item move
+	 * between kinds, so with one lane of each kind nothing could move at all.
+	 *
+	 * Both become ordinary video tracks. An emptied one is DROPPED rather than
+	 * kept: it only ever existed as a placeholder for a feature that arrived in
+	 * a different shape, and a lane with nothing on it is noise in a viewport
+	 * this short. Runs on every read path, before the renderer or the exporter
+	 * sees the document, so no consumer has to know the old shape.
+	 */
+	private migrateEditorTracks(thread: Thread): boolean {
+		const editor = thread.editor
+		if (!editor?.tracks?.length) return false
+
+		const legacy = (kind: string) => kind === 'overlay' || kind === 'text'
+		if (!editor.tracks.some((t) => legacy(t.kind))) return false
+
+		const used = new Set((editor.timeline || []).map((i) => i.trackId))
+		const kept: Track[] = []
+		for (const track of editor.tracks) {
+			if (!legacy(track.kind)) { kept.push(track); continue }
+			if (!used.has(track.id)) continue          // empty placeholder — drop it
+			kept.push({ ...track, kind: 'video' })
+		}
+		editor.tracks = kept
+		editor.schemaVersion = 2
+		return true
 	}
 }
 

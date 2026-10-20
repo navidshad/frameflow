@@ -1,6 +1,10 @@
 import type {
 	Clip, EnrichedTimelineSegment, MediaAsset, TimelineDiff, TimelineItem, Track
 } from './types'
+import { sameTransform } from './transform'
+import { sameKeyframes } from './keyframes'
+import { sameKey } from './keying'
+import { sameGenerator } from './generators'
 
 /**
  * Pure timeline helpers shared by renderer (manual editing, undo/redo) and
@@ -199,11 +203,68 @@ export function segmentsToItems(
 
 // Fields compared per-entity when diffing (id is the key, not a field).
 const ITEM_FIELDS: (keyof TimelineItem)[] = [
-	'trackId', 'sourceAssetId', 'sourceClipId', 'masterSegmentIndex',
+	'trackId', 'sourceAssetId', 'sourceClipId', 'masterSegmentIndex', 'layerRole',
 	'timelineStart', 'in', 'out', 'speed', 'preservePitch', 'duration',
 	'label', 'gain', 'muted', 'fadeInSec', 'fadeOutSec'
 ]
-const TRACK_FIELDS: (keyof Track)[] = ['kind', 'name', 'order', 'muted', 'locked', 'hidden', 'height', 'gain']
+const TRACK_FIELDS: (keyof Track)[] = ['kind', 'name', 'order', 'muted', 'locked', 'hidden', 'height', 'gain', 'role']
+
+/**
+ * `transition` is the only OBJECT-valued field we diff, and `changedFields`
+ * compares with `!==`, which would report every re-render as a change. Compare
+ * by value instead. Writers must treat the value as IMMUTABLE — replace the
+ * object, never mutate it — or the before/after snapshots alias and no edit is
+ * ever recorded.
+ */
+const sameTransition = (a: TimelineItem['transition'], b: TimelineItem['transition']): boolean => {
+	if (a === b) return true
+	const sameRef = (x?: { kind: string; duration: number }, y?: { kind: string; duration: number }) =>
+		x === y || (!!x && !!y && x.kind === y.kind && x.duration === y.duration)
+	return sameRef(a?.in, b?.in) && sameRef(a?.out, b?.out)
+}
+
+/** Same immutability contract as `transition` above — replace, never mutate. */
+const sameFraming = (a: TimelineItem['framing'], b: TimelineItem['framing']): boolean => {
+	if (a === b) return true
+	if (!a || !b) return false
+	return a.mode === b.mode && (a.pan ?? 0) === (b.pan ?? 0)
+}
+
+/**
+ * Same immutability contract again. Compared item by item and value by value:
+ * an effect list is ordered — the chain top-to-bottom IS the filter order — so
+ * a reorder is a real change and has to register as one.
+ */
+const sameEffects = (a: TimelineItem['effects'], b: TimelineItem['effects']): boolean => {
+	if (a === b) return true
+	const left = a ?? []
+	const right = b ?? []
+	if (left.length !== right.length) return false
+	return left.every((effect, i) => {
+		const other = right[i]
+		if (effect.id !== other.id || effect.kind !== other.kind) return false
+		const keys = new Set([...Object.keys(effect.params ?? {}), ...Object.keys(other.params ?? {})])
+		return [...keys].every((key) => effect.params?.[key] === other.params?.[key])
+	})
+}
+
+/**
+ * Same immutability contract as the rest — replace, never mutate.
+ *
+ * Every key of both objects, NOT a list written here: a curated list is a
+ * second place to remember, and the day `rotation` was added it was forgotten,
+ * so turning a title registered no history step and could not be undone. The
+ * fields are all primitives, so comparing whatever is actually present is both
+ * correct and immune to the next field.
+ */
+const sameText = (a: TimelineItem['text'], b: TimelineItem['text']): boolean => {
+	if (a === b) return true
+	if (!a || !b) return false
+	const keys = new Set([...Object.keys(a), ...Object.keys(b)])
+	return [...keys].every(
+		(k) => a[k as keyof typeof a] === b[k as keyof typeof b]
+	)
+}
 
 function changedFields<T extends { id: string }>(before: T, after: T, fields: (keyof T)[]): Partial<T> | null {
 	let changed: Partial<T> | null = null
@@ -246,8 +307,46 @@ export function diffTimelines(
 			;(inverse.removeItemIds ||= []).push(id)
 			dirty = true
 		} else {
+			// `transition` is diffed here rather than through ITEM_FIELDS: the generic
+			// comparator is shared with TRACK_FIELDS and compares by identity, which
+			// is wrong for an object. Without this, applying a transition is invisible
+			// to undo and to revisions.
+			const objectChanged =
+				!sameTransition(beforeItem.transition, afterItem.transition) ||
+				!sameFraming(beforeItem.framing, afterItem.framing) ||
+				!sameEffects(beforeItem.effects, afterItem.effects) ||
+				!sameText(beforeItem.text, afterItem.text) ||
+				!sameTransform(beforeItem.transform, afterItem.transform) ||
+				!sameKeyframes(beforeItem.keyframes, afterItem.keyframes) ||
+				!sameKey(beforeItem.key, afterItem.key) ||
+				!sameGenerator(beforeItem.generator, afterItem.generator)
 			const fwd = changedFields(beforeItem, afterItem, ITEM_FIELDS)
+				?? (objectChanged ? {} : null)
 			if (fwd) {
+				if (!sameTransition(beforeItem.transition, afterItem.transition)) {
+					fwd.transition = afterItem.transition
+				}
+				if (!sameFraming(beforeItem.framing, afterItem.framing)) {
+					fwd.framing = afterItem.framing
+				}
+				if (!sameEffects(beforeItem.effects, afterItem.effects)) {
+					fwd.effects = afterItem.effects
+				}
+				if (!sameText(beforeItem.text, afterItem.text)) {
+					fwd.text = afterItem.text
+				}
+				if (!sameTransform(beforeItem.transform, afterItem.transform)) {
+					fwd.transform = afterItem.transform
+				}
+				if (!sameKeyframes(beforeItem.keyframes, afterItem.keyframes)) {
+					fwd.keyframes = afterItem.keyframes
+				}
+				if (!sameKey(beforeItem.key, afterItem.key)) {
+					fwd.key = afterItem.key
+				}
+				if (!sameGenerator(beforeItem.generator, afterItem.generator)) {
+					fwd.generator = afterItem.generator
+				}
 				const keys = Object.keys(fwd) as (keyof TimelineItem)[]
 				;(forward.updateItems ||= []).push({ id, ...fwd })
 				;(inverse.updateItems ||= []).push({ id, ...pickFields(beforeItem, keys) })
@@ -470,7 +569,12 @@ export function findOrphanItems(
 	items: readonly TimelineItem[],
 	assetIds: ReadonlySet<string>
 ): TimelineItem[] {
-	return items.filter((item) => !assetIds.has(item.sourceAssetId))
+	// A title or a generated layer carries its own content and references no
+	// media, so it has no asset id to match. Without this exemption both would
+	// be pruned by the next autosave — main treats an unknown id as media that
+	// was removed.
+	return items.filter((item) =>
+		!item.text && !item.generator && !assetIds.has(item.sourceAssetId))
 }
 
 /**

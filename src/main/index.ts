@@ -6,7 +6,7 @@ import { pathToFileURL } from 'url'
 import { Pipeline } from './pipeline'
 import { settingsManager } from './settings'
 import { threadManager } from './threads'
-import type { EditorDocument, TimelineItem } from '@shared/types'
+import type { DeliveryFormat, EditorDocument, TimelineItem } from '@shared/types'
 import { pruneOrphanItems } from '@shared/timeline'
 import * as extraction from './pipeline/phases/extraction'
 import * as supply from './pipeline/phases/supply'
@@ -24,7 +24,10 @@ import * as editorAssets from './editor/assets'
 import * as editorPreprocess from './editor/preprocess'
 import * as editorHistory from './editor/history'
 import * as editorPrompt from './editor/prompt'
+import * as editorPreview from './editor/preview'
 import * as editorRender from './editor/render'
+import * as editorCaptions from './editor/captions'
+import { loadPacks, packManifests } from './editor/packs'
 import * as editorRevisions from './editor/revisions'
 import { BUILTIN_PERSONAS } from './constants/personas'
 import { v4 as uuidv4 } from 'uuid'
@@ -97,6 +100,14 @@ app.whenReady().then(() => {
 	threadManager.init()
 
 	backgroundTaskManager.init()
+
+	// Effect packs, before any window can ask for the catalogue. Never fatal —
+	// a broken pack on disk must not stop the app opening.
+	try {
+		loadPacks()
+	} catch (error) {
+		console.warn('[packs] load failed:', error)
+	}
 
 	app.on('browser-window-created', (_, window) => {
 		optimizer.watchWindowShortcuts(window)
@@ -394,6 +405,8 @@ app.whenReady().then(() => {
 			historyRef?: any
 			markers?: any[]
 			currentRevisionId?: string
+			captionsEnabled?: boolean
+			loudnessEnabled?: boolean
 		}
 	}) => {
 		return await threadManager.updateThreadWith(threadId, (thread) => {
@@ -424,6 +437,10 @@ app.whenReady().then(() => {
 			// state land in one atomic write (crash-consistent by construction).
 			if (patch.historyRef) editor.historyRef = patch.historyRef
 			if (patch.markers) editor.markers = patch.markers
+			// Explicitly against undefined: turning captions OFF is a false, which
+			// a truthiness check would silently refuse to save.
+			if (patch.captionsEnabled !== undefined) editor.captionsEnabled = patch.captionsEnabled
+			if (patch.loudnessEnabled !== undefined) editor.loudnessEnabled = patch.loudnessEnabled
 			if (patch.currentRevisionId !== undefined) editor.currentRevisionId = patch.currentRevisionId
 
 			// Fold clip-selected flags into the matching clips (the one renderer-owned
@@ -618,12 +635,37 @@ app.whenReady().then(() => {
 
 	// Export / render (M4): fast path via assembleVideo, region path via
 	// segment-then-concat; progress streams over editor-render-progress.
-	ipcMain.handle('export-editor-timeline', (_event, { threadId, quality, doc }: {
-		threadId: string, quality: 'original' | 'preview', doc?: EditorDocument
+	ipcMain.handle('export-editor-timeline', (_event, { threadId, quality, doc, format }: {
+		threadId: string, quality: 'original' | 'preview', doc?: EditorDocument, format?: DeliveryFormat
 	}) => {
 		// `doc` is the renderer's in-memory timeline snapshot at click time —
 		// the render is detached from the live document and never persists it.
-		return editorRender.startEditorRender({ threadId, quality, doc })
+		return editorRender.startEditorRender({ threadId, quality, doc, format })
+	})
+
+	ipcMain.handle('render-exact-frame', (_event, data: {
+		threadId: string
+		doc: EditorDocument
+		timeSec: number
+	}) => editorPreview.renderExactFrame(data))
+
+	ipcMain.handle('ensure-transition-preview', (_event, data: {
+		threadId: string
+		doc: EditorDocument
+		outgoingId: string
+		incomingId: string
+	}) => editorPreview.ensureTransitionPreview(data))
+
+	// Effect packs are pure data; the renderer parses the same manifests with the
+	// same parser, because an EffectDef's `build` cannot cross IPC.
+	ipcMain.handle('get-effect-packs', () => packManifests())
+
+	// The monitor draws captions itself, from the same mapper the export burns
+	// with — so it needs the transcripts, not a picture of them.
+	ipcMain.handle('get-editor-transcripts', (_event, threadId: string) => {
+		const thread = threadManager.getThread(threadId)
+		if (!thread || thread.type !== 'editor' || !thread.editor) return {}
+		return editorCaptions.transcriptsForAssets(thread.editor.media)
 	})
 
 	ipcMain.handle('abort-editor-render', (_event, { renderId }: { renderId: string }) => {

@@ -187,6 +187,9 @@ export interface Thread {
 }
 
 // ============================================================
+import type { KeySpec } from './keying'
+import type { GeneratorSpec } from './generators'
+
 // Timeline Video Editor (see video-editor-prd.md §6)
 // Canonical time unit is SECONDS. SRT strings appear only at the boundary
 // with assembleVideo (the ffmpeg renderer) — see srtToSeconds in
@@ -194,7 +197,8 @@ export interface Thread {
 // ============================================================
 
 export interface EditorDocument {
-	schemaVersion: 1
+	/** 1 = the four-kind track model; 2 = two families. See main's `migrateEditorTracks`. */
+	schemaVersion: 1 | 2
 	media: MediaAsset[]         // imported sources
 	tracks: Track[]             // lane definitions
 	timeline: TimelineItem[]    // placements across tracks — the live EDL
@@ -205,6 +209,18 @@ export interface EditorDocument {
 	historyRef: EditorHistoryRef      // pointer into the sidecar history file
 	selection?: { clipIds?: string[]; itemIds?: string[] }
 	markers?: EditorMarker[]    // renderer-owned; NOT undoable (outside TimelineDiff)
+	/**
+	 * Burn the transcript into the picture. A project-level switch rather than an
+	 * export option, because you have to be able to judge captions in the monitor
+	 * before paying for a render. NOT undoable, same as markers.
+	 */
+	captionsEnabled?: boolean
+	/**
+	 * Normalise the finished mix to the streaming target (-14 LUFS). A property
+	 * of the whole export, not of any one clip — which is why it is a document
+	 * setting rather than an effect. NOT undoable, same as captions.
+	 */
+	loudnessEnabled?: boolean
 	/** Pointer into the revisions sidecar (userData/editor-revisions/{id}.json). */
 	currentRevisionId?: string
 }
@@ -215,6 +231,14 @@ export interface TimelineMeta {
 	height: number
 	duration: number            // seconds; derived = max(item.timelineStart + item.duration)
 	aspectRatio?: string        // "16:9" | "9:16"
+	/**
+	 * True once `width`/`height` were CHOSEN — by the frame picker, or seeded from
+	 * the first import. Without this the render cannot tell a chosen 1920x1080
+	 * from the literal every project has always been seeded with and nothing ever
+	 * read, and honouring that literal would silently relandscape every portrait
+	 * project already on disk.
+	 */
+	frameChosen?: boolean
 }
 
 export type MediaKind = 'video' | 'image' | 'audio'
@@ -288,11 +312,16 @@ export interface Clip {        // a selectable scene piece
 	masterSegmentIndex?: number // back-reference into the enriched master timeline
 }
 
-export type TrackKind = 'video' | 'audio' | 'overlay' | 'text'
+/**
+ * Two families, and that is the whole model: video holds anything you can SEE
+ * (footage, stills, titles, generated layers), audio anything you can HEAR.
+ * See `shared/tracks.ts` for what follows from it.
+ */
+export type TrackKind = 'video' | 'audio'
 
 export interface Track {
 	id: string
-	kind: TrackKind             // 'overlay' | 'text' = "other objects for later"
+	kind: TrackKind
 	name: string
 	order: number               // stacking order (0 = bottom video)
 	muted: boolean
@@ -300,6 +329,11 @@ export interface Track {
 	hidden: boolean
 	height: number              // px in the timeline UI
 	gain?: number               // track-level audio gain, composed with item gain at render (default 1.0)
+	/**
+	 * 'music' marks a bed: it ducks under speech on every other track. Absent
+	 * means the track IS speech as far as ducking is concerned.
+	 */
+	role?: 'music'
 }
 
 export interface TimelineItem {  // an instance of a clip placed on a track
@@ -321,15 +355,78 @@ export interface TimelineItem {  // an instance of a clip placed on a track
 	muted?: boolean
 	// ---- Stubs (deferred: effects/transitions/transforms/text) ----
 	transform?: TimelineItemTransform
+	/** Reframing for a sequence of a different shape. Absent = 'fit' (letterbox). */
+	framing?: ItemFraming
 	effects?: EffectRef[]
+	/**
+	 * Parameters that change over the clip, keyed by path (`transform.x`,
+	 * `gain`). Times are seconds from the clip's own start. See
+	 * shared/keyframes.ts for which paths this build can actually animate.
+	 */
+	keyframes?: Record<string, { t: number; value: number; ease?: 'linear' | 'hold' | 'ease' }[]>
 	transition?: { in?: TransitionRef; out?: TransitionRef }
 	text?: TextOverlaySpec
+	/**
+	 * Derive an alpha channel from this clip's own pixels, so it can sit IN
+	 * FRONT of the layer below rather than beside it. See shared/keying.ts.
+	 */
+	key?: KeySpec
+	/**
+	 * A synthesised layer — a gradient, a colour, grain — with no footage
+	 * behind it. `sourceAssetId` is empty for these, the same as a title.
+	 */
+	generator?: GeneratorSpec
+	/**
+	 * What this clip is FOR, in a composited shot. Purely descriptive today —
+	 * it is what lets "put this behind the subject" be a field rather than an
+	 * architecture, and what tells the AI which of two stacked clips is which.
+	 */
+	layerRole?: 'subject' | 'background' | 'overlay'
 }
 
 export interface TimelineItemTransform { x?: number; y?: number; scale?: number; rotation?: number }
-export interface EffectRef { id: string; kind: string; params?: Record<string, unknown> } // stub
+
+/**
+ * How a clip fills a sequence frame of a different shape.
+ *
+ * Deliberately NOT `TimelineItemTransform`, which is the Phase 3 free transform
+ * (arbitrary scale/position/rotation). This is the narrow reframing question —
+ * given a 16:9 source in a 9:16 sequence, letterbox it or crop it — and it needs
+ * exactly one number.
+ *
+ * `pan` is normalised to -1..1 across whichever axis has slack after the fill
+ * scale: -1 is hard left (or top), 0 centred, 1 hard right (or bottom). Only one
+ * axis ever has slack, so one value serves both orientations and the renderer
+ * resolves it from the frame at filter time rather than from source metadata.
+ */
+export interface ItemFraming { mode: 'fit' | 'fill'; pan?: number }
+/** One effect on a clip. `kind` indexes the catalogue in shared/effects.ts. */
+export interface EffectRef { id: string; kind: string; params?: Record<string, number | string> }
 export interface TransitionRef { kind: string; duration: number }                          // stub
-export interface TextOverlaySpec { content: string; style?: Record<string, unknown> }      // stub
+/**
+ * A title: text placed on the frame for the length of its timeline item.
+ *
+ * Position and size are FRACTIONS of the frame, not pixels, so a title survives
+ * a change of sequence shape — the same reason `ItemFraming.pan` is normalised.
+ */
+export interface TextOverlaySpec {
+	content: string
+	/** 0,0 is the top-left of the frame; 0.5,0.5 is dead centre. */
+	x?: number
+	y?: number
+	/** Cap height as a fraction of frame height. */
+	size?: number
+	/**
+	 * Degrees, CLOCKWISE — the same sense as a clip's `transform.rotation`, so
+	 * one number means one thing wherever it appears. libass counts the other
+	 * way, and `titleCues` is the single place that negates it.
+	 */
+	rotation?: number
+	/** '#RRGGBB'. */
+	color?: string
+	outline?: string
+	bold?: boolean
+}
 
 export interface EditorPersona {
 	id: string
@@ -348,6 +445,29 @@ export interface EditorPersona {
 	 */
 	defaults?: { pacing?: 'tight' | 'balanced' | 'relaxed' }
 	featureSets?: FeatureSetRef[]  // deferred; always [] in v1
+	/**
+	 * The look this voice edits in — vocabulary, not rules.
+	 *
+	 * A persona already carries judgement about WHAT to cut; this carries what
+	 * the result should look and sound like, so the two travel together instead
+	 * of the user re-describing a house style in every prompt. Everything in
+	 * the catalogues stays available: these are preferences the model is told
+	 * about, not a whitelist it is confined to.
+	 */
+	style?: PersonaStyle
+}
+
+export interface PersonaStyle {
+	/** Transition kinds this voice reaches for first. */
+	transitions?: string[]
+	/** Effect kinds that make up its look. */
+	looks?: string[]
+	/** Whether it captions by default — short-form does, a lecture does not. */
+	captions?: boolean
+	/** Whether it normalises the mix. True for anything meant to be posted. */
+	loudness?: boolean
+	/** One line the system instruction quotes, in the persona's own voice. */
+	note?: string
 }
 
 export interface FeatureSetRef { id: string; name: string } // stub
@@ -493,7 +613,58 @@ export interface EditorOps {
 		gain?: number
 		fadeInSec?: number
 		fadeOutSec?: number
+		/** Move, scale or rotate inside the frame (Phase 3's free transform). */
+		transform?: { x?: number; y?: number; scale?: number; rotation?: number }
+		/** How this clip fills a frame of a different shape. */
+		framing?: { mode: 'fit' | 'fill'; pan?: number }
+		/** Key this clip's background out so it sits in front of the layer below. */
+		key?: { kind: 'chroma' | 'luma'; colour?: string; similarity?: number; blend?: number; despill?: number }
+		/** What this clip is FOR in a composited shot. */
+		layerRole?: 'subject' | 'background' | 'overlay'
 	}>
+	/**
+	 * Synthesised backgrounds — a gradient or a colour with no footage behind
+	 * them. They go on their own track below everything, which is what a keyed
+	 * subject needs to sit in front of.
+	 */
+	addBackgrounds?: Array<{
+		kind?: 'solid' | 'gradient' | 'bars' | 'noise'
+		colour?: string
+		colour2?: string
+		atSec?: number
+		durationSec?: number
+	}>
+	/**
+	 * A transition on the cut AFTER each named item. `kind: 'none'` removes one.
+	 * Keyed by the OUTGOING item because that is where the document stores it.
+	 */
+	setTransitions?: Array<{ afterItemId: string; kind: string; durationSec?: number }>
+	/**
+	 * Append a look or a repair to each named clip. Appends rather than replaces,
+	 * so a second call stacks — `clearLooks` is how you start over.
+	 */
+	applyLook?: Array<{ itemIds: string[]; kind: string; params?: Record<string, number | string> }>
+	/** Item ids whose effects should all be removed. */
+	clearLooks?: string[]
+	/** Text on the frame. Placed on a text track, created if there is not one. */
+	addTitles?: Array<{
+		text: string
+		atSec: number
+		durationSec?: number
+		x?: number
+		y?: number
+		size?: number
+	}>
+	/**
+	 * Cut spans of TIME out of the timeline, splitting clips where a span falls
+	 * mid-clip. This is how a sentence gets removed without removing the piece
+	 * it sits in.
+	 */
+	removeRanges?: Array<{ fromSec: number; toSec: number }>
+	/** Burn the transcript into the picture. */
+	captions?: boolean
+	/** Normalise the finished mix to the streaming target. */
+	loudness?: boolean
 	addClips?: Array<{
 		assetId: string
 		sceneIndex?: number       // preferred: a scene # from AVAILABLE SCENES
@@ -564,6 +735,13 @@ export type TimelineDiff = {
 // ===== Export / render (M4) =====
 
 export type ExportQuality = 'original' | 'preview'
+
+/**
+ * What kind of file comes out. `h264` is the mp4 the render already produces;
+ * anything else is a transcode of it, because the intermediates have to be
+ * identical h264 for `concat -c copy` to work at all.
+ */
+export type DeliveryFormat = 'h264' | 'prores'
 
 export type RenderPhase = 'rendering' | 'stitching' | 'done' | 'error'
 
