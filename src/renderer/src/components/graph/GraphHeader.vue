@@ -52,6 +52,11 @@
       </div>
     </div>
 
+    <!-- Centre: live status (the editor's agent banner) -->
+    <div v-if="$slots.center" class="flex-1 flex justify-center min-w-0 px-3">
+      <slot name="center" />
+    </div>
+
     <!-- Right Action Area -->
     <div class="flex items-center justify-end gap-3 min-w-[20px] mr-12">
       <slot name="actions" />

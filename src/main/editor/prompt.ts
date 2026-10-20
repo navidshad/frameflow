@@ -47,20 +47,26 @@ const SURVEY_MAX_OUTPUT_TOKENS = 16_384
 // ===== Turn lifecycle =====
 const turnControllers = new Map<string, AbortController>()
 
-function emitTurnUpdate(payload: {
+/**
+ * Exported for the MCP server, whose agent turns take this same path. `replyId`
+ * asks the renderer to report back once it has applied the turn (see
+ * mcp/rendererBridge.ts); the built-in turn runner never sets it.
+ */
+export function emitTurnUpdate(payload: {
 	threadId: string
 	turn: PromptTurn
 	addMarkers?: { time: number; label: string }[]
 	docSettings?: { captionsEnabled?: boolean; loudnessEnabled?: boolean }
 	thinContext?: boolean
 	truncated?: boolean
+	replyId?: string
 }) {
 	BrowserWindow.getAllWindows().forEach((win) => {
 		win.webContents.send('editor-turn-update', payload)
 	})
 }
 
-async function persistTurn(threadId: string, turn: PromptTurn): Promise<void> {
+export async function persistTurn(threadId: string, turn: PromptTurn): Promise<void> {
 	await threadManager.updateThreadWith(threadId, (thread) => {
 		if (!thread.editor) return null
 		const turns = [...thread.editor.turns]

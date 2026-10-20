@@ -2,7 +2,10 @@ import { app, safeStorage } from 'electron'
 import { join } from 'path'
 import { existsSync, mkdirSync, readFileSync, writeFileSync, realpathSync } from 'fs'
 import os from 'os'
+import { randomBytes } from 'crypto'
 import { EditorPersona, ModelSettings } from '../shared/types'
+import { normalizePermissions, TOKEN_PREFIX, type AgentPermissions } from '../shared/agent'
+import type { AgentRecentSession } from '../shared/agentFeed'
 import { DEFAULT_MODEL_SETTINGS } from './constants/gemini'
 import { BUILTIN_PERSONAS } from './constants/personas'
 
@@ -13,7 +16,25 @@ interface Settings {
 	modelSettings?: ModelSettings
 	/** User-defined editor personas ONLY — built-ins are merged at read time. */
 	personas?: EditorPersona[]
+	/** MCP agent access. Off unless the user turns it on in Settings. */
+	agentAccess?: AgentAccessSettings
+	/** In memory only. On disk it is `agentTokenEnc`, encrypted like the API key. */
+	agentToken?: string
 }
+
+export interface AgentAccessSettings {
+	enabled: boolean
+	permissions: AgentPermissions
+	recent: AgentRecentSession[]
+}
+
+const RECENT_AGENT_SESSIONS = 10
+
+const normalizeAgentAccess = (value: any): AgentAccessSettings => ({
+	enabled: value?.enabled === true,
+	permissions: normalizePermissions(value?.permissions),
+	recent: Array.isArray(value?.recent) ? value.recent.slice(0, RECENT_AGENT_SESSIONS) : []
+})
 
 /**
  * The API key, encrypted at rest with the OS keychain.
@@ -110,7 +131,9 @@ class SettingsManager {
 					tempDir: parsed.tempDir || this.defaultTempDir,
 					geminiApiKey: decryptKey(parsed),
 					modelSettings: this.mergeModelSettings(parsed.modelSettings || DEFAULT_MODEL_SETTINGS),
-					personas: Array.isArray(parsed.personas) ? parsed.personas : []
+					personas: Array.isArray(parsed.personas) ? parsed.personas : [],
+					agentAccess: normalizeAgentAccess(parsed.agentAccess),
+					agentToken: decryptKey({ geminiApiKeyEnc: parsed.agentTokenEnc, geminiApiKey: parsed.agentToken })
 				}
 			}
 		} catch (error) {
@@ -132,12 +155,16 @@ class SettingsManager {
 			// The key is written encrypted under its own name and NEVER under the
 			// plaintext one — otherwise an upgrade would leave the old copy behind
 			// beside the new one.
-			const { geminiApiKey, ...rest } = this.settings
+			const { geminiApiKey, agentToken, ...rest } = this.settings
 			const { enc, plain } = encryptKey(geminiApiKey ?? '')
+			// The agent token follows the same rule: encrypted where the OS can.
+			const token = encryptKey(agentToken ?? '')
 			writeFileSync(this.settingsPath, JSON.stringify({
 				...rest,
 				...(enc ? { geminiApiKeyEnc: enc } : {}),
-				...(plain ? { geminiApiKey: plain } : {})
+				...(plain ? { geminiApiKey: plain } : {}),
+				...(token.enc ? { agentTokenEnc: token.enc } : {}),
+				...(token.plain ? { agentToken: token.plain } : {})
 			}, null, 2))
 			return true
 		} catch (error) {
@@ -260,6 +287,37 @@ class SettingsManager {
 		)
 		this.saveSettings()
 		return this.settings.personas
+	}
+
+	// ===== Agent access (MCP) =====
+
+	getAgentAccess(): AgentAccessSettings {
+		return this.settings.agentAccess || normalizeAgentAccess(undefined)
+	}
+
+	updateAgentAccess(patch: Partial<AgentAccessSettings>): AgentAccessSettings {
+		this.settings.agentAccess = normalizeAgentAccess({ ...this.getAgentAccess(), ...patch })
+		this.saveSettings()
+		return this.settings.agentAccess
+	}
+
+	/** Most recent first, capped. */
+	recordAgentSession(entry: AgentRecentSession): void {
+		const access = this.getAgentAccess()
+		const recent = [entry, ...access.recent.filter((r) => r.startedAt !== entry.startedAt || r.clientName !== entry.clientName)]
+		this.updateAgentAccess({ recent: recent.slice(0, RECENT_AGENT_SESSIONS) })
+	}
+
+	/** Generated on first use, per install. */
+	getAgentToken(): string {
+		if (!this.settings.agentToken) return this.newAgentToken()
+		return this.settings.agentToken
+	}
+
+	newAgentToken(): string {
+		this.settings.agentToken = `${TOKEN_PREFIX}${randomBytes(24).toString('hex')}`
+		this.saveSettings()
+		return this.settings.agentToken
 	}
 }
 

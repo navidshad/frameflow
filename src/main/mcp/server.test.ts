@@ -3,6 +3,7 @@ import { Client } from '@modelcontextprotocol/sdk/client/index.js'
 import { StreamableHTTPClientTransport } from '@modelcontextprotocol/sdk/client/streamableHttp.js'
 import type { Clip, EditorDocument, MediaAsset, TimelineItem } from '@shared/types'
 import { applyTimelineDiff } from '@shared/timeline'
+import type { TranscriptEntry } from '@shared/captions'
 import { DEFAULT_AGENT_PERMISSIONS, type AgentPermissions } from '@shared/agent'
 import type { AgentActivity } from '@shared/agentFeed'
 import { AgentServer, type AgentServerEvent } from './server'
@@ -91,7 +92,7 @@ class FakeEditor implements EditorBridge {
 		}
 	}
 
-	async readTranscripts(_project: LiveProject, ids: string[]) {
+	async readTranscripts(_project: LiveProject, ids: string[]): Promise<Record<string, TranscriptEntry[]>> {
 		return ids.includes('team')
 			? { team: [{ start: 21, end: 24, text: 'How much faster is triage now?' }, { start: 24, end: 27, text: 'Three times faster.' }] }
 			: {}

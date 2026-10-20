@@ -43,6 +43,12 @@
 		</div>
 
 		<div class="flex items-center gap-1">
+			<!-- Legend for the dashed outlines an MCP agent's latest edit leaves -->
+			<span v-if="store.agentMarksSeq !== null && Object.keys(store.agentMarks).length"
+				class="flex items-center gap-1.5 text-[9px] text-zinc-400 mr-2 whitespace-nowrap">
+				<span class="w-3.5 h-2.5 rounded-[3px] outline outline-1 outline-dashed outline-[rgba(167,139,250,0.9)]"></span>
+				changed by the agent in V{{ store.agentMarksSeq }}
+			</span>
 			<!-- Undo / Redo -->
 			<ToolButton icon="tabler--arrow-back-up" :title="`Undo (${keysFor('undo')})`" :disabled="!store.canUndo" @click="store.undo()" />
 			<ToolButton icon="tabler--arrow-forward-up" :title="`Redo (${keysFor('redo')})`" :disabled="!store.canRedo" @click="store.redo()" />

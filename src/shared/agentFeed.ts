@@ -44,6 +44,8 @@ export interface AgentSessionInfo {
 	lastActivityAt: number
 	/** Tool calls so far. */
 	steps: number
+	/** The project it last read, filled in by main for Settings' session list. */
+	project?: string
 }
 
 export interface AgentRecentSession {
@@ -67,6 +69,19 @@ export interface AgentAccessState {
 	recent: AgentRecentSession[]
 	error?: string
 }
+
+/** What the renderer reports after it applied (or could not apply) an agent's turn. */
+export type AgentApplyOutcome =
+	| {
+		ok: true
+		revisionId: string
+		revisionSeq: number
+		parentRevisionId: string | null
+		counts: { added: number; removed: number; updated: number; markers: number }
+		/** Ops the live doc rejected when the diff was dry-run against it. */
+		pruned: string[]
+	}
+	| { ok: false; error: string }
 
 // ===== Formatting =====
 

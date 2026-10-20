@@ -1,5 +1,6 @@
 import type { EditorDocument, EditorRevision, PromptTurn } from '@shared/types'
 import type { TranscriptEntry } from '@shared/captions'
+import type { AgentApplyOutcome } from '@shared/agentFeed'
 
 /**
  * What the MCP tools need from the rest of the app, as an interface.
@@ -22,18 +23,8 @@ export interface LiveProject {
 	playheadSec: number
 }
 
-/** What the renderer reports after it applied (or could not apply) an agent turn. */
-export type ApplyOutcome =
-	| {
-		ok: true
-		revisionId: string
-		revisionSeq: number
-		parentRevisionId: string | null
-		counts: { added: number; removed: number; updated: number; markers: number }
-		/** Ops the live doc rejected when the diff was dry-run against it. */
-		pruned: string[]
-	}
-	| { ok: false; error: string }
+/** What the renderer reports after it applied (or could not apply) an agent's turn. */
+export type ApplyOutcome = AgentApplyOutcome
 
 export interface TurnCommit {
 	threadId: string

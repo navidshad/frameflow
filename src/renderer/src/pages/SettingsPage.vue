@@ -54,6 +54,9 @@
             </div>
           </Card>
 
+          <!-- Agent access (MCP) — board 4's lower card -->
+          <AgentAccessCard />
+
           <!-- Gemini API Key section -->
           <Card
             class="!bg-white/90 dark:!bg-zinc-900/90 backdrop-blur-xl !rounded-lg border !border-zinc-200 dark:!border-zinc-700 !p-8">
@@ -246,6 +249,7 @@ import { Button, IconButton, Card } from 'pilotui/elements'
 import { Input } from 'pilotui/form'
 import { useVideoStore } from '../stores/videoStore'
 import PageHeader from '../components/PageHeader.vue'
+import AgentAccessCard from '../components/settings/AgentAccessCard.vue'
 import { ModelSettings } from '../../../shared/types'
 // In a real scenario we'd import constants, but we can also use the IPC-returned defaults if we added a method.
 // For now, we'll manually ensure the new model and selection are present if missing.
