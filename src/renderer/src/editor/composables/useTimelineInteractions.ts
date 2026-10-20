@@ -291,15 +291,26 @@ export function useTimelineInteractions(viewport: TimelineViewport) {
 		// time — don't draw a guide at a place the user cannot hit.
 		if (trimRipple && trimEdge === 'left') snapGuideSec.value = null
 
-		const solved = solveTrim(gestureBefore, target.id, trimEdge, t, {
+		// A motion layer has no source to run out of: its clip IS its length,
+		// always from in = 0. Give the solver headroom on the left so the head
+		// can be dragged earlier too, then put the clip back on its own clock.
+		const MOTION_ROOM = 3600
+		const snapshot = target.motion
+			? {
+				...gestureBefore,
+				timeline: gestureBefore.timeline.map((i) =>
+					i.id === target.id ? { ...i, in: i.in + MOTION_ROOM, out: i.out + MOTION_ROOM } : i)
+			}
+			: gestureBefore
+		const solved = solveTrim(snapshot, target.id, trimEdge, t, {
 			ripple: trimRipple,
-			sourceDuration: asset?.metadata?.duration
+			sourceDuration: target.motion ? undefined : asset?.metadata?.duration
 		})
 		if (!solved) return
 
 		target.timelineStart = solved.item.timelineStart
-		target.in = solved.item.in
-		target.out = solved.item.out
+		target.in = target.motion ? 0 : solved.item.in
+		target.out = target.motion ? solved.item.duration : solved.item.out
 		target.duration = solved.item.duration
 
 		const byId = new Map(doc().timeline.map((i) => [i.id, i]))

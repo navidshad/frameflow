@@ -37,7 +37,7 @@
  *
  * No Node or Electron imports: this runs in the renderer, in main and in tests.
  */
-import type { TimelineItem } from './types'
+import type { TimelineItem, Track } from './types'
 import { normalise, valueAt } from './keyframes'
 import { MOTION_TEMPLATES, motionTemplate } from './motionTemplates'
 import { MOTION_FONT_CSS } from './motion-templates/fonts'
@@ -113,6 +113,43 @@ export interface MotionSpec {
 export const MOTION_TRACK_NAME = 'M1'
 export const isMotionTrack = (track: { name: string; kind: string } | undefined): boolean =>
 	!!track && track.kind === 'video' && /^M\d+$/.test(track.name)
+
+/**
+ * The motion track a layer at [start, start + duration) should go on: the first
+ * motion track (M1, M2, …) that is free then, or null when none is — the caller
+ * makes the next one. Timing is the point of a motion layer, so a clash is
+ * never resolved by sliding it later; the UI's drop and the AI's `addMotion`
+ * both ask here, so a person and an agent place layers the same way.
+ */
+export function freeMotionTrack<T extends Pick<Track, 'id' | 'name' | 'kind' | 'locked' | 'hidden'>>(
+	tracks: T[],
+	items: Pick<TimelineItem, 'trackId' | 'timelineStart' | 'in' | 'out' | 'speed'>[],
+	start: number,
+	duration: number,
+	ignoreId?: string
+): T | null {
+	const end = start + duration
+	const lanes = tracks
+		.filter((t) => isMotionTrack(t) && !t.locked && !t.hidden)
+		.sort((a, b) => a.name.localeCompare(b.name, undefined, { numeric: true }))
+	for (const track of lanes) {
+		const clash = items.some((i) =>
+			(i as { id?: string }).id !== ignoreId &&
+			i.trackId === track.id &&
+			i.timelineStart < end - 1e-6 &&
+			i.timelineStart + (i.out - i.in) / (i.speed || 1) > start + 1e-6)
+		if (!clash) return track
+	}
+	return null
+}
+
+/** M1, then M2… — the first motion-track name not in use. */
+export function nextMotionTrackName(tracks: Pick<Track, 'name'>[]): string {
+	const taken = new Set(tracks.map((t) => t.name))
+	let n = 1
+	while (taken.has(`M${n}`)) n++
+	return `M${n}`
+}
 
 /** The pink every motion surface uses (tailwind pink-500). */
 export const MOTION_COLOUR = '#ec4899'
@@ -608,7 +645,7 @@ export function composeMotionPage(
 		`<meta http-equiv="Content-Security-Policy" content="${MOTION_CSP}">`,
 		`<meta name="viewport" content="width=${width}, height=${height}">`,
 		`<style>${MOTION_FONT_CSS}\n` +
-			`html,body{margin:0;padding:0;width:${width}px;height:${height}px;overflow:hidden;background:transparent}\n` +
+			`html{color-scheme:normal}html,body{margin:0;padding:0;width:${width}px;height:${height}px;overflow:hidden;background:transparent}\n` +
 			'*,*::before,*::after{animation:none!important;transition:none!important;caret-color:transparent}</style>',
 		`<script>${scriptSafe(RUNTIME.replace('__DEF__', JSON.stringify(def)))}</script>`
 	].join('\n')

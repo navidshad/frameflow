@@ -96,6 +96,7 @@
 <script setup lang="ts">
 import { computed, inject, ref } from 'vue'
 import { trackFamily } from '@shared/tracks'
+import { isMotionTrack } from '@shared/motion'
 import type { Track } from '@shared/types'
 import { itemEnd } from '@shared/timeline'
 import { DEFAULT_TRANSITION_SEC, type Seam } from '@shared/transitionPlan'
@@ -191,9 +192,11 @@ const onSeamClick = (seam: Seam, e: MouseEvent) => {
 // ===== Drag & drop =====
 
 const laneTint = computed(() =>
-	trackFamily(props.track) === 'audio'
-		? 'bg-accent/[0.03] dark:bg-accent/[0.05]'
-		: 'bg-primary/[0.03] dark:bg-primary/[0.05]'
+	isMotionTrack(props.track)
+		? 'bg-pink-500/[0.04]'
+		: trackFamily(props.track) === 'audio'
+			? 'bg-accent/[0.03] dark:bg-accent/[0.05]'
+			: 'bg-primary/[0.03] dark:bg-primary/[0.05]'
 )
 
 /** Accept and refuse, in the vocabulary the seam targets already use. */
@@ -205,10 +208,21 @@ const dropClass = computed(() => {
 })
 
 const emptyHint = computed(() =>
-	trackFamily(props.track) === 'audio'
-		? 'Drag an audio file or pieces here'
-		: 'Drag a file, pieces or a title here'
+	isMotionTrack(props.track)
+		? 'Drag a motion template here'
+		: trackFamily(props.track) === 'audio'
+			? 'Drag an audio file or pieces here'
+			: 'Drag a file, pieces or a title here'
 )
+
+/**
+ * A motion template is accepted on ANY lane: wherever it is dropped, it lands
+ * on the motion track at the drop time (made when absent). Dropping on the
+ * footage is the natural gesture, and refusing it would make the user find a
+ * lane that may not exist yet.
+ */
+const isMotionDrag = (dt: DataTransfer | null) =>
+	!!dt?.types.includes('application/x-frameflow-kind-motion') && !props.track.locked
 
 // A lane accepts a drop when it is unlocked and visible and the dragged thing
 // belongs to its family — read here from the readable kind-hint type, because
@@ -225,6 +239,12 @@ const canAcceptDrag = (dt: DataTransfer | null): boolean => {
 }
 
 const onDragOver = (e: DragEvent) => {
+	if (isMotionDrag(e.dataTransfer)) {
+		e.preventDefault()
+		e.dataTransfer!.dropEffect = 'copy'
+		dragOver.value = true
+		return
+	}
 	if (!canAcceptDrag(e.dataTransfer)) {
 		if (e.dataTransfer) e.dataTransfer.dropEffect = 'none'
 		return
@@ -236,12 +256,20 @@ const onDragOver = (e: DragEvent) => {
 
 const onDrop = (e: DragEvent) => {
 	dragOver.value = false
-	if (!canAcceptDrag(e.dataTransfer)) return
+	const motion = isMotionDrag(e.dataTransfer)
+	if (!motion && !canAcceptDrag(e.dataTransfer)) return
 	e.preventDefault()
 	const el = viewport.scrollEl.value
 	if (!el) return
 	const rect = el.getBoundingClientRect()
 	const atSec = Math.max(0, viewport.pxToSec(el.scrollLeft + (e.clientX - rect.left)))
+
+	if (motion) {
+		const template = e.dataTransfer!.getData('application/x-frameflow-motion')
+		store.draggingMotionTemplate = null
+		store.addMotionLayer(template === 'custom' ? null : template, atSec)
+		return
+	}
 
 	const assetId = e.dataTransfer!.getData('application/x-frameflow-asset')
 	if (assetId) { store.addItemFromAsset(assetId, props.track.id, atSec); return }

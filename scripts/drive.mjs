@@ -34,7 +34,9 @@ async function pageTarget() {
 		fail(`No debugger on ${HOST}. Start the app first:\n\n  npm run start:debug\n`)
 	}
 	// Electron lists the renderer as a page; devtools windows are 'other'.
-	const page = targets.find((t) => t.type === 'page' && !t.url.startsWith('devtools://'))
+	// Not a motion capture window: those are pages too, on a data: URL, and
+	// exist only while an export renders a motion layer.
+	const page = targets.find((t) => t.type === 'page' && !t.url.startsWith('devtools://') && !t.url.startsWith('data:'))
 	if (!page) fail(`No page target. Targets:\n${targets.map((t) => `  ${t.type} ${t.url}`).join('\n')}`)
 	return page
 }
@@ -64,10 +66,16 @@ async function connect() {
 		const id = nextId++
 		socket.send(JSON.stringify({ id, method, params }))
 		return new Promise((resolve, reject) => {
-			pending.set(id, { resolve, reject, method })
-			setTimeout(() => {
+			// Cleared on reply: a live timer kept every run alive for 30s after
+			// it had already printed its answer.
+			const timer = setTimeout(() => {
 				if (pending.delete(id)) reject(new Error(`${method} timed out`))
 			}, 30_000)
+			pending.set(id, {
+				resolve: (v) => { clearTimeout(timer); resolve(v) },
+				reject: (e) => { clearTimeout(timer); reject(e) },
+				method
+			})
 		})
 	}
 

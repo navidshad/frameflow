@@ -15,7 +15,7 @@ import { hasTransform, OFFSET_RANGE, SCALE_RANGE } from '@shared/transform'
 import { defaultParams, effectDef } from '@shared/effects'
 import { findTitleTrack, nextTrackOrder, TITLE_TRACK_NAME } from '@shared/tracks'
 import {
-	isMotionTrack, motionTemplate, resolveDefinition, sanitiseSetting, MOTION_TRACK_NAME,
+	freeMotionTrack, motionTemplate, nextMotionTrackName, resolveDefinition, sanitiseSetting,
 	type MotionSpec
 } from '@shared/motion'
 import type { MotionOpSettings } from '@shared/types'
@@ -1668,20 +1668,12 @@ function applyMotionOps(
 		...(diff.addItems ?? [])
 	]
 
-	const freeMotionTrack = (start: number, duration: number) => {
-		const end = start + duration
-		for (const track of tracks.filter(isMotionTrack).sort((a, b) => a.name.localeCompare(b.name, undefined, { numeric: true }))) {
-			if (track.locked || track.hidden) continue
-			const clash = placed.some((i) =>
-				i.trackId === track.id && i.timelineStart < end - 1e-6 && itemEnd(i) > start + 1e-6)
-			if (!clash) return track
-		}
-		const taken = new Set(tracks.map((t) => t.name))
-		let n = 1
-		while (taken.has(`M${n}`)) n++
+	const motionTrackAt = (start: number, duration: number) => {
+		const free = freeMotionTrack(tracks, placed, start, duration)
+		if (free) return free
 		const track = {
 			id: uuidv4(), kind: 'video' as const,
-			name: n === 1 ? MOTION_TRACK_NAME : `M${n}`,
+			name: nextMotionTrackName(tracks),
 			// On top of the video family: a graphic is in front of the picture.
 			order: nextTrackOrder(tracks, 'video'),
 			muted: false, locked: false, hidden: false, height: 64
@@ -1703,7 +1695,7 @@ function applyMotionOps(
 		const timing = motionTiming(base, request.moments, request.durationSec, template.definition.duration)
 		const spec = tidyMotion({ ...base, settings: values, moments: timing.moments })
 		const start = Math.max(0, finiteNumber(request.atSec) ? request.atSec : 0)
-		const track = freeMotionTrack(start, timing.duration)
+		const track = motionTrackAt(start, timing.duration)
 		const item: TimelineItem = {
 			id: uuidv4(), trackId: track.id, sourceAssetId: '',
 			timelineStart: start, in: 0, out: timing.duration,

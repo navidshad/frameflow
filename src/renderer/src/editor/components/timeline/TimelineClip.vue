@@ -3,7 +3,9 @@
 		:class="[
 			selected
 				? 'border-primary ring-2 ring-primary/40 shadow-md shadow-primary/20 z-10'
-				: 'border-zinc-300/60 dark:border-zinc-700/80 hover:border-primary/40',
+				: item.motion
+					? 'border-pink-500/45 hover:border-pink-500/70'
+					: 'border-zinc-300/60 dark:border-zinc-700/80 hover:border-primary/40',
 			track?.locked ? 'pointer-events-none opacity-60' : 'cursor-grab active:cursor-grabbing',
 			effectHover ? 'ring-2 ring-accent border-accent' : '',
 			dragging ? 'opacity-80 shadow-lg shadow-black/30 z-30' : ''
@@ -19,8 +21,38 @@
 		@dragleave.stop="effectHover = false"
 		@drop.stop="onEffectDrop">
 
+		<!-- A motion layer: pink, its in/out windows drawn where they fall, and
+		     every keyframe it carries as a diamond along the bottom. -->
+		<div v-if="item.motion" class="absolute inset-0"
+			:class="selected ? 'bg-pink-500/[0.16]' : 'bg-pink-500/[0.12]'"
+			:data-motion-clip="item.id">
+			<template v-if="selected">
+				<template v-for="zone in motionZones" :key="zone.name">
+					<div class="absolute inset-y-0 bg-pink-500/[0.28] pointer-events-none"
+						:style="{ left: `${zone.left}px`, width: `${zone.width}px` }"></div>
+					<div class="absolute inset-y-0 w-px bg-pink-900/30 dark:bg-white/45 pointer-events-none"
+						:style="{ left: `${zone.edge}px` }"></div>
+					<span v-if="motionWidth > 60"
+						class="absolute top-0.5 font-mono text-[7px] text-pink-900/60 dark:text-white/60 pointer-events-none"
+						:style="zone.side === 'left' ? { left: `${zone.edge + 2}px` } : { left: `${zone.edge - 2}px`, transform: 'translateX(-100%)' }">
+						{{ zone.name }}
+					</span>
+				</template>
+			</template>
+			<div class="absolute top-4 flex items-center gap-1 text-[9px] font-semibold whitespace-nowrap overflow-hidden pointer-events-none"
+				:class="selected
+					? 'left-3 right-3 text-pink-900 dark:text-white/90'
+					: 'left-1.5 right-1 text-pink-900/80 dark:text-white/85'">
+				<span v-if="selected" class="iconify tabler--sparkles w-2.5 h-2.5 text-pink-400 shrink-0"></span>
+				<span class="truncate">{{ motionLabel }}</span>
+			</div>
+			<div v-for="key in motionKeys" :key="key"
+				class="absolute bottom-1.5 w-[7px] h-[7px] bg-blue-400 rotate-45 pointer-events-none"
+				:style="{ left: `${key - 3.5}px` }"></div>
+		</div>
+
 		<!-- Body: filmstrip (scene thumbnail) or context (visual text) -->
-		<div class="absolute inset-0 bg-zinc-200 dark:bg-zinc-800">
+		<div v-else class="absolute inset-0 bg-zinc-200 dark:bg-zinc-800">
 			<template v-if="store.timelineView === 'filmstrip'">
 				<!-- Dense strip (§5.5): frames from the batched per-asset filmstrip,
 				     one per ~64px slot; falls back to the scene thumbnail. -->
@@ -75,6 +107,7 @@ import { toMediaUrl } from '@shared/media-url'
 import { computed, inject, ref } from 'vue'
 import type { TimelineItem } from '@shared/types'
 import { itemEnd } from '@shared/timeline'
+import { motionClipLabel, resolveMoments } from '@shared/motion'
 import { useEditorStore } from '../../../stores/editorStore'
 import { TimelineViewportKey, TimelineInteractionsKey } from '../../composables/useTimelineViewport'
 
@@ -156,6 +189,39 @@ const stripFrames = computed<string[]>(() => {
 })
 
 const contextText = computed(() => sourceClip.value?.visual || props.item.label || '')
+
+// ===== Motion =====
+
+const motionWidth = computed(() => Math.max(viewport.secToPx(props.item.duration), 6))
+const motionLabel = computed(() => motionClipLabel(props.item))
+
+/**
+ * The first and last windows (the entrance and the exit), in px from the
+ * clip's left edge. Only the ends are drawn: the middle is the hold, which is
+ * the clip's body.
+ */
+const motionZones = computed(() => {
+	if (!props.item.motion) return []
+	const moments = resolveMoments(props.item.motion, props.item.duration)
+	if (moments.length < 2) return []
+	const first = moments[0]
+	const last = moments[moments.length - 1]
+	const px = (s: number) => viewport.secToPx(s)
+	return [
+		{ name: first.name, side: 'left', left: 0, width: px(first.duration), edge: px(first.duration) },
+		{ name: last.name, side: 'right', left: px(last.start), width: px(last.duration), edge: px(last.start) }
+	].filter((z) => z.width > 0.5)
+})
+
+/** Every keyframe time on the clip, any path, in px from its left edge. */
+const motionKeys = computed(() => {
+	const tracks = props.item.keyframes ?? {}
+	const times = new Set<number>()
+	for (const keys of Object.values(tracks)) {
+		for (const k of keys ?? []) if (k.t >= 0 && k.t <= props.item.duration) times.add(Math.round(k.t * 100) / 100)
+	}
+	return [...times].sort((a, b) => a - b).map((t) => viewport.secToPx(t))
+})
 
 const format = (seconds: number) => {
 	const m = Math.floor(seconds / 60)

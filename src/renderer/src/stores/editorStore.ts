@@ -13,7 +13,11 @@ import {
 } from '@shared/timeline'
 import { computeScope } from '@shared/ai-scope'
 import { hasTransform, TRANSFORM_DEFAULTS } from '@shared/transform'
-import { isAnimatable, valueAt } from '@shared/keyframes'
+import { isAnimatableOn, valueAt } from '@shared/keyframes'
+import {
+	freeMotionTrack, motionAnimatablePaths, motionTemplate, newMotionSpec, nextMotionTrackName,
+	resolveDefinition, sameMotion, type MotionDefinition, type MotionSettingValue, type MotionSpec
+} from '@shared/motion'
 import { planRangeRemoval } from '@shared/rangeEdit'
 import { hasKey, KEY_DEFAULTS, type KeySpec } from '@shared/keying'
 import { GENERATOR_DEFAULTS, GENERATORS, type GeneratorSpec } from '@shared/generators'
@@ -331,6 +335,31 @@ export const useEditorStore = defineStore('editor', () => {
 		)
 	})
 
+	/**
+	 * Motion layers covering the playhead — the monitor gives each one a
+	 * sandboxed page. Bottom-most first, so DOM order matches stacking order.
+	 */
+	const activeMotion = computed(() => {
+		const d = doc.value
+		if (!d) return []
+		const hidden = new Set(d.tracks.filter((t) => t.hidden).map((t) => t.id))
+		const order = new Map(d.tracks.map((t) => [t.id, t.order]))
+		const t = playheadSec.value
+		return d.timeline
+			.filter((i) => i.motion && !hidden.has(i.trackId) && t >= i.timelineStart && t < i.timelineStart + i.duration)
+			.sort((a, b) => (order.get(a.trackId) ?? 0) - (order.get(b.trackId) ?? 0))
+	})
+
+	/**
+	 * Where each motion layer's content sits on the frame, as fractions — what
+	 * its page reported after the last seek. The gizmo draws its handles round
+	 * this rather than round the whole frame.
+	 */
+	const motionBounds = ref<Record<string, { x: number; y: number; w: number; h: number } | null>>({})
+
+	/** The template being dragged from the library, so lanes can light up. */
+	const draggingMotionTemplate = ref<string | null>(null)
+
 	/** Titles covering the playhead, so the monitor can draw them. */
 	const activeTitles = computed(() => {
 		const d = doc.value
@@ -550,7 +579,9 @@ export const useEditorStore = defineStore('editor', () => {
 	const playableVideoTracks = computed(() => {
 		const withMedia = new Set(
 			(doc.value?.timeline ?? [])
-				.filter((i) => !i.generator && isCompositedItem(i))
+				// Generated and motion layers draw themselves; neither is a file
+				// the <video> pair could play.
+				.filter((i) => !i.generator && !i.motion && isCompositedItem(i))
 				.map((i) => i.trackId)
 		)
 		return visibleVideoTracks.value.filter((t) => withMedia.has(t.id))
@@ -1935,6 +1966,97 @@ export const useEditorStore = defineStore('editor', () => {
 		commitStep({ before, label: 'Edit background' })
 	}
 
+	// ===== Motion layers =====
+
+	/**
+	 * Place a motion layer — a template from the library, or a blank custom page
+	 * when `templateId` is null — at `atSec` (the playhead by default).
+	 *
+	 * It goes on a motion track (`M1`, made on top of the video family when
+	 * there is none). A clash is never solved by sliding the layer later: it
+	 * lands on the next motion track free at that moment, made if needed — the
+	 * same rule the AI's addMotion follows, from the same shared function.
+	 */
+	const addMotionLayer = (templateId: string | null, atSec?: number) => {
+		if (!doc.value) return null
+		const before = snapshotState()
+		const spec = newMotionSpec(templateId ?? undefined)
+		const duration = resolveDefinition(spec).duration
+		const start = Math.max(0, atSec ?? playheadSec.value)
+		let track = freeMotionTrack(doc.value.tracks, doc.value.timeline, start, duration)
+		if (!track) {
+			track = {
+				id: newId('tr'), kind: 'video', name: nextMotionTrackName(doc.value.tracks),
+				order: nextTrackOrder(doc.value.tracks, 'video'),
+				muted: false, locked: false, hidden: false, height: 64
+			}
+			doc.value.tracks.push(track)
+		}
+		const id = newId('ti')
+		doc.value.timeline.push({
+			id, trackId: track.id, sourceAssetId: '',
+			timelineStart: start, in: 0, out: duration, speed: 1, preservePitch: true, duration,
+			label: motionTemplate(templateId ?? undefined)?.label ?? 'Custom HTML',
+			layerRole: 'overlay',
+			motion: spec
+		})
+		commitStep({ before, label: 'Add motion' })
+		selectItems([id])
+		return id
+	}
+
+	/** Tidy a spec so an untouched map compares equal to an absent one. */
+	const tidyMotion = (spec: MotionSpec): MotionSpec => {
+		const out: MotionSpec = { ...spec }
+		if (!out.settings || !Object.keys(out.settings).length) delete out.settings
+		if (!out.moments || !Object.keys(out.moments).length) delete out.moments
+		return out
+	}
+
+	/** Set one setting's static value. Replace, never mutate. */
+	const setMotionSetting = (id: string, key: string, value: MotionSettingValue) => {
+		const item = doc.value?.timeline.find((i) => i.id === id)
+		if (!item?.motion) return
+		const before = snapshotState()
+		item.motion = tidyMotion({ ...item.motion, settings: { ...item.motion.settings, [key]: value } })
+		commitStep({ before, label: 'Edit motion' })
+	}
+
+	/**
+	 * Retime a motion layer's windows. `moments` holds the FIXED windows (in,
+	 * out); `length`, when given, is the clip's new length — which is how the
+	 * hold is set, since the hold is whatever the length leaves.
+	 */
+	const setMotionTiming = (id: string, moments: Record<string, number>, length?: number) => {
+		const item = doc.value?.timeline.find((i) => i.id === id)
+		if (!item?.motion) return
+		const before = snapshotState()
+		item.motion = tidyMotion({ ...item.motion, moments: { ...item.motion.moments, ...moments } })
+		if (length !== undefined && Number.isFinite(length) && length > 0) {
+			// Lengthening stops at the next layer on the lane rather than pushing
+			// it later: where a motion layer sits is the point of it.
+			const room = doc.value!.timeline
+				.filter((i) => i.id !== item.id && i.trackId === item.trackId && i.timelineStart >= item.timelineStart + 1e-6)
+				.reduce((min, i) => Math.min(min, i.timelineStart - item.timelineStart), Infinity)
+			const next = Math.max(0.2, Math.min(length, room))
+			item.in = 0
+			item.out = next
+			item.duration = next
+		}
+		commitStep({ before, label: 'Retime motion' })
+	}
+
+	/** A custom page's own report of its definition (stage 5 builds on this). */
+	const setMotionDefinition = (id: string, definition: MotionDefinition) => {
+		const item = doc.value?.timeline.find((i) => i.id === id)
+		if (!item?.motion || item.motion.template) return
+		const next = { ...item.motion, definition }
+		if (sameMotion(next, item.motion)) return
+		const before = snapshotState()
+		item.motion = next
+		commitStep({ before, label: 'Update motion page' })
+	}
+
 	/**
 	 * Key a clip's background out, so it sits IN FRONT of the layer below
 	 * rather than beside it. `undefined` puts the background back.
@@ -1985,6 +2107,10 @@ export const useEditorStore = defineStore('editor', () => {
 		text?: Partial<NonNullable<TimelineItem['text']>>
 		framing?: TimelineItem['framing']
 		generator?: Partial<NonNullable<TimelineItem['generator']>>
+		motion?: MotionSpec
+		keyframes?: TimelineItem['keyframes']
+		/** Clip length, for a motion layer whose hold is being dragged. */
+		length?: number
 		key?: TimelineItem['key']
 		effects?: TimelineItem['effects']
 		gain?: number
@@ -1999,6 +2125,17 @@ export const useEditorStore = defineStore('editor', () => {
 		if (patch.text && item.text) item.text = { ...item.text, ...patch.text }
 		if ('framing' in patch) item.framing = patch.framing ? { ...patch.framing } : undefined
 		if (patch.generator && item.generator) item.generator = { ...item.generator, ...patch.generator }
+		if (patch.motion && item.motion) item.motion = { ...patch.motion }
+		if ('keyframes' in patch) {
+			item.keyframes = patch.keyframes && Object.keys(patch.keyframes).length
+				? Object.fromEntries(Object.entries(patch.keyframes).map(([k, v]) => [k, v.map((key) => ({ ...key }))]))
+				: undefined
+		}
+		if (patch.length !== undefined && item.motion && patch.length > 0) {
+			item.in = 0
+			item.out = patch.length
+			item.duration = patch.length
+		}
 		if ('key' in patch) item.key = patch.key ? { ...patch.key } : undefined
 		if (patch.effects) item.effects = patch.effects.map((e) => ({ ...e, params: { ...e.params } }))
 		if (patch.gain !== undefined) item.gain = patch.gain
@@ -2034,7 +2171,7 @@ export const useEditorStore = defineStore('editor', () => {
 	 */
 	const setKeyframe = (id: string, path: string, t: number, value: number) => {
 		const item = doc.value?.timeline.find((i) => i.id === id)
-		if (!item || !isAnimatable(path) || !Number.isFinite(value)) return
+		if (!item || !isAnimatableOn(path, motionAnimatablePaths(item)) || !Number.isFinite(value)) return
 		const at = Math.max(0, Math.round(t * 100) / 100)
 		const before = snapshotState()
 		const existing = item.keyframes?.[path] ?? []
@@ -3211,6 +3348,13 @@ export const useEditorStore = defineStore('editor', () => {
 		setItemKey,
 		addGeneratedLayer,
 		setGenerator,
+		addMotionLayer,
+		setMotionSetting,
+		setMotionTiming,
+		setMotionDefinition,
+		activeMotion,
+		motionBounds,
+		draggingMotionTemplate,
 		setLayerRole,
 		setKeyframe,
 		removeKeyframe,
