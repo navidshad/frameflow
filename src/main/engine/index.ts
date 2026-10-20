@@ -10,7 +10,8 @@ import { threadManager } from '../threads'
 import { emitTurnUpdate, persistTurn, resolvePersona } from '../editor/prompt'
 import { rendererBridge, switchRevisionFor } from '../mcp/rendererBridge'
 import { detectCli, locate, recordRunFailure } from './detect'
-import { runEngineTurn } from './runner'
+import { enginePermissions, runEngineTurn } from './runner'
+import { probeMotionPage } from '../motion/probe'
 
 /**
  * The AI engine, wired to the app: the Settings card and engine chip's IPC,
@@ -129,6 +130,9 @@ export function runCliEditorPrompt(options: {
 				systemPrompt: buildEngineSystemPrompt({ persona, maxSteps: settings.maxSteps, engineLabel: label }),
 				model,
 				maxSteps: settings.maxSteps,
+				// The user's "Write custom HTML motion layers" switch, read per call.
+				permissions: () => enginePermissions(settingsManager.getAgentAccess().permissions.html),
+				probeMotion: probeMotionPage,
 				bridge: { ...rendererBridge, switchRevision: (revisionId) => switchRevisionFor(revisionId, turnId) },
 				turnId,
 				version: app.getVersion(),

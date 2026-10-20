@@ -16,8 +16,13 @@ import { hasTransform, TRANSFORM_DEFAULTS } from '@shared/transform'
 import { isAnimatableOn, valueAt } from '@shared/keyframes'
 import {
 	freeMotionTrack, motionAnimatablePaths, motionTemplate, newMotionSpec, nextMotionTrackName,
-	resolveDefinition, sameMotion, type MotionDefinition, type MotionSettingValue, type MotionSpec
+	renderVersion, resolveDefinition, sameMotion, type MotionDefinition, type MotionSettingValue, type MotionSpec
 } from '@shared/motion'
+import {
+	describePrompt, editedSpec, failedSpec, fixPrompt, htmlHash, unverifiedPage, verifiedSpec,
+	type CheckIssue, type RuntimeReport
+} from '@shared/motionCode'
+import { setUserMotionTemplates, userMotionTemplate, type MotionUserTemplate } from '@shared/motionTemplates'
 import { planRangeRemoval } from '@shared/rangeEdit'
 import { hasKey, KEY_DEFAULTS, type KeySpec } from '@shared/keying'
 import { GENERATOR_DEFAULTS, GENERATORS, type GeneratorSpec } from '@shared/generators'
@@ -2004,8 +2009,15 @@ export const useEditorStore = defineStore('editor', () => {
 	const addMotionLayer = (templateId: string | null, atSec?: number) => {
 		if (!doc.value) return null
 		const before = snapshotState()
-		const spec = newMotionSpec(templateId ?? undefined)
-		const duration = resolveDefinition(spec).duration
+		// `project:<item id>` is another placement of a custom layer already in
+		// this project: its page, settings and timing are copied as they are.
+		const source = templateId?.startsWith('project:')
+			? doc.value.timeline.find((i) => i.id === templateId.slice('project:'.length) && i.motion)
+			: undefined
+		const spec: MotionSpec = source
+			? JSON.parse(JSON.stringify(source.motion))
+			: newMotionSpec(templateId ?? undefined)
+		const duration = source ? source.duration : resolveDefinition(spec).duration
 		const start = Math.max(0, atSec ?? playheadSec.value)
 		let track = freeMotionTrack(doc.value.tracks, doc.value.timeline, start, duration)
 		if (!track) {
@@ -2020,7 +2032,7 @@ export const useEditorStore = defineStore('editor', () => {
 		doc.value.timeline.push({
 			id, trackId: track.id, sourceAssetId: '',
 			timelineStart: start, in: 0, out: duration, speed: 1, preservePitch: true, duration,
-			label: motionTemplate(templateId ?? undefined)?.label ?? 'Custom HTML',
+			label: source?.label ?? motionTemplate(templateId ?? undefined)?.label ?? userMotionTemplate(templateId ?? undefined)?.label ?? 'Custom HTML',
 			layerRole: 'overlay',
 			motion: spec
 		})
@@ -2070,15 +2082,180 @@ export const useEditorStore = defineStore('editor', () => {
 		commitStep({ before, label: 'Retime motion' })
 	}
 
-	/** A custom page's own report of its definition (stage 5 builds on this). */
+	/**
+	 * A custom page's own report of its definition, for pages whose `define`
+	 * call is not a literal the reader can evaluate. It describes the page that
+	 * is DRAWN (the passing version), so that is what it updates; the working
+	 * text only follows when it is the same page.
+	 */
 	const setMotionDefinition = (id: string, definition: MotionDefinition) => {
 		const item = doc.value?.timeline.find((i) => i.id === id)
 		if (!item?.motion || item.motion.template) return
-		const next = { ...item.motion, definition }
-		if (sameMotion(next, item.motion)) return
+		const motion = item.motion
+		const drawn = renderVersion(motion)
+		const next: MotionSpec = {
+			...motion,
+			passed: motion.passed ? { ...motion.passed, definition } : motion.passed,
+			definition: motion.passed && motion.passed.html !== motion.html ? motion.definition : definition
+		}
+		if (sameMotion(next, motion) || drawn.source === 'nothing') return
 		const before = snapshotState()
 		item.motion = next
 		commitStep({ before, label: 'Update motion page' })
+	}
+
+	// ===== Custom HTML pages (stage 5) =====
+
+	/** The probe's latest word on a page, by its text — the HTML tab's runtime checks. */
+	const motionRuntime = ref<Record<string, RuntimeReport>>({})
+
+	/** Saved templates (main owns the files; this is the Motion tab's copy). */
+	const motionUserTemplates = ref<MotionUserTemplate[]>([])
+
+	const adoptUserTemplates = (list: MotionUserTemplate[]) => {
+		motionUserTemplates.value = list
+		setUserMotionTemplates(list)
+	}
+
+	const loadMotionTemplates = async () => {
+		try {
+			adoptUserTemplates((await api.listMotionTemplates()) || [])
+		} catch (error) {
+			console.error('[editorStore] Failed to load motion templates:', error)
+		}
+	}
+
+	/**
+	 * Draw `html` twice in the hidden window and compare. Never rejects: a probe
+	 * that cannot run is `skipped`, which blocks nothing.
+	 */
+	const probeMotionHtml = async (html: string, definition: MotionDefinition): Promise<RuntimeReport> => {
+		const meta = doc.value?.timelineMeta
+		try {
+			const result = await api.probeMotionPage({
+				html, definition: JSON.parse(JSON.stringify(definition)),
+				frame: { width: meta?.width || 1920, height: meta?.height || 1080 }
+			})
+			const report: RuntimeReport = {
+				determinism: result?.determinism ?? 'skipped', differsAt: result?.differsAt, error: result?.error,
+				definition: result?.definition
+			}
+			motionRuntime.value = { ...motionRuntime.value, [htmlHash(html)]: report }
+			return report
+		} catch (error) {
+			console.error('[editorStore] Motion probe failed to run:', error)
+			return { determinism: 'skipped' }
+		}
+	}
+
+	/**
+	 * A person's edit to a custom page, as ONE undoable step. The caller has
+	 * already run the checks; `passed` says whether the text cleared them, which
+	 * decides whether it becomes the drawn version or waits as the working copy.
+	 */
+	const commitMotionHtml = (
+		id: string,
+		text: string,
+		outcome: { passed: boolean; definition?: MotionDefinition }
+	): boolean => {
+		const item = doc.value?.timeline.find((i) => i.id === id)
+		if (!item?.motion || item.motion.template) return false
+		const next = editedSpec(item.motion, text, outcome)
+		if (sameMotion(next, item.motion)) return false
+		const before = snapshotState()
+		item.motion = next
+		return commitStep({ before, label: outcome.passed ? 'Edit motion HTML' : 'Edit motion HTML (checks failing)' })
+	}
+
+	/**
+	 * Pages an AI or an agent wrote land drawn but unprobed (the ops path has no
+	 * window). Probe each distinct one once, quietly: a pass marks it verified;
+	 * a failure draws nothing, so a page that fails is never rendered.
+	 */
+	const probing = new Set<string>()
+	const verifyMotionPages = async () => {
+		const d = doc.value
+		if (!d) return
+		for (const item of d.timeline) {
+			const page = unverifiedPage(item.motion)
+			if (!page) continue
+			const key = htmlHash(page.html)
+			if (probing.has(key)) continue
+			probing.add(key)
+			try {
+				const report = await probeMotionHtml(page.html, resolveDefinition(item.motion))
+				const ok = report.determinism !== 'fail' && !report.error
+				let changed = false
+				for (const other of doc.value?.timeline ?? []) {
+					if (!other.motion || unverifiedPage(other.motion)?.html !== page.html) continue
+					other.motion = ok ? verifiedSpec(other.motion, page.html) : failedSpec(other.motion, page.html)
+					changed = true
+				}
+				// Quiet on purpose: the checks are a fact about the page, not an edit.
+				if (changed) markDirty()
+			} finally {
+				probing.delete(key)
+			}
+		}
+	}
+	watch(
+		() => doc.value?.timeline.map((i) => unverifiedPage(i.motion)?.html ?? '').join('\u0000'),
+		(signature) => { if (signature && signature.replace(/\u0000/g, '')) void verifyMotionPages() }
+	)
+
+	/** Save a passing custom layer to the library, for every project. */
+	const saveMotionAsTemplate = async (
+		id: string,
+		label: string
+	): Promise<{ ok: true; template: MotionUserTemplate } | { ok: false; error: string }> => {
+		const item = doc.value?.timeline.find((i) => i.id === id)
+		if (!item?.motion || item.motion.template) return { ok: false, error: 'Only a custom layer can be saved as a template.' }
+		const drawn = renderVersion(item.motion)
+		try {
+			const result = await api.saveMotionTemplate({
+				label, html: drawn.html, definition: JSON.parse(JSON.stringify(drawn.definition)),
+				author: item.motion.author?.by ?? 'you'
+			})
+			if (result?.ok) {
+				adoptUserTemplates(result.templates)
+				return { ok: true, template: result.template }
+			}
+			return { ok: false, error: result?.error || 'Could not save the template.' }
+		} catch (error: any) {
+			return { ok: false, error: error?.message || 'Could not save the template.' }
+		}
+	}
+
+	const deleteMotionTemplate = async (templateId: string) => {
+		try {
+			adoptUserTemplates((await api.deleteMotionTemplate(templateId)) || [])
+		} catch (error) {
+			console.error('[editorStore] Failed to delete motion template:', error)
+		}
+	}
+
+	/** "Ask AI to fix": the error, the line and the page, scoped to this layer. */
+	const askAiToFixMotion = (id: string, issue: CheckIssue | undefined, html: string) => {
+		const item = doc.value?.timeline.find((i) => i.id === id)
+		if (!item?.motion || promptRunning.value) return
+		if (!selectedItemIds.value.includes(id)) selectItems([id])
+		void runPrompt(fixPrompt({ layer: item.label || 'Custom HTML', itemId: id, issue, html }))
+	}
+
+	/** "Describe it": a blank custom layer, then the AI writes its page. */
+	const describeMotionLayer = (description: string, atSec?: number) => {
+		const text = description.trim()
+		const id = addMotionLayer(null, atSec)
+		if (!id || !text) return id
+		const item = doc.value?.timeline.find((i) => i.id === id)
+		if (item) {
+			// Named for what it is, so the library tile and the timeline say so.
+			const before = snapshotState()
+			item.label = text.length > 28 ? `${text.slice(0, 27).trimEnd()}…` : text
+			commitStep({ before, label: 'Name motion layer' })
+		}
+		void runPrompt(describePrompt({ layer: item?.label || 'Custom HTML', itemId: id, description: text }))
+		return id
 	}
 
 	/**
@@ -3442,6 +3619,15 @@ export const useEditorStore = defineStore('editor', () => {
 		setMotionSetting,
 		setMotionTiming,
 		setMotionDefinition,
+		motionRuntime,
+		motionUserTemplates,
+		loadMotionTemplates,
+		probeMotionHtml,
+		commitMotionHtml,
+		saveMotionAsTemplate,
+		deleteMotionTemplate,
+		askAiToFixMotion,
+		describeMotionLayer,
 		activeMotion,
 		motionBounds,
 		draggingMotionTemplate,

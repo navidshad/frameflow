@@ -15,9 +15,11 @@ import { hasTransform, OFFSET_RANGE, SCALE_RANGE } from '@shared/transform'
 import { defaultParams, effectDef } from '@shared/effects'
 import { findTitleTrack, nextTrackOrder, TITLE_TRACK_NAME } from '@shared/tracks'
 import {
-	freeMotionTrack, motionTemplate, nextMotionTrackName, resolveDefinition, sanitiseSetting,
-	type MotionSpec
+	freeMotionTrack, lintMotionHtml, motionTemplate, newMotionSpec, nextMotionTrackName, resolveDefinition,
+	sanitiseSetting, type MotionSpec
 } from '@shared/motion'
+import { writtenSpec } from '@shared/motionCode'
+import { userMotionTemplate } from '@shared/motionTemplates'
 import type { MotionOpSettings } from '@shared/types'
 import { isTransitionKind } from '@shared/transitionPresets'
 import {
@@ -64,6 +66,16 @@ const MOTION_SETTINGS_SCHEMA = {
 		},
 		required: ['key', 'value']
 	}
+}
+
+const MOTION_HTML_SCHEMA = {
+	type: 'string',
+	description:
+		'A whole self-contained HTML page for a CUSTOM motion layer. It must call ' +
+		'frameflow.define({ duration, settings, moments, seek(t, settings) }) and draw only from t and settings. ' +
+		'Helpers: frameflow.progress("in", t), ease(x), clamp(x, lo, hi). A page that breaks the rules ' +
+		'(clocks, timers, random, CSS animation, network, or drawing differently on a second visit to the same t) ' +
+		'is not applied: the layer keeps its earlier page and the result says why.'
 }
 
 const MOTION_MOMENTS_SCHEMA = {
@@ -244,11 +256,12 @@ export const EDITOR_OPS_SCHEMA = {
 		},
 		addMotion: {
 			type: 'array',
-			description: 'Add a motion graphic — a lower third, a title card, a stat — from AVAILABLE MOTION TEMPLATES. It goes on a motion track above the footage.',
+			description: 'Add a motion graphic — a lower third, a title card, a stat — from AVAILABLE MOTION TEMPLATES, or write your own page (`template: "custom"` with `html`). It goes on a motion track above the footage.',
 			items: {
 				type: 'object',
 				properties: {
-					template: { type: 'string', description: 'A template id from AVAILABLE MOTION TEMPLATES' },
+					template: { type: 'string', description: 'A template id from AVAILABLE MOTION TEMPLATES, or "custom" when you write the page in `html`' },
+					html: MOTION_HTML_SCHEMA,
 					atSec: { type: 'number', description: 'Timeline seconds where it starts. Land it on the beat it belongs to — the word, not after it.' },
 					durationSec: { type: 'number', description: 'How long it stays. Omit for the template’s own length.' },
 					settings: MOTION_SETTINGS_SCHEMA,
@@ -260,11 +273,12 @@ export const EDITOR_OPS_SCHEMA = {
 		},
 		updateMotion: {
 			type: 'array',
-			description: 'Change a motion layer already on the timeline (an item listed with `motion`): its text and colours, its in/hold/out windows, or when it starts and how long it stays.',
+			description: 'Change a motion layer already on the timeline (an item listed with `motion`): its text and colours, its in/hold/out windows, when it starts and how long it stays, or — with `html` — the page itself.',
 			items: {
 				type: 'object',
 				properties: {
 					id: { type: 'string' },
+					html: MOTION_HTML_SCHEMA,
 					settings: MOTION_SETTINGS_SCHEMA,
 					moments: MOTION_MOMENTS_SCHEMA,
 					atSec: { type: 'number' },
@@ -775,6 +789,16 @@ export function composeSystemInstruction(
 		'    at a turn in the story. Time it to the words: start it on the beat, and set the `out`',
 		'    window to finish before the next shot. `updateMotion` retimes or rewrites one that is',
 		'    already placed. Prefer these over `addTitles` for anything designed.',
+		'    When no template fits, write the page: `addMotion` with `template: "custom"` and `html`,',
+		'    or `updateMotion` with `html` to rewrite a custom layer. A page calls',
+		'    frameflow.define({ duration, settings: [{ key, type: number|text|color|enum, default,',
+		'    animate? }], moments: [{ name, duration, flex? }], seek(t, settings) }) and draws ONLY',
+		'    from t and settings: no CSS animation or transition, setTimeout, requestAnimationFrame,',
+		'    Date.now, Math.random, fetch or remote URLs. Helpers: frameflow.progress("in", t) is 0..1',
+		'    across a moment; ease(x) is a smooth 0..1 curve and clamp(x, lo = 0, hi = 1) limits a value',
+		'    (plain globals; frameflow.ease.out/inOut/back, frameflow.lerp and frameflow.clamp also exist).',
+		'    Inter and Outfit are bundled. A page that breaks these rules is not drawn — the last version that',
+		'    passed stays, and the result says why.',
 		'  - `addTitles` puts text on the picture. `captions: true` burns the spoken transcript',
 		'    in, and only helps when the material has actually been transcribed.',
 		'    `loudness: true` normalises the mix to the level streaming platforms expect —',
@@ -894,7 +918,12 @@ export interface OpsToDiffResult {
 const labelFrom = (clip: Clip): string =>
 	(clip.visual || clip.text)?.replace(/\s+/g, ' ').trim().slice(0, 40) || `Piece #${clip.index}`
 
-export function opsToDiff(ops: EditorOps, doc: EditorDocument): OpsToDiffResult {
+export function opsToDiff(
+	ops: EditorOps,
+	doc: EditorDocument,
+	/** Who is writing, for the "Written by …" line on a custom page. */
+	writer: { by: string; turnId?: string } = { by: 'FrameFlow AI' }
+): OpsToDiffResult {
 	const droppedOps: string[] = []
 	const notes: string[] = []
 	const diff: TimelineDiff = { schemaVersion: TIMELINE_DIFF_SCHEMA_VERSION }
@@ -1564,7 +1593,7 @@ export function opsToDiff(ops: EditorOps, doc: EditorDocument): OpsToDiffResult 
 	}
 
 	if (ops.addMotion?.length || ops.updateMotion?.length) {
-		applyMotionOps(ops, doc, diff, droppedOps, notes)
+		applyMotionOps(ops, doc, diff, droppedOps, notes, writer)
 	}
 
 	const docSettings: OpsToDiffResult['docSettings'] = {}
@@ -1647,6 +1676,32 @@ function tidyMotion(spec: MotionSpec): MotionSpec {
 }
 
 /**
+ * Does this request write a custom page? Agents over MCP need the user's
+ * "Write custom HTML motion layers" permission for that; picking a template and
+ * setting its fields is ordinary editing.
+ */
+export function opsWriteHtml(ops: Pick<EditorOps, 'addMotion' | 'updateMotion'>): boolean {
+	const writes = (r: { html?: string } | undefined) => typeof r?.html === 'string' && r.html.trim() !== ''
+	return !!ops.addMotion?.some(writes) || !!ops.updateMotion?.some(writes)
+}
+
+/**
+ * Tell whoever wrote a page what is wrong with it, in the result they read: a
+ * page that fails is kept as the working text but not drawn, and an agent that
+ * is not told would assume it worked.
+ */
+function reportPageProblems(label: string, html: string, spec: MotionSpec, notes: string[]): void {
+	const lint = lintMotionHtml(html)
+	if (lint.ok) return
+	const first = lint.issues[0]
+	const more = lint.issues.length > 1 ? ` (+${lint.issues.length - 1} more)` : ''
+	const shown = spec.passed
+		? 'the last version that passed stays on screen'
+		: 'nothing is drawn until a version passes'
+	notes.push(`"${label}": line ${first.line} fails its checks — ${first.message}${more} FrameFlow keeps your page as the working text but ${shown}. Fix it with updateMotion.html.`)
+}
+
+/**
  * `addMotion` / `updateMotion` → the diff.
  *
  * A motion layer lands on a motion track (`M1`, made on top of the video
@@ -1659,7 +1714,8 @@ function applyMotionOps(
 	doc: EditorDocument,
 	diff: TimelineDiff,
 	droppedOps: string[],
-	notes: string[]
+	notes: string[],
+	writer: { by: string; turnId?: string }
 ): void {
 	const removed = new Set(diff.removeItemIds ?? [])
 	const tracks = [...doc.tracks, ...(diff.addTracks ?? [])]
@@ -1684,15 +1740,35 @@ function applyMotionOps(
 	}
 
 	for (const request of ops.addMotion ?? []) {
+		const html = typeof request?.html === 'string' && request.html.trim() ? request.html : null
+		const saved = userMotionTemplate(request?.template)
 		const template = motionTemplate(request?.template)
-		if (!template) {
+		// A page written in `html` is a custom layer, whatever template it names;
+		// a saved template is copied in as a custom page the project owns.
+		let base: MotionSpec
+		let label: string
+		if (html) {
+			base = writtenSpec(saved ? newMotionSpec(saved.id) : undefined, html, writer)
+			label = saved?.label ?? template?.label ?? 'Custom HTML'
+			reportPageProblems(label, html, base, notes)
+		} else if (template) {
+			base = { template: template.id }
+			label = template.label
+		} else if (saved) {
+			base = newMotionSpec(saved.id)
+			label = saved.label
+		} else if (request?.template === 'custom') {
+			base = newMotionSpec()
+			label = 'Custom HTML'
+			notes.push('A custom layer needs `html` — added a blank one. Send the page with updateMotion.')
+		} else {
 			droppedOps.push(`addMotion: unknown template "${request?.template}"`)
 			continue
 		}
-		const base: MotionSpec = { template: template.id }
+		const def = resolveDefinition(base)
 		const { values, unknown } = motionSettingsFrom(request.settings, base)
-		if (unknown.length) notes.push(`${template.label} has no setting ${unknown.map((k) => `"${k}"`).join(', ')} — ignored.`)
-		const timing = motionTiming(base, request.moments, request.durationSec, template.definition.duration)
+		if (unknown.length) notes.push(`${label} has no setting ${unknown.map((k) => `"${k}"`).join(', ')} — ignored.`)
+		const timing = motionTiming(base, request.moments, request.durationSec, def.duration)
 		const spec = tidyMotion({ ...base, settings: values, moments: timing.moments })
 		const start = Math.max(0, finiteNumber(request.atSec) ? request.atSec : 0)
 		const track = motionTrackAt(start, timing.duration)
@@ -1700,7 +1776,7 @@ function applyMotionOps(
 			id: uuidv4(), trackId: track.id, sourceAssetId: '',
 			timelineStart: start, in: 0, out: timing.duration,
 			speed: 1, preservePitch: true, duration: timing.duration,
-			label: request.label?.trim() || template.label,
+			label: request.label?.trim() || label,
 			layerRole: 'overlay',
 			motion: spec
 		}
@@ -1718,14 +1794,19 @@ function applyMotionOps(
 			droppedOps.push(`updateMotion: ${item.id} is not a motion layer`)
 			continue
 		}
-		const { values, unknown } = motionSettingsFrom(request.settings, item.motion)
+		// A new page replaces the old one first, so the settings and windows in the
+		// same request are read against the page they were written for.
+		const html = typeof request.html === 'string' && request.html.trim() ? request.html : null
+		const current: MotionSpec = html ? writtenSpec(item.motion, html, writer) : item.motion
+		if (html) reportPageProblems(item.label || item.id, html, current, notes)
+		const { values, unknown } = motionSettingsFrom(request.settings, current)
 		if (unknown.length) {
 			notes.push(`"${item.label || item.id}" has no setting ${unknown.map((k) => `"${k}"`).join(', ')} — ignored.`)
 		}
-		const timing = motionTiming(item.motion, request.moments, request.durationSec, item.duration)
+		const timing = motionTiming(current, request.moments, request.durationSec, item.duration)
 		const spec = tidyMotion({
-			...item.motion,
-			settings: { ...(item.motion.settings ?? {}), ...values },
+			...current,
+			settings: { ...(current.settings ?? {}), ...values },
 			moments: timing.moments
 		})
 		const fields: Partial<TimelineItem> = { motion: spec }

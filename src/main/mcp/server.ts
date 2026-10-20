@@ -12,6 +12,7 @@ import {
 import type { AgentActivity, AgentSessionInfo } from '@shared/agentFeed'
 import { agentFocus } from '@shared/engines'
 import type { EditorBridge } from './bridge'
+import type { MotionProbe } from '../editor/vetHtml'
 import { SERVER_INSTRUCTIONS, ToolError, TOOLS, type ToolContext, type ToolDef } from './tools'
 
 /**
@@ -54,6 +55,8 @@ export interface AgentServerOptions {
 	engineTurnId?: string
 	/** Tool calls allowed across all sessions; later calls are refused with a "wrap up" note. */
 	maxToolCalls?: number
+	/** Draws a custom page in the hidden window, for the check every written page gets. */
+	probeMotion?: MotionProbe
 }
 
 interface Session {
@@ -345,10 +348,18 @@ export class AgentServer {
 			}
 		}
 
-		const refusal = permissionRefusal(def.permission, this.options.permissions())
-		if (refusal) {
-			finish({ status: 'refused', detail: REFUSED_SHORT[def.permission] })
-			return { content: [{ type: 'text' as const, text: refusal }], isError: true }
+		// The tool's own permission, then any this call's arguments add (apply_ops
+		// is "edit"; writing a custom HTML page in it is also "html").
+		const needed: AgentPermission[] = [def.permission]
+		const extra = def.alsoNeeds?.(args)
+		if (extra) needed.push(extra)
+		const denied = needed.find((p) => permissionRefusal(p, this.options.permissions()))
+		if (denied) {
+			finish({ status: 'refused', detail: REFUSED_SHORT[denied] })
+			return {
+				content: [{ type: 'text' as const, text: permissionRefusal(denied, this.options.permissions())! }],
+				isError: true
+			}
 		}
 
 		const ctx: ToolContext = {
@@ -356,7 +367,8 @@ export class AgentServer {
 			clientName: session.info.clientName,
 			bridge: this.options.bridge,
 			permissions: this.options.permissions,
-			engineTurnId: this.options.engineTurnId
+			engineTurnId: this.options.engineTurnId,
+			probeMotion: this.options.probeMotion
 		}
 		try {
 			const run = () => def.run(args, ctx)

@@ -703,6 +703,11 @@ export interface EditorOps {
 		/** Window lengths in seconds by moment name; `hold` sets the length when no durationSec. */
 		moments?: Record<string, number>
 		label?: string
+		/**
+		 * A whole page for a CUSTOM layer (`template: "custom"`). Agents over MCP
+		 * need the "Write custom HTML motion layers" permission to send one.
+		 */
+		html?: string
 	}>
 	/** Change a motion layer already on the timeline: its fields, its windows, its timing. */
 	updateMotion?: Array<{
@@ -711,6 +716,8 @@ export interface EditorOps {
 		moments?: Record<string, number>
 		atSec?: number
 		durationSec?: number
+		/** Replace the layer's page (it becomes a custom layer). */
+		html?: string
 	}>
 	/**
 	 * A transition on the cut AFTER each named item. `kind: 'none'` removes one.

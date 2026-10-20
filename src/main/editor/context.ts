@@ -6,9 +6,11 @@ import { FEATURED_KINDS, transitionGroups } from '@shared/transitionPresets'
 import { computeScope, type AiScope } from '@shared/ai-scope'
 import { itemDuration } from '@shared/timeline'
 import {
-	MOTION_TEMPLATES, motionName, resolveDefinition, resolveMoments, settingValues,
-	type MotionSettingDef
+	MOTION_TEMPLATES, lintMotionHtml, motionName, motionWorkingHtml, resolveDefinition, resolveMoments,
+	settingValues, type MotionSettingDef
 } from '@shared/motion'
+import { userMotionTemplates } from '@shared/motionTemplates'
+import { motionStatus } from '@shared/motionCode'
 
 /**
  * Builds the prompt context text for the editor AI (PRD §5.7).
@@ -503,6 +505,12 @@ export function buildPromptContext(
 			const windows = def.moments.map((m) => `${m.name} ${fmt(m.duration)}${m.flex ? '*' : ''}`).join('/')
 			lines.push(`- ${template.id} (${fmt(def.duration)}s; ${windows}): ${def.settings.map(describeSetting).join(', ')} — ${template.description}`)
 		}
+		for (const template of userMotionTemplates()) {
+			const def = template.definition
+			const windows = def.moments.map((m) => `${m.name} ${fmt(m.duration)}${m.flex ? '*' : ''}`).join('/')
+			lines.push(`- ${template.id} (${fmt(def.duration)}s; ${windows}): ${def.settings.map(describeSetting).join(', ')} — ${template.description} [saved by the user]`)
+		}
+		lines.push('- custom: no template; write the page yourself in addMotion.html / updateMotion.html (see the instructions)')
 		lines.push('(* is the window that stretches with the clip. [anim] settings can be keyframed by a person.)')
 		lines.push('')
 
@@ -577,6 +585,11 @@ export function buildPromptContext(
 			const showContent = !r.dropNeighborVisuals || selectedSet.has(item.id) || scope.kind !== 'selection'
 			if (item.motion) {
 				lines.push(`- ${item.id} | ${track?.name || '?'} | at ${fmt(item.timelineStart)}s | ${fmt(item.duration)}s | "${item.label || ''}" | ${motionLine(item)}`)
+				// A custom page is only editable if the model can read it. Only the
+				// layers in scope get the whole page; the rest are one line.
+				if (!item.motion.template && (selectedSet.has(item.id) || scope.kind === 'selection')) {
+					lines.push(...motionPageLines(item))
+				}
 				continue
 			}
 			const { span, content } = coverageOf(item, showContent ? ITEM_SUMMARY_MAX_CHARS : 0, false)
@@ -808,6 +821,26 @@ function describeSetting(s: MotionSettingDef): string {
 		case 'enum': return `${s.key} ${(s.options ?? []).map((o) => o.value).join('|')}${s.animate ? ' [anim hold: key option index]' : ''}`
 		default: return `${s.key} text`
 	}
+}
+
+const MAX_PAGE_LINES_CHARS = 8_000
+
+/** A custom layer's page and what its checks say, for `updateMotion.html`. */
+function motionPageLines(item: TimelineItem): string[] {
+	const spec = item.motion!
+	const html = motionWorkingHtml(spec)
+	const lint = lintMotionHtml(html)
+	const status = motionStatus(spec)
+	const out: string[] = []
+	if (!lint.ok || status.state !== 'ok') {
+		const first = lint.issues[0]
+		out.push(`    CHECKS FAIL${first ? `: line ${first.line} — ${first.message}` : ''}. ${
+			status.state === 'nothing' ? 'No version has passed, so nothing is drawn.' : 'The last version that passed is drawn instead.'}`)
+	}
+	out.push('    page (html):')
+	const shown = html.length > MAX_PAGE_LINES_CHARS ? `${html.slice(0, MAX_PAGE_LINES_CHARS)}\n… (cut)` : html
+	for (const line of shown.split('\n')) out.push(`    | ${line}`)
+	return out
 }
 
 /** What a placed motion layer is and says, so `updateMotion` can change it. */

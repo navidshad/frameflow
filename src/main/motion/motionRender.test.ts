@@ -7,7 +7,8 @@ import { join, resolve } from 'path'
 import { promisify } from 'util'
 import { build } from 'vite'
 import type { EditorDocument, TimelineItem, Track } from '@shared/types'
-import { motionFrameCount } from '@shared/motion'
+import { motionFrameCount, type MotionSpec } from '@shared/motion'
+import { editedSpec } from '@shared/motionCode'
 import { getFFmpegBinaryPath, getFFprobeBinaryPath } from '../ffmpeg/binaries'
 import { computeRegions } from '../editor/render'
 import { buildRegionGraph, motionJobsFor, regionAtInstant, type CutRegion } from '../editor/renderBuilders'
@@ -260,4 +261,55 @@ describe.skipIf(!canOpenWindows)('a motion layer through the export graph', () =
 		expect(g1).toBeLessThan(110)
 		expect(b1).toBeGreaterThan(120)
 	}, 180_000)
+})
+
+describe.skipIf(!canOpenWindows)('a custom layer whose latest edit fails its checks', () => {
+	const fps = 10
+	const frame = { width: 320, height: 180, fps }
+	const page = (colour: string, extra = '') =>
+		`<div style="position:absolute;inset:0;background:${colour}"></div>\n` +
+		`<script>frameflow.define({ duration: 1, settings: [], moments: [], seek(t) { ${extra} } })</script>`
+	const GREEN = page('#00ff00')
+	const RED_CLOCK = page('#ff0000', 'var now = Date.now();')
+	const RED = page('#ff0000')
+
+	const layer = (motion: MotionSpec): TimelineItem => ({
+		id: 'c', trackId: 'm1', sourceAssetId: '', timelineStart: 0, in: 0, out: 1,
+		speed: 1, preservePitch: true, duration: 1, label: 'Custom', motion
+	})
+	const centre = async (file: string) => px(await rgbaAt(file, 0.5), 160, 90, 320)
+
+	it('exports the last version that passed, not the text that fails; and the cache agrees', async () => {
+		// Green passed; the edit to red reads the clock, so it did not.
+		const passedGreen = editedSpec({}, GREEN, { passed: true })
+		const failing = editedSpec(passedGreen, RED_CLOCK, { passed: false })
+		const passingRed = editedSpec(passedGreen, RED, { passed: true })
+		expect(failing.html).toBe(RED_CLOCK)
+
+		const files = { failing: join(dir, 'custom-failing.mov'), plain: join(dir, 'custom-green.mov'), red: join(dir, 'custom-red.mov') }
+		await renderInElectron([
+			{ item: layer(failing), frame, outputPath: files.failing },
+			{ item: layer(passedGreen), frame, outputPath: files.plain },
+			{ item: layer(passingRed), frame, outputPath: files.red }
+		])
+
+		// Within a rounding step: the premultiplied capture is un-premultiplied.
+		const near = (got: number[], want: number[]) => got.forEach((v, i) => expect(Math.abs(v - want[i])).toBeLessThanOrEqual(2))
+		near(await centre(files.failing), [0, 255, 0, 255])
+		near(await centre(files.plain), [0, 255, 0, 255])
+		near(await centre(files.red), [255, 0, 0, 255])
+		// The failing edit and the green page it fell back to are the same clip
+		// to the cache, so a broken edit neither re-renders nor changes it.
+		expect(motionClipPath(dir, layer(failing), { width: 320, height: 180, fps }))
+			.toBe(motionClipPath(dir, layer(passedGreen), { width: 320, height: 180, fps }))
+		expect(motionClipPath(dir, layer(passingRed), { width: 320, height: 180, fps }))
+			.not.toBe(motionClipPath(dir, layer(passedGreen), { width: 320, height: 180, fps }))
+	}, 120_000)
+
+	it('draws nothing at all when no version has ever passed', async () => {
+		const never = { html: RED_CLOCK, passed: null } as MotionSpec
+		const file = join(dir, 'custom-never.mov')
+		await renderInElectron([{ item: layer(never), frame, outputPath: file }])
+		expect((await centre(file))[3]).toBe(0)
+	}, 120_000)
 })

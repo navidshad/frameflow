@@ -2,9 +2,12 @@ import { describe, expect, it } from 'vitest'
 import type { Clip, EditorDocument, EditorPersona, MediaAsset, TimelineItem, Track } from '@shared/types'
 import { repairOverlaps, TIMELINE_DIFF_SCHEMA_VERSION } from '@shared/timeline'
 import {
-	composeSystemInstruction, EDITOR_OPS_SCHEMA, editorOpsSchema, measureBuild, opsToDiff,
+	composeSystemInstruction, EDITOR_OPS_SCHEMA, editorOpsSchema, measureBuild, opsToDiff, opsWriteHtml,
 	parseTargetLength, routeSurveyResponse, sumUsage, type PromptStats
 } from './ops'
+import { BLANK_MOTION_HTML, motionTemplate, newMotionSpec, renderVersion, resolveDefinition } from '@shared/motion'
+import { writtenSpec } from '@shared/motionCode'
+import { setUserMotionTemplates } from '@shared/motionTemplates'
 
 // ===== Fixtures =====
 
@@ -1222,3 +1225,126 @@ describe('motion ops', () => {
 		})
 	})
 })
+
+describe('custom HTML motion ops', () => {
+	const asset = makeAsset('a', uniform(4, 5))
+	const clip: TimelineItem = {
+		id: 'v', trackId: 'v1', sourceAssetId: 'a', timelineStart: 0, in: 0, out: 20,
+		speed: 1, preservePitch: true, duration: 20
+	}
+	const GOOD = [
+		'<div id="n"></div>',
+		'<script>frameflow.define({ duration: 5, settings: [{ key: "value", type: "number", default: 3, animate: true }],',
+		'  moments: [{ name: "in", duration: 1 }, { name: "hold", duration: 3.5, flex: true }, { name: "out", duration: 0.5 }],',
+		'  seek(t, s) { n.textContent = String(Math.round(s.value * frameflow.progress("in", t))) } })</script>'
+	].join('\n')
+	const BAD = GOOD.replace('String(Math.round(', 'String(Date.now() + Math.round(')
+	const writer = { by: 'Claude Code', turnId: 'turn-8' }
+
+	const placed = (html: string): TimelineItem => ({
+		id: 'cl', trackId: 'm', sourceAssetId: '', timelineStart: 3, in: 0, out: 5,
+		speed: 1, preservePitch: true, duration: 5, label: 'Triage stat',
+		motion: writtenSpec(newMotionSpec(), html, writer)
+	})
+	const withLayer = (html: string) => {
+		const d = makeDoc([asset], [clip, placed(html)])
+		d.tracks.push({ id: 'm', kind: 'video', name: 'M1', order: 1, muted: false, locked: false, hidden: false, height: 64 })
+		return d
+	}
+
+	it('adds a custom layer from html, with its length and settings read out of the page', () => {
+		const { diff, notes, droppedOps } = opsToDiff(
+			{ addMotion: [{ template: 'custom', atSec: 2, html: GOOD, label: 'Triage stat', settings: { value: 7 } }] },
+			makeDoc([asset], [clip]), writer)
+		expect(droppedOps).toEqual([])
+		expect(notes).toEqual([])
+		const item = diff.addItems![0]
+		expect(item).toMatchObject({ label: 'Triage stat', duration: 5, timelineStart: 2 })
+		expect(item.motion!.template).toBeUndefined()
+		expect(item.motion!.html).toBe(GOOD)
+		expect(item.motion!.passed!.html).toBe(GOOD)
+		expect(item.motion!.settings).toEqual({ value: 7 })
+		expect(item.motion!.author).toEqual(writer)
+		expect(resolveDefinition(item.motion).duration).toBe(5)
+	})
+
+	it('writes who wrote it from the turn, so the inspector can say “in V8”', () => {
+		const { diff } = opsToDiff({ addMotion: [{ template: 'custom', atSec: 0, html: GOOD }] }, makeDoc([asset], [clip]))
+		expect(diff.addItems![0].motion!.author).toEqual({ by: 'FrameFlow AI' })
+	})
+
+	it('adds a blank custom layer when asked for “custom” without a page, and says so', () => {
+		const { diff, notes } = opsToDiff({ addMotion: [{ template: 'custom', atSec: 0 }] }, makeDoc([asset], [clip]))
+		expect(diff.addItems![0].motion!.html).toBe(BLANK_MOTION_HTML)
+		expect(notes.join(' ')).toMatch(/needs `html`/)
+	})
+
+	it('keeps a failing page as the working text, draws nothing, and tells the writer which line', () => {
+		const { diff, notes } = opsToDiff({ addMotion: [{ template: 'custom', atSec: 0, html: BAD }] }, makeDoc([asset], [clip]), writer)
+		const spec = diff.addItems![0].motion!
+		expect(spec.html).toBe(BAD)
+		expect(spec.passed).toBeNull()
+		expect(renderVersion(spec).source).toBe('nothing')
+		expect(notes.join(' ')).toMatch(/line 4 fails its checks — The wall clock differs/)
+		expect(notes.join(' ')).toMatch(/nothing is drawn until a version passes/)
+	})
+
+	it('rewrites a layer’s page and keeps drawing the old one when the new one fails', () => {
+		const ok = opsToDiff({ updateMotion: [{ id: 'cl', html: GOOD.replace('duration: 5', 'duration: 6') }] }, withLayer(GOOD), writer)
+		expect(resolveDefinition(ok.diff.updateItems![0].motion).duration).toBe(6)
+
+		const bad = opsToDiff({ updateMotion: [{ id: 'cl', html: BAD }] }, withLayer(GOOD), { by: 'Codex', turnId: 'turn-9' })
+		const spec = bad.diff.updateItems![0].motion!
+		expect(spec.html).toBe(BAD)
+		expect(spec.passed!.html).toBe(GOOD)
+		expect(renderVersion(spec).source).toBe('last-passing')
+		expect(spec.author).toEqual({ by: 'Codex', turnId: 'turn-9' })
+		expect(bad.notes.join(' ')).toMatch(/the last version that passed stays on screen/)
+	})
+
+	it('reads settings in the same request against the page that request writes', () => {
+		const { diff, notes } = opsToDiff({ updateMotion: [{ id: 'cl', html: GOOD.replace('key: "value"', 'key: "amount"'), settings: { amount: 9, value: 1 } }] }, withLayer(GOOD), writer)
+		expect(diff.updateItems![0].motion!.settings).toEqual({ amount: 9 })
+		expect(notes.join(' ')).toMatch(/no setting "value"/)
+	})
+
+	it('turns a template layer into a custom one when its page is rewritten', () => {
+		const d = makeDoc([asset], [clip, { ...placed(GOOD), motion: { template: 'lower-third', settings: { name: 'Sara' } } }])
+		d.tracks.push({ id: 'm', kind: 'video', name: 'M1', order: 1, muted: false, locked: false, hidden: false, height: 64 })
+		const { diff } = opsToDiff({ updateMotion: [{ id: 'cl', html: BAD }] }, d, writer)
+		const spec = diff.updateItems![0].motion!
+		expect(spec.template).toBeUndefined()
+		// Still drawing the template it was, until the new page passes.
+		expect(spec.passed!.html).toBe(motionTemplate('lower-third')!.html)
+	})
+
+	it('places a saved template as a custom page the project owns', () => {
+		setUserMotionTemplates([{ id: 'my-triage-stat', label: 'Triage stat', description: 'x', html: GOOD, definition: resolveDefinition(placed(GOOD).motion), savedAt: 1, author: 'you' }])
+		try {
+			const { diff, droppedOps } = opsToDiff({ addMotion: [{ template: 'my-triage-stat', atSec: 1, settings: { value: 4 } }] }, makeDoc([asset], [clip]))
+			expect(droppedOps).toEqual([])
+			const item = diff.addItems![0]
+			expect(item.label).toBe('Triage stat')
+			expect(item.motion).toMatchObject({ html: GOOD, settings: { value: 4 } })
+			expect(item.motion!.template).toBeUndefined()
+		} finally {
+			setUserMotionTemplates([])
+		}
+	})
+
+	it('knows which ops write a page, for the MCP permission', () => {
+		expect(opsWriteHtml({ addMotion: [{ template: 'lower-third', atSec: 0 }] })).toBe(false)
+		expect(opsWriteHtml({ updateMotion: [{ id: 'x', settings: { a: 1 } }] })).toBe(false)
+		expect(opsWriteHtml({ addMotion: [{ template: 'custom', atSec: 0, html: '  ' }] })).toBe(false)
+		expect(opsWriteHtml({ addMotion: [{ template: 'custom', atSec: 0, html: GOOD }] })).toBe(true)
+		expect(opsWriteHtml({ updateMotion: [{ id: 'x', html: GOOD }] })).toBe(true)
+	})
+
+	it('offers html on both ops, and teaches the contract', () => {
+		const props = editorOpsSchema(true).properties as any
+		expect(props.addMotion.items.properties.html.type).toBe('string')
+		expect(props.updateMotion.items.properties.html.type).toBe('string')
+		expect(props.addMotion.items.properties.template.description).toMatch(/custom/)
+	})
+})
+

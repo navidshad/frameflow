@@ -47,6 +47,10 @@
 				<span v-if="selected" class="iconify tabler--sparkles w-2.5 h-2.5 text-pink-400 shrink-0"></span>
 				<span class="truncate">{{ motionLabel }}</span>
 			</div>
+			<!-- The page fails its checks: an older version is drawn (board 5). -->
+			<span v-if="motionWarning" data-motion-warning-dot :title="`${motionWarning} — open the HTML tab`"
+				class="absolute top-0.5 right-[3px] w-3 h-3 rounded-full bg-amber-500 text-white text-[8px] font-black
+				       flex items-center justify-center pointer-events-none">!</span>
 			<div v-for="key in motionKeys" :key="key"
 				class="absolute bottom-1.5 w-[7px] h-[7px] bg-blue-400 rotate-45 pointer-events-none"
 				:style="{ left: `${key - 3.5}px` }"></div>
@@ -114,6 +118,7 @@ import { computed, inject, ref } from 'vue'
 import type { TimelineItem } from '@shared/types'
 import { itemEnd } from '@shared/timeline'
 import { motionClipLabel, resolveMoments } from '@shared/motion'
+import { motionBadge } from '@shared/motionCode'
 import { useEditorStore } from '../../../stores/editorStore'
 import { TimelineViewportKey, TimelineInteractionsKey } from '../../composables/useTimelineViewport'
 
@@ -201,6 +206,7 @@ const contextText = computed(() => sourceClip.value?.visual || props.item.label 
 
 const motionWidth = computed(() => Math.max(viewport.secToPx(props.item.duration), 6))
 const motionLabel = computed(() => motionClipLabel(props.item))
+const motionWarning = computed(() => motionBadge(props.item.motion))
 
 /**
  * The first and last windows (the entrance and the exit), in px from the

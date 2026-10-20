@@ -9,6 +9,8 @@ import { GeminiAdapter } from '../gemini/adapter'
 import { GEMINI_MODEL_2_5_FLASH } from '../constants/gemini'
 import { BUILTIN_PERSONAS, DEFAULT_PERSONA_ID } from '../constants/personas'
 import { buildPromptContext } from './context'
+import { vetHtmlOps } from './vetHtml'
+import { probeMotionPage } from '../motion/probe'
 import {
 	composeSystemInstruction, EDITOR_OPS_SCHEMA, editorOpsSchema, measureBuild, opsToDiff,
 	parseTargetLength, routeSurveyResponse, sumUsage, type PromptStats
@@ -265,7 +267,11 @@ export function runEditorPrompt(options: {
 			// Map ops against a FRESH read (doc may have advanced during the call);
 			// the renderer re-validates against ITS live doc anyway.
 			const freshDoc = threadManager.getThread(threadId)?.editor || doc
-			const { diff, addMarkers, docSettings, droppedOps, notes } = opsToDiff(ops || {}, freshDoc)
+			// Same rule as an agent's: a custom page is checked before it replaces anything.
+			const vetted = await vetHtmlOps(ops || {}, freshDoc, probeMotionPage)
+			const mapped = opsToDiff(vetted.ops, freshDoc, { by: 'FrameFlow AI', turnId })
+			const { diff, addMarkers, docSettings, notes } = mapped
+			const droppedOps = [...vetted.dropped, ...mapped.droppedOps]
 			const targetLengthSec = parseTargetLength(ops?.targetLength)
 			const build = measureBuild(diff, freshDoc, stats, targetLengthSec)
 

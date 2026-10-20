@@ -8,7 +8,9 @@ import {
 import { allEffects } from '@shared/effects'
 import { TRANSITION_PRESETS } from '@shared/transitionPresets'
 import { computeContentEnd } from '@shared/timeline'
-import { EDITOR_OPS_SCHEMA, opsToDiff } from '../editor/ops'
+import { EDITOR_OPS_SCHEMA, opsToDiff, opsWriteHtml } from '../editor/ops'
+import { vetHtmlOps, type MotionProbe } from '../editor/vetHtml'
+import { MOTION_TEMPLATES, userMotionTemplates } from '@shared/motionTemplates'
 import type { EditorBridge, LiveProject } from './bridge'
 
 /**
@@ -26,6 +28,8 @@ export interface ToolContext {
 	permissions: () => AgentPermissions
 	/** FrameFlow's own CLI engine: the chat turn these edits belong to. */
 	engineTurnId?: string
+	/** Draws a page in the hidden window. Absent where there is none (tests): the lint decides alone. */
+	probeMotion?: MotionProbe
 }
 
 /** What the activity feed shows for one call. */
@@ -52,6 +56,11 @@ export interface ToolDef {
 	description: string
 	inputSchema: JsonSchema
 	permission: AgentPermission
+	/**
+	 * A second permission this particular call needs, decided from its arguments:
+	 * `apply_ops` is "edit", but one that writes a custom HTML page is also "html".
+	 */
+	alsoNeeds?: (args: Record<string, any>) => AgentPermission | null
 	/** Writes are serialised, so each one sees the result of the last. */
 	writes?: boolean
 	/** The feed title before the call finishes ("render_frame 0:27.5"). */
@@ -165,6 +174,18 @@ const getProject: ToolDef = {
 				read: true, editTimeline: perms.edit, writeHtmlMotion: perms.html, exportVideos: perms.export
 			},
 			catalog: {
+				// For apply_ops addMotion.template. Saved templates are the user's own
+				// custom layers; they appear here the moment they are saved.
+				motionTemplates: [
+					...MOTION_TEMPLATES.map((t) => ({
+						id: t.id, label: t.label, description: t.description, durationSec: t.definition.duration,
+						settings: t.definition.settings.map((s) => s.key)
+					})),
+					...userMotionTemplates().map((t) => ({
+						id: t.id, label: t.label, description: t.description, durationSec: t.definition.duration,
+						settings: t.definition.settings.map((s) => s.key), saved: true
+					}))
+				],
 				transitions: TRANSITION_PRESETS.map((p) => p.kind),
 				effects: allEffects().map((e) => ({
 					kind: e.kind, stream: e.stream, label: e.label,
@@ -395,16 +416,27 @@ const applyOps: ToolDef = {
 		'is its own revision — and check the result with render_frame. Always include a short rationale: ' +
 		'the user reads it.',
 	inputSchema: OPS_INPUT_SCHEMA,
+	alsoNeeds: (args) => (opsWriteHtml(args as EditorOps) ? 'html' : null),
 	async run(args, ctx) {
 		const errors = validateArgs(OPS_INPUT_SCHEMA, args)
 		if (errors.length) throw new ToolError(`Invalid operations — nothing was changed:\n- ${errors.join('\n- ')}`)
 		if (!opKeys(args).length) throw new ToolError('apply_ops needs at least one operation besides rationale.')
 
 		const project = await requireProject(ctx)
-		const ops = args as EditorOps
-		const { diff, addMarkers, docSettings, droppedOps, notes } = opsToDiff(ops, project.doc)
+		// A page an agent writes is checked — lint, then drawn twice in the hidden
+		// window — BEFORE it replaces anything. One that fails is not applied; the
+		// earlier page stays, and the agent is told what to fix.
+		const vetted = await vetHtmlOps(args as EditorOps, project.doc, ctx.probeMotion)
+		if (!opKeys(vetted.ops as Record<string, unknown>).length) {
+			throw new ToolError(`Nothing was changed. Every operation was rejected:\n- ${vetted.dropped.join('\n- ')}`)
+		}
+		const ops = vetted.ops
+		const turnId = randomUUID()
+		const mapped = opsToDiff(ops, project.doc, { by: ctx.clientName, turnId })
+		const { diff, addMarkers, docSettings, notes } = mapped
+		const droppedOps = [...vetted.dropped, ...mapped.droppedOps]
 		const turn: PromptTurn = {
-			id: randomUUID(),
+			id: turnId,
 			personaId: project.doc.activePersonaId,
 			prompt: `${ctx.clientName} edited over MCP`,
 			baseStepId: project.doc.historyRef?.currentStepId || '',
@@ -438,7 +470,7 @@ const applyOps: ToolDef = {
 			})],
 			feed: {
 				detail: ops.rationale || undefined,
-				chips: opChips(args, outcome.revisionSeq)
+				chips: opChips(ops as Record<string, unknown>, outcome.revisionSeq)
 			}
 		}
 	}

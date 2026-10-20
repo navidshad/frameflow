@@ -155,6 +155,13 @@ const api = {
 	improviseMessage: (threadId: string, messageId: string) =>
 		ipcRenderer.invoke('improvise-message', { threadId, messageId }),
 	getModelMetadata: () => ipcRenderer.invoke('get-model-metadata'),
+	// Custom HTML motion layers: the determinism probe and the saved-template library.
+	probeMotionPage: (input: { html: string; definition: any; frame: { width: number; height: number } }) =>
+		ipcRenderer.invoke('motion-probe', input),
+	listMotionTemplates: () => ipcRenderer.invoke('motion-templates-list'),
+	saveMotionTemplate: (input: { label: string; description?: string; html: string; definition?: any; author?: string }) =>
+		ipcRenderer.invoke('motion-templates-save', input),
+	deleteMotionTemplate: (id: string) => ipcRenderer.invoke('motion-templates-delete', id),
 	// Agent access (MCP). The token itself never reaches the renderer.
 	getAgentAccess: () => ipcRenderer.invoke('get-agent-access'),
 	setAgentAccessEnabled: (enabled: boolean) => ipcRenderer.invoke('set-agent-access-enabled', enabled),
