@@ -3,7 +3,7 @@ import { readFileSync } from 'node:fs'
 import { resolve } from 'node:path'
 import {
 	agentFocus, buildCommand, buildEngineSystemPrompt, buildEngineUserPrompt, displayPath, editTime,
-	engineFailureNote, engineRetry, lineSplitter, normalizeEngineSettings, normalizeToolName, parseClaudeAuth,
+	engineFailureNote, engineRetry, isFrameflowTool, lineSplitter, normalizeEngineSettings, normalizeToolName, parseClaudeAuth,
 	parseStreamLine, parseVersion, readableError, StepTracker, stepTitle, TOKEN_ENV, unexpectedTools, type CliEngineId
 } from './engines'
 import type { PromptTurn } from './types'
@@ -163,6 +163,12 @@ describe('prompts', () => {
 		const text = buildEngineSystemPrompt({ persona: { name: 'Podcast editor', systemPrompt: 'Keep it tight.' }, maxSteps: 12, engineLabel: 'Claude Code' })
 		expect(text).toMatch(/at most 12 tool calls/)
 		expect(text).toMatch(/Keep it tight\.$/)
+	})
+
+	it('sends an agent to the motion guide before it writes a page, and knows the tool is FrameFlow’s', () => {
+		const text = buildEngineSystemPrompt({ persona: { name: 'p', systemPrompt: 'x' }, maxSteps: 5, engineLabel: 'Claude Code' })
+		expect(text).toMatch(/call get_motion_guide/)
+		expect(isFrameflowTool('get_motion_guide', null)).toBe(true)
 	})
 
 	it('user prompt carries the scope', () => {

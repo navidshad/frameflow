@@ -4,13 +4,16 @@
 		<div ref="scrollRef" class="flex-1 min-h-0 overflow-y-auto custom-scrollbar px-3 py-3 space-y-3">
 			<!-- Empty state — reflects whether media is ready to talk about -->
 			<div v-if="turns.length === 0" class="h-full flex flex-col items-center justify-center gap-2 text-center px-4">
-				<span class="text-2xl" :class="{ 'opacity-40': !store.hasReadyMedia }">{{ store.activePersona?.icon || '🎬' }}</span>
-				<template v-if="store.hasReadyMedia">
+				<span class="text-2xl" :class="{ 'opacity-40': !store.canPrompt }">{{ store.activePersona?.icon || '🎬' }}</span>
+				<template v-if="store.canPrompt">
 					<p class="text-xs font-bold text-zinc-600 dark:text-zinc-300">
 						{{ store.activePersona?.name || 'Your editor' }} is ready
 					</p>
-					<p class="text-[11px] text-zinc-400 leading-relaxed">
+					<p v-if="store.hasReadyMedia" class="text-[11px] text-zinc-400 leading-relaxed">
 						Ask for a cut, a cleanup, or a question about the footage. Every request and result stays here.
+					</p>
+					<p v-else class="text-[11px] text-zinc-400 leading-relaxed">
+						Ask for a graphic, a scene, or a change to a layer on the timeline. Every request and result stays here.
 					</p>
 				</template>
 				<template v-else-if="store.mediaProcessing">

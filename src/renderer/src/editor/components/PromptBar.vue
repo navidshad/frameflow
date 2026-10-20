@@ -98,16 +98,17 @@ const scopeMenuOpen = ref(false)
 const inputRef = ref<HTMLTextAreaElement | null>(null)
 const scopeRef = ref<HTMLElement | null>(null)
 
-// Chat is inert until media is imported AND has finished preprocessing —
-// the AI needs pieces/transcript to reason about the footage.
-const inputDisabled = computed(() => store.promptRunning || !store.hasReadyMedia)
+// Chat is inert until there is something to work on: media that has finished
+// preprocessing (the AI needs pieces/transcript to reason about footage), or
+// layers that need no footage at all.
+const inputDisabled = computed(() => store.promptRunning || !store.canPrompt)
 
 // Keep placeholders short — the narrow rail clips a single-row textarea, and
 // the chat empty-state already carries the full guidance.
 const placeholder = computed(() => {
-	if (store.isEmpty) return 'Import media to start…'
-	if (store.mediaProcessing) return 'Preparing media…'
-	if (!store.hasReadyMedia) return 'Media not ready yet…'
+	if (store.isEmpty && !store.hasLayers) return 'Import media to start…'
+	if (!store.canPrompt && store.mediaProcessing) return 'Preparing media…'
+	if (!store.canPrompt) return 'Media not ready yet…'
 	return `Message ${store.activePersona?.name || 'your editor'}…`
 })
 
@@ -151,7 +152,7 @@ const retry = () => {
  * grows on @input — so a multi-line prefill would render clipped to one line.
  */
 onMounted(() => nextTick(autoGrow))
-watch(() => store.hasReadyMedia, (ready) => {
+watch(() => store.canPrompt, (ready) => {
 	if (ready && text.value.trim()) nextTick(() => inputRef.value?.focus())
 })
 

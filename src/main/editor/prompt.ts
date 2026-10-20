@@ -1,3 +1,4 @@
+import { hasPromptableContent } from '@shared/tracks'
 import { BrowserWindow } from 'electron'
 import { transcriptsForDoc } from './captions'
 import { v4 as uuidv4 } from 'uuid'
@@ -130,8 +131,8 @@ export function runEditorPrompt(options: {
 			if (!thread || thread.type !== 'editor' || !thread.editor) {
 				throw new Error('Not an editor project')
 			}
-			if (thread.editor.media.length === 0) {
-				throw new Error('Import media before prompting')
+			if (!hasPromptableContent(thread.editor)) {
+				throw new Error('Import media or add a layer before prompting')
 			}
 			const doc = thread.editor
 
