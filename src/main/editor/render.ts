@@ -19,6 +19,8 @@ import { hasTransform } from '@shared/transform'
 import { hasKeyframes } from '@shared/keyframes'
 import { hasKey } from '@shared/keying'
 import { generatorSource } from '@shared/generators'
+import { fallbackMotionDir, motionCacheDir, motionClipPath } from '../motion/cache'
+import { ensureMotionJobs } from '../motion'
 import type { TranscriptEntry } from '@shared/captions'
 import { burnCaptions, cuesForDoc, transcriptsForDoc } from './captions'
 import { normaliseLoudness } from './loudness'
@@ -27,7 +29,7 @@ import { threadManager } from '../threads'
 import { assembleVideo, sanitizeFilename } from '../ffmpeg'
 import { THREAD_DIRS } from '../constants/paths'
 import {
-	allSlices, buildRegionGraph,
+	allSlices, buildRegionGraph, motionJobsFor,
 	type Region, type RegionPlan, type SourceSlice
 } from './renderBuilders'
 
@@ -84,7 +86,16 @@ export function computeRegions(
 	 * caller renders a document alone: without them a bed still ducks, just
 	 * across whole clips rather than around the pauses between phrases.
 	 */
-	transcripts: Record<string, TranscriptEntry[]> = {}
+	transcripts: Record<string, TranscriptEntry[]> = {},
+	options: {
+		/**
+		 * Where a motion layer's rendered clip lives. Resolved here, synchronously,
+		 * because it is a hash of what the clip shows at THIS plan's frame; the
+		 * file itself is rendered later (`motionJobsFor`). Defaults to a shared
+		 * temp directory for callers with no project.
+		 */
+		motionDir?: string
+	} = {}
 ): RegionPlan {
 	// Video tracks TOP-most first (highest order wins visually); [0] of a
 	// region's videoLayers is the layer v1 actually renders.
@@ -206,7 +217,7 @@ export function computeRegions(
 	// A GENERATED layer has no source and therefore no audio — it is a picture,
 	// not a recording.
 	const videoAudioActive = (item: TimelineItem, asset: MediaAsset | undefined) =>
-		!item.generator && !!asset &&
+		!item.generator && !item.motion && !!asset &&
 		!item.muted && !trackById.get(item.trackId)?.muted && asset.metadata?.hasAudio !== false
 	// An audio-track item contributes when neither it nor its track is muted.
 	const audioItemActive = (item: TimelineItem) =>
@@ -231,6 +242,23 @@ export function computeRegions(
 			offset: s - t0, duration: e - s, freezeHead: 0, freezeTail: 0,
 			item, track: trackById.get(item.trackId)!
 		}
+		// A motion layer is its own rendered clip: in = 0 at the clip's start,
+		// one source second per timeline second. The item rides along normalised
+		// to exactly that, so every builder that reads `slice.in - item.in`
+		// (keyframe offsets, fades) agrees with the file whatever a trim left in
+		// the document's `in`.
+		if (item.motion) {
+			const clip: TimelineItem = { ...item, in: 0, out: item.duration, speed: 1 }
+			const frame = { width, height, fps }
+			return {
+				...common,
+				item: clip,
+				in: s - item.timelineStart,
+				out: e - item.timelineStart,
+				motion: frame,
+				srcPath: motionClipPath(options.motionDir ?? fallbackMotionDir(), clip, frame)
+			}
+		}
 		// A generated layer has no footage behind it. It is synthesised for
 		// exactly the window it fills, which is why the source string carries the
 		// region's own duration rather than the item's.
@@ -251,6 +279,12 @@ export function computeRegions(
 		side: TransitionWindow['outgoing'], duration: number
 	): SourceSlice => {
 		const item = side.item
+		if (item.motion || item.generator) {
+			throw new Error(
+				`A transition touches "${item.label || item.id}", which is not footage. ` +
+				'Transitions join clips; remove this one, then export again.'
+			)
+		}
 		const asset = assetById.get(item.sourceAssetId)
 		if (!asset) throw new Error(`Missing media asset for clip "${item.label || item.id}".`)
 		const speed = item.speed || 1
@@ -452,7 +486,7 @@ export function isFastPathEligible(items: TimelineItem[], track: Track, hasAudio
 	if (items.some((i) => hasKeyframes(i.keyframes))) return false
 	if (items.some((i) => hasKey(i.key))) return false
 	// assembleVideo re-muxes ONE source file; a synthesised layer is not one.
-	if (items.some((i) => !isCompositedItem(i) || !!i.generator)) return false
+	if (items.some((i) => !isCompositedItem(i) || !!i.generator || !!i.motion)) return false
 	if (Math.abs(items[0].timelineStart) > SNAP_EPS) return false // leading gap needs black
 	for (let i = 1; i < items.length; i++) {
 		if (Math.abs(items[i].timelineStart - itemEnd(items[i - 1])) > SNAP_EPS) return false
@@ -611,12 +645,15 @@ export function startEditorRender(options: {
 	// immediately instead of producing a ghost render) ----
 	// The transcript sharpens ducking from whole-clip to phrase-level; reading it
 	// here costs one file per asset and nothing when no bed exists.
-	const plan = computeRegions(doc, quality, transcriptsForDoc(doc))
+	const plan = computeRegions(doc, quality, transcriptsForDoc(doc), {
+		motionDir: motionCacheDir(thread.tempDir)
+	})
 	// `allSlices` is exhaustive over region kinds, so a slice can never escape this
 	// check by living in a field the pre-flight forgot — which would turn a clean
-	// synchronous rejection into a failure halfway through a long render.
+	// synchronous rejection into a failure halfway through a long render. Motion
+	// clips are exempt: they are rendered below, before anything reads them.
 	const srcPaths = [...new Set(
-		plan.regions.flatMap(allSlices).filter((s) => !s.lavfi).map((s) => s.srcPath)
+		plan.regions.flatMap(allSlices).filter((s) => !s.lavfi && !s.motion).map((s) => s.srcPath)
 	)]
 	const missing = srcPaths.filter((p) => !fs.existsSync(p))
 	if (missing.length > 0) {
@@ -645,6 +682,20 @@ export function startEditorRender(options: {
 		let sidecarPath: string | null = null
 		try {
 			progress(0, 'rendering')
+
+			// ---- Motion layers ----
+			// Each page is captured once per distinct look, by content hash, into
+			// an alpha .mov the region graph overlays like any other layer. Done
+			// first so every region below finds its file; a cached clip costs a
+			// stat. The first 15% of the bar, weighted by frames captured.
+			const motionJobs = motionJobsFor(plan.regions)
+			const motionWeight = motionJobs.length ? 15 : 0
+			if (motionJobs.length) {
+				await ensureMotionJobs(motionJobs, {
+					signal,
+					onProgress: (fraction) => progress(fraction * motionWeight, 'rendering')
+				})
+			}
 
 			const videoTrack = doc.tracks
 				.filter((t) => t.kind === 'video' && !t.hidden)
@@ -710,7 +761,7 @@ export function startEditorRender(options: {
 					const region = plan.regions[i]
 					const weight = region.duration / total
 					const onRegionProgress = (pct: number) => {
-						const overall = (doneWeight + weight * (pct / 100)) * 96
+						const overall = motionWeight + (doneWeight + weight * (pct / 100)) * (96 - motionWeight)
 						if (overall - lastEmit >= 1) {
 							lastEmit = overall
 							progress(overall, 'rendering')
@@ -719,7 +770,7 @@ export function startEditorRender(options: {
 					const file = await renderRegion(region, i, plan, workDir, signal, onRegionProgress)
 					regionFiles.push(file)
 					doneWeight += weight
-					progress(doneWeight * 96, 'rendering')
+					progress(motionWeight + doneWeight * (96 - motionWeight), 'rendering')
 				}
 
 				progress(96, 'stitching')
