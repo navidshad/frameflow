@@ -108,6 +108,16 @@ export function valueAt(track: Keyframe[] | undefined, t: number, fallback = 0):
 	return last.value
 }
 
+/**
+ * The value at `t` when the parameter cannot travel — a colour, a choice.
+ *
+ * Exactly `valueAt` with every segment forced to `hold`, so it is the same
+ * evaluator and the same "flat outside the keys" rule, just without a halfway.
+ */
+export function heldValueAt(track: Keyframe[] | undefined, t: number, fallback = 0): number {
+	return valueAt(normalise(track).map((k) => ({ ...k, ease: 'hold' as const })), t, fallback)
+}
+
 const fmt = (n: number) => n.toFixed(4).replace(/0+$/, '').replace(/\.$/, '')
 
 /**

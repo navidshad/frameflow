@@ -1,5 +1,6 @@
 import { onMounted, onUnmounted, ref } from 'vue'
 import { useEditorStore } from '../../stores/editorStore'
+import { useKeyframeLanesStore } from '../../stores/keyframeLanesStore'
 import { matchShortcut } from '../shortcuts'
 
 /**
@@ -17,6 +18,7 @@ export function useEditorShortcuts(options: {
 	onFullscreen?: () => void
 } = {}) {
 	const store = useEditorStore()
+	const lanes = useKeyframeLanesStore()
 
 	const frameStep = () => 1 / (store.doc?.timelineMeta.fps || 30)
 
@@ -106,6 +108,8 @@ export function useEditorShortcuts(options: {
 			case 'trim-end': return store.trimToPlayhead('right') > 0
 			case 'delete':
 			case 'delete-gap':
+				// Selected keys go first: they are what was clicked last.
+				if (lanes.expanded && lanes.deleteSelected()) return true
 				if (!store.selectedItemIds.length) return false
 				store.deleteItems(store.selectedItemIds, { ripple: id === 'delete' })
 				return true
@@ -125,6 +129,7 @@ export function useEditorShortcuts(options: {
 				// Esc closes what is in front first. Deselecting behind an open
 				// overlay would look like the key did nothing.
 				if (store.shortcutsOpen) { store.shortcutsOpen = false; return true }
+				if (lanes.selection.length) { lanes.clearSelection(); return true }
 				store.clearItemSelection()
 				return true
 

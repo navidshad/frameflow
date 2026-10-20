@@ -2,7 +2,11 @@
 	<div class="glass-card rounded-2xl flex flex-col min-h-0 overflow-hidden">
 		<div class="px-4 pt-4 pb-2 shrink-0 flex items-center justify-between">
 			<span class="text-[10px] font-bold uppercase tracking-widest text-zinc-500">Inspector</span>
-			<span v-if="!seam && timelineItem?.motion"
+			<span v-if="!seam && keyframeMode"
+				class="px-1.5 py-0.5 rounded bg-primary/[0.12] text-blue-400 text-[9px] font-bold uppercase tracking-widest">
+				Keyframe
+			</span>
+			<span v-else-if="!seam && timelineItem?.motion"
 				class="px-1.5 py-0.5 rounded bg-pink-500/[0.12] text-pink-400 text-[9px] font-bold uppercase tracking-widest">
 				Motion · {{ timelineItem.motion.template ? 'template' : 'custom' }}
 			</span>
@@ -67,6 +71,8 @@
 
 			<!-- A motion layer has its own inspector: fields from its page's
 			     schema, its windows, what it animates, and the AI for it. -->
+			<!-- A key selected in the lanes: the Keyframe panel (board 2). -->
+			<KeyframeInspector v-else-if="keyframeMode && timelineItem" :item="timelineItem" />
 			<MotionInspector v-else-if="timelineItem?.motion" :item="timelineItem" />
 
 			<!-- Timeline-item mode (priority when items are selected) -->
@@ -706,6 +712,8 @@ import type { FunctionalComponent } from 'vue'
 import { useEditorStore } from '../../stores/editorStore'
 import SilenceFinder from './SilenceFinder.vue'
 import MotionInspector from './MotionInspector.vue'
+import KeyframeInspector from './KeyframeInspector.vue'
+import { useKeyframeLanesStore } from '../../stores/keyframeLanesStore'
 
 const editorStore = useEditorStore()
 
@@ -724,6 +732,10 @@ const timelineItem = computed(() =>
 const trackName = computed(() =>
 	editorStore.doc?.tracks.find((t) => t.id === timelineItem.value?.trackId)?.name || '—'
 )
+
+/** A key is selected in the open lanes: the inspector describes the key, not the clip. */
+const keyframeLanes = useKeyframeLanesStore()
+const keyframeMode = computed(() => keyframeLanes.expanded && !!keyframeLanes.primary)
 
 const gainValue = computed(() => timelineItem.value?.gain ?? 1)
 const fadeInValue = computed(() => timelineItem.value?.fadeInSec ?? 0)

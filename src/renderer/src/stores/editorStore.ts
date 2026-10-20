@@ -268,6 +268,15 @@ export const useEditorStore = defineStore('editor', () => {
 		doc.value ? captionsFromTimeline(doc.value, transcripts.value) : []
 	)
 
+	/**
+	 * Every spoken word with its own start, for snapping keyframes to speech.
+	 * Transcripts are timed per phrase; this is the captions' own estimate with
+	 * one word per cue, so a key lands where the caption shows the word.
+	 */
+	const transcriptWords = computed<CaptionCue[]>(() =>
+		doc.value ? captionsFromTimeline(doc.value, transcripts.value, { maxWords: 1, minCueSec: 0 }) : []
+	)
+
 	/** Whether there is anything to caption — the toggle is dead weight without it. */
 	const hasTranscript = computed(() => {
 		const d = doc.value
@@ -3453,6 +3462,7 @@ export const useEditorStore = defineStore('editor', () => {
 		sequenceFrame,
 		captionCues,
 		transcriptCues,
+		transcriptWords,
 		captionsEnabled,
 		hasTranscript,
 		setCaptionsEnabled,

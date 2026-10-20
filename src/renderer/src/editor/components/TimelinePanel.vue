@@ -9,7 +9,11 @@
 			<div class="border-r border-zinc-200 dark:border-zinc-800 bg-zinc-50/50 dark:bg-zinc-950/40 overflow-hidden flex flex-col">
 				<div class="h-6 border-b border-zinc-200 dark:border-zinc-800 shrink-0"></div> <!-- ruler spacer -->
 				<div :style="{ transform: `translateY(${-vScroll}px)` }">
-					<TrackHeader v-for="track in store.sortedTracks" :key="track.id" :track="track" />
+					<template v-for="track in store.sortedTracks" :key="track.id">
+						<TrackHeader :track="track" />
+						<!-- The selected clip's keyframe lanes open under its own track. -->
+						<KeyframeLaneHeaders v-if="lanesTrackId === track.id" />
+					</template>
 				</div>
 			</div>
 
@@ -32,7 +36,10 @@
 						<span class="text-[10px] font-semibold text-accent">Drop to add a video track</span>
 					</div>
 
-					<TrackLane v-for="track in store.sortedTracks" :key="track.id" :track="track" />
+					<template v-for="track in store.sortedTracks" :key="track.id">
+						<TrackLane :track="track" />
+						<KeyframeLanes v-if="lanesTrackId === track.id && kf.item" :item="kf.item" />
+					</template>
 
 					<!-- The audio half, appended after the lanes so it takes its own
 					     space without moving any of them. -->
@@ -44,6 +51,10 @@
 
 					<TimelinePlayhead />
 					<!-- Snap guide -->
+					<!-- A dragged key's snap, in the same guide the clips use. -->
+					<div v-if="kf.snapGuide !== null"
+						class="absolute top-0 bottom-0 w-px bg-secondary z-20 pointer-events-none shadow-[0_0_6px_rgba(139,92,246,0.6)]"
+						:style="{ transform: `translateX(${viewport.secToPx(kf.snapGuide)}px)` }"></div>
 					<div v-if="interactions.snapGuideSec.value !== null"
 						class="absolute top-0 bottom-0 w-px bg-secondary z-20 pointer-events-none shadow-[0_0_6px_rgba(139,92,246,0.6)]"
 						:style="{ transform: `translateX(${viewport.secToPx(interactions.snapGuideSec.value)}px)` }"></div>
@@ -70,8 +81,15 @@ import TimelineRuler from './timeline/TimelineRuler.vue'
 import TrackHeader from './timeline/TrackHeader.vue'
 import TrackLane from './timeline/TrackLane.vue'
 import TimelinePlayhead from './timeline/TimelinePlayhead.vue'
+import KeyframeLanes from './timeline/KeyframeLanes.vue'
+import KeyframeLaneHeaders from './timeline/KeyframeLaneHeaders.vue'
+import { useKeyframeLanesStore } from '../../stores/keyframeLanesStore'
 
 const store = useEditorStore()
+const kf = useKeyframeLanesStore()
+
+/** The track whose clip's lanes are open, if any. */
+const lanesTrackId = computed(() => (kf.expanded ? kf.item?.trackId : null) ?? null)
 
 const viewport = useTimelineViewport()
 const interactions = useTimelineInteractions(viewport)

@@ -803,8 +803,9 @@ function describeSetting(s: MotionSettingDef): string {
 			const range = `${s.min ?? ''}..${s.max ?? ''}${s.unit && s.unit !== '%' ? s.unit : ''}`
 			return `${s.key} ${range}${s.animate ? ' [anim]' : ''}`
 		}
-		case 'color': return `${s.key} #RRGGBB`
-		case 'enum': return `${s.key} ${(s.options ?? []).map((o) => o.value).join('|')}`
+		// Keyed colours and enums hold, and their keys are numbers: say how.
+		case 'color': return `${s.key} #RRGGBB${s.animate ? ' [anim hold: key 0xRRGGBB int]' : ''}`
+		case 'enum': return `${s.key} ${(s.options ?? []).map((o) => o.value).join('|')}${s.animate ? ' [anim hold: key option index]' : ''}`
 		default: return `${s.key} text`
 	}
 }
