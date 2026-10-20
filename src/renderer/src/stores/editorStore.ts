@@ -47,6 +47,7 @@ import {
 	MAX_TRANSITION_SEC, MIN_TRANSITION_SEC, planTransitions, seamAt, sourceDurationsFrom,
 	type Seam
 } from '@shared/transitionPlan'
+import { dialog } from '../composables/useDialog'
 
 /**
  * Store for the timeline video editor (/editor/:id).
@@ -1208,7 +1209,7 @@ export const useEditorStore = defineStore('editor', () => {
 		if (!threadId.value || !doc.value) return
 		// Counted before the IPC: the dialog has to say what will actually be lost.
 		const clipCount = doc.value.timeline.filter((i) => i.sourceAssetId === assetId).length
-		const confirmed = await api.showConfirmation({
+		const confirmed = await dialog.confirm({
 			title: 'Remove media',
 			message: clipCount
 				? `Remove this media and the ${clipCount} clip${clipCount === 1 ? '' : 's'} it has on the timeline?`
@@ -1216,9 +1217,10 @@ export const useEditorStore = defineStore('editor', () => {
 			detail: clipCount
 				? 'The imported copy and generated thumbnails will be deleted, and those clips will leave gaps you can close with Close gaps. This cannot be undone. The original file on disk is not affected.'
 				: 'The imported copy and generated thumbnails will be deleted. This cannot be undone. The original file on disk is not affected.',
-			buttons: ['Cancel', 'Remove']
+			confirmLabel: 'Remove',
+			danger: true
 		})
-		if (!confirmed || confirmed.response !== 1) return
+		if (!confirmed) return
 		const success = await api.removeMediaAsset({ threadId: threadId.value, assetId })
 		if (success) {
 			doc.value.media = doc.value.media.filter((a) => a.id !== assetId)
@@ -1267,13 +1269,13 @@ export const useEditorStore = defineStore('editor', () => {
 	 */
 	const repairTranscript = async (assetId: string) => {
 		if (!threadId.value) return
-		const confirmed = await api.showConfirmation({
+		const confirmed = await dialog.confirm({
 			title: 'Re-transcribe this media?',
 			message: 'Check the audio again and rebuild the speech pieces?',
 			detail: 'A stronger model re-reads the audio alongside the current transcript to fix the repeated section. This runs Gemini (costs tokens) and replaces the pieces derived from the old transcript. Clips already on the timeline keep playing the same footage.',
-			buttons: ['Cancel', 'Re-transcribe']
+			confirmLabel: 'Re-transcribe'
 		})
-		if (!confirmed || confirmed.response !== 1) return
+		if (!confirmed) return
 		await api.preprocessMedia({ threadId: threadId.value, assetId, steps: ['retranscribe'] })
 	}
 
@@ -1281,13 +1283,14 @@ export const useEditorStore = defineStore('editor', () => {
 	const clearAssetData = async (assetId: string, kind: 'transcript' | 'descriptions') => {
 		if (!threadId.value) return
 		const label = kind === 'transcript' ? 'transcript' : 'scene descriptions'
-		const confirmed = await api.showConfirmation({
+		const confirmed = await dialog.confirm({
 			title: `Remove ${label}?`,
 			message: `Delete the ${label} for this media?`,
 			detail: `The ${label} data is removed from every piece. Regenerating it later runs Gemini again and costs tokens.`,
-			buttons: ['Cancel', 'Remove']
+			confirmLabel: 'Remove',
+			danger: true
 		})
-		if (!confirmed || confirmed.response !== 1) return
+		if (!confirmed) return
 		const updated = await api.clearAssetData({ threadId: threadId.value, assetId, kind })
 		if (updated && doc.value) {
 			const index = doc.value.media.findIndex((a) => a.id === updated.id)
@@ -2994,16 +2997,20 @@ export const useEditorStore = defineStore('editor', () => {
 		if (promptRunning.value && !engineTurn) return false
 
 		if (!options.force && revisionDirty.value) {
-			const confirmed = await api.showConfirmation({
+			const choice = await dialog.choose<'cancel' | 'discard' | 'save'>({
 				title: 'Unsaved changes',
 				message: 'Your timeline has changes not saved to a revision.',
 				detail: 'Save them as a revision before switching, or discard them?',
-				buttons: ['Cancel', 'Discard changes', 'Save & switch'],
-				defaultId: 2,
-				cancelId: 0
+				tone: 'warning',
+				actions: [
+					{ label: 'Cancel', value: 'cancel' },
+					{ label: 'Discard changes', value: 'discard', danger: true },
+					{ label: 'Save & switch', value: 'save', primary: true }
+				],
+				dismissValue: 'cancel'
 			})
-			if (!confirmed || confirmed.response === 0) return false
-			if (confirmed.response === 2) {
+			if (choice === 'cancel') return false
+			if (choice === 'save') {
 				await createRevision({ origin: 'manual', label: 'Manual save' })
 			}
 		}
@@ -3063,13 +3070,14 @@ export const useEditorStore = defineStore('editor', () => {
 			if (!ok) return false
 		}
 
-		const confirmed = await api.showConfirmation({
+		const confirmed = await dialog.confirm({
 			title: 'Delete revisions',
 			message: `Delete V${target.seq}${ids.size > 1 ? ` and ${ids.size - 1} descendant revision(s)` : ''}?`,
 			detail: 'The timeline states saved in them will be lost. The current timeline is not affected.',
-			buttons: ['Cancel', 'Delete']
+			confirmLabel: 'Delete',
+			danger: true
 		})
-		if (!confirmed || confirmed.response !== 1) return false
+		if (!confirmed) return false
 
 		await api.deleteEditorRevisions({ threadId: threadId.value, ids: [...ids] })
 		revisions.value = revisions.value.filter((r) => !ids.has(r.id))

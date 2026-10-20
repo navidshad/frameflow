@@ -279,6 +279,7 @@ import { fromMediaUrl, toMediaUrl } from '@shared/media-url'
 import { ref, watch } from 'vue'
 import { Handle, Position, useVueFlow } from '@vue-flow/core'
 import { useVideoStore } from '../../stores/videoStore'
+import { dialog } from '../../composables/useDialog'
 import { Button } from 'pilotui/elements'
 import SlimTooltip from '../SlimTooltip.vue'
 import { Modal } from 'pilotui/complex'
@@ -421,17 +422,15 @@ const handleRetryConfirmed = async (messageId: string, shouldRemoveBranch: boole
 }
 
 const removeMessage = async (messageId: string) => {
-  const result = await (window as any).api.showConfirmation({
+  const confirmed = await dialog.confirm({
     title: 'Remove Message',
     message: 'Are you sure you want to remove this message from the conversation?',
     detail: 'This will delete the message and its artifacts. Subsequent messages in this node will be preserved.',
-    type: 'warning',
-    buttons: ['Cancel', 'Remove'],
-    defaultId: 1,
-    cancelId: 0
+    confirmLabel: 'Remove',
+    danger: true
   })
 
-  if (result.response === 1) {
+  if (confirmed) {
     await videoStore.removeSingleMessage(messageId)
   }
 }

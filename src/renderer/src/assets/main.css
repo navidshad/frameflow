@@ -48,6 +48,8 @@
   .hair-b { border-bottom: 1px solid var(--ff-hairline); }
   .hair-l { border-left: 1px solid var(--ff-hairline); }
   .hair-r { border-right: 1px solid var(--ff-hairline); }
+  /* A field bounded above and below by the stronger line (the Home composer). */
+  .hair-y-strong { border-top: 1px solid var(--ff-hairline-strong); border-bottom: 1px solid var(--ff-hairline-strong); }
 
   /* Underline tab: the active one is underlined in the primary colour. */
   .tab-u {
@@ -90,6 +92,44 @@
     border-color: rgb(var(--primary)) !important;
     outline: none !important;
   }
+
+  /* ---- v2 controls shared by every page and dialog ---- */
+  /* Text button: the default action. Only the main one on a screen is filled. */
+  .btn-text {
+    @apply inline-flex items-center justify-center gap-1.5 h-7 px-1.5 text-xs font-semibold whitespace-nowrap
+      text-zinc-500 dark:text-zinc-400 bg-transparent transition-colors
+      hover:text-zinc-900 dark:hover:text-zinc-100 disabled:opacity-40 disabled:cursor-not-allowed;
+  }
+  .btn-text-primary { @apply text-primary hover:text-primary-dark dark:hover:text-primary-light; }
+  .btn-text-danger { @apply text-red-500 hover:text-red-600 dark:text-red-400 dark:hover:text-red-300; }
+  /* The single filled button. 6px corners, never a shadow. */
+  .btn-fill {
+    @apply inline-flex items-center justify-center gap-1.5 h-7 px-4 rounded-md text-xs font-semibold whitespace-nowrap
+      bg-primary text-white transition-colors hover:bg-primary-dark
+      disabled:opacity-40 disabled:cursor-not-allowed;
+  }
+  .btn-fill-danger { @apply bg-red-500 hover:bg-red-600; }
+  .btn-icon {
+    @apply inline-flex items-center justify-center w-7 h-7 rounded-md text-zinc-500 dark:text-zinc-400
+      transition-colors hover:text-primary hover:bg-primary/10 disabled:opacity-40 disabled:cursor-not-allowed;
+  }
+
+  /* One underlined field row (a single input, select or textarea). */
+  .field {
+    @apply w-full bg-transparent text-xs text-zinc-900 dark:text-zinc-50 placeholder:text-zinc-400 dark:placeholder:text-zinc-500
+      outline-none rounded-none px-0 py-1.5 transition-colors disabled:opacity-50;
+    border: 0 solid transparent;
+    border-bottom: 1px solid var(--ff-hairline-strong);
+  }
+  .field:focus { border-bottom-color: rgb(var(--primary)); }
+
+  /* A banner is a hairline strip, not a card. The tone sets the top line. */
+  .strip { @apply flex items-start gap-3 py-2.5 text-xs leading-snug;
+    border-top: 1px solid var(--ff-hairline); border-bottom: 1px solid var(--ff-hairline); }
+  .strip-warn { border-top-color: rgba(245, 158, 11, 0.45); }
+  .strip-error { border-top-color: rgba(239, 68, 68, 0.45); }
+  .strip-ok { border-top-color: rgba(16, 185, 129, 0.45); }
+  .strip-info { border-top-color: rgba(59, 130, 246, 0.45); }
 
   .no-scrollbar { scrollbar-width: none; }
   .no-scrollbar::-webkit-scrollbar { display: none; }
