@@ -1,5 +1,6 @@
 import { clock } from './agentFeed'
 import { opKeys } from './agent'
+import type { PromptTurn } from './types'
 
 /**
  * AI engines: which AI edits when the user chats in FrameFlow.
@@ -179,6 +180,33 @@ export function engineFailureNote(id: CliEngineId, output: string): string | nul
 		return 'Claude Code is not signed in. Run `claude` in a terminal and sign in, then try again.'
 	}
 	return null
+}
+
+// ===== Retry =====
+
+export interface EngineRetry {
+	engine: CliEngineId
+	prompt: string
+	selectedItemIds: string[]
+	playheadSec: number
+	widen?: 'chapter' | 'full'
+}
+
+/**
+ * A run that failed can be sent again, on the same engine, with the same
+ * prompt and selection, from where the project is now. Only the newest chat
+ * turn offers it, and never a run the user stopped. Returns what to re-send,
+ * or null when Retry is not offered.
+ */
+export function engineRetry(turn: PromptTurn | null | undefined, turns: PromptTurn[]): EngineRetry | null {
+	const engine = turn?.engine
+	if (!turn || !engine || engine.end !== 'failed' || !engine.request) return null
+	if (turn.status !== 'error' && turn.status !== 'completed') return null
+	// The edits an engine makes are agent turns inside its own chat turn.
+	const chat = turns.filter((t) => !t.agent?.engineTurnId)
+	const latest = chat.reduce<PromptTurn | undefined>((a, t) => (!a || t.createdAt >= a.createdAt ? t : a), undefined)
+	if (latest?.id !== turn.id) return null
+	return { engine: engine.id, prompt: turn.prompt, ...engine.request }
 }
 
 // ===== The common step model =====

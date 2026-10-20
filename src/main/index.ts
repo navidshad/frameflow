@@ -36,6 +36,7 @@ import { GEMINI_MODEL_2_5_FLASH, MODEL_METADATA } from './constants/gemini'
 import { electronApp, optimizer, is } from '@electron-toolkit/utils'
 import { registerMediaProtocol } from './media-protocol'
 import { initAgentAccess } from './mcp'
+import { isCliEngine, type CliEngineId } from '@shared/engines'
 import { abortEngineTurn, cliEngineSelected, initEngines, runCliEditorPrompt } from './engine'
 
 const activePipelines = new Map<string, Pipeline>()
@@ -610,11 +611,12 @@ app.whenReady().then(() => {
 	// editor-turn-update; the base doc is never mutated until user accept.
 	ipcMain.handle('run-editor-prompt', (_event, options: {
 		threadId: string, personaId: string, prompt: string, baseStepId: string,
-		selectedItemIds: string[], playheadSec: number, widen?: 'chapter' | 'full'
+		selectedItemIds: string[], playheadSec: number, widen?: 'chapter' | 'full', engine?: CliEngineId
 	}) => {
 		// The engine picked in Settings or the chat's engine chip: a CLI runs
 		// agentically through FrameFlow's MCP tools, Gemini API as before.
-		return cliEngineSelected() ? runCliEditorPrompt(options) : editorPrompt.runEditorPrompt(options)
+		// Retry names its engine, so a switch since the failure does not move it.
+		return isCliEngine(options.engine) || cliEngineSelected() ? runCliEditorPrompt(options) : editorPrompt.runEditorPrompt(options)
 	})
 
 	ipcMain.handle('abort-editor-prompt', (_event, { turnId }: { threadId: string, turnId: string }) => {

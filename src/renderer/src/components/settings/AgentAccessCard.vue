@@ -150,8 +150,7 @@ const busy = ref(false)
 
 const CLIENTS: { kind: AgentClientKind; label: string }[] = [
 	{ kind: 'claude', label: 'Claude Code' },
-	{ kind: 'codex', label: 'Codex' },
-	{ kind: 'gemini', label: 'Gemini CLI' }
+	{ kind: 'codex', label: 'Codex' }
 ]
 const client = ref<AgentClientKind>('claude')
 

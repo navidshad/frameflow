@@ -88,12 +88,17 @@ export function runCliEditorPrompt(options: {
 	selectedItemIds: string[]
 	playheadSec: number
 	widen?: 'chapter' | 'full'
+	/** Retry names the engine the failed run used, whatever is selected now. */
+	engine?: CliEngineId
 }): { turnId: string } {
 	const settings = settingsManager.getEngineSettings()
-	const id = settings.engine as CliEngineId
+	const id = options.engine ?? settings.engine as CliEngineId
 	const label = ENGINES[id].label
 	const turnId = uuidv4()
-	const engine: PromptTurnEngine = { id, label, steps: [] }
+	const engine: PromptTurnEngine = {
+		id, label, steps: [],
+		request: { selectedItemIds: options.selectedItemIds, playheadSec: options.playheadSec, widen: options.widen }
+	}
 	const turn: PromptTurn = {
 		id: turnId,
 		personaId: options.personaId,
@@ -165,7 +170,8 @@ export function runCliEditorPrompt(options: {
 
 			// Edits that landed stay landed: a run stopped half way still shows them.
 			if (!result.ok && !commits.length) {
-				const failed: PromptTurn = { ...turn, status: 'error', error: result.error || `${label} failed`, engine: finalEngine }
+				const end = result.cancelled ? 'cancelled' : 'failed'
+				const failed: PromptTurn = { ...turn, status: 'error', error: result.error || `${label} failed`, engine: { ...finalEngine, end } }
 				await persistTurn(threadId, failed)
 				emitTurnUpdate({ threadId, turn: failed })
 				return
@@ -174,7 +180,7 @@ export function runCliEditorPrompt(options: {
 			const completed: PromptTurn = {
 				...turn,
 				status: 'completed',
-				engine: finalEngine,
+				engine: result.ok ? finalEngine : { ...finalEngine, end: result.cancelled ? 'cancelled' : 'failed' },
 				revisionId: result.finalRevisionId ?? last?.revisionId,
 				rationale: commits.length ? result.answer || undefined : undefined,
 				answer: commits.length ? undefined : result.answer || `${label} finished without changing anything.`,
@@ -186,7 +192,8 @@ export function runCliEditorPrompt(options: {
 			const failed: PromptTurn = {
 				...turn,
 				status: 'error',
-				error: controller.signal.aborted ? 'Cancelled' : error?.message || `${label} failed`
+				error: controller.signal.aborted ? 'Cancelled' : error?.message || `${label} failed`,
+				engine: { ...engine, end: controller.signal.aborted ? 'cancelled' : 'failed' }
 			}
 			try { await persistTurn(threadId, failed) } catch { /* best effort */ }
 			emitTurnUpdate({ threadId, turn: failed })

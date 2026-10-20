@@ -579,6 +579,13 @@ export interface PromptTurnEngine {
 	parentRevisionId?: string | null
 	/** Summed over every edit the run made. */
 	counts?: { added: number; removed: number; updated: number; markers: number }
+	/** What the user had selected when they sent it: Retry sends the same scope. */
+	request?: { selectedItemIds: string[]; playheadSec: number; widen?: 'chapter' | 'full' }
+	/**
+	 * How a run that did not finish ended. `failed` is the CLI's fault (error,
+	 * sign-in, step cap, crash) and offers Retry; `cancelled` is the user's stop.
+	 */
+	end?: 'failed' | 'cancelled'
 }
 
 export interface PromptTurn {
