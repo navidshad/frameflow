@@ -12,6 +12,7 @@ import {
 	type TimelineState
 } from '@shared/timeline'
 import { computeScope } from '@shared/ai-scope'
+import { engineRetry, type EngineRetry } from '@shared/engines'
 import { hasTransform, TRANSFORM_DEFAULTS } from '@shared/transform'
 import { isAnimatableOn, valueAt } from '@shared/keyframes'
 import {
@@ -3070,7 +3071,7 @@ export const useEditorStore = defineStore('editor', () => {
 		pendingPrompt.value = text.trim() ? { threadId: id, text: text.trim() } : null
 	}
 
-	const runPrompt = async (prompt: string, override?: { widen?: 'chapter' | 'full' }) => {
+	const runPrompt = async (prompt: string, override?: { widen?: 'chapter' | 'full'; retry?: EngineRetry }) => {
 		if (!threadId.value || !doc.value || promptRunning.value) return
 		promptError.value = null
 		lastAnswer.value = null
@@ -3083,14 +3084,24 @@ export const useEditorStore = defineStore('editor', () => {
 				personaId: activePersona.value?.id || DEFAULT_PERSONA_ID,
 				prompt,
 				baseStepId: doc.value.historyRef.currentStepId,
-				selectedItemIds: JSON.parse(JSON.stringify(selectedItemIds.value)),
-				playheadSec: playheadSec.value,
-				widen: override?.widen ?? (scopeWiden.value === 'auto' ? undefined : scopeWiden.value)
+				selectedItemIds: JSON.parse(JSON.stringify(override?.retry?.selectedItemIds ?? selectedItemIds.value)),
+				playheadSec: override?.retry?.playheadSec ?? playheadSec.value,
+				widen: override?.retry ? override.retry.widen : override?.widen ?? (scopeWiden.value === 'auto' ? undefined : scopeWiden.value),
+				engine: override?.retry?.engine
 			})
 			if (result?.turnId) activeTurnId.value = result.turnId
 		} catch (error: any) {
 			promptError.value = error?.message || 'Failed to start the prompt'
 		}
+	}
+
+	/** What Retry would re-send for this turn, or null when it is not offered. */
+	const retryFor = (turn: PromptTurn | null | undefined) => engineRetry(turn, doc.value?.turns || [])
+
+	/** Run a failed engine turn again: same prompt, scope and engine. */
+	const retryTurn = (turn: PromptTurn) => {
+		const retry = retryFor(turn)
+		if (retry) return runPrompt(retry.prompt, { retry })
 	}
 
 	const abortPrompt = async () => {
@@ -3351,7 +3362,8 @@ export const useEditorStore = defineStore('editor', () => {
 			}
 		} else if (turn.status === 'error') {
 			activeTurnId.value = null
-			promptError.value = turn.error || 'Prompt failed'
+			// An engine turn's failure shows in its own chat card, with its own Retry.
+			if (!turn.engine) promptError.value = turn.error || 'Prompt failed'
 		}
 	}
 
@@ -3712,6 +3724,8 @@ export const useEditorStore = defineStore('editor', () => {
 		promptRunning,
 		scopePreview,
 		runPrompt,
+		retryFor,
+		retryTurn,
 		abortPrompt,
 		dismissAnswer,
 		// revisions

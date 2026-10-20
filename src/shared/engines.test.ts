@@ -3,9 +3,10 @@ import { readFileSync } from 'node:fs'
 import { resolve } from 'node:path'
 import {
 	agentFocus, buildCommand, buildEngineSystemPrompt, buildEngineUserPrompt, displayPath, editTime,
-	engineFailureNote, lineSplitter, normalizeEngineSettings, normalizeToolName, parseClaudeAuth,
+	engineFailureNote, engineRetry, lineSplitter, normalizeEngineSettings, normalizeToolName, parseClaudeAuth,
 	parseStreamLine, parseVersion, readableError, StepTracker, stepTitle, TOKEN_ENV, unexpectedTools, type CliEngineId
 } from './engines'
+import type { PromptTurn } from './types'
 
 const fixture = (name: string) => readFileSync(resolve(__dirname, '../main/engine/fixtures', name), 'utf-8')
 
@@ -168,5 +169,49 @@ describe('prompts', () => {
 		expect(buildEngineUserPrompt({ prompt: 'Trim it', playheadSec: 63, selectedItemIds: ['a', 'b'] }))
 			.toBe('Trim it\n\n---\nPlayhead: 1:03.0. Scope: the selected timeline items (a, b). Change only them unless the request needs more.')
 		expect(buildEngineUserPrompt({ prompt: 'x', playheadSec: 0, selectedItemIds: ['a'], widen: 'full' })).toMatch(/whole timeline/)
+	})
+})
+
+describe('Retry on a failed engine run', () => {
+	const request = { selectedItemIds: ['clip-1', 'clip-2'], playheadSec: 12.5, widen: 'full' as const }
+	const turn = (patch: Partial<PromptTurn> = {}, end: 'failed' | 'cancelled' | 'none' = 'failed'): PromptTurn => ({
+		id: 't1', personaId: 'p', prompt: 'tighten the intro', baseStepId: 's', status: 'error', createdAt: 100,
+		engine: { id: 'claude-code', label: 'Claude Code', steps: [], request, end: end === 'none' ? undefined : end },
+		...patch
+	})
+
+	it('re-sends the same prompt, selection, playhead and widen on the same engine', () => {
+		const t = turn()
+		expect(engineRetry(t, [t])).toEqual({ engine: 'claude-code', prompt: 'tighten the intro', ...request })
+	})
+
+	it('is offered when edits landed before it failed (a completed turn with a failure note)', () => {
+		const t = turn({ status: 'completed', notes: ['Claude Code did not finish.'] })
+		expect(engineRetry(t, [t])).not.toBeNull()
+	})
+
+	it('is not offered after the user stopped it, or for a run that finished', () => {
+		const stopped = turn({}, 'cancelled')
+		expect(engineRetry(stopped, [stopped])).toBeNull()
+		const fine = turn({ status: 'completed' }, 'none')
+		expect(engineRetry(fine, [fine])).toBeNull()
+	})
+
+	it('is not offered while running, for a Gemini API turn, or without the recorded request', () => {
+		const running = turn({ status: 'running' })
+		expect(engineRetry(running, [running])).toBeNull()
+		const api = turn({ engine: undefined })
+		expect(engineRetry(api, [api])).toBeNull()
+		const old = turn({ engine: { id: 'claude-code', label: 'Claude Code', steps: [], end: 'failed' } })
+		expect(engineRetry(old, [old])).toBeNull()
+		expect(engineRetry(undefined, [])).toBeNull()
+	})
+
+	it('only the newest chat turn offers it; the run’s own edit turns do not count', () => {
+		const failed = turn()
+		const edit = turn({ id: 'e1', createdAt: 150, engine: undefined, status: 'completed', agent: { name: 'Claude Code', sessionId: 's', engineTurnId: 't1' } })
+		expect(engineRetry(failed, [failed, edit])).not.toBeNull()
+		const later = turn({ id: 't2', createdAt: 200, engine: undefined, status: 'completed' })
+		expect(engineRetry(failed, [failed, later])).toBeNull()
 	})
 })

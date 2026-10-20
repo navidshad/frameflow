@@ -61,12 +61,16 @@
 			<span class="iconify tabler--clock w-3 h-3 inline-block align-[-1px] mr-1"></span>
 			{{ lengthNote }}
 		</p>
-		<div v-if="turn?.notes?.length" class="mt-2 px-2.5 py-1.5 rounded-lg bg-zinc-500/5 border border-zinc-500/10">
-			<p v-for="(note, i) in turn.notes" :key="i"
-				class="text-[10px] font-medium text-zinc-500 leading-snug">
-				<span class="iconify tabler--info-circle w-3 h-3 inline-block align-[-1px] mr-1"></span>
-				{{ note }}
-			</p>
+		<div v-if="turn?.notes?.length"
+			class="mt-2 px-2.5 py-1.5 rounded-lg bg-zinc-500/5 border border-zinc-500/10 flex items-center justify-between gap-2">
+			<div class="min-w-0">
+				<p v-for="(note, i) in turn.notes" :key="i"
+					class="text-[10px] font-medium text-zinc-500 leading-snug">
+					<span class="iconify tabler--info-circle w-3 h-3 inline-block align-[-1px] mr-1"></span>
+					{{ note }}
+				</p>
+			</div>
+			<RetryButton v-if="store.retryFor(turn)" :turn="turn" />
 		</div>
 		<div v-if="turn?.build?.shortfall"
 			class="mt-2 px-2.5 py-1.5 rounded-lg bg-secondary/10 border border-secondary/20 flex items-center justify-between gap-2">
@@ -104,6 +108,7 @@ import { computed } from 'vue'
 import { useEditorStore } from '../../stores/editorStore'
 import { ENGINES } from '@shared/engines'
 import EngineSteps from './EngineSteps.vue'
+import RetryButton from './RetryButton.vue'
 
 const store = useEditorStore()
 

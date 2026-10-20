@@ -1,7 +1,7 @@
 /**
  * Agent access over MCP: the decidable parts.
  *
- * An agent in the user's terminal (Claude Code, Codex, Gemini CLI) connects to
+ * An agent in the user's terminal (Claude Code, Codex) connects to
  * FrameFlow's local MCP server and reads or edits the project that is open in
  * the editor. Everything here is pure so main (the server) and the renderer
  * (Settings, the Agent tab) share one answer, and so it can be unit-tested:
@@ -133,17 +133,15 @@ export function displayClientName(info?: { name?: string; title?: string } | nul
 	const raw = `${info?.name || ''} ${info?.title || ''}`
 	if (/claude/i.test(raw)) return 'Claude Code'
 	if (/codex/i.test(raw)) return 'Codex'
-	if (/gemini/i.test(raw)) return 'Gemini CLI'
 	return info?.title || info?.name || 'An agent'
 }
 
-export type AgentClientKind = 'claude' | 'codex' | 'gemini'
+export type AgentClientKind = 'claude' | 'codex'
 
 /**
  * The connect command for each CLI, verified against their own `--help`:
- * Claude Code and Gemini CLI take an HTTP header; Codex only reads a bearer
- * token from an environment variable it names. Gemini's default scope is the
- * project, which would write the token into the repository, so it is user.
+ * Claude Code takes an HTTP header; Codex only reads a bearer token from an
+ * environment variable it names.
  */
 export function connectSnippet(kind: AgentClientKind, url: string, token: string): string {
 	switch (kind) {
@@ -151,15 +149,12 @@ export function connectSnippet(kind: AgentClientKind, url: string, token: string
 			return `claude mcp add --transport http ${AGENT_SERVER_NAME} \\\n  ${url} \\\n  --header "Authorization: Bearer ${token}"`
 		case 'codex':
 			return `export FRAMEFLOW_TOKEN=${token}\ncodex mcp add ${AGENT_SERVER_NAME} --url ${url} \\\n  --bearer-token-env-var FRAMEFLOW_TOKEN`
-		case 'gemini':
-			return `gemini mcp add --transport http --scope user ${AGENT_SERVER_NAME} \\\n  ${url} \\\n  --header "Authorization: Bearer ${token}"`
 	}
 }
 
 export const CONNECT_HINTS: Record<AgentClientKind, string> = {
 	claude: 'Run it once in a terminal. Then ask Claude Code something like “cut the pauses out of the team greeting in FrameFlow”.',
-	codex: 'Run both lines once, and keep the export in your shell profile so Codex can read the token. Then ask Codex something like “cut the pauses out of the team greeting in FrameFlow”.',
-	gemini: 'Run it once in a terminal. Then ask Gemini CLI something like “cut the pauses out of the team greeting in FrameFlow”.'
+	codex: 'Run both lines once, and keep the export in your shell profile so Codex can read the token. Then ask Codex something like “cut the pauses out of the team greeting in FrameFlow”.'
 }
 
 // ===== The edit-ops contract as JSON Schema =====

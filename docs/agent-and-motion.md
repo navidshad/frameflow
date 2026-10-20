@@ -53,7 +53,7 @@ can also drive. Every ability gets two surfaces: MCP for agents, the editor for 
 | 1 | MCP server, live-doc bridge, tools, Agent tab feed, Agent access settings card | 0 | 3, 4 (lower card) |
 | 2 | Motion layer engine: model, contract, preview iframe, offscreen export, templates, Motion library, motion inspector, M1 track | 0 | 1 |
 | 3 | Keyframe lanes UI + `opacity` / motion-setting paths | 2 | 2 |
-| 4 | Built-in CLI engine (Claude Code / Codex / Gemini CLI), engine chip, AI engine settings card, MCP motion tools | 1, 2 | 1 (chat), 4 (upper card) |
+| 4 | Built-in CLI engine (Claude Code; Codex parked), engine chip, AI engine settings card, MCP motion tools | 1, 2 | 1 (chat), 4 (upper card) |
 | 5 | Custom HTML authoring: code view, motion checks, "Ask AI to fix", save as template | 3 | 5 |
 
 Stages 1 and 2 run in parallel (file boundary: 1 owns `src/main/mcp/**`, settings, chat Agent

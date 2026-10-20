@@ -50,8 +50,8 @@ Branching exploration for still images.
 
 ## 🤖 In progress: AI agents and motion graphics
 
-FrameFlow is gaining three abilities: an **MCP server**, so agents like Claude Code, Codex and
-Gemini CLI can read and edit your open project; an **HTML motion layer** (templates, custom
+FrameFlow is gaining three abilities: an **MCP server**, so agents like Claude Code and
+Codex can read and edit your open project; an **HTML motion layer** (templates, custom
 HTML and keyframes); and your **own AI CLI as the editing engine**.
 
 - **Design (the UI to build, exactly as drawn):** https://claude.ai/artifact/CWdPbiqvmizwszhTXgpKb5

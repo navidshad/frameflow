@@ -84,7 +84,7 @@
 			<p class="text-xs font-bold text-zinc-600 dark:text-zinc-300">No agent connected</p>
 			<p class="text-[10px] leading-snug text-zinc-500">
 				{{ agent.access?.enabled
-					? 'Agent access is on. Connect Claude Code, Codex or Gemini CLI with the command in Settings.'
+					? 'Agent access is on. Connect Claude Code or Codex with the command in Settings.'
 					: 'Let an agent in your terminal edit this project over MCP. Turn it on in Settings → Agent access.' }}
 			</p>
 			<button class="mt-1 px-3 py-1.5 rounded-xl border border-zinc-300 dark:border-zinc-700 text-xs font-bold text-zinc-600 dark:text-zinc-300 transition hover:border-primary/40 hover:text-primary"

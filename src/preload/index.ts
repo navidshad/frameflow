@@ -102,7 +102,7 @@ const api = {
 		ipcRenderer.on('editor-render-progress', listener)
 		return () => ipcRenderer.removeListener('editor-render-progress', listener)
 	},
-	runEditorPrompt: (data: { threadId: string, personaId: string, prompt: string, baseStepId: string, selectedItemIds: string[], playheadSec: number, widen?: string }) =>
+	runEditorPrompt: (data: { threadId: string, personaId: string, prompt: string, baseStepId: string, selectedItemIds: string[], playheadSec: number, widen?: string, engine?: string }) =>
 		ipcRenderer.invoke('run-editor-prompt', data),
 	abortEditorPrompt: (data: { threadId: string, turnId: string }) =>
 		ipcRenderer.invoke('abort-editor-prompt', data),
@@ -168,7 +168,7 @@ const api = {
 	setAgentPermission: (key: 'edit' | 'html' | 'export', value: boolean) =>
 		ipcRenderer.invoke('set-agent-permission', { key, value }),
 	copyAgentToken: () => ipcRenderer.invoke('copy-agent-token'),
-	copyAgentSnippet: (kind: 'claude' | 'codex' | 'gemini') => ipcRenderer.invoke('copy-agent-snippet', kind),
+	copyAgentSnippet: (kind: 'claude' | 'codex') => ipcRenderer.invoke('copy-agent-snippet', kind),
 	newAgentToken: () => ipcRenderer.invoke('new-agent-token'),
 	disconnectAgentSession: (sessionId: string) => ipcRenderer.invoke('disconnect-agent-session', sessionId),
 	onAgentAccessState: (callback: (state: any) => void) => {

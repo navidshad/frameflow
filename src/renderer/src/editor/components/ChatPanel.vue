@@ -64,11 +64,20 @@
 						<!-- Error -->
 						<div v-else-if="turn.status === 'error'"
 							class="px-3 py-2 rounded-2xl rounded-tl-md bg-red-500/10 border border-red-500/20">
-							<p class="text-[11px] text-red-500 leading-snug">{{ turn.error || 'The request failed.' }}</p>
-							<button class="mt-1.5 px-2 py-0.5 rounded-lg bg-red-500/10 text-red-500 text-[9px] font-bold uppercase tracking-widest hover:bg-red-500/20 transition"
-								@click="store.runPrompt(turn.prompt)">
-								Retry
-							</button>
+							<!-- A built-in engine run offers Retry only when it failed (never a Stop). -->
+							<template v-if="turn.engine">
+								<div class="flex items-center justify-between gap-3">
+									<p class="text-[11px] text-red-500 leading-snug">{{ turn.error || 'The request failed.' }}</p>
+									<RetryButton v-if="store.retryFor(turn)" :turn="turn" />
+								</div>
+							</template>
+							<template v-else>
+								<p class="text-[11px] text-red-500 leading-snug">{{ turn.error || 'The request failed.' }}</p>
+								<button class="mt-1.5 px-2 py-0.5 rounded-lg bg-red-500/10 text-red-500 text-[9px] font-bold uppercase tracking-widest hover:bg-red-500/20 transition"
+									@click="store.runPrompt(turn.prompt)">
+									Retry
+								</button>
+							</template>
 						</div>
 
 						<!-- Question answer -->
@@ -128,6 +137,7 @@ import { useEditorStore } from '../../stores/editorStore'
 import PromptBar from './PromptBar.vue'
 import AiResultCard from './AiResultCard.vue'
 import EngineSteps from './EngineSteps.vue'
+import RetryButton from './RetryButton.vue'
 import { ENGINES } from '@shared/engines'
 
 const store = useEditorStore()

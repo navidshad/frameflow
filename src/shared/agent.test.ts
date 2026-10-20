@@ -76,10 +76,9 @@ describe('tokens and clients', () => {
 		expect(maskToken('')).toBe('')
 	})
 
-	it('names the three CLIs from their clientInfo', () => {
+	it('names the two CLIs from their clientInfo', () => {
 		expect(displayClientName({ name: 'claude-code' })).toBe('Claude Code')
 		expect(displayClientName({ name: 'codex-mcp-client' })).toBe('Codex')
-		expect(displayClientName({ name: 'gemini-cli-mcp-client' })).toBe('Gemini CLI')
 		expect(displayClientName({ name: 'my-tool', title: 'My Tool' })).toBe('My Tool')
 		expect(displayClientName(undefined)).toBe('An agent')
 	})
@@ -94,8 +93,6 @@ describe('tokens and clients', () => {
 		expect(codex).toContain(`export FRAMEFLOW_TOKEN=${TOKEN}`)
 		expect(codex).toContain('--bearer-token-env-var FRAMEFLOW_TOKEN')
 		expect(codex).toContain(`--url ${url}`)
-		// User scope: the default (project) would write the token into the repo
-		expect(connectSnippet('gemini', url, TOKEN)).toContain('--scope user')
 	})
 })
 

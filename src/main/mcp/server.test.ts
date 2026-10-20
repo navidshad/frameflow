@@ -8,7 +8,7 @@ import { FakeEditor, PIXEL, TOKEN } from './fakeEditor'
 
 /**
  * The real server on an ephemeral port, driven through the SDK's own client —
- * the same path Claude Code, Codex and Gemini CLI take. Only the editor is
+ * the same path Claude Code and Codex take. Only the editor is
  * fake: a document in memory that applies diffs the way the renderer does.
  */
 

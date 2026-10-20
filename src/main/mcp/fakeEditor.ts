@@ -6,7 +6,7 @@ import type { EditorBridge, LiveProject, RevisionSummary, TurnCommit } from './b
 /**
  * A fake editor for tests: a document in memory that applies diffs the way the
  * renderer does. Used by the server test and by the CLI-engine tests that
- * point a real Claude Code / Codex / Gemini CLI at a real server.
+ * point a real Claude Code / Codex at a real server.
  */
 
 export const TOKEN = 'ff_test0123456789abcdef0123456789ab'
