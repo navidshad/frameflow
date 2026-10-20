@@ -385,7 +385,7 @@ describe('motion in the context', () => {
 
 	it('lists every template with its windows and settings, so addMotion can name them', () => {
 		expect(text).toContain('AVAILABLE MOTION TEMPLATES')
-		expect(text).toMatch(/- lower-third \(4s; in 0\.4\/hold 3\.2\*\/out 0\.4\): name text, role text, accent #RRGGBB, style bar\|pill\|glass, slide 0\.\.60px \[anim\]/)
+		expect(text).toMatch(/- lower-third \(4s; in 0\.4\/hold 3\.2\*\/out 0\.4\): name text, role text, accent #RRGGBB \[anim hold: key 0xRRGGBB int\], style bar\|pill\|glass, slide 0\.\.60px \[anim\]/)
 		for (const id of ['title-card', 'chapter-card', 'pull-quote', 'stat-counter', 'callout-ring', 'bar-reveal']) {
 			expect(text).toContain(`- ${id} (`)
 		}

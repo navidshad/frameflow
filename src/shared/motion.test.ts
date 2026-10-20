@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest'
 import type { TimelineItem, Track } from './types'
 import {
 	BLANK_MOTION_HTML, MOTION_CSP, MOTION_TEMPLATES, composeMotionPage, isMotionTrack, lintMotionHtml,
+	colourKeyValue, keyedSettingValue, keyValueColour, settingKeyValue,
 	momentAt, motionAnimatablePaths, motionClipLabel, motionFramePlan, motionFrameState,
 	motionRenderRecipe, newMotionSpec, normaliseDefinition, pageTime, resolveDefinition,
 	resolveMoments, sameMotion, settingValues, type MotionSpec
@@ -59,9 +60,9 @@ describe('the template library', () => {
 				}
 			})
 
-			it('only marks numbers as animatable', () => {
+			it('never marks text as animatable — a string has no keyframe lane', () => {
 				for (const s of template.definition.settings) {
-					if (s.animate) expect(s.type).toBe('number')
+					if (s.animate) expect(s.type).not.toBe('text')
 				}
 			})
 		})
@@ -213,11 +214,38 @@ describe('motionFrameState — the one evaluator', () => {
 describe('keyframe paths', () => {
 	it('offers opacity and the animatable settings on a motion item only', () => {
 		const paths = motionAnimatablePaths(motionItem({ template: 'callout-ring' }))
-		expect(paths).toEqual(['opacity', 'motion.x', 'motion.y', 'motion.size'])
+		expect(paths).toEqual(['opacity', 'motion.x', 'motion.y', 'motion.size', 'motion.accent'])
 		expect(isAnimatableOn('motion.x', paths)).toBe(true)
 		expect(isAnimatableOn('motion.label', paths)).toBe(false)
 		expect(isAnimatableOn('opacity', [])).toBe(false)
 		expect(isAnimatableOn('transform.x', [])).toBe(true)
+	})
+
+	it('keys a colour as its 0xRRGGBB number and hands the page the hex', () => {
+		expect(colourKeyValue('#EC4899')).toBe(0xec4899)
+		expect(keyValueColour(0x8b5cf6)).toBe('#8B5CF6')
+		expect(keyValueColour(colourKeyValue('#00FF7F'))).toBe('#00FF7F')
+	})
+
+	it('holds a keyed colour — there is no halfway between two colours', () => {
+		const item = motionItem({ template: 'lower-third' }, 4, {
+			keyframes: {
+				// Even a key asking to ease is held: the evaluator decides, not the key.
+				'motion.accent': [{ t: 0, value: 0xec4899, ease: 'ease' }, { t: 2, value: 0x8b5cf6 }]
+			}
+		})
+		expect(motionFrameState(item, 0).settings.accent).toBe('#EC4899')
+		expect(motionFrameState(item, 1.99).settings.accent).toBe('#EC4899')
+		expect(motionFrameState(item, 2).settings.accent).toBe('#8B5CF6')
+		expect(motionFrameState(item, 3.5).settings.accent).toBe('#8B5CF6')
+	})
+
+	it('reads an enum key as its option index, held', () => {
+		const style = { key: 'style', label: 'Style', type: 'enum' as const, default: 'bar',
+			options: [{ value: 'bar', label: 'Bar' }, { value: 'pill', label: 'Pill' }], animate: true }
+		expect(settingKeyValue(style, 'pill')).toBe(1)
+		expect(keyedSettingValue(style, 1)).toBe('pill')
+		expect(keyedSettingValue(style, 7)).toBe('pill') // clamped to the options
 	})
 
 	it('counts a keyed opacity as animation', () => {

@@ -32,7 +32,7 @@ export interface MotionTemplate {
 	html: string
 }
 
-const accent: MotionSettingDef = { key: 'accent', label: 'Accent', type: 'color', default: '#EC4899' }
+const accent: MotionSettingDef = { key: 'accent', label: 'Accent', type: 'color', default: '#EC4899', animate: true }
 
 /** in / hold / out, the hold flexible. Most templates are shaped like this. */
 const inHoldOut = (inSec: number, holdSec: number, outSec: number) => [
