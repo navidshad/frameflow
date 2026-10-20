@@ -27,8 +27,15 @@ import type { Located } from './detect'
  * No Electron here: the test that really spawns each CLI runs this as is.
  */
 
-/** The engine may edit; exporting stays the user's button. */
-const ENGINE_PERMISSIONS: AgentPermissions = { edit: true, html: true, export: false }
+/**
+ * What a CLI engine may do through its private MCP server. It may edit, and
+ * exporting stays the user's button. Writing a custom HTML page is the user's
+ * "Write custom HTML motion layers" setting, exactly as for an external agent:
+ * the engine is an agent too, and a page it writes runs in a window. The caller
+ * passes the setting in; absent, the answer is no.
+ */
+export const enginePermissions = (htmlAllowed: boolean): AgentPermissions =>
+	({ edit: true, html: htmlAllowed, export: false })
 
 /** Calls past the step limit are refused; this many more and the run is stopped. */
 const OVERRUN_GRACE = 5
@@ -59,6 +66,8 @@ export interface EngineRunOptions {
 	timeoutMs?: number
 	/** Tests: run in this folder and leave it, to check nothing was written. */
 	workDir?: string
+	/** Read per call, so flipping the setting mid-turn takes effect. Default: no HTML pages. */
+	permissions?: () => AgentPermissions
 }
 
 export interface EngineRunResult {
@@ -122,7 +131,7 @@ export async function runEngineTurn(options: EngineRunOptions): Promise<EngineRu
 	const server = new AgentServer({
 		bridge,
 		token: () => token,
-		permissions: () => ENGINE_PERMISSIONS,
+		permissions: options.permissions ?? (() => enginePermissions(false)),
 		version: options.version,
 		engineTurnId: options.turnId,
 		maxToolCalls: options.maxSteps,
