@@ -22,6 +22,8 @@
 		<template v-if="!collapsed">
 			<MediaPanel v-show="tab === 'media'" class="flex-1 min-h-0 min-w-0"
 				:collapsed="collapsed" @update:collapsed="$emit('update:collapsed', $event)" />
+			<MotionPanel v-if="tab === 'motion'" class="flex-1 min-h-0 min-w-0"
+				:collapsed="collapsed" @update:collapsed="$emit('update:collapsed', $event)" />
 			<LibraryPanel v-if="tab === 'transitions'" class="flex-1 min-h-0 min-w-0"
 				:collapsed="collapsed" @update:collapsed="$emit('update:collapsed', $event)" />
 			<EffectsPanel v-if="tab === 'effects'" class="flex-1 min-h-0 min-w-0"
@@ -35,6 +37,7 @@
 <script setup lang="ts">
 import MediaPanel from './MediaPanel.vue'
 import LibraryPanel from './LibraryPanel.vue'
+import MotionPanel from './MotionPanel.vue'
 import EffectsPanel from './EffectsPanel.vue'
 import TranscriptPanel from './TranscriptPanel.vue'
 import SlimTooltip from '../../components/SlimTooltip.vue'
@@ -49,10 +52,11 @@ import SlimTooltip from '../../components/SlimTooltip.vue'
  *
  * Collapse and resize stay with VideoEditorPage; this only routes the event.
  */
-export type LeftTab = 'media' | 'transitions' | 'effects' | 'words'
+export type LeftTab = 'media' | 'motion' | 'transitions' | 'effects' | 'words'
 
 const TABS: { value: LeftTab; label: string; icon: string }[] = [
 	{ value: 'media', label: 'Media', icon: 'tabler--folder' },
+	{ value: 'motion', label: 'Motion', icon: 'tabler--sparkles' },
 	{ value: 'transitions', label: 'Transitions', icon: 'tabler--transition-right' },
 	{ value: 'effects', label: 'Effects', icon: 'tabler--wand' },
 	{ value: 'words', label: 'Words', icon: 'tabler--text-caption' }

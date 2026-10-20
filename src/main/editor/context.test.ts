@@ -371,3 +371,31 @@ describe('buildPromptContext', () => {
 		expect(row).toContain('pipe inside and a newline')
 	})
 })
+
+describe('motion in the context', () => {
+	const doc = makeDoc([transcriptAsset('a', 10)])
+	doc.tracks.push({ id: 'm', kind: 'video', name: 'M1', order: 1, muted: false, locked: false, hidden: false, height: 64 })
+	doc.timeline.push({
+		id: 'lt', trackId: 'm', sourceAssetId: '', timelineStart: 3, in: 0, out: 4.4,
+		speed: 1, preservePitch: true, duration: 4.4, label: 'Lower third',
+		motion: { template: 'lower-third', settings: { name: 'Sara Ahmadi' }, moments: { out: 0.8 } },
+		keyframes: { opacity: [{ t: 0, value: 0 }, { t: 1, value: 1 }] }
+	})
+	const text = buildPromptContext(doc, 'tidy the lower third', { selectedItemIds: ['lt'], playheadSec: 3 }).contextText
+
+	it('lists every template with its windows and settings, so addMotion can name them', () => {
+		expect(text).toContain('AVAILABLE MOTION TEMPLATES')
+		expect(text).toMatch(/- lower-third \(4s; in 0\.4\/hold 3\.2\*\/out 0\.4\): name text, role text, accent #RRGGBB, style bar\|pill\|glass, slide 0\.\.60px \[anim\]/)
+		for (const id of ['title-card', 'chapter-card', 'pull-quote', 'stat-counter', 'callout-ring', 'bar-reveal']) {
+			expect(text).toContain(`- ${id} (`)
+		}
+	})
+
+	it('describes a placed layer by what it says and how it is timed', () => {
+		const row = text.split('\n').find((l) => l.startsWith('- lt |'))!
+		expect(row).toContain('motion lower-third')
+		expect(row).toContain('name="Sara Ahmadi"')
+		expect(row).toContain('windows in 0.40/hold 3.20/out 0.80')
+		expect(row).toContain('keyed: opacity')
+	})
+})

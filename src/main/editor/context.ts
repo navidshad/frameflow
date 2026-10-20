@@ -5,6 +5,10 @@ import type { TranscriptEntry } from '@shared/captions'
 import { FEATURED_KINDS, transitionGroups } from '@shared/transitionPresets'
 import { computeScope, type AiScope } from '@shared/ai-scope'
 import { itemDuration } from '@shared/timeline'
+import {
+	MOTION_TEMPLATES, motionName, resolveDefinition, resolveMoments, settingValues,
+	type MotionSettingDef
+} from '@shared/motion'
 
 /**
  * Builds the prompt context text for the editor AI (PRD §5.7).
@@ -493,6 +497,15 @@ export function buildPromptContext(
 		lines.push(' its neutral value, so name a value when you want a visible change.)')
 		lines.push('')
 
+		lines.push('AVAILABLE MOTION TEMPLATES (for addMotion.template; settings by key)')
+		for (const template of MOTION_TEMPLATES) {
+			const def = template.definition
+			const windows = def.moments.map((m) => `${m.name} ${fmt(m.duration)}${m.flex ? '*' : ''}`).join('/')
+			lines.push(`- ${template.id} (${fmt(def.duration)}s; ${windows}): ${def.settings.map(describeSetting).join(', ')} — ${template.description}`)
+		}
+		lines.push('(* is the window that stretches with the clip. [anim] settings can be keyframed by a person.)')
+		lines.push('')
+
 		// ---- CUTAWAY OPPORTUNITIES ----
 		// Both halves were already computed and sitting unused: the transcript
 		// says what is being said, `clip.visual` says what every piece looks
@@ -562,6 +575,10 @@ export function buildPromptContext(
 		for (const item of inScopeItems) {
 			const track = doc.tracks.find((t) => t.id === item.trackId)
 			const showContent = !r.dropNeighborVisuals || selectedSet.has(item.id) || scope.kind !== 'selection'
+			if (item.motion) {
+				lines.push(`- ${item.id} | ${track?.name || '?'} | at ${fmt(item.timelineStart)}s | ${fmt(item.duration)}s | "${item.label || ''}" | ${motionLine(item)}`)
+				continue
+			}
 			const { span, content } = coverageOf(item, showContent ? ITEM_SUMMARY_MAX_CHARS : 0, false)
 			lines.push(
 				`- ${item.id} | ${track?.name || '?'} | at ${fmt(item.timelineStart)}s | src ${fmt(item.in)}–${fmt(item.out)}s${span ? ` (${span})` : ''} | ${item.speed}x | "${item.label || ''}"${content ? ` | ${content}` : ''}`
@@ -775,4 +792,34 @@ export function buildPromptContext(
 		expandedPieces: expansion?.expandedPieces,
 		expandedRegions: expansion ? expansion.listed.length : undefined
 	}
+}
+
+// ===== Motion layers =====
+
+/** `name text`, `accent #RRGGBB`, `style bar|pill|glass`, `slide 0..60px [anim]`. */
+function describeSetting(s: MotionSettingDef): string {
+	switch (s.type) {
+		case 'number': {
+			const range = `${s.min ?? ''}..${s.max ?? ''}${s.unit && s.unit !== '%' ? s.unit : ''}`
+			return `${s.key} ${range}${s.animate ? ' [anim]' : ''}`
+		}
+		case 'color': return `${s.key} #RRGGBB`
+		case 'enum': return `${s.key} ${(s.options ?? []).map((o) => o.value).join('|')}`
+		default: return `${s.key} text`
+	}
+}
+
+/** What a placed motion layer is and says, so `updateMotion` can change it. */
+function motionLine(item: TimelineItem): string {
+	const spec = item.motion!
+	const def = resolveDefinition(spec)
+	const values = settingValues(spec, def)
+	const settings = def.settings
+		.map((s) => `${s.key}=${typeof values[s.key] === 'string' ? JSON.stringify(String(values[s.key]).slice(0, 60)) : values[s.key]}`)
+		.join(' ')
+	const windows = resolveMoments(spec, item.duration, def)
+		.map((m) => `${m.name} ${m.duration.toFixed(2)}`).join('/')
+	const kind = spec.template ? `motion ${spec.template}` : `motion custom "${motionName(spec)}"`
+	const keyed = Object.keys(item.keyframes ?? {})
+	return `${kind} | ${settings} | windows ${windows}${keyed.length ? ` | keyed: ${keyed.join(', ')}` : ''}`
 }

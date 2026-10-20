@@ -1,0 +1,50 @@
+<!-- Pull quote — the words fade up line by line, then the attribution. -->
+<style>
+	:root { font-size: calc(100vmin / 108); }
+	.quote { position: absolute; left: 50%; top: 50%; width: 70%; transform: translate(-50%, -50%); text-align: center; }
+	.mark { font: 800 16rem/0.6 Outfit, Inter, sans-serif; height: 7rem; }
+	.words { font: italic 400 7rem/1.25 Inter, sans-serif; color: #fafafa; }
+	.who { font: 600 3.8rem/1.2 Inter, sans-serif; margin-top: 4rem; color: #a1a1aa; letter-spacing: 0.04em; }
+</style>
+<div class="quote" data-ff-bounds>
+	<div class="mark" id="mark">“</div>
+	<div class="words" id="words"></div>
+	<div class="who" id="who"></div>
+</div>
+<script>
+	const mark = document.getElementById('mark')
+	const words = document.getElementById('words')
+	const who = document.getElementById('who')
+	let lastText = null
+	let spans = []
+
+	frameflow.define({
+		seek(t, s) {
+			const ease = frameflow.ease
+			if (s.quote !== lastText) {
+				// Rebuilt only when the text changes, so scrubbing is cheap.
+				lastText = s.quote
+				words.textContent = ''
+				spans = String(s.quote).split(/(\s+)/).map((part) => {
+					const span = document.createElement('span')
+					span.textContent = part
+					words.appendChild(span)
+					return span
+				})
+			}
+			const enter = frameflow.progress('in', t)
+			const leave = ease.in(frameflow.progress('out', t))
+			const n = Math.max(1, spans.length)
+			spans.forEach((span, i) => {
+				// Each word starts a little after the one before it.
+				const u = frameflow.clamp(enter * 1.6 - (i / n) * 0.6, 0, 1)
+				span.style.opacity = String(ease.out(u))
+			})
+			mark.style.color = s.accent
+			mark.style.opacity = String(ease.out(frameflow.clamp(enter * 3, 0, 1)))
+			who.textContent = s.attribution
+			who.style.opacity = String(ease.out(frameflow.clamp(enter * 2 - 1, 0, 1)))
+			document.body.style.opacity = String(1 - leave)
+		}
+	})
+</script>

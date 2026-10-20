@@ -10,7 +10,7 @@
 		<div v-for="(track, row) in store.sortedTracks" :key="track.id">
 			<div v-for="item in itemsByTrack[track.id] || []" :key="item.id"
 				class="absolute rounded-[1px]"
-				:class="trackTint(track.kind)"
+				:class="item.motion ? 'bg-pink-500/70' : trackTint(track.kind)"
 				:style="{
 					left: `${frac(item.timelineStart) * 100}%`,
 					width: `${Math.max(frac(item.duration) * 100, 0.15)}%`,

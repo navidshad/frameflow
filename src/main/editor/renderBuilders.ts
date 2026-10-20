@@ -32,6 +32,13 @@ export interface SourceSlice {
 	 * to look for it.
 	 */
 	lavfi?: boolean
+	/**
+	 * `srcPath` is a motion layer's rendered clip, keyed by content for THIS
+	 * frame. It may not exist yet: the pre-flight skips it, and the caller
+	 * renders it (`motionJobsFor`) before the graph runs. The clip's own seconds
+	 * are its source seconds, so `in`/`out` index straight into the file.
+	 */
+	motion?: { width: number; height: number; fps: number }
 	in: number                  // source seconds mapped to this region
 	out: number
 	/**
@@ -132,6 +139,13 @@ export function allSlices(region: Region): SourceSlice[] {
 	}
 	const unreachable: never = region
 	return unreachable
+}
+
+/** The motion clips a set of regions composites, as render jobs. */
+export function motionJobsFor(regions: Region[]): { item: TimelineItem; frame: { width: number; height: number; fps: number }; outputPath: string }[] {
+	return regions.flatMap(allSlices)
+		.filter((s) => !!s.motion)
+		.map((s) => ({ item: s.item, frame: s.motion!, outputPath: s.srcPath }))
 }
 
 export interface FilterBuilder {

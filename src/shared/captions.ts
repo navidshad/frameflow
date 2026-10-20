@@ -172,7 +172,7 @@ export function captionsFromTimeline(
 		// A title or a generated layer carries no speech to caption. The kind of
 		// the track it sits on used to answer this; now that anything visible can
 		// share a video track, the ITEM has to.
-		if (item.text || item.generator) continue
+		if (item.text || item.generator || item.motion) continue
 		if (!trackAudible(trackById.get(item.trackId))) continue
 		const entries = transcripts[item.sourceAssetId]
 		if (!entries?.length) continue

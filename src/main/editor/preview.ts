@@ -7,8 +7,10 @@ import { threadManager } from '../threads'
 import { THREAD_DIRS } from '../constants/paths'
 import { computeRegions, intermediateOpts, runCommand } from './render'
 import { transcriptsForDoc } from './captions'
+import { motionCacheDir } from '../motion/cache'
+import { ensureMotionJobs } from '../motion'
 import {
-	buildRegionGraph, regionAtInstant,
+	buildRegionGraph, motionJobsFor, regionAtInstant,
 	type OverlapRegion, type Region, type RegionPlan
 } from './renderBuilders'
 
@@ -161,7 +163,9 @@ export async function ensureTransitionPreview(options: {
 	// Proxy quality: computeRegions already resolves proxyPath for 'preview'.
 	// Transcripts ride along so a bed inside the window ducks in the cached
 	// render exactly as it will in the export (it silently did not, before).
-	const full = computeRegions(doc, 'preview', transcriptsForDoc(doc))
+	const full = computeRegions(doc, 'preview', transcriptsForDoc(doc), {
+		motionDir: motionCacheDir(thread.tempDir)
+	})
 	const plan = previewPlan(full)
 	const region = full.regions.find(
 		(r): r is OverlapRegion =>
@@ -180,6 +184,7 @@ export async function ensureTransitionPreview(options: {
 
 	const job = (async () => {
 		fs.mkdirSync(dir, { recursive: true })
+		await ensureMotionJobs(motionJobsFor([region]))
 		await renderTransitionWindow(region, plan, outputPath)
 		sweep(dir)
 		return outputPath
@@ -228,7 +233,9 @@ export async function renderExactFrame(options: {
 	const thread = threadManager.getThread(threadId)
 	if (!thread || thread.type !== 'editor') throw new Error('Not an editor project')
 
-	const plan = computeRegions(doc, 'original', transcriptsForDoc(doc))
+	const plan = computeRegions(doc, 'original', transcriptsForDoc(doc), {
+		motionDir: motionCacheDir(thread.tempDir)
+	})
 	let cursor = 0
 	let region: Region | null = null
 	let local = 0
@@ -243,6 +250,10 @@ export async function renderExactFrame(options: {
 	if (!region) throw new Error('Nothing on the timeline at that time.')
 
 	const still = region.kind === 'cut' ? regionAtInstant(region, local, plan.fps) : region
+	// A motion layer in the frame is its rendered clip, so render it first. The
+	// first exact frame over a new look pays for the whole clip; every frame
+	// after it, and the export, reuse the file.
+	await ensureMotionJobs(motionJobsFor([still]))
 	const graph = buildRegionGraph(still, plan)
 
 	const command = ffmpeg()

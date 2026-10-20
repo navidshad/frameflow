@@ -12,7 +12,9 @@ export const THREAD_DIRS = {
 	// Timeline editor: export workdirs + final renders (tempDir/exports/...)
 	EXPORTS: 'exports',
 	// Timeline editor: cached transition previews for the monitor (tempDir/previews/...)
-	PREVIEWS: 'previews'
+	PREVIEWS: 'previews',
+	// Timeline editor: rendered motion layers, by content hash (tempDir/motion/<key>.mov)
+	MOTION: 'motion'
 } as const
 
 // Subdirectories inside tempDir/media/<assetId>/ for the timeline editor.

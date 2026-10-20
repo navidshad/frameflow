@@ -125,6 +125,8 @@
 
 			<ToolButton icon="tabler--typography" title="Add a title at the playhead"
 				@click="store.addTitle()" />
+			<ToolButton icon="tabler--sparkles" tint="motion" title="Add a motion layer at the playhead — a lower third; the Motion tab has the rest"
+				@click="store.addMotionLayer('lower-third')" />
 			<ToolButton icon="tabler--color-swatch"
 				title="Add a generated background at the playhead — something for a keyed layer to sit in front of"
 				@click="store.addGeneratedLayer()" />
@@ -186,7 +188,7 @@ const formatTime = (seconds: number) => {
  * what every panel already uses.
  */
 const ToolButton: FunctionalComponent<
-	{ icon: string; title: string; disabled?: boolean; active?: boolean },
+	{ icon: string; title: string; disabled?: boolean; active?: boolean; tint?: 'motion' },
 	{ click: () => void }
 > = (props, { emit }) =>
 	h(SlimTooltip, { text: props.title, placement: 'top' }, {
@@ -197,13 +199,15 @@ const ToolButton: FunctionalComponent<
 					? 'text-zinc-300 dark:text-zinc-700 cursor-not-allowed'
 					: props.active
 						? 'text-primary bg-primary/10'
-						: 'text-zinc-500 hover:text-primary hover:bg-primary/10'
+						: props.tint === 'motion'
+							? 'text-pink-500 hover:bg-pink-500/10'
+							: 'text-zinc-500 hover:text-primary hover:bg-primary/10'
 			],
 			'aria-label': props.title,
 			disabled: props.disabled,
 			onClick: () => { if (!props.disabled) emit('click') }
 		}, [h('span', { class: `iconify ${props.icon} w-3.5 h-3.5` })])
 	})
-ToolButton.props = ['icon', 'title', 'disabled', 'active']
+ToolButton.props = ['icon', 'title', 'disabled', 'active', 'tint']
 ToolButton.emits = ['click']
 </script>

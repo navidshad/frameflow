@@ -8,19 +8,32 @@
 	<div v-if="mode === 'clip'"
 		class="absolute inset-0 z-30"
 		:style="{ transform: clipCss || undefined }">
-		<!-- The face: grab anywhere on the picture to move it. -->
-		<div class="absolute inset-0 cursor-move border-2 border-primary/70"
-			@pointerdown.stop.prevent="begin('move', $event)"></div>
-		<!-- Corners: uniform scale about the centre. -->
-		<div v-for="corner in CORNERS" :key="corner.key"
-			class="absolute w-2.5 h-2.5 rounded-sm bg-primary border border-white/80 cursor-nwse-resize"
-			:style="corner.style"
-			@pointerdown.stop.prevent="begin('scale', $event)"></div>
-		<!-- The rotation stalk, above the top edge. -->
-		<div class="absolute left-1/2 -top-6 -translate-x-1/2 flex flex-col items-center"
-			@pointerdown.stop.prevent="begin('rotate', $event)">
-			<div class="w-2.5 h-2.5 rounded-full bg-primary border border-white/80 cursor-grab"></div>
-			<div class="w-px h-3.5 bg-primary/70"></div>
+		<!-- The box the handles sit on: the whole frame for footage, the
+		     content a motion page reported for a motion layer (a lower third is
+		     a small thing in the corner, not the frame). Either way the gestures
+		     drive the same layer transform, about the frame's centre. -->
+		<div class="absolute" :class="motionBox ? '' : 'inset-0'" :style="motionBox ?? undefined">
+			<!-- The face: grab anywhere on the picture to move it. -->
+			<div class="absolute inset-0 cursor-move border-2"
+				:class="motionBox ? 'border-dashed border-primary/80' : 'border-primary/70'"
+				@pointerdown.stop.prevent="begin('move', $event)"></div>
+			<!-- Corners: uniform scale about the centre. -->
+			<div v-for="corner in CORNERS" :key="corner.key"
+				class="absolute w-2.5 h-2.5 rounded-sm bg-primary border border-white/80 cursor-nwse-resize"
+				:style="corner.style"
+				@pointerdown.stop.prevent="begin('scale', $event)"></div>
+			<!-- The rotation stalk, above the top edge. -->
+			<div class="absolute left-1/2 -top-6 -translate-x-1/2 flex flex-col items-center"
+				@pointerdown.stop.prevent="begin('rotate', $event)">
+				<div class="w-2.5 h-2.5 rounded-full bg-primary border border-white/80 cursor-grab"></div>
+				<div class="w-px h-3.5 bg-primary/70"></div>
+			</div>
+			<!-- Which window the playhead is in, and how far through. -->
+			<div v-if="moment"
+				class="absolute top-1/2 left-full ml-1.5 -translate-y-1/2 px-1.5 py-0.5 rounded bg-pink-500/90
+				       font-mono text-[8px] text-white whitespace-nowrap pointer-events-none">
+				{{ moment.name }} · {{ Math.round(moment.progress * 100) }}%
+			</div>
 		</div>
 	</div>
 
@@ -57,6 +70,7 @@ import { computed, nextTick, onBeforeUnmount, ref, watch } from 'vue'
 import { useEditorStore } from '../../stores/editorStore'
 import { transformCss, OFFSET_RANGE, SCALE_RANGE, TRANSFORM_DEFAULTS } from '@shared/transform'
 import { valueAt } from '@shared/keyframes'
+import { momentAt } from '@shared/motion'
 
 /**
  * On-canvas editing for the selected item: move, scale and rotate a clip, or
@@ -113,6 +127,29 @@ const clipCss = computed(() =>
 		t: clipTime.value
 	}) : ''
 )
+
+/** A motion layer's content box, as fractions of the frame — from its page. */
+const motionBox = computed(() => {
+	const item = selected.value
+	if (!item?.motion) return null
+	const b = store.motionBounds[item.id]
+	if (!b) return null
+	// A few pixels of air, so the dashed outline does not sit on the artwork.
+	const padX = 6 / (props.frameWidth || 1)
+	const padY = 6 / (props.frameHeight || 1)
+	return {
+		left: `${(b.x - padX) * 100}%`,
+		top: `${(b.y - padY) * 100}%`,
+		width: `${(b.w + 2 * padX) * 100}%`,
+		height: `${(b.h + 2 * padY) * 100}%`
+	}
+})
+
+const moment = computed(() => {
+	const item = selected.value
+	if (!item?.motion) return null
+	return momentAt(item.motion, item.duration, store.playheadSec - item.timelineStart)
+})
 
 const titleX = computed(() => selected.value?.text?.x ?? 0.5)
 const titleY = computed(() => selected.value?.text?.y ?? 0.85)
@@ -298,7 +335,7 @@ const onMove = (event: PointerEvent) => {
 const onUp = () => {
 	window.removeEventListener('pointermove', onMove)
 	if (!drag) return
-	const noun = mode.value === 'title' ? 'title' : 'clip'
+	const noun = mode.value === 'title' ? 'title' : selected.value?.motion ? 'motion layer' : 'clip'
 	const verb = drag.gesture === 'move' ? 'Move' : drag.gesture === 'scale' ? 'Resize' : 'Rotate'
 	const label = `${verb} ${noun}`
 	drag = null

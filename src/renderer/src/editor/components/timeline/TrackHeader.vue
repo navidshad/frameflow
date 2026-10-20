@@ -3,14 +3,21 @@
 	     `data-track-id`; the row that controls it had nothing, so anything
 	     addressing a track's controls had to guess from the label text. -->
 	<div class="flex items-center justify-between px-2 border-b border-zinc-200/60 dark:border-zinc-800/60"
+		:class="motion ? 'bg-pink-500/[0.04]' : ''"
 		:data-track-header="track.id"
 		:style="{ height: `${track.height}px` }">
-		<span class="text-[9px] font-bold uppercase tracking-widest"
+		<!-- A motion lane says so in its own colour: pink is motion everywhere. -->
+		<span v-if="motion" class="flex items-center gap-1 text-[9px] font-bold uppercase tracking-widest"
+			:class="track.hidden ? 'text-pink-400/40' : 'text-pink-400'">
+			<span class="iconify tabler--sparkles w-[11px] h-[11px]"></span>{{ track.name }}
+		</span>
+		<span v-else class="text-[9px] font-bold uppercase tracking-widest"
 			:class="track.hidden ? 'text-zinc-300 dark:text-zinc-700' : 'text-zinc-500'">
 			{{ track.name }}
 		</span>
 		<div class="flex items-center gap-0.5">
-			<button class="w-5 h-5 flex items-center justify-center rounded transition"
+			<!-- No mute on a motion lane: a page has no sound to mute. -->
+			<button v-if="!motion" class="w-5 h-5 flex items-center justify-center rounded transition"
 				:class="track.muted ? 'text-red-500 bg-red-500/10' : 'text-zinc-400 hover:text-zinc-600 dark:hover:text-zinc-300'"
 				:title="track.muted ? 'Unmute track' : 'Mute track'"
 				@click="store.toggleTrackFlag(track.id, 'muted')">
@@ -51,9 +58,12 @@
 </template>
 
 <script setup lang="ts">
+import { computed } from 'vue'
 import type { Track } from '@shared/types'
+import { isMotionTrack } from '@shared/motion'
 import { useEditorStore } from '../../../stores/editorStore'
 
-defineProps<{ track: Track }>()
+const props = defineProps<{ track: Track }>()
 const store = useEditorStore()
+const motion = computed(() => isMotionTrack(props.track))
 </script>

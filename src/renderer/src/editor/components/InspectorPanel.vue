@@ -1,7 +1,11 @@
 <template>
 	<div class="glass-card rounded-2xl flex flex-col min-h-0 overflow-hidden">
-		<div class="px-4 pt-4 pb-2 shrink-0">
+		<div class="px-4 pt-4 pb-2 shrink-0 flex items-center justify-between">
 			<span class="text-[10px] font-bold uppercase tracking-widest text-zinc-500">Inspector</span>
+			<span v-if="!seam && timelineItem?.motion"
+				class="px-1.5 py-0.5 rounded bg-pink-500/[0.12] text-pink-400 text-[9px] font-bold uppercase tracking-widest">
+				Motion · {{ timelineItem.motion.template ? 'template' : 'custom' }}
+			</span>
 		</div>
 
 		<div class="flex-1 min-h-0 overflow-y-auto custom-scrollbar px-4 pb-4">
@@ -60,6 +64,10 @@
 					Remove transition
 				</button>
 			</template>
+
+			<!-- A motion layer has its own inspector: fields from its page's
+			     schema, its windows, what it animates, and the AI for it. -->
+			<MotionInspector v-else-if="timelineItem?.motion" :item="timelineItem" />
 
 			<!-- Timeline-item mode (priority when items are selected) -->
 			<template v-else-if="timelineItem">
@@ -697,6 +705,7 @@ import { computed, h, ref } from 'vue'
 import type { FunctionalComponent } from 'vue'
 import { useEditorStore } from '../../stores/editorStore'
 import SilenceFinder from './SilenceFinder.vue'
+import MotionInspector from './MotionInspector.vue'
 
 const editorStore = useEditorStore()
 

@@ -189,6 +189,7 @@ export interface Thread {
 // ============================================================
 import type { KeySpec } from './keying'
 import type { GeneratorSpec } from './generators'
+import type { MotionSpec } from './motion'
 
 // Timeline Video Editor (see video-editor-prd.md §6)
 // Canonical time unit is SECONDS. SRT strings appear only at the boundary
@@ -376,6 +377,12 @@ export interface TimelineItem {  // an instance of a clip placed on a track
 	 * behind it. `sourceAssetId` is empty for these, the same as a title.
 	 */
 	generator?: GeneratorSpec
+	/**
+	 * A motion layer: an HTML page drawn as a pure function of time, from the
+	 * template library or written by hand. `sourceAssetId` is empty, like a
+	 * title's; `in` is 0 and `out` is the clip's length. See shared/motion.ts.
+	 */
+	motion?: MotionSpec
 	/**
 	 * What this clip is FOR, in a composited shot. Purely descriptive today —
 	 * it is what lets "put this behind the subject" be a field rather than an
@@ -590,6 +597,11 @@ export interface PromptTurn {
 	createdAt: number
 }
 
+/** A motion layer's settings as an agent may send them: a map, or key/value pairs. */
+export type MotionOpSettings =
+	| Record<string, number | string>
+	| Array<{ key: string; value: number | string }>
+
 /**
  * Constrained edit-operation schema the AI model returns (M3).
  * Deliberately NOT a raw TimelineDiff: item ids for adds are generated
@@ -636,6 +648,30 @@ export interface EditorOps {
 		kind?: 'solid' | 'gradient' | 'bars' | 'noise'
 		colour?: string
 		colour2?: string
+		atSec?: number
+		durationSec?: number
+	}>
+	/**
+	 * Motion layers: an HTML page from the template library placed on a motion
+	 * track (`M1`, made when there is none). `template` is an id from AVAILABLE
+	 * MOTION TEMPLATES. Settings may be a map or `{key, value}` pairs — the
+	 * pairs form exists because constrained decoding cannot express a free map.
+	 */
+	addMotion?: Array<{
+		template: string
+		atSec: number
+		/** Clip length. Defaults to the template's own; the hold absorbs the difference. */
+		durationSec?: number
+		settings?: MotionOpSettings
+		/** Window lengths in seconds by moment name; `hold` sets the length when no durationSec. */
+		moments?: Record<string, number>
+		label?: string
+	}>
+	/** Change a motion layer already on the timeline: its fields, its windows, its timing. */
+	updateMotion?: Array<{
+		id: string
+		settings?: MotionOpSettings
+		moments?: Record<string, number>
 		atSec?: number
 		durationSec?: number
 	}>

@@ -1,0 +1,68 @@
+<!-- Callout ring — a circle that draws itself around something, with a pointer and a note. -->
+<style>
+	:root { font-size: calc(100vmin / 108); }
+	svg { position: absolute; inset: 0; width: 100%; height: 100%; overflow: visible; }
+	.note { position: absolute; font: 700 4.2rem/1.2 Inter, sans-serif; color: #fafafa; white-space: nowrap;
+		padding: 1.2rem 2.4rem; border-radius: 1.2rem; background: rgba(24, 24, 27, 0.82); }
+</style>
+<svg id="svg">
+	<g id="mark" data-ff-bounds>
+		<circle id="ring" fill="none" stroke-linecap="round"></circle>
+		<line id="pointer" stroke-linecap="round"></line>
+	</g>
+</svg>
+<div class="note" id="note" data-ff-bounds></div>
+<script>
+	const svg = document.getElementById('svg')
+	const ring = document.getElementById('ring')
+	const pointer = document.getElementById('pointer')
+	const note = document.getElementById('note')
+
+	frameflow.define({
+		seek(t, s) {
+			const ease = frameflow.ease
+			const W = window.innerWidth
+			const H = window.innerHeight
+			const unit = Math.min(W, H)
+			const draw = ease.inOut(frameflow.progress('in', t))
+			const leave = ease.in(frameflow.progress('out', t))
+			const cx = Number(s.x) * W
+			const cy = Number(s.y) * H
+			const r = Number(s.size) * unit
+			const stroke = unit * 0.009
+			const length = 2 * Math.PI * r
+
+			for (const el of [ring, pointer]) {
+				el.setAttribute('stroke', s.accent)
+				el.setAttribute('stroke-width', stroke.toFixed(2))
+			}
+			ring.setAttribute('cx', cx.toFixed(2))
+			ring.setAttribute('cy', cy.toFixed(2))
+			ring.setAttribute('r', r.toFixed(2))
+			ring.setAttribute('stroke-dasharray', length.toFixed(2))
+			ring.setAttribute('stroke-dashoffset', (length * (1 - draw)).toFixed(2))
+			ring.setAttribute('transform', `rotate(-90 ${cx.toFixed(2)} ${cy.toFixed(2)})`)
+
+			// The pointer leaves the ring down and to the left, toward the note.
+			const a = (135 * Math.PI) / 180
+			const x1 = cx + Math.cos(a) * r
+			const y1 = cy + Math.sin(a) * r
+			const reach = unit * 0.14 * ease.out(frameflow.clamp(draw * 2 - 1, 0, 1))
+			const x2 = x1 + Math.cos(a) * reach
+			const y2 = y1 + Math.sin(a) * reach
+			pointer.setAttribute('x1', x1.toFixed(2))
+			pointer.setAttribute('y1', y1.toFixed(2))
+			pointer.setAttribute('x2', x2.toFixed(2))
+			pointer.setAttribute('y2', y2.toFixed(2))
+
+			note.textContent = s.label
+			note.style.display = s.label ? 'block' : 'none'
+			note.style.left = `${x2.toFixed(2)}px`
+			note.style.top = `${y2.toFixed(2)}px`
+			note.style.transform = 'translate(-100%, 0)'
+			note.style.opacity = String(frameflow.clamp(draw * 3 - 2, 0, 1))
+			svg.style.opacity = '1'
+			document.body.style.opacity = String(1 - leave)
+		}
+	})
+</script>

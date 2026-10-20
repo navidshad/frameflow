@@ -93,6 +93,16 @@
 							...layerLook(layer)
 						}"></div>
 
+					<!-- Motion layers: each a sandboxed page, the same one the export
+					     captures, seeked to the playhead. Stacked by their track like
+					     the generated layers above. -->
+					<MotionLayer v-for="layer in store.activeMotion" :key="layer.id"
+						:item="layer"
+						:frame-width="seqWidth" :frame-height="seqHeight"
+						:box-width="frameBox.w"
+						:z-index="store.videoLayerDepth[layer.trackId] ?? 1"
+						:look="layerLook(layer)" />
+
 					<!-- Opacity is a NUMBER written every tick, not a CSS transition:
 						     inside a transition the blend has to hold its exact frame
 						     when you pause or scrub, which a CSS ramp cannot do. -->
@@ -126,6 +136,13 @@
 							class="absolute top-2 left-2 px-1.5 py-0.5 rounded-md bg-accent/80
 							       pointer-events-none z-20">
 							<span class="text-[8px] font-mono uppercase tracking-widest text-white">exact</span>
+						</div>
+						<!-- A motion layer is never an approximation: this IS the page
+						     the export captures, seeked to this instant. -->
+						<div v-else-if="store.activeMotion.length"
+							class="absolute top-2 left-2 px-1.5 py-0.5 rounded-md bg-accent/80 pointer-events-none z-40"
+							title="Motion layers preview exactly: the export captures this same page.">
+							<span class="text-[8px] font-mono uppercase text-white">Motion · exact</span>
 						</div>
 
 						<!-- Titles. Position and size are fractions of the frame in both
@@ -178,7 +195,7 @@
 						<!-- Not while the overlay has a picture: the base track being in
 						     a gap does not make the FRAME empty, and a "gap" placard
 						     over a live layer was the monitor calling itself blank. -->
-						<div v-if="edl.inGap.value && !edl.itemO.value"
+						<div v-if="edl.inGap.value && !edl.itemO.value && !store.activeMotion.length"
 							class="absolute inset-0 flex flex-col items-center justify-center gap-2 pointer-events-none z-30">
 							<template v-if="edl.audioActive.value">
 								<span class="iconify tabler--music w-6 h-6 text-white/40"></span>
@@ -378,6 +395,7 @@ import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { useEditorStore } from '../../stores/editorStore'
 import { useEdlPlayback } from '../composables/useEdlPlayback'
 import CanvasGizmo from './CanvasGizmo.vue'
+import MotionLayer from './MotionLayer.vue'
 import SlimTooltip from '../../components/SlimTooltip.vue'
 
 const store = useEditorStore()
@@ -468,8 +486,9 @@ const gizmoActive = computed(() => {
 	if (store.isPlaying || store.selectedItemIds.length !== 1) return false
 	const item = store.doc?.timeline.find((i) => i.id === store.selectedItemIds[0])
 	if (!item) return false
-	if (item.text) {
-		// A title's anchor only makes sense while the title is on screen.
+	if (item.text || item.motion) {
+		// A title's anchor, or a motion page's content box, only makes sense
+		// while it is on screen.
 		return store.playheadSec >= item.timelineStart &&
 			store.playheadSec < item.timelineStart + item.duration
 	}

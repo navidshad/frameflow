@@ -1,0 +1,36 @@
+<!-- Chapter card — a kicker and a title beside an accent bar that grows. -->
+<style>
+	:root { font-size: calc(100vmin / 108); }
+	.chapter { position: absolute; left: 8%; top: 50%; transform: translateY(-50%); display: flex; align-items: center; gap: 4rem; }
+	.bar { width: 1.2rem; height: 22rem; border-radius: 0.4rem; transform-origin: 50% 50%; }
+	.kicker { font: 700 3.6rem/1 Inter, sans-serif; letter-spacing: 0.18em; text-transform: uppercase; color: #a1a1aa; }
+	.title { font: 800 10rem/1.05 Outfit, Inter, sans-serif; color: #fafafa; margin-top: 2.2rem; white-space: nowrap; }
+</style>
+<div class="chapter" data-ff-bounds>
+	<div class="bar" id="bar"></div>
+	<div id="words">
+		<div class="kicker" id="kicker"></div>
+		<div class="title" id="title"></div>
+	</div>
+</div>
+<script>
+	const bar = document.getElementById('bar')
+	const words = document.getElementById('words')
+	const kicker = document.getElementById('kicker')
+	const title = document.getElementById('title')
+
+	frameflow.define({
+		seek(t, s) {
+			const ease = frameflow.ease
+			const enter = ease.out(frameflow.progress('in', t))
+			const leave = ease.in(frameflow.progress('out', t))
+
+			kicker.textContent = s.kicker
+			title.textContent = s.title
+			bar.style.background = s.accent
+			bar.style.transform = `scaleY(${(enter * (1 - leave)).toFixed(4)})`
+			words.style.opacity = String(enter * (1 - leave))
+			words.style.transform = `translateX(${(-6 * (1 - enter) + 6 * leave).toFixed(3)}rem)`
+		}
+	})
+</script>

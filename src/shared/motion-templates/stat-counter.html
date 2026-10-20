@@ -1,0 +1,39 @@
+<!-- Stat counter — a number that counts up to its value, and what it means. -->
+<style>
+	:root { font-size: calc(100vmin / 108); }
+	.stat { position: absolute; left: 50%; top: 50%; transform: translate(-50%, -50%); display: flex; align-items: center; gap: 4rem; }
+	.value { font: 900 22rem/1 Outfit, Inter, sans-serif; color: #fafafa; font-variant-numeric: tabular-nums; white-space: nowrap; }
+	.label { font: 600 5rem/1.15 Inter, sans-serif; color: #d4d4d8; max-width: 34rem; }
+	.underline { height: 0.8rem; margin-top: 2rem; border-radius: 1rem; }
+</style>
+<div class="stat" id="stat" data-ff-bounds>
+	<div class="value" id="value"></div>
+	<div>
+		<div class="label" id="label"></div>
+		<div class="underline" id="underline"></div>
+	</div>
+</div>
+<script>
+	const stat = document.getElementById('stat')
+	const value = document.getElementById('value')
+	const label = document.getElementById('label')
+	const underline = document.getElementById('underline')
+
+	frameflow.define({
+		seek(t, s) {
+			const ease = frameflow.ease
+			const count = ease.out(frameflow.progress('in', t))
+			const leave = ease.in(frameflow.progress('out', t))
+			const target = Number(s.value) || 0
+			const places = Math.max(0, Math.min(2, Math.round(Number(s.decimals) || 0)))
+
+			value.textContent = `${s.prefix}${(target * count).toFixed(places)}${s.suffix}`
+			label.textContent = s.label
+			underline.style.background = s.accent
+			underline.style.width = `${(30 * count).toFixed(3)}rem`
+			label.style.opacity = String(frameflow.clamp(count * 1.5 - 0.3, 0, 1))
+			stat.style.opacity = String(frameflow.clamp(count * 4, 0, 1) * (1 - leave))
+			stat.style.transform = `translate(-50%, -50%) translateY(${(3 * leave).toFixed(3)}rem)`
+		}
+	})
+</script>
