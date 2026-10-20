@@ -699,7 +699,17 @@ window.fetch = function () { return Promise.reject(new Error('Motion pages have 
 window.XMLHttpRequest = undefined; window.WebSocket = undefined; window.EventSource = undefined;
 var windows = {};
 (function () { var at = 0; DEF.moments.forEach(function (m) { windows[m.name] = { start: at, duration: m.duration }; at += m.duration; }); })();
-var clamp = function (n, lo, hi) { return Math.max(lo, Math.min(hi, n)); };
+var clamp = function (n, lo, hi) {
+  if (lo === undefined) lo = 0;
+  if (hi === undefined) hi = 1;
+  return Math.max(lo, Math.min(hi, n));
+};
+// Plain ease(x) and clamp(x, lo?, hi?): what a page reaches for by habit. They are
+// ordinary (configurable) properties of window, so a page that declares its own
+// clamp or ease — const, let, function or var — simply shadows them.
+var smooth = function (u) { u = clamp(u); return u * u * (3 - 2 * u); };
+window.ease = smooth;
+window.clamp = clamp;
 var seekFn = null, defined = false, resolveReady;
 var ready = new Promise(function (r) { resolveReady = r; });
 function bounds() {
@@ -741,6 +751,7 @@ var ff = {
     return clamp((t - m.start) / m.duration, 0, 1);
   },
   clamp: clamp,
+  smooth: smooth,
   lerp: function (a, b, u) { return a + (b - a) * u; },
   ease: {
     linear: function (u) { return u; },

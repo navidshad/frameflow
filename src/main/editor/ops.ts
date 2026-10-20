@@ -73,8 +73,9 @@ const MOTION_HTML_SCHEMA = {
 	description:
 		'A whole self-contained HTML page for a CUSTOM motion layer. It must call ' +
 		'frameflow.define({ duration, settings, moments, seek(t, settings) }) and draw only from t and settings. ' +
-		'Pages that break the rules (clocks, timers, random, CSS animation, network) are not drawn: the last ' +
-		'version that passed stays on screen.'
+		'Helpers: frameflow.progress("in", t), ease(x), clamp(x, lo, hi). A page that breaks the rules ' +
+		'(clocks, timers, random, CSS animation, network, or drawing differently on a second visit to the same t) ' +
+		'is not applied: the layer keeps its earlier page and the result says why.'
 }
 
 const MOTION_MOMENTS_SCHEMA = {
@@ -794,8 +795,9 @@ export function composeSystemInstruction(
 		'    animate? }], moments: [{ name, duration, flex? }], seek(t, settings) }) and draws ONLY',
 		'    from t and settings: no CSS animation or transition, setTimeout, requestAnimationFrame,',
 		'    Date.now, Math.random, fetch or remote URLs. Helpers: frameflow.progress("in", t) is 0..1',
-		'    across a moment; frameflow.ease.out/inOut/back, frameflow.lerp, frameflow.clamp. Inter and',
-		'    Outfit are bundled. A page that breaks these rules is not drawn — the last version that',
+		'    across a moment; ease(x) is a smooth 0..1 curve and clamp(x, lo = 0, hi = 1) limits a value',
+		'    (plain globals; frameflow.ease.out/inOut/back, frameflow.lerp and frameflow.clamp also exist).',
+		'    Inter and Outfit are bundled. A page that breaks these rules is not drawn — the last version that',
 		'    passed stays, and the result says why.',
 		'  - `addTitles` puts text on the picture. `captions: true` burns the spoken transcript',
 		'    in, and only helps when the material has actually been transcribed.',

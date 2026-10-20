@@ -8,6 +8,7 @@ import {
 } from '@shared/engines'
 import type { AgentActivity } from '@shared/agentFeed'
 import type { AgentPermissions } from '@shared/agent'
+import type { MotionProbe } from '../editor/vetHtml'
 import { AgentServer } from '../mcp/server'
 import type { ApplyOutcome, EditorBridge } from '../mcp/bridge'
 import { killTree, spawnTree } from './proc'
@@ -68,6 +69,8 @@ export interface EngineRunOptions {
 	workDir?: string
 	/** Read per call, so flipping the setting mid-turn takes effect. Default: no HTML pages. */
 	permissions?: () => AgentPermissions
+	/** Draws a page in the hidden window: the engine's pages get the same check as everyone's. */
+	probeMotion?: MotionProbe
 }
 
 export interface EngineRunResult {
@@ -132,6 +135,7 @@ export async function runEngineTurn(options: EngineRunOptions): Promise<EngineRu
 		bridge,
 		token: () => token,
 		permissions: options.permissions ?? (() => enginePermissions(false)),
+		probeMotion: options.probeMotion,
 		version: options.version,
 		engineTurnId: options.turnId,
 		maxToolCalls: options.maxSteps,

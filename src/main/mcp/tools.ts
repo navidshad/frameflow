@@ -9,6 +9,7 @@ import { allEffects } from '@shared/effects'
 import { TRANSITION_PRESETS } from '@shared/transitionPresets'
 import { computeContentEnd } from '@shared/timeline'
 import { EDITOR_OPS_SCHEMA, opsToDiff, opsWriteHtml } from '../editor/ops'
+import { vetHtmlOps, type MotionProbe } from '../editor/vetHtml'
 import { MOTION_TEMPLATES, userMotionTemplates } from '@shared/motionTemplates'
 import type { EditorBridge, LiveProject } from './bridge'
 
@@ -27,6 +28,8 @@ export interface ToolContext {
 	permissions: () => AgentPermissions
 	/** FrameFlow's own CLI engine: the chat turn these edits belong to. */
 	engineTurnId?: string
+	/** Draws a page in the hidden window. Absent where there is none (tests): the lint decides alone. */
+	probeMotion?: MotionProbe
 }
 
 /** What the activity feed shows for one call. */
@@ -420,10 +423,18 @@ const applyOps: ToolDef = {
 		if (!opKeys(args).length) throw new ToolError('apply_ops needs at least one operation besides rationale.')
 
 		const project = await requireProject(ctx)
-		const ops = args as EditorOps
+		// A page an agent writes is checked — lint, then drawn twice in the hidden
+		// window — BEFORE it replaces anything. One that fails is not applied; the
+		// earlier page stays, and the agent is told what to fix.
+		const vetted = await vetHtmlOps(args as EditorOps, project.doc, ctx.probeMotion)
+		if (!opKeys(vetted.ops as Record<string, unknown>).length) {
+			throw new ToolError(`Nothing was changed. Every operation was rejected:\n- ${vetted.dropped.join('\n- ')}`)
+		}
+		const ops = vetted.ops
 		const turnId = randomUUID()
-		const { diff, addMarkers, docSettings, droppedOps, notes } =
-			opsToDiff(ops, project.doc, { by: ctx.clientName, turnId })
+		const mapped = opsToDiff(ops, project.doc, { by: ctx.clientName, turnId })
+		const { diff, addMarkers, docSettings, notes } = mapped
+		const droppedOps = [...vetted.dropped, ...mapped.droppedOps]
 		const turn: PromptTurn = {
 			id: turnId,
 			personaId: project.doc.activePersonaId,
@@ -459,7 +470,7 @@ const applyOps: ToolDef = {
 			})],
 			feed: {
 				detail: ops.rationale || undefined,
-				chips: opChips(args, outcome.revisionSeq)
+				chips: opChips(ops as Record<string, unknown>, outcome.revisionSeq)
 			}
 		}
 	}

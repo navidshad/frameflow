@@ -12,6 +12,7 @@ import {
 import type { AgentActivity, AgentSessionInfo } from '@shared/agentFeed'
 import { agentFocus } from '@shared/engines'
 import type { EditorBridge } from './bridge'
+import type { MotionProbe } from '../editor/vetHtml'
 import { SERVER_INSTRUCTIONS, ToolError, TOOLS, type ToolContext, type ToolDef } from './tools'
 
 /**
@@ -54,6 +55,8 @@ export interface AgentServerOptions {
 	engineTurnId?: string
 	/** Tool calls allowed across all sessions; later calls are refused with a "wrap up" note. */
 	maxToolCalls?: number
+	/** Draws a custom page in the hidden window, for the check every written page gets. */
+	probeMotion?: MotionProbe
 }
 
 interface Session {
@@ -364,7 +367,8 @@ export class AgentServer {
 			clientName: session.info.clientName,
 			bridge: this.options.bridge,
 			permissions: this.options.permissions,
-			engineTurnId: this.options.engineTurnId
+			engineTurnId: this.options.engineTurnId,
+			probeMotion: this.options.probeMotion
 		}
 		try {
 			const run = () => def.run(args, ctx)

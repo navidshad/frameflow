@@ -94,7 +94,11 @@ describe.skipIf(!canOpenWindows)('the determinism probe, in real Electron', () =
 			// 6. Never defines itself: nothing to draw.
 			input('<div>hello</div>'),
 			// 7. A define call the text reader cannot evaluate (a variable duration).
-			input(page('box.style.left = "1px"', 'var LEN = 1.25;').replace('duration: 2,', 'duration: LEN,'))
+			input(page('box.style.left = "1px"', 'var LEN = 1.25;').replace('duration: 2,', 'duration: LEN,')),
+			// 8. The plain globals a page reaches for by habit.
+			input(page('box.style.left = (ease(clamp(t / 2)) * s.x) + "px"')),
+			// 9. A page that brings its own clamp and ease, whichever way it declares them.
+			input(page('box.style.left = (ease(clamp(t)) * 10) + "px"', 'const clamp = (v) => v * 2; function ease(u) { return u * u }'))
 		])
 
 		expect(results[0].determinism).toBe('pass')
@@ -118,5 +122,10 @@ describe.skipIf(!canOpenWindows)('the determinism probe, in real Electron', () =
 
 		expect(results[6].determinism).toBe('pass')
 		expect(results[6].definition!.duration).toBe(1.25)
+
+		expect(results[7]).toMatchObject({ determinism: 'pass' })
+		expect(results[7].error).toBeUndefined()
+		expect(results[8]).toMatchObject({ determinism: 'pass' })
+		expect(results[8].error).toBeUndefined()
 	}, 90_000)
 })

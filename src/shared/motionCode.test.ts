@@ -365,6 +365,24 @@ describe('pages nobody has probed yet', () => {
 	})
 })
 
+describe('the helpers a page reaches for by habit', () => {
+	it('gives the page plain ease(x) and clamp(x, lo?, hi?), and keeps frameflow.ease and frameflow.clamp', () => {
+		const page = composeMotionPage(newMotionSpec(), { width: 640, height: 360 })
+		expect(page).toContain('window.ease = smooth')
+		expect(page).toContain('window.clamp = clamp')
+		expect(page).toContain('clamp: clamp')
+		expect(page).toContain('inOut: function')
+		// Both are optional to supply: clamp(x) limits to 0..1.
+		expect(page).toContain('if (lo === undefined) lo = 0')
+		expect(page).toContain('if (hi === undefined) hi = 1')
+	})
+
+	it('lints a page that calls them without complaint — they are not clocks, timers or random', () => {
+		expect(buildChecks(GOOD_PAGE, { determinism: 'pass' }).passing).toBe(true)
+		expect(GOOD_PAGE).toContain('ease(clamp(t / 0.6))')
+	})
+})
+
 describe('who wrote it', () => {
 	const versions: Record<string, number> = { t8: 8 }
 	const versionOf = (turn: string) => versions[turn] ?? null

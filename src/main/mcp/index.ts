@@ -1,3 +1,4 @@
+import { probeMotionPage } from '../motion/probe'
 import { app, BrowserWindow, clipboard, ipcMain } from 'electron'
 import {
 	AGENT_DEFAULT_PORT, AGENT_MCP_PATH, connectSnippet, maskToken,
@@ -72,6 +73,7 @@ async function start(): Promise<void> {
 		token: () => settingsManager.getAgentToken(),
 		permissions: () => settingsManager.getAgentAccess().permissions,
 		version: app.getVersion(),
+		probeMotion: probeMotionPage,
 		onEvent: onServerEvent
 	})
 	try {

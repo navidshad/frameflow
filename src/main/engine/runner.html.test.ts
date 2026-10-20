@@ -5,6 +5,7 @@ import os from 'node:os'
 import type { AgentActivity } from '@shared/agentFeed'
 import { buildEngineSystemPrompt, ENGINES } from '@shared/engines'
 import { FakeEditor } from '../mcp/fakeEditor'
+import type { MotionProbe } from '../editor/vetHtml'
 import { enginePermissions, runEngineTurn } from './runner'
 
 /**
@@ -52,7 +53,7 @@ beforeAll(() => {
 })
 afterAll(() => rmSync(dir, { recursive: true, force: true }))
 
-async function turn(mode: 'html' | 'template', htmlAllowed: boolean) {
+async function turn(mode: 'html' | 'template', htmlAllowed: boolean, probeMotion?: MotionProbe) {
 	const editor = new FakeEditor()
 	const activities: AgentActivity[] = []
 	const result = await runEngineTurn({
@@ -67,6 +68,7 @@ async function turn(mode: 'html' | 'template', htmlAllowed: boolean) {
 		signal: new AbortController().signal,
 		onActivity: (a) => activities.push(a),
 		permissions: () => enginePermissions(htmlAllowed),
+		probeMotion,
 		timeoutMs: 60_000
 	})
 	const last = (tool: string) => [...activities].reverse().find((a) => a.tool === tool && a.status !== 'running')
@@ -91,6 +93,21 @@ describe('a CLI engine turn that writes custom HTML', () => {
 		expect(layer.motion!.html).toContain('frameflow.define')
 		expect(layer.motion!.passed!.html).toBe(layer.motion!.html)
 		expect(editor.commits[0].turn.agent).toMatchObject({ name: 'Claude Code', engineTurnId: 'turn-html' })
+	}, 90_000)
+
+	it('is checked before it lands: a page the probe rejects is not applied, permission or not', async () => {
+		const seen: string[] = []
+		const { editor, result, applyOps } = await turn('html', true, async (input) => {
+			seen.push(input.html)
+			return { determinism: 'fail', differsAt: 1.5 }
+		})
+		expect(seen).toHaveLength(1)
+		expect(seen[0]).toContain('frameflow.define')
+		expect(applyOps).toMatchObject({ status: 'error' })
+		expect(applyOps!.detail).toMatch(/Nothing was changed/)
+		expect(editor.commits).toHaveLength(0)
+		expect(result.commits).toHaveLength(0)
+		expect(editor.doc.timeline.some((i) => i.motion)).toBe(false)
 	}, 90_000)
 
 	it('still places a built-in template with the permission off — only pages are gated', async () => {

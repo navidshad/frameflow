@@ -16,6 +16,8 @@ describe('AgentServer over Streamable HTTP', () => {
 	let editor: FakeEditor
 	let server: AgentServer
 	let permissions: AgentPermissions
+	/** Stands in for the hidden-window probe; the real one is tested in Electron. */
+	let probe: (input: any) => Promise<any>
 	let events: AgentServerEvent[]
 	let url: URL
 	const clients: Client[] = []
@@ -35,9 +37,11 @@ describe('AgentServer over Streamable HTTP', () => {
 	beforeEach(async () => {
 		editor = new FakeEditor()
 		permissions = { ...DEFAULT_AGENT_PERMISSIONS }
+		probe = async () => ({ determinism: 'pass' })
 		events = []
 		server = new AgentServer({
 			bridge: editor, token: () => TOKEN, permissions: () => permissions, version: 'test',
+			probeMotion: (input) => probe(input),
 			onEvent: (e) => events.push(e)
 		})
 		const port = await server.start(0)
@@ -233,15 +237,79 @@ describe('AgentServer over Streamable HTTP', () => {
 			expect(layer.motion!.author).toEqual({ by: 'Claude Code', turnId: editor.commits[0].turn.id })
 		})
 
-		it('tells the agent what is wrong with a page that fails, and draws nothing of it', async () => {
+		it('rejects a page that fails the lint, changes nothing, and says which line', async () => {
 			const client = await connect()
 			const result: any = await client.callTool({
 				name: 'apply_ops',
 				arguments: { addMotion: [{ template: 'custom', atSec: 4, html: PAGE.replace('String(s.value)', 'String(Date.now())') }] }
 			})
+			expect(result.isError).toBe(true)
+			const message = result.content[0].text
+			expect(message).toMatch(/Nothing was changed/)
+			expect(message).toMatch(/addMotion\[0\] \(custom page\) rejected, nothing was added: line 4/)
+			expect(message).toMatch(/wall clock/)
+			expect(editor.commits).toHaveLength(0)
+			expect(editor.doc.timeline.some((i) => i.motion)).toBe(false)
+		})
+
+		it('rejects a page that lints clean but fails the probe: the earlier page stays, and the agent is told why', async () => {
+			const client = await connect()
+			await client.callTool({ name: 'apply_ops', arguments: { addMotion: [{ template: 'custom', atSec: 4, html: PAGE }] } })
+			const layer = editor.doc.timeline.find((i) => i.motion)!
+			const before = JSON.stringify(layer.motion)
+			const commits = editor.commits.length
+
+			// Clean as far as the text goes — but drawn twice, it differs.
+			const STATEFUL = PAGE.replace('seek(t, s) { n.textContent = String(s.value) }', 'seek(t, s) { n.textContent = String((window.k = (window.k || 0) + 1)) }')
+			expect(STATEFUL).not.toBe(PAGE)
+			probe = async (input) => (input.html === STATEFUL ? { determinism: 'fail', differsAt: 1.5 } : { determinism: 'pass' })
+			const result: any = await client.callTool({
+				name: 'apply_ops',
+				arguments: { rationale: 'Count the frames', updateMotion: [{ id: layer.id, html: STATEFUL }] }
+			})
+
+			expect(result.isError).toBe(true)
+			const message = result.content[0].text
+			expect(message).toMatch(new RegExp(`updateMotion ${layer.id} rejected, the layer keeps its previous page`))
+			expect(message).toMatch(/drawing the same frame twice gave different pixels at t = 1\.50s/)
+			expect(message).toMatch(/pure function of t and settings/)
+			// Nothing reached the editor: no new turn, and the earlier page is untouched.
+			expect(editor.commits).toHaveLength(commits)
+			expect(JSON.stringify(editor.doc.timeline.find((i) => i.id === layer.id)!.motion)).toBe(before)
+			expect(editor.doc.timeline.find((i) => i.id === layer.id)!.motion!.html).toBe(PAGE)
+		})
+
+		it('hands the probe the page, its definition and the frame', async () => {
+			const seen: any[] = []
+			probe = async (input) => { seen.push(input); return { determinism: 'pass' } }
+			const client = await connect()
+			await client.callTool({ name: 'apply_ops', arguments: { addMotion: [{ template: 'custom', atSec: 4, html: PAGE }] } })
+			expect(seen).toHaveLength(1)
+			expect(seen[0].html).toBe(PAGE)
+			expect(seen[0].definition.duration).toBe(3)
+			expect(seen[0].frame).toEqual({ width: 1920, height: 1080 })
+		})
+
+		it('reports a page that throws when it runs', async () => {
+			probe = async () => ({ determinism: 'fail', error: 'thisFunctionDoesNotExist is not defined' })
+			const client = await connect()
+			const result: any = await client.callTool({ name: 'apply_ops', arguments: { addMotion: [{ template: 'custom', atSec: 4, html: PAGE }] } })
+			expect(result.isError).toBe(true)
+			expect(result.content[0].text).toMatch(/the page throws when it runs: thisFunctionDoesNotExist is not defined/)
+		})
+
+		it('applies the rest of a call when only one page is rejected, and lists the rejection', async () => {
+			probe = async () => ({ determinism: 'fail', differsAt: 0 })
+			const client = await connect()
+			const result: any = await client.callTool({
+				name: 'apply_ops',
+				arguments: { addMotion: [{ template: 'lower-third', atSec: 2 }, { template: 'custom', atSec: 4, html: PAGE }] }
+			})
 			expect(result.isError).toBeFalsy()
-			expect(text(result).notes.join(' ')).toMatch(/line 4 fails its checks/)
-			expect(editor.doc.timeline.find((i) => i.motion)!.motion!.passed).toBeNull()
+			const body = text(result)
+			expect(body.droppedOps.join(' ')).toMatch(/addMotion\[1\] \(custom page\) rejected/)
+			const layers = editor.doc.timeline.filter((i) => i.motion)
+			expect(layers.map((l) => l.motion!.template)).toEqual(['lower-third'])
 		})
 
 		it('lists the motion templates in get_project, with saved ones marked', async () => {
