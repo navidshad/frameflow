@@ -3185,7 +3185,8 @@ export const useEditorStore = defineStore('editor', () => {
 			}
 		} else if (turn.status === 'error') {
 			activeTurnId.value = null
-			promptError.value = turn.error || 'Prompt failed'
+			// An engine turn's failure shows in its own chat card, with its own Retry.
+			if (!turn.engine) promptError.value = turn.error || 'Prompt failed'
 		}
 	}
 
