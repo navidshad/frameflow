@@ -1,7 +1,7 @@
 <template>
 	<div class="flex flex-col min-h-0 overflow-hidden">
 		<!-- Where a sound comes from. The synth is built in and free; the others
-		     wait for a provider (Settings › Audio). -->
+		     wait for a provider (Settings › Audio providers). -->
 		<div class="h-8 shrink-0 hair-b flex items-end gap-3.5 px-3">
 			<button class="tab-u !h-[31px] !text-[11px]" :class="{ 'tab-u-active': source === 'synth' }"
 				:style="source === 'synth' ? { boxShadow: 'inset 0 -2px 0 rgb(var(--accent))' } : undefined"
@@ -60,37 +60,18 @@
 			</template>
 		</template>
 
-		<!-- Generate and Voice need a provider. Each says what it will be, and where to get it. -->
-		<div v-else class="flex-1 min-h-0 px-4 py-4 space-y-4">
-			<div class="flex gap-2.5 text-zinc-500">
-				<span class="iconify tabler--lock w-4 h-4 mt-0.5 shrink-0"></span>
-				<div class="text-[11px] leading-snug">
-					<p class="text-xs font-semibold text-zinc-700 dark:text-zinc-200">
-						{{ source === 'generate' ? 'Sound effects from a prompt' : 'Voice-over from text' }}
-					</p>
-					<p class="mt-1">
-						{{ source === 'generate'
-							? 'Describe a sound and a provider makes it once; after that it is a file in your project. Needs a provider key.'
-							: 'Type a line and a voice reads it. Needs a provider key.' }}
-					</p>
-					<button class="mt-2 font-semibold text-primary hover:underline" @click="router.push('/settings')">
-						Add one in Settings
-					</button>
-				</div>
-			</div>
-			<p class="text-[11px] leading-snug text-zinc-500">
-				The built-in synth never needs one: every sound on the Synth tab is made here, offline, the same on every computer.
-			</p>
-		</div>
+		<!-- Generate and Voice need a provider; until there is one they say what they will be. -->
+		<ProviderGenerate v-else :mode="source" />
 	</div>
 </template>
 
 <script setup lang="ts">
 import { computed, onMounted, ref } from 'vue'
-import { useRouter } from 'vue-router'
 import { SOUND_GROUPS, SOUND_PRESETS, soundLength, type SoundGroup, type SoundPreset } from '@shared/synth'
 import { waveformPath } from '@shared/audio'
 import { useEditorStore } from '../../stores/editorStore'
+import { useAudioStore } from '../../stores/audioStore'
+import ProviderGenerate from './ProviderGenerate.vue'
 import SoundCues from './SoundCues.vue'
 
 /**
@@ -100,7 +81,6 @@ import SoundCues from './SoundCues.vue'
  * sound and adds a set in one step.
  */
 const store = useEditorStore()
-const router = useRouter()
 
 const source = ref<'synth' | 'generate' | 'voice'>('synth')
 const groups = ['All', ...SOUND_GROUPS] as const
@@ -113,6 +93,7 @@ const shown = computed(() => SOUND_PRESETS.filter((p) => group.value === 'All' |
 // Each row draws the sound it will make. They are rendered (and cached) one at
 // a time as the panel opens, a few tenths of a second each, never all at once.
 onMounted(async () => {
+	void useAudioStore().load()
 	for (const preset of SOUND_PRESETS) {
 		if (!store.soundPreviews[preset.kind]) await store.previewSound({ kind: preset.kind, durationSec: preset.follows ? 1 : undefined })
 	}

@@ -377,15 +377,15 @@ export const useEditorStore = defineStore('editor', () => {
 	}
 	const stopAudition = () => { auditionEl?.pause(); auditionEl = null }
 
-	/** The audio track a sound should go on: a free effects lane, else a new one. */
-	const soundTrackFor = (start: number, length: number, ignoreItemId?: string): string | null => {
+	/** The audio track a sound should go on: a free lane of its role (effects by default), else a new one. */
+	const soundTrackFor = (start: number, length: number, ignoreItemId?: string, role: TrackRole = 'sfx'): string | null => {
 		if (!doc.value) return null
-		const free = freeSoundTrack(currentState(), start, length, ignoreItemId)
+		const free = freeSoundTrack(currentState(), start, length, ignoreItemId, role)
 		if (free) return free
 		const track: Track = {
 			id: newId('tr'), kind: 'audio', name: nextTrackName(doc.value.tracks, 'audio'),
 			order: nextTrackOrder(doc.value.tracks, 'audio'), muted: false, locked: false, hidden: false, height: 48,
-			role: 'sfx'
+			role
 		}
 		doc.value.tracks.push(track)
 		return track.id
@@ -433,6 +433,43 @@ export const useEditorStore = defineStore('editor', () => {
 
 	const addSound = async (recipe: SoundRecipe, opts: { atSec?: number; bind?: SoundBinding } = {}) =>
 		(await addSounds([{ recipe, ...opts }]))[0] ?? null
+
+	// ===== Generated audio (a provider made it once; from here it is a file) =====
+
+	/** Voices, effects and music made for this project, newest first. */
+	const generatedAssets = computed(() =>
+		(doc.value?.media ?? []).filter((a) => a.generated).sort((a, b) => (b.generated!.madeAt - a.generated!.madeAt))
+	)
+
+	/**
+	 * Put a generated sound on the timeline at the playhead (or `atSec`), on a free
+	 * lane of its kind: a voice-over goes on a voice lane, music on a music lane.
+	 * One undo step. The asset is already in the project; this only places it.
+	 */
+	const placeGeneratedAudio = (asset: MediaAsset, opts: { atSec?: number } = {}): TimelineItem | null => {
+		if (!doc.value || asset.kind !== 'audio') return null
+		upsertAsset(asset)
+		const length = asset.metadata?.duration || 0
+		if (length <= 0) return null
+		const capability = asset.generated?.capability
+		const role: TrackRole = capability === 'speech' ? 'voice' : capability === 'music' ? 'music' : 'sfx'
+		const before = snapshotState()
+		const wanted = Math.max(0, opts.atSec ?? playheadSec.value)
+		const trackId = soundTrackFor(wanted, length, undefined, role)
+		if (!trackId) return null
+		const item = itemFromAsset(asset, trackId, resolveFreePosition(trackId, wanted, length), length)
+		doc.value.timeline.push(item)
+		commitStep({ before, label: `Add ${capability === 'speech' ? 'voice-over' : capability === 'music' ? 'music' : 'sound effect'}` })
+		selectItems([item.id])
+		return item
+	}
+
+	/** Play a generated (or any audio) asset once, cutting off whatever was auditioning. */
+	const auditionAsset = (asset: MediaAsset) => {
+		auditionEl?.pause()
+		auditionEl = new Audio(toMediaUrl(asset.originalPath))
+		void auditionEl.play().catch(() => { /* a blocked autoplay is not worth a message */ })
+	}
 
 	/** A synthesised sound's recipe, if that is what the clip is. */
 	const soundRecipeOf = (itemId: string): Required<SoundRecipe> | null => {
@@ -3749,6 +3786,10 @@ export const useEditorStore = defineStore('editor', () => {
 		threadId,
 		thread,
 		doc,
+		upsertAsset,
+		generatedAssets,
+		placeGeneratedAudio,
+		auditionAsset,
 		backgroundTasks,
 		selectedAssetId,
 		selectedClipId,

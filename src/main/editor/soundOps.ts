@@ -67,6 +67,10 @@ export function soundRecipesOf(ops: EditorOps, doc: EditorDocument): SoundRecipe
 /** True when the ops make or change a sound: what the "sound" permission guards. */
 export const opsMakeSound = (ops: EditorOps): boolean => !!(ops.addSounds?.length || ops.setSounds?.length)
 
+/** The lane role a generated sound belongs on, from what it is. */
+const roleFor = (capability: 'speech' | 'sfx' | 'music'): 'voice' | 'music' | 'sfx' =>
+	capability === 'speech' ? 'voice' : capability === 'music' ? 'music' : 'sfx'
+
 const clock = (s: number) => `${Math.floor(s / 60)}:${(s % 60).toFixed(1).padStart(4, '0')}`
 
 export function applySoundOps(
@@ -113,13 +117,13 @@ export function applySoundOps(
 		return { itemId: target.id, at, leadSec: num(follow.leadSec) !== undefined ? Math.max(0, follow.leadSec!) : soundLead(recipe) }
 	}
 
-	const laneFor = (start: number, length: number, ignoreId?: string): string => {
-		const free = freeSoundTrack(state(), start, length, ignoreId)
+	const laneFor = (start: number, length: number, ignoreId?: string, role: 'voice' | 'music' | 'sfx' = 'sfx'): string => {
+		const free = freeSoundTrack(state(), start, length, ignoreId, role)
 		if (free) return free
 		const tracks = state().tracks
 		const track: Track = {
 			id: uuidv4(), kind: 'audio', name: nextTrackName(tracks, 'audio'), order: nextTrackOrder(tracks, 'audio'),
-			muted: false, locked: false, hidden: false, height: 48, role: 'sfx'
+			muted: false, locked: false, hidden: false, height: 48, role
 		}
 		;(diff.addTracks ||= []).push(track)
 		return track.id
@@ -154,6 +158,38 @@ export function applySoundOps(
 		}
 		;(diff.addItems ||= []).push(item)
 		notes.push(`Added ${presetOf(made.recipe.kind).label.toLowerCase()} at ${clock(start)}${bind ? ` (follows ${nowItem(bind.itemId)?.label || 'a clip'})` : ''}.`)
+	}
+
+	// ---- placeAudio: a sound or voice a provider made, already an asset
+	for (const [index, place] of (ops.placeAudio ?? []).entries()) {
+		const label = `placeAudio[${index}]`
+		const asset = assets.get(`asset:${place.asset}`) ?? doc.media.find((a) => a.id === place.asset)
+		if (!asset || asset.kind !== 'audio') {
+			droppedOps.push(`${label}: no audio ${place.asset}. generate_audio returns the asset id to use`)
+			continue
+		}
+		const length = asset.metadata?.duration || 0
+		if (length <= 0) { droppedOps.push(`${label}: ${asset.name} has no length yet`); continue }
+		let bind: SoundBinding | undefined
+		if (place.follow) {
+			const b = bindingOf(place.follow, { kind: 'pop' }, label)
+			if (!b) continue
+			bind = { ...b, leadSec: num(place.follow.leadSec) !== undefined ? Math.max(0, place.follow.leadSec!) : 0 }
+		} else if (num(place.atSec) === undefined) {
+			droppedOps.push(`${label}: say when: atSec (timeline seconds), or follow {item, at}`)
+			continue
+		}
+		const target = bind ? nowItem(bind.itemId)! : undefined
+		const start = target && bind ? boundStart(target, bind) : Math.max(0, place.atSec!)
+		const role = roleFor(asset.generated?.capability ?? 'sfx')
+		const item: TimelineItem = {
+			id: uuidv4(), trackId: laneFor(start, length, undefined, role), sourceAssetId: asset.id, timelineStart: start, in: 0, out: length,
+			speed: 1, preservePitch: true, duration: length, label: asset.name,
+			...(typeof place.gain === 'number' ? { gain: Math.max(0, Math.min(2, place.gain)) } : {}),
+			...(bind ? { bind } : {})
+		}
+		;(diff.addItems ||= []).push(item)
+		notes.push(`Placed ${asset.name} at ${clock(start)}.`)
 	}
 
 	// ---- setSounds

@@ -169,12 +169,16 @@ export function cueRecipe(c: SoundCue, extra?: Partial<SoundRecipe>): SoundRecip
 
 export const cueLead = (c: SoundCue, extra?: Partial<SoundRecipe>): number => soundLead(cueRecipe(c, extra))
 
-/** An audio track that can hold a sound over [start, start + length), or null. */
+/**
+ * An audio track with the given role (effects by default) that can hold a sound
+ * over [start, start + length), or null.
+ */
 export function freeSoundTrack(
-	state: Pick<TimelineState, 'timeline' | 'tracks'>, start: number, length: number, ignoreItemId?: string
+	state: Pick<TimelineState, 'timeline' | 'tracks'>, start: number, length: number, ignoreItemId?: string,
+	role: 'voice' | 'music' | 'sfx' = 'sfx'
 ): string | null {
-	const sfx = state.tracks.filter((t) => t.kind === 'audio' && t.role === 'sfx' && !t.locked)
-	for (const track of sfx) {
+	const lanes = state.tracks.filter((t) => t.kind === 'audio' && t.role === role && !t.locked)
+	for (const track of lanes) {
 		const clash = state.timeline.some((i) =>
 			i.trackId === track.id && i.id !== ignoreItemId &&
 			i.timelineStart < start + length - 1e-6 && i.timelineStart + i.duration > start + 1e-6)

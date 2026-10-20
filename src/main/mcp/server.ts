@@ -11,6 +11,7 @@ import {
 } from '@shared/agent'
 import type { AgentActivity, AgentSessionInfo } from '@shared/agentFeed'
 import { agentFocus } from '@shared/engines'
+import type { Spent } from '@shared/audioProviders'
 import type { EditorBridge } from './bridge'
 import type { MotionProbe } from '../editor/vetHtml'
 import { SERVER_INSTRUCTIONS, ToolError, TOOLS, type ToolContext, type ToolDef } from './tools'
@@ -74,12 +75,25 @@ interface Session {
  */
 let writeChain: Promise<unknown> = Promise.resolve()
 
+/** What each turn (an engine's chat turn, or an outside agent's session) has spent on generated audio. */
+const spendLedgers = new Map<string, Spent>()
+function ledgerFor(key: string): Spent {
+	let ledger = spendLedgers.get(key)
+	if (!ledger) {
+		ledger = { count: 0, usd: 0 }
+		spendLedgers.set(key, ledger)
+		// Turns end without telling us: keep only the recent ones.
+		if (spendLedgers.size > 200) spendLedgers.delete(spendLedgers.keys().next().value!)
+	}
+	return ledger
+}
+
 /** A tool reply never needs more; anything bigger is a mistake or an attack. */
 const MAX_BODY_BYTES = 8 * 1024 * 1024
 
 const REFUSED_SHORT: Record<AgentPermission, string> = {
 	read: '', edit: 'refused · editing is off', html: 'refused · HTML motion is off', export: 'refused · exporting is off',
-	sound: 'refused · the synth is off'
+	sound: 'refused · the synth is off', generate: 'refused · generating audio is off'
 }
 
 function readJson(req: http.IncomingMessage): Promise<unknown> {
@@ -369,7 +383,8 @@ export class AgentServer {
 			bridge: this.options.bridge,
 			permissions: this.options.permissions,
 			engineTurnId: this.options.engineTurnId,
-			probeMotion: this.options.probeMotion
+			probeMotion: this.options.probeMotion,
+			spent: ledgerFor(this.options.engineTurnId ?? session.info.id)
 		}
 		try {
 			const run = () => def.run(args, ctx)

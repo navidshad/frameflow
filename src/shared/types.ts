@@ -1,5 +1,6 @@
 import type { TrackRole } from './audio'
 import type { SoundRecipe } from './synth'
+import type { AudioProvenance } from './audioProviders'
 
 export enum MessageRole {
 	User = 'user',
@@ -60,6 +61,8 @@ export interface UsageRecord {
 	cost: number;
 	timestamp?: number;
 	messageId?: string;
+	/** What spent it, when it was not a model turn: "audio:elevenlabs". */
+	source?: string;
 }
 
 /** What kind of result a message node renders as. */
@@ -265,6 +268,12 @@ export interface MediaAsset {
 	 * makes it. The file is a cache of the recipe, so it can be re-rolled.
 	 */
 	synth?: Required<SoundRecipe>
+	/**
+	 * Set when a provider made this sound or voice (ElevenLabs, Gemini): what it
+	 * was asked, who made it and what it cost. The file is the sound; this is its
+	 * receipt, and the project plays without the provider.
+	 */
+	generated?: AudioProvenance
 	clips: Clip[]               // derived from scene detection
 	filmstrip?: FilmstripEntry[]
 	transcriptHealth?: TranscriptHealth  // set by the transcript step
@@ -740,6 +749,18 @@ export interface EditorOps {
 		follow?: { item: string; at?: 'start' | 'out' | 'end'; leadSec?: number }
 		/** True stops it following whatever it follows. */
 		unfollow?: boolean
+	}>
+	/**
+	 * Put a sound or voice a provider made (generate_audio gave you its asset id)
+	 * on the timeline: a voice-over on a voice lane, an effect on an effects lane,
+	 * music on a music lane. `follow` lands it on a moment, like addSounds.
+	 */
+	placeAudio?: Array<{
+		asset: string
+		atSec?: number
+		follow?: { item: string; at?: 'start' | 'out' | 'end'; leadSec?: number }
+		/** Mix level for this clip, 0 to 2 (1 is unchanged). */
+		gain?: number
 	}>
 	/** What an audio track is for: the mix levels each by it, and a music bed ducks under speech. */
 	setTrackRoles?: Array<{ trackId: string; role: 'voice' | 'music' | 'sfx' | 'none' }>

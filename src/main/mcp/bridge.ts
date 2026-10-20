@@ -3,6 +3,7 @@ import type { AudioAnalysis } from '@shared/audio'
 import type { SoundRecipe } from '@shared/synth'
 import type { TranscriptEntry } from '@shared/captions'
 import type { AgentApplyOutcome } from '@shared/agentFeed'
+import type { AudioProvenance, GenerateRequest, ProviderId, SpendPolicy } from '@shared/audioProviders'
 
 /**
  * What the MCP tools need from the rest of the app, as an interface.
@@ -71,4 +72,10 @@ export interface EditorBridge {
 	inspectSound(project: LiveProject, target: { recipe: SoundRecipe } | { assetId: string }): Promise<SoundReport>
 	/** Waveform and loudness of media, measured once and cached. */
 	audioAnalyses(project: LiveProject, assetIds: string[]): Promise<Record<string, AudioAnalysis>>
+	/** Which audio providers are connected, and what an agent may spend on them. */
+	audioStatus(): { connected: ProviderId[]; spend: SpendPolicy }
+	/** What a request would cost in USD before it is made; null when the provider bills in credits. */
+	estimateAudio(req: GenerateRequest): number | null
+	/** Make a voice, effect or music with a provider, keep it as an asset in the project and hand it to the editor. */
+	generateAudio(project: LiveProject, req: GenerateRequest): Promise<{ asset: MediaAsset; provenance: AudioProvenance }>
 }

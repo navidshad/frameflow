@@ -35,6 +35,9 @@ ROLES
 ${roles}
 Put sounds on audio tracks with the sfx role (apply_ops addSounds does it for you, on a free lane). Mark a voice track voice and a music bed music with setTrackRoles; a music bed ducks under speech by itself.
 
+WHEN THE PALETTE IS NOT ENOUGH
+Spoken words, a sound with no kind here, a music bed: list_sounds says whether a provider is connected and whether generate_audio is allowed. It costs the user money and is capped per turn, so: say it once, make it as short as it can be, check it with analyze_audio, and never make several takes to choose from. The result is an ordinary audio asset: place it with apply_ops placeAudio {asset, atSec or follow}; voice-over lands on a voice lane, music on a music lane. If nothing is connected, use the palette or tell the user what you would have made.
+
 LEVELS
 - The finished video is normalised to ${MASTER_LUFS} LUFS when Loudness is on, so what matters is how roles sit AGAINST each other.
 - Effects about 10 LU under the voice, a music bed about 12 LU under. analyze_audio warns when they are not.

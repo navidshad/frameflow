@@ -8,6 +8,7 @@ import { getFFmpegBinaryPath } from '../ffmpeg/binaries'
 import { threadManager } from '../threads'
 import { createMediaAsset, getAssetDir, patchAsset } from './assets'
 import { previewPeaks } from './audioAnalysis'
+import { wavFromPcm16 } from '../audio/wav'
 
 /**
  * Render a recipe to a WAV, and keep it.
@@ -31,25 +32,6 @@ export const soundAssetId = (recipe: SoundRecipe): string => `synth-${soundHash(
 const soundDir = (tempDir: string) => path.join(tempDir, 'synth')
 /** Where a project keeps the sounds it has rendered. */
 export const soundDirFor = soundDir
-
-/** A 16-bit PCM WAV: the header, then the samples. */
-function wavBytes(samples: Int16Array, channels: number): Buffer {
-	const data = Buffer.from(samples.buffer, samples.byteOffset, samples.byteLength)
-	const header = Buffer.alloc(44)
-	header.write('RIFF', 0)
-	header.writeUInt32LE(36 + data.length, 4)
-	header.write('WAVEfmt ', 8)
-	header.writeUInt32LE(16, 16)
-	header.writeUInt16LE(1, 20)
-	header.writeUInt16LE(channels, 22)
-	header.writeUInt32LE(SR, 24)
-	header.writeUInt32LE(SR * channels * 2, 28)
-	header.writeUInt16LE(channels * 2, 32)
-	header.writeUInt16LE(16, 34)
-	header.write('data', 36)
-	header.writeUInt32LE(data.length, 40)
-	return Buffer.concat([header, data])
-}
 
 /**
  * Run the graph and write the result to `outPath`.
@@ -89,7 +71,7 @@ export function renderSoundFile(recipe: SoundRecipe, outPath: string): Promise<{
 			const scale = 10 ** (soundPeakDb(recipe) / 20) / peak
 			const pcm = new Int16Array(floats.length)
 			for (let i = 0; i < floats.length; i++) pcm[i] = Math.max(-32768, Math.min(32767, Math.round(floats[i] * scale * 32767)))
-			fs.writeFileSync(outPath, wavBytes(pcm, channels))
+			fs.writeFileSync(outPath, wavFromPcm16(pcm, SR, channels))
 			resolve({ lengthSec, ms: Date.now() - started })
 		})
 	})

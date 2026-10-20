@@ -22,7 +22,7 @@ export const AGENT_SERVER_NAME = 'frameflow'
  * the Agent access card. `html` is stored here and enforced by the motion
  * layer's tools when they exist.
  */
-export type AgentPermission = 'read' | 'edit' | 'html' | 'export' | 'sound'
+export type AgentPermission = 'read' | 'edit' | 'html' | 'export' | 'sound' | 'generate'
 
 export interface AgentPermissions {
 	edit: boolean
@@ -34,10 +34,16 @@ export interface AgentPermissions {
 	 * permission, off by default, which arrives with providers.
 	 */
 	sound: boolean
+	/**
+	 * Generate audio with a provider (a voice, a sound from a prompt, music). This
+	 * one SPENDS MONEY, so it is off until the user turns it on, and even then each
+	 * turn is capped (Settings → Audio providers).
+	 */
+	generate: boolean
 }
 
 /** As drawn: editing, HTML motion and the built-in synth on, export off until the user allows it. */
-export const DEFAULT_AGENT_PERMISSIONS: AgentPermissions = { edit: true, html: true, export: false, sound: true }
+export const DEFAULT_AGENT_PERMISSIONS: AgentPermissions = { edit: true, html: true, export: false, sound: true, generate: false }
 
 export function normalizePermissions(value: unknown): AgentPermissions {
 	const v = (value && typeof value === 'object' ? value : {}) as Partial<AgentPermissions>
@@ -45,7 +51,8 @@ export function normalizePermissions(value: unknown): AgentPermissions {
 		edit: typeof v.edit === 'boolean' ? v.edit : DEFAULT_AGENT_PERMISSIONS.edit,
 		html: typeof v.html === 'boolean' ? v.html : DEFAULT_AGENT_PERMISSIONS.html,
 		export: typeof v.export === 'boolean' ? v.export : DEFAULT_AGENT_PERMISSIONS.export,
-		sound: typeof v.sound === 'boolean' ? v.sound : DEFAULT_AGENT_PERMISSIONS.sound
+		sound: typeof v.sound === 'boolean' ? v.sound : DEFAULT_AGENT_PERMISSIONS.sound,
+		generate: typeof v.generate === 'boolean' ? v.generate : DEFAULT_AGENT_PERMISSIONS.generate
 	}
 }
 
@@ -70,6 +77,11 @@ export function permissionRefusal(permission: AgentPermission, perms: AgentPermi
 		return 'Refused: the user has not allowed agents to make sounds with the built-in synth ' +
 			'(Settings → Agent access → "Make sounds with the built-in synth"). Describe the sounds you would ' +
 			'add and ask the user to allow it, or to add them from the Sound tab.'
+	}
+	if (permission === 'generate' && !perms.generate) {
+		return 'Refused: the user has not allowed agents to generate audio with a provider, which costs money ' +
+			'(Settings → Agent access → "Generate audio with a provider"). Say what you would make and why, and ask ' +
+			'the user to allow it, or to make it from the Sound tab. The built-in synth (addSounds) is free and does not need this.'
 	}
 	if (permission === 'export' && !perms.export) {
 		return 'Refused: exporting is turned off for agents. Ask the user to press Export in FrameFlow, ' +

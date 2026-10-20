@@ -36,7 +36,7 @@ import type { Located } from './detect'
  * passes the setting in; absent, the answer is no.
  */
 export const enginePermissions = (htmlAllowed: boolean): AgentPermissions =>
-	({ edit: true, html: htmlAllowed, export: false, sound: true })
+	({ edit: true, html: htmlAllowed, export: false, sound: true, generate: false })
 
 /** Calls past the step limit are refused; this many more and the run is stopped. */
 const OVERRUN_GRACE = 5

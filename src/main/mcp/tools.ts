@@ -19,6 +19,10 @@ import {
 	isSoundKind, normaliseRecipe, presetOf, recipeKey, SOUND_PRESETS, soundLength, soundPeakDb, type SoundRecipe
 } from '@shared/synth'
 import { opsMakeSound, soundRecipesOf } from '../editor/soundOps'
+import {
+	CAPABILITY_LABEL, formatCost, isCapability, isProviderId, LIMITS, PROVIDERS, providerInfo, requestProblem, spendDecision,
+	type AudioCapability, type GenerateRequest, type Spent
+} from '@shared/audioProviders'
 import type { EditorBridge, LiveProject } from './bridge'
 
 /**
@@ -38,6 +42,8 @@ export interface ToolContext {
 	engineTurnId?: string
 	/** Draws a page in the hidden window. Absent where there is none (tests): the lint decides alone. */
 	probeMotion?: MotionProbe
+	/** What this turn has already spent generating audio; generate_audio adds to it. */
+	spent?: Spent
 }
 
 /** What the activity feed shows for one call. */
@@ -472,6 +478,24 @@ const SOUND_OPS_SCHEMA = {
 			additionalProperties: false
 		}
 	},
+	placeAudio: {
+		type: 'array',
+		description:
+			'Put a voice, effect or music that generate_audio made (or any audio already in the project) on the timeline. It lands on ' +
+			'a free lane of the right role: voice-over on a voice lane, effects on an effects lane, music on a music lane. ' +
+			'Free to use: only generate_audio costs money.',
+		items: {
+			type: 'object',
+			properties: {
+				asset: { type: 'string', description: 'The audio asset id generate_audio returned (or one from get_media)' },
+				atSec: { type: 'number', minimum: 0, description: 'Timeline seconds. Not needed with follow' },
+				follow: FOLLOW_SCHEMA,
+				gain: { type: 'number', minimum: 0, maximum: 2, description: 'Level for this clip; 1 leaves it as made' }
+			},
+			required: ['asset'],
+			additionalProperties: false
+		}
+	},
 	setTrackRoles: {
 		type: 'array',
 		description: 'Say what an audio track is for. A music bed ducks under speech; the mix levels each role against the voice.',
@@ -526,9 +550,91 @@ const listSounds: ToolDef = {
 			peakDb: p.level, leadMs: Math.round(p.lead * 1000), takes: p.variants
 		}))
 		const audioTracks = doc.tracks.filter((t) => t.kind === 'audio').map((t) => ({ id: t.id, name: t.name, role: t.role ?? null }))
+		// What generate_audio could use right now, and the most it may spend in a turn.
+		const status = ctx.bridge.audioStatus()
+		const providers = {
+			connected: PROVIDERS.filter((p) => status.connected.includes(p.id)).map((p) => ({ provider: p.id, makes: p.capabilities })),
+			allowed: ctx.permissions().generate,
+			limit: { generations: status.spend.maxGenerationsPerTurn, usd: status.spend.maxUsdPerTurn }
+		}
 		return {
-			content: [json({ palette, placed, audioTracks, providers: [] })],
+			content: [json({ palette, placed, audioTracks, providers })],
 			feed: { detail: `${palette.length} sounds · ${placed.length} on the timeline` }
+		}
+	}
+}
+
+const generateAudioTool: ToolDef = {
+	name: 'generate_audio',
+	permission: 'generate',
+	writes: true,
+	description:
+		'Make a voice-over, a sound effect from a description, or music with an audio provider the user connected ' +
+		'(list_sounds says which). It COSTS MONEY and is capped per turn, so use it only when the built-in sounds ' +
+		'cannot do the job: spoken words, a sound with no built-in kind, a music bed. The result is a normal audio asset ' +
+		'in the project (its id is returned); place it with apply_ops placeAudio. Nothing is placed by this call. ' +
+		`Voice-over: prompt is the line to speak (up to ${LIMITS.speechChars.max} characters). Effects and music: prompt is a description ` +
+		`(up to ${LIMITS.promptChars.max} characters), durationSec is ${LIMITS.sfxSec.min}–${LIMITS.sfxSec.max} s for an effect, ` +
+		`${LIMITS.musicSec.min}–${LIMITS.musicSec.max} s for music. Say it once and check it with analyze_audio: do not make ` +
+		'several takes to see which is best.',
+	inputSchema: {
+		type: 'object',
+		properties: {
+			capability: { type: 'string', enum: ['speech', 'sfx', 'music'], description: 'speech = a voice reading the prompt; sfx = a sound effect; music = a music bed' },
+			prompt: { type: 'string', description: 'The line to speak, or a description of the sound' },
+			provider: { type: 'string', enum: PROVIDERS.map((p) => p.id), description: 'Which provider. Omit to use a connected one that does this.' },
+			voice: { type: 'string', description: 'Speech only: a voice name or id. Omit for the provider’s default.' },
+			durationSec: { type: 'number', description: 'Effects and music: how long. Omit to let the provider choose.' }
+		},
+		required: ['capability', 'prompt'],
+		additionalProperties: false
+	},
+	title: (args) => `generate_audio ${args.capability ?? ''}`.trim(),
+	async run(args, ctx) {
+		const project = await requireProject(ctx)
+		if (!isCapability(args.capability)) throw new ToolError('capability must be speech, sfx or music.')
+		const capability = args.capability as AudioCapability
+		const status = ctx.bridge.audioStatus()
+		const usable = PROVIDERS.filter((p) => status.connected.includes(p.id) && p.capabilities.includes(capability))
+		if (args.provider !== undefined && !isProviderId(args.provider)) {
+			throw new ToolError(`Unknown provider "${args.provider}". Providers: ${PROVIDERS.map((p) => p.id).join(', ')}.`)
+		}
+		const provider = args.provider ?? usable[0]?.id
+		if (!provider || !status.connected.includes(provider)) {
+			const wants = PROVIDERS.filter((p) => p.capabilities.includes(capability)).map((p) => p.label).join(' or ')
+			throw new ToolError(
+				`No audio provider is connected for ${CAPABILITY_LABEL[capability].toLowerCase()}. The user can connect ${wants} in ` +
+				'Settings → Audio providers. Until then, use the built-in sounds (list_sounds) or tell the user what you would have made.'
+			)
+		}
+		const req: GenerateRequest = {
+			provider, capability, prompt: String(args.prompt ?? ''),
+			...(typeof args.voice === 'string' && args.voice.trim() ? { voice: args.voice.trim() } : {}),
+			...(typeof args.durationSec === 'number' ? { durationSec: args.durationSec } : {})
+		}
+		const problem = requestProblem(req)
+		if (problem) throw new ToolError(problem)
+
+		const spent = ctx.spent ?? { count: 0, usd: 0 }
+		const estimate = ctx.bridge.estimateAudio(req)
+		const decision = spendDecision(status.spend, spent, estimate)
+		if (!decision.ok) throw new ToolError(decision.reason)
+
+		const made = await ctx.bridge.generateAudio(project, req)
+		spent.count += 1
+		spent.usd += made.provenance.costUsd ?? estimate ?? 0
+		const left = Math.max(0, status.spend.maxGenerationsPerTurn - spent.count)
+		return {
+			content: [json({
+				asset: made.asset.id, name: made.asset.name, lengthSec: r3(made.asset.metadata?.duration),
+				provider, cost: formatCost(made.provenance), generationsLeftThisTurn: left,
+				next: 'Place it with apply_ops placeAudio {asset, atSec | follow}. Check it with analyze_audio if levels matter.'
+			})],
+			feed: {
+				detail: `${CAPABILITY_LABEL[capability].toLowerCase()} · ${providerInfo(provider)!.label} · ${formatCost(made.provenance)}`,
+				quote: req.prompt.length > 120 ? `${req.prompt.slice(0, 118)}…` : req.prompt,
+				chips: [{ text: formatCost(made.provenance), tone: 'violet' }]
+			}
 		}
 	}
 }
@@ -797,7 +903,7 @@ const exportTool: ToolDef = {
 
 export const TOOLS: ToolDef[] = [
 	getProject, getTimeline, getMedia, searchMomentsTool, renderFrame, getMotionGuide,
-	getSoundGuide, listSounds, suggestCuesTool, renderSoundTool, analyzeAudio,
+	getSoundGuide, listSounds, suggestCuesTool, renderSoundTool, analyzeAudio, generateAudioTool,
 	applyOps, revertToVersion, exportTool
 ]
 
@@ -807,5 +913,5 @@ export const SERVER_INSTRUCTIONS =
 	'material → apply_ops to edit (get_motion_guide first if you will write an HTML motion page) → ' +
 	'render_frame to look at the result → revert_to_version if it is ' +
 	'wrong. For sound: get_sound_guide, then suggest_cues → apply_ops addSounds (with follow) → analyze_audio; ' +
-	'you cannot hear, so work by the numbers and the spectrogram render_sound gives. Every apply_ops is a revision the user can see and undo; the user may edit at the same time, ' +
+	'you cannot hear, so work by the numbers and the spectrogram render_sound gives. Spoken words or a sound the palette cannot make: generate_audio (costs money, capped) then apply_ops placeAudio. Every apply_ops is a revision the user can see and undo; the user may edit at the same time, ' +
 	'so read the timeline again before each edit instead of relying on an old read.'

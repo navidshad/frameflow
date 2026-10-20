@@ -105,7 +105,7 @@ describe('AgentServer over Streamable HTTP', () => {
 		const { tools } = await client.listTools()
 		expect(tools.map((t) => t.name)).toEqual([
 			'get_project', 'get_timeline', 'get_media', 'search_moments', 'render_frame', 'get_motion_guide',
-			'get_sound_guide', 'list_sounds', 'suggest_cues', 'render_sound', 'analyze_audio',
+			'get_sound_guide', 'list_sounds', 'suggest_cues', 'render_sound', 'analyze_audio', 'generate_audio',
 			'apply_ops', 'revert_to_version', 'export'
 		])
 		const apply = tools.find((t) => t.name === 'apply_ops')!
@@ -355,7 +355,9 @@ describe('AgentServer over Streamable HTTP', () => {
 		expect(palette.palette.map((p: any) => p.kind)).toContain('whoosh')
 		expect(palette.palette.find((p: any) => p.kind === 'flight').lengthSec).toMatch(/durationSec/)
 		expect(palette.placed).toEqual([])
-		expect(palette.providers).toEqual([])
+		expect(palette.providers).toEqual({
+			connected: [{ provider: 'elevenlabs', makes: ['speech', 'sfx', 'music'] }], allowed: false, limit: { generations: 2, usd: 1 }
+		})
 	})
 
 	it('suggests the moments that want a sound, with the follow to pass back', async () => {
@@ -457,6 +459,92 @@ describe('AgentServer over Streamable HTTP', () => {
 		const roles = await client.callTool({ name: 'apply_ops', arguments: { rationale: 'x', setTrackRoles: [{ trackId: 'v1', role: 'voice' }] } }) as any
 		expect(roles.content[0].text).not.toMatch(/built-in synth/)
 		expect((await client.callTool({ name: 'list_sounds', arguments: {} }) as any).isError).toBeFalsy()
+	})
+
+	describe('generating audio with a provider', () => {
+		const gen = (client: any, args: Record<string, unknown>) =>
+			client.callTool({ name: 'generate_audio', arguments: args }) as Promise<any>
+
+		it('is off until the user allows it, and nothing is made or spent', async () => {
+			const client = await connect()
+			const refused = await gen(client, { capability: 'speech', prompt: 'Welcome to the show.' })
+			expect(refused.isError).toBe(true)
+			expect(refused.content[0].text).toMatch(/Settings/)
+			expect(editor.generated).toEqual([])
+		})
+
+		it('makes an asset, says what it cost, and puts nothing on the timeline', async () => {
+			permissions.generate = true
+			const client = await connect()
+			const before = editor.doc.timeline.length
+			const made = text(await gen(client, { capability: 'speech', prompt: 'Welcome to the show.', voice: 'Rachel' }))
+			expect(made).toMatchObject({ asset: 'gen-1', provider: 'elevenlabs', generationsLeftThisTurn: 1 })
+			expect(made.cost).toBe('$0.05')
+			expect(editor.generated[0]).toMatchObject({ provider: 'elevenlabs', capability: 'speech', voice: 'Rachel' })
+			expect(editor.doc.timeline).toHaveLength(before)
+		})
+
+		it('stops at the count for the turn, and tells the agent what to do instead', async () => {
+			permissions.generate = true
+			const client = await connect()
+			await gen(client, { capability: 'sfx', prompt: 'a door slamming', durationSec: 1 })
+			await gen(client, { capability: 'sfx', prompt: 'a door creaking', durationSec: 1 })
+			const third = await gen(client, { capability: 'sfx', prompt: 'a door knocking', durationSec: 1 })
+			expect(third.isError).toBe(true)
+			expect(third.content[0].text).toMatch(/2 generations per turn/)
+			expect(editor.generated).toHaveLength(2)
+		})
+
+		it('stops at the dollars before it spends them', async () => {
+			permissions.generate = true
+			const client = await connect()
+			await gen(client, { capability: 'music', prompt: 'calm piano', durationSec: 30 })
+			const over = await gen(client, { capability: 'music', prompt: 'calm piano again', durationSec: 30 })
+			expect(over.isError).toBe(true)
+			expect(over.content[0].text).toMatch(/limit/)
+			expect(editor.generated).toHaveLength(1)
+		})
+
+		it('says so when no provider is connected, and when the request cannot be made', async () => {
+			permissions.generate = true
+			const client = await connect()
+			editor.connected = []
+			const none = await gen(client, { capability: 'speech', prompt: 'Hello there.' })
+			expect(none.content[0].text).toMatch(/No audio provider is connected.*Settings → Audio providers/)
+			editor.connected = ['elevenlabs']
+			const short = await gen(client, { capability: 'sfx', prompt: 'a door slamming', durationSec: 99 })
+			expect(short.isError).toBe(true)
+			expect(short.content[0].text).toMatch(/0\.5 to 30 seconds/)
+			const unknown = await gen(client, { capability: 'speech', prompt: 'Hello there.', provider: 'suno' })
+			expect(unknown.content[0].text).toMatch(/Unknown provider/)
+			expect(editor.generated).toEqual([])
+		})
+
+		it('places what it made on a lane of the right role, and a missing asset is dropped, not guessed', async () => {
+			permissions.generate = true
+			const client = await connect()
+			await gen(client, { capability: 'speech', prompt: 'Welcome to the show.' })
+			const raw = await client.callTool({
+				name: 'apply_ops', arguments: { rationale: 'Voice-over', placeAudio: [{ asset: 'gen-1', atSec: 2 }, { asset: 'nope', atSec: 1 }, { asset: 'gen-1' }] }
+			}) as any
+			const placed = text(raw)
+			expect(placed.droppedOps.join(' ')).toMatch(/no audio nope/)
+			expect(placed.droppedOps.join(' ')).toMatch(/say when/)
+			const clip = editor.doc.timeline.find((i) => i.sourceAssetId === 'gen-1')!
+			expect(clip.timelineStart).toBe(2)
+			expect(editor.doc.tracks.find((t) => t.id === clip.trackId)).toMatchObject({ kind: 'audio', role: 'voice' })
+		})
+
+		it('placing costs nothing and needs no generate permission', async () => {
+			const client = await connect()
+			editor.doc.media.push({
+				id: 'vo', kind: 'audio', name: 'vo', originalPath: '', preprocessing: {}, clips: [], createdAt: 0,
+				metadata: { duration: 3 } as any, generated: { provider: 'elevenlabs', capability: 'speech', prompt: 'x', costUsd: 0.01, madeAt: 0 }
+			})
+			const placed = text(await client.callTool({ name: 'apply_ops', arguments: { rationale: 'Voice-over', placeAudio: [{ asset: 'vo', atSec: 0 }] } }))
+			expect(placed.applied).toBeTruthy()
+			expect(editor.generated).toEqual([])
+		})
 	})
 
 	it('returns an image from render_frame and reverts by V number', async () => {

@@ -1601,7 +1601,7 @@ export function opsToDiff(
 		applyMotionOps(ops, doc, diff, droppedOps, notes, writer)
 	}
 
-	if (ops.addSounds?.length || ops.setSounds?.length || ops.setTrackRoles?.length) {
+	if (ops.addSounds?.length || ops.setSounds?.length || ops.setTrackRoles?.length || ops.placeAudio?.length) {
 		applySoundOps(ops, doc, diff, droppedOps, notes, soundAssets)
 	}
 	// Sounds that follow a moment go with it, in this same diff.

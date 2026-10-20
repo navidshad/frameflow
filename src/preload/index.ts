@@ -66,6 +66,12 @@ const api = {
 		ipcRenderer.invoke('find-silence', data),
 	getAudioAnalysis: (data: { threadId: string, assetId: string }) =>
 		ipcRenderer.invoke('editor-audio-analysis', data),
+	audioProviders: () => ipcRenderer.invoke('audio-providers-status'),
+	setElevenLabsKey: (key: string) => ipcRenderer.invoke('audio-set-elevenlabs-key', key),
+	updateAudioSettings: (patch: unknown) => ipcRenderer.invoke('audio-update-settings', patch),
+	estimateAudio: (request: unknown) => ipcRenderer.invoke('audio-estimate', request),
+	audioVoices: (provider: string) => ipcRenderer.invoke('audio-voices', provider),
+	generateAudio: (data: { threadId: string, request: unknown }) => ipcRenderer.invoke('audio-generate', data),
 	previewSound: (data: { threadId: string, recipe: unknown }) =>
 		ipcRenderer.invoke('editor-sound-preview', data),
 	ensureSoundAsset: (data: { threadId: string, recipe: unknown }) =>
@@ -171,7 +177,7 @@ const api = {
 	// Agent access (MCP). The token itself never reaches the renderer.
 	getAgentAccess: () => ipcRenderer.invoke('get-agent-access'),
 	setAgentAccessEnabled: (enabled: boolean) => ipcRenderer.invoke('set-agent-access-enabled', enabled),
-	setAgentPermission: (key: 'edit' | 'html' | 'export' | 'sound', value: boolean) =>
+	setAgentPermission: (key: 'edit' | 'html' | 'export' | 'sound' | 'generate', value: boolean) =>
 		ipcRenderer.invoke('set-agent-permission', { key, value }),
 	copyAgentToken: () => ipcRenderer.invoke('copy-agent-token'),
 	copyAgentSnippet: (kind: 'claude' | 'codex') => ipcRenderer.invoke('copy-agent-snippet', kind),

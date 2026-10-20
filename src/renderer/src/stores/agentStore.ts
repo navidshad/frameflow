@@ -166,6 +166,12 @@ export const useAgentStore = defineStore('agent', () => {
 				const ok = await editor.switchRevision(payload.revisionId, { force: true, engineTurnId: payload.engineTurnId })
 				return ok ? { ok: true } : { ok: false, error: 'The editor could not switch to that revision.' }
 			}
+			case 'upsert-assets': {
+				// Sounds main generated for the agent: the store hears of them before any op can place them.
+				if (!open) return { ok: false, error: 'No project is open in the editor.' }
+				for (const asset of payload.assets ?? []) editor.upsertAsset(asset)
+				return { ok: true }
+			}
 			case 'export': {
 				if (!open) return { ok: false, error: 'No project is open in the editor.' }
 				if (editor.isRendering) return { ok: false, error: 'An export is already running. Wait for it to finish.' }

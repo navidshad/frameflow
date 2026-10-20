@@ -28,8 +28,8 @@
 
         <!-- Agent access (MCP) -->
         <AgentAccessCard />
-
-        <!-- More sections (audio providers, ...) are appended here. -->
+        <!-- Audio providers -->
+        <AudioProvidersCard />
 
         <!-- Gemini API key -->
         <SettingsSection title="Gemini API key"
@@ -115,6 +115,7 @@ import SettingsSection from '../components/settings/SettingsSection.vue'
 import { dialog } from '../composables/useDialog'
 import AgentAccessCard from '../components/settings/AgentAccessCard.vue'
 import AiEngineCard from '../components/settings/AiEngineCard.vue'
+import AudioProvidersCard from '../components/settings/AudioProvidersCard.vue'
 import { ModelSettings } from '../../../shared/types'
 // In a real scenario we'd import constants, but we can also use the IPC-returned defaults if we added a method.
 // For now, we'll manually ensure the new model and selection are present if missing.

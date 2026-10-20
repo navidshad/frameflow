@@ -139,6 +139,11 @@ const PERMISSIONS: { key: keyof AgentPermissions; title: string; on: string; off
 		off: 'Off: an agent can describe the sounds it would add, and you add them from the Sound tab.'
 	},
 	{
+		key: 'generate', title: 'Generate audio with a provider',
+		on: 'An agent can make a voice, a sound or music with a provider. This costs money; each turn is capped in Audio providers.',
+		off: 'Off: nothing is spent. An agent can still use the free built-in synth.'
+	},
+	{
 		key: 'export', title: 'Export videos to disk',
 		on: 'An agent can start an export; it lands in the project’s exports folder.',
 		off: 'Off: an agent can ask, and you press Export.'

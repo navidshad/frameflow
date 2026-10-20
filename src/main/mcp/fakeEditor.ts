@@ -3,6 +3,7 @@ import { applyTimelineDiff } from '@shared/timeline'
 import type { TranscriptEntry } from '@shared/captions'
 import type { AudioAnalysis } from '@shared/audio'
 import { normaliseRecipe, presetOf, recipeKey, soundLength, type SoundRecipe } from '@shared/synth'
+import type { AudioProvenance, GenerateRequest, ProviderId, SpendPolicy } from '@shared/audioProviders'
 import type { EditorBridge, LiveProject, RevisionSummary, SoundReport, TurnCommit } from './bridge'
 
 /**
@@ -145,5 +146,33 @@ export class FakeEditor implements EditorBridge {
 				lufs: sound ? sound.levelDb - 12 : -16, truePeakDb: sound ? sound.levelDb : -3, lra: null
 			}]
 		}))
+	}
+
+	/** Providers the fake pretends are connected; the cap an agent may spend. */
+	connected: ProviderId[] = ['elevenlabs']
+	spend: SpendPolicy = { maxGenerationsPerTurn: 2, maxUsdPerTurn: 1 }
+	generated: GenerateRequest[] = []
+
+	audioStatus() {
+		return { connected: this.connected, spend: this.spend }
+	}
+
+	estimateAudio(req: GenerateRequest): number | null {
+		return req.capability === 'music' ? 0.6 : 0.05
+	}
+
+	async generateAudio(_project: LiveProject, req: GenerateRequest): Promise<{ asset: MediaAsset; provenance: AudioProvenance }> {
+		this.generated.push(req)
+		const provenance: AudioProvenance = {
+			provider: req.provider, capability: req.capability, prompt: req.prompt, voice: req.voice,
+			costUsd: this.estimateAudio(req), madeAt: 0
+		}
+		const asset: MediaAsset = {
+			id: `gen-${this.generated.length}`, kind: 'audio', name: `${req.capability}: ${req.prompt}`.slice(0, 40),
+			originalPath: '/tmp/generated.mp3', metadata: { duration: req.durationSec ?? 4 } as MediaAsset['metadata'],
+			preprocessing: {}, preprocessState: 'completed', clips: [], createdAt: 0, generated: provenance
+		}
+		this.doc.media.push(asset)
+		return { asset, provenance }
 	}
 }

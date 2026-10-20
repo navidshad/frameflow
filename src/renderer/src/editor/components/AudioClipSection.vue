@@ -38,6 +38,20 @@
 		</div>
 		<p v-if="roleHint" class="text-[10px] leading-snug text-zinc-500">{{ roleHint }}</p>
 
+		<!-- A sound a provider made: where it came from and what it cost. It is a plain file now. -->
+		<div v-if="made" class="hair-t pt-3 space-y-1.5">
+			<div class="flex items-center">
+				<span class="lbl">Made by</span>
+				<div class="flex-1"></div>
+				<span class="text-[10px] font-bold tracking-[.08em] text-secondary uppercase">{{ madeBy }}</span>
+			</div>
+			<p class="text-[11px] leading-snug text-zinc-700 dark:text-zinc-300">“{{ made.prompt }}”</p>
+			<p class="text-[10px] text-zinc-500">
+				{{ CAPABILITY_LABEL[made.capability] }}<template v-if="made.model"> · {{ made.model }}</template> · {{ formatCost(made) }}
+				· a file in this project: it plays and exports without {{ madeBy }}.
+			</p>
+		</div>
+
 		<!-- A synthesised sound is a recipe: its numbers, and the moment it follows -->
 		<div v-if="recipe" class="hair-t pt-3">
 			<SoundRecipeSection :item="item" :recipe="recipe" />
@@ -51,6 +65,7 @@ import type { TimelineItem } from '@shared/types'
 import { formatLufs, gainToDb, roleSpec, TRACK_ROLES } from '@shared/audio'
 import { useEditorStore } from '../../stores/editorStore'
 import AudioWaveform from './AudioWaveform.vue'
+import { CAPABILITY_LABEL, formatCost, providerInfo } from '@shared/audioProviders'
 import SoundRecipeSection from './SoundRecipeSection.vue'
 
 /**
@@ -64,6 +79,8 @@ const store = useEditorStore()
 const track = computed(() => store.doc?.tracks.find((t) => t.id === props.item.trackId))
 const analysis = computed(() => store.audioAnalysis[props.item.sourceAssetId])
 const recipe = computed(() => store.soundRecipeOf(props.item.id))
+const made = computed(() => store.doc?.media.find((a) => a.id === props.item.sourceAssetId)?.generated)
+const madeBy = computed(() => (made.value ? providerInfo(made.value.provider)?.label ?? made.value.provider : ''))
 
 onMounted(() => store.ensureAudioAnalysis(props.item.sourceAssetId))
 

@@ -10,6 +10,9 @@ import { analyzeAudioFile, getAudioAnalysis, spectrogramBase64 } from '../editor
 import { ensureSoundAsset, ensureSoundFile, soundDirFor } from '../editor/synth'
 import { getAssetDir } from '../editor/assets'
 import { normaliseRecipe } from '../../shared/synth'
+import { connectedProviders, estimateUsd, generateForProject } from '../audio/runtime'
+import { settingsManager } from '../settings'
+import { ProviderError } from '../audio/provider'
 
 /**
  * The bridge to the renderer, whose Pinia store owns the live timeline.
@@ -166,5 +169,27 @@ export const rendererBridge: EditorBridge = {
 			} catch { /* an unreadable source simply has no analysis */ }
 		}
 		return out
+	}
+	,
+
+	audioStatus() {
+		return { connected: connectedProviders(), spend: settingsManager.getAudioSettings().spend }
+	},
+
+	estimateAudio: estimateUsd,
+
+	async generateAudio(project, req) {
+		let made
+		try {
+			made = await generateForProject(project.threadId, req)
+		} catch (error: any) {
+			// A provider's own words (bad key, out of credits) are the ones to show.
+			if (error instanceof ProviderError) throw new ToolError(error.message)
+			throw error
+		}
+		// The renderer owns the live document and its autosave would drop an asset
+		// it never heard of, so it is told before anything can place it.
+		await request('upsert-assets', { assets: [made.asset] }, 10_000)
+		return made
 	}
 }
