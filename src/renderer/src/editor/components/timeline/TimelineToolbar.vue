@@ -40,9 +40,40 @@
 				@click="step(1)" />
 
 			<span class="text-[10px] font-mono text-zinc-500 tabular-nums pl-1">{{ timecode }}</span>
+
+			<!-- Keyframes (board 2): step between keys, add one at the playhead on
+			     the lane being worked on, and how many are selected. -->
+			<template v-if="kf.expanded">
+				<div class="w-px h-4 bg-zinc-200 dark:bg-zinc-800 mx-0.5"></div>
+				<ToolButton icon="tabler--chevron-left" title="Previous keyframe"
+					:disabled="!kf.canStep(-1)" @click="kf.step(-1)" />
+				<ToolButton icon="tabler--diamond" tint="key"
+					:title="kf.primary ? `Add a ${kf.primaryLane?.label.toLowerCase()} key at the playhead` : 'Add keyframe at playhead — pick a lane’s key first, or use a lane’s ◆'"
+					:disabled="!kf.primary" @click="kf.addAtPlayhead()" />
+				<ToolButton icon="tabler--chevron-right" title="Next keyframe"
+					:disabled="!kf.canStep(1)" @click="kf.step(1)" />
+				<span v-if="kf.selection.length" class="font-mono text-[9px] text-zinc-400 whitespace-nowrap">
+					{{ kf.selection.length }} key{{ kf.selection.length === 1 ? '' : 's' }} selected
+				</span>
+			</template>
 		</div>
 
 		<div class="flex items-center gap-1">
+			<!-- Keyframe lanes. Lit while open — and while closed, when the
+			     selected clip has keys to show (board 1). -->
+			<SlimTooltip :text="kf.open ? 'Hide keyframe lanes' : 'Show keyframe lanes — every animatable property of the selected clip, under its track'" placement="top">
+				<button class="h-6 px-2 flex items-center gap-1 rounded-lg text-[9px] font-bold uppercase tracking-widest transition active:scale-95 mr-1"
+					:class="kf.open || kf.itemHasKeys
+						? 'text-primary bg-primary/10'
+						: 'text-zinc-500 hover:text-primary hover:bg-primary/10'"
+					:aria-label="kf.open ? 'Hide keyframe lanes' : 'Show keyframe lanes'"
+					:aria-pressed="kf.open"
+					@click="kf.toggle()">
+					<svg class="w-3 h-3" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"
+						stroke-linejoin="round" aria-hidden="true"><path d="M12 3l9 9-9 9-9-9z" /></svg>
+					Keyframes
+				</button>
+			</SlimTooltip>
 			<!-- Legend for the dashed outlines an MCP agent's latest edit leaves -->
 			<span v-if="store.agentMarksSeq !== null && Object.keys(store.agentMarks).length"
 				class="flex items-center gap-1.5 text-[9px] text-zinc-400 mr-2 whitespace-nowrap">
@@ -147,11 +178,13 @@
 import { computed, h, inject, ref } from 'vue'
 import type { FunctionalComponent } from 'vue'
 import { useEditorStore } from '../../../stores/editorStore'
+import { useKeyframeLanesStore } from '../../../stores/keyframeLanesStore'
 import { TimelineViewportKey } from '../../composables/useTimelineViewport'
 import { keysFor } from '../../shortcuts'
 import SlimTooltip from '../../../components/SlimTooltip.vue'
 
 const store = useEditorStore()
+const kf = useKeyframeLanesStore()
 const viewport = inject(TimelineViewportKey)!
 
 const markersOpen = ref(false)
@@ -188,7 +221,7 @@ const formatTime = (seconds: number) => {
  * what every panel already uses.
  */
 const ToolButton: FunctionalComponent<
-	{ icon: string; title: string; disabled?: boolean; active?: boolean; tint?: 'motion' },
+	{ icon: string; title: string; disabled?: boolean; active?: boolean; tint?: 'motion' | 'key' },
 	{ click: () => void }
 > = (props, { emit }) =>
 	h(SlimTooltip, { text: props.title, placement: 'top' }, {
@@ -199,7 +232,9 @@ const ToolButton: FunctionalComponent<
 					? 'text-zinc-300 dark:text-zinc-700 cursor-not-allowed'
 					: props.active
 						? 'text-primary bg-primary/10'
-						: props.tint === 'motion'
+						: props.tint === 'key'
+							? 'text-blue-400 hover:bg-primary/10'
+							: props.tint === 'motion'
 							? 'text-pink-500 hover:bg-pink-500/10'
 							: 'text-zinc-500 hover:text-primary hover:bg-primary/10'
 			],

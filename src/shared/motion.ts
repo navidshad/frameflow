@@ -38,7 +38,7 @@
  * No Node or Electron imports: this runs in the renderer, in main and in tests.
  */
 import type { TimelineItem, Track } from './types'
-import { normalise, valueAt } from './keyframes'
+import { heldValueAt, normalise, valueAt } from './keyframes'
 import { MOTION_TEMPLATES, motionTemplate } from './motionTemplates'
 import { MOTION_FONT_CSS } from './motion-templates/fonts'
 
@@ -60,9 +60,12 @@ export interface MotionSettingDef {
 	/** Enums only. */
 	options?: { value: string; label: string }[]
 	/**
-	 * Keyframable. Numbers only — a colour or a string has no "halfway". The
-	 * path is `motion.<key>` and the editor interpolates it with the same
-	 * `valueAt` every other keyframe uses, then hands the page a plain number.
+	 * Keyframable, on the path `motion.<key>`. A number travels between keys
+	 * with the same `valueAt` every other keyframe uses. A colour or an enum
+	 * has no "halfway", so it HOLDS: each key's value lasts until the next.
+	 * Their keys still store a number — a colour as its 0xRRGGBB integer
+	 * (`colourKeyValue`), an enum as its option's index — and the evaluator
+	 * hands the page the hex string or the option value. Text never animates.
 	 */
 	animate?: boolean
 	/** Text only: a textarea rather than a line. */
@@ -300,8 +303,42 @@ export function motionAnimatablePaths(item: Pick<TimelineItem, 'motion'>): strin
 	const def = resolveDefinition(item.motion)
 	return [
 		OPACITY_PATH,
-		...def.settings.filter((s) => s.animate && s.type === 'number').map((s) => motionSettingPath(s.key))
+		...def.settings.filter(isKeyableSetting).map((s) => motionSettingPath(s.key))
 	]
+}
+
+/** A setting with a keyframe lane: marked `animate`, and anything but text. */
+export const isKeyableSetting = (s: MotionSettingDef): boolean => !!s.animate && s.type !== 'text'
+
+/** Colours and enums hold; only numbers travel between keys. */
+export const isHeldSetting = (s: MotionSettingDef): boolean => s.type === 'color' || s.type === 'enum'
+
+/** A colour as a key's number: `#EC4899` → 0xEC4899. */
+export const colourKeyValue = (hex: string): number => {
+	const clean = HEX.test(hex.trim()) ? hex.trim() : '#000000'
+	return parseInt(clean.slice(1), 16)
+}
+
+/** A key's number back to a colour: 0xEC4899 → `#EC4899`. */
+export const keyValueColour = (n: number): string =>
+	`#${(Math.max(0, Math.min(0xffffff, Math.round(finite(n) ? n : 0)))).toString(16).padStart(6, '0').toUpperCase()}`
+
+/** A setting's static value as the number its keys would store. */
+export function settingKeyValue(s: MotionSettingDef, value: MotionSettingValue): number {
+	if (s.type === 'color') return colourKeyValue(String(value))
+	if (s.type === 'enum') return Math.max(0, s.options?.findIndex((o) => o.value === value) ?? 0)
+	return Number(value)
+}
+
+/** A key's number as the value the page receives. */
+export function keyedSettingValue(s: MotionSettingDef, n: number): MotionSettingValue {
+	if (s.type === 'color') return keyValueColour(n)
+	if (s.type === 'enum') {
+		const options = s.options ?? []
+		const i = Math.max(0, Math.min(options.length - 1, Math.round(n)))
+		return options[i]?.value ?? String(s.default)
+	}
+	return sanitiseSetting(s, n)
 }
 
 // ===== Time =====
@@ -417,9 +454,12 @@ export function motionFrameState(
 	const settings = settingValues(spec, def)
 	const keys = item.keyframes ?? {}
 	for (const s of def.settings) {
-		if (!s.animate || s.type !== 'number') continue
+		if (!isKeyableSetting(s)) continue
 		const track = keys[motionSettingPath(s.key)]
-		if (normalise(track).length) {
+		if (!normalise(track).length) continue
+		if (isHeldSetting(s)) {
+			settings[s.key] = keyedSettingValue(s, heldValueAt(track, u))
+		} else {
 			settings[s.key] = round(sanitiseSetting(s, valueAt(track, u, settings[s.key] as number)) as number)
 		}
 	}

@@ -18,7 +18,10 @@
 					{{ m }}
 				</button>
 			</div>
-			<span v-if="mode === 'timeline' && edl.currentSegmentId.value" class="text-[9px] font-mono text-zinc-400 truncate max-w-[50%]">
+			<span v-if="mode === 'timeline' && motionPathShown" class="text-[9px] font-mono text-zinc-400 truncate max-w-[50%]">
+				motion path shown while a position key is selected
+			</span>
+			<span v-else-if="mode === 'timeline' && edl.currentSegmentId.value" class="text-[9px] font-mono text-zinc-400 truncate max-w-[50%]">
 				{{ activeSegmentLabel }}
 			</span>
 		</div>
@@ -210,6 +213,8 @@
 						     the picture following it out. -->
 						<CanvasGizmo v-if="gizmoActive"
 							:frame-width="frameBox.w" :frame-height="frameBox.h" />
+						<!-- Stage 3: the selected position key's motion path. -->
+						<KeyframeMotionPath :frame-width="frameBox.w" :frame-height="frameBox.h" />
 					</div>
 					<!-- The monitor stacks <video> elements; CSS has no chroma key, so
 					     a keyed layer previews UNKEYED. Saying so beats a preview
@@ -396,9 +401,15 @@ import { useEditorStore } from '../../stores/editorStore'
 import { useEdlPlayback } from '../composables/useEdlPlayback'
 import CanvasGizmo from './CanvasGizmo.vue'
 import MotionLayer from './MotionLayer.vue'
+import KeyframeMotionPath from './KeyframeMotionPath.vue'
+import { useKeyframeLanesStore } from '../../stores/keyframeLanesStore'
 import SlimTooltip from '../../components/SlimTooltip.vue'
 
 const store = useEditorStore()
+const keyframeLanes = useKeyframeLanesStore()
+/** The header says why a dashed path is on the picture (board 2). */
+const motionPathShown = computed(() =>
+	keyframeLanes.expanded && (keyframeLanes.primary?.path === 'transform.x' || keyframeLanes.primary?.path === 'transform.y'))
 const api = (window as any).api
 
 // The edit is the subject of this app, so the monitor opens on it. SOURCE is
