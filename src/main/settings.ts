@@ -6,6 +6,7 @@ import { randomBytes } from 'crypto'
 import { EditorPersona, ModelSettings } from '../shared/types'
 import { normalizePermissions, TOKEN_PREFIX, type AgentPermissions } from '../shared/agent'
 import type { AgentRecentSession } from '../shared/agentFeed'
+import { normalizeEngineSettings, type EngineSettings } from '../shared/engines'
 import { DEFAULT_MODEL_SETTINGS } from './constants/gemini'
 import { BUILTIN_PERSONAS } from './constants/personas'
 
@@ -20,6 +21,8 @@ interface Settings {
 	agentAccess?: AgentAccessSettings
 	/** In memory only. On disk it is `agentTokenEnc`, encrypted like the API key. */
 	agentToken?: string
+	/** Which AI edits when the user chats (Gemini API unless they pick a CLI). */
+	engine?: EngineSettings
 }
 
 export interface AgentAccessSettings {
@@ -133,7 +136,8 @@ class SettingsManager {
 					modelSettings: this.mergeModelSettings(parsed.modelSettings || DEFAULT_MODEL_SETTINGS),
 					personas: Array.isArray(parsed.personas) ? parsed.personas : [],
 					agentAccess: normalizeAgentAccess(parsed.agentAccess),
-					agentToken: decryptKey({ geminiApiKeyEnc: parsed.agentTokenEnc, geminiApiKey: parsed.agentToken })
+					agentToken: decryptKey({ geminiApiKeyEnc: parsed.agentTokenEnc, geminiApiKey: parsed.agentToken }),
+					engine: normalizeEngineSettings(parsed.engine)
 				}
 			}
 		} catch (error) {
@@ -318,6 +322,21 @@ class SettingsManager {
 		this.settings.agentToken = `${TOKEN_PREFIX}${randomBytes(24).toString('hex')}`
 		this.saveSettings()
 		return this.settings.agentToken
+	}
+
+	// ===== AI engine =====
+
+	getEngineSettings(): EngineSettings {
+		return normalizeEngineSettings(this.settings.engine)
+	}
+
+	updateEngineSettings(patch: Partial<EngineSettings>): EngineSettings {
+		const current = this.getEngineSettings()
+		this.settings.engine = normalizeEngineSettings({
+			...current, ...patch, models: { ...current.models, ...(patch.models || {}) }
+		})
+		this.saveSettings()
+		return this.settings.engine
 	}
 }
 

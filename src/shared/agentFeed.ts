@@ -1,3 +1,4 @@
+import type { AgentFocus } from './engines'
 import type { TimelineDiff, TimelineItem, TranscriptHealth, DescriptionHealth } from './types'
 import type { AgentPermissions } from './agent'
 
@@ -32,6 +33,8 @@ export interface AgentActivity {
 	status: AgentActivityStatus
 	startedAt: number
 	endedAt?: number
+	/** Where the agent is acting: the media it reads, the time it looks at or edits. */
+	focus?: AgentFocus
 }
 
 export interface AgentSessionInfo {

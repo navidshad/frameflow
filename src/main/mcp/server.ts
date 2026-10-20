@@ -10,6 +10,7 @@ import {
 	displayClientName, permissionRefusal, type AgentPermission, type AgentPermissions
 } from '@shared/agent'
 import type { AgentActivity, AgentSessionInfo } from '@shared/agentFeed'
+import { agentFocus } from '@shared/engines'
 import type { EditorBridge } from './bridge'
 import { SERVER_INSTRUCTIONS, ToolError, TOOLS, type ToolContext, type ToolDef } from './tools'
 
@@ -46,6 +47,13 @@ export interface AgentServerOptions {
 	 */
 	idleTimeoutMs?: number
 	sweepEveryMs?: number
+	/**
+	 * Set for FrameFlow's own CLI engine: the chat turn this server serves.
+	 * apply_ops links each revision it makes to that turn.
+	 */
+	engineTurnId?: string
+	/** Tool calls allowed across all sessions; later calls are refused with a "wrap up" note. */
+	maxToolCalls?: number
 }
 
 interface Session {
@@ -55,6 +63,13 @@ interface Session {
 	transport: StreamableHTTPServerTransport
 	server: Server
 }
+
+/**
+ * One write at a time across every server in the process — the user's
+ * external agents and FrameFlow's own engine run on separate servers but edit
+ * the same live document, so each write must see the one before it.
+ */
+let writeChain: Promise<unknown> = Promise.resolve()
 
 /** A tool reply never needs more; anything bigger is a mistake or an attack. */
 const MAX_BODY_BYTES = 8 * 1024 * 1024
@@ -108,7 +123,7 @@ function displayRoot(uri: string | undefined): string | undefined {
 export class AgentServer {
 	private httpServer: http.Server | null = null
 	private sessions = new Map<string, Session>()
-	private writeChain: Promise<unknown> = Promise.resolve()
+	private toolCalls = 0
 	private sweeper: NodeJS.Timeout | null = null
 	private readonly tools: ToolDef[]
 	port: number | null = null
@@ -304,6 +319,7 @@ export class AgentServer {
 		session.info.steps++
 		session.info.lastActivityAt = Date.now()
 		this.emit({ type: 'session', session: { ...session.info } })
+		this.toolCalls++
 
 		let activity: AgentActivity = {
 			id: randomUUID(),
@@ -311,12 +327,22 @@ export class AgentServer {
 			tool: name,
 			title: safeTitle(def, args),
 			status: 'running',
-			startedAt: Date.now()
+			startedAt: Date.now(),
+			focus: agentFocus(name, args) ?? undefined
 		}
 		this.emit({ type: 'activity', activity })
 		const finish = (patch: Partial<AgentActivity>) => {
 			activity = { ...activity, ...patch, endedAt: Date.now() }
 			this.emit({ type: 'activity', activity })
+		}
+
+		const limit = this.options.maxToolCalls
+		if (limit !== undefined && this.toolCalls > limit) {
+			finish({ status: 'refused', detail: 'refused · step limit reached' })
+			return {
+				content: [{ type: 'text' as const, text: `You have used all ${limit} steps for this turn. Do not call any more tools: reply to the user now with what you did and what is left.` }],
+				isError: true
+			}
 		}
 
 		const refusal = permissionRefusal(def.permission, this.options.permissions())
@@ -329,7 +355,8 @@ export class AgentServer {
 			sessionId: session.info.id,
 			clientName: session.info.clientName,
 			bridge: this.options.bridge,
-			permissions: this.options.permissions
+			permissions: this.options.permissions,
+			engineTurnId: this.options.engineTurnId
 		}
 		try {
 			const run = () => def.run(args, ctx)
@@ -354,8 +381,8 @@ export class AgentServer {
 	 * the previous one left, so two agents cannot build diffs off the same base.
 	 */
 	private serialize<T>(work: () => Promise<T>): Promise<T> {
-		const next = this.writeChain.then(work, work)
-		this.writeChain = next.catch(() => undefined)
+		const next = writeChain.then(work, work)
+		writeChain = next.catch(() => undefined)
 		return next
 	}
 

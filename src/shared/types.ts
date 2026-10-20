@@ -558,6 +558,23 @@ export interface EditorRevisionsFile {
 	revisions: EditorRevision[]
 }
 
+export interface PromptTurnEngine {
+	id: 'claude-code' | 'codex' | 'gemini-cli'
+	label: string
+	/** The model the CLI reported, when it did. */
+	model?: string
+	steps: Array<{
+		id: string
+		tool: string
+		title: string
+		status: 'running' | 'done' | 'error'
+		foreign?: boolean
+		error?: string
+	}>
+	/** Revisions the run made, oldest first. */
+	revisionIds?: string[]
+}
+
 export interface PromptTurn {
 	id: string
 	personaId: string
@@ -572,7 +589,21 @@ export interface PromptTurn {
 	 * Set when an external agent made this edit over MCP rather than the
 	 * built-in turn runner: its display name labels the revision ("Claude Code").
 	 */
-	agent?: { name: string; sessionId: string }
+	agent?: {
+		name: string
+		sessionId: string
+		/**
+		 * Set when FrameFlow's own CLI engine made the edit: the chat turn it
+		 * belongs to. The chat shows it inside that turn, not as its own.
+		 */
+		engineTurnId?: string
+	}
+	/**
+	 * Set on a turn a CLI engine (Claude Code, Codex, Gemini CLI) ran. Its
+	 * edits arrive as their own agent turns (above); this carries the steps
+	 * and, once done, the revisions they made.
+	 */
+	engine?: PromptTurnEngine
 	/** The runtime the model said it was aiming for — measureBuild judges against it. */
 	targetLengthSec?: number
 	answer?: string             // set when the request was a question, not an edit

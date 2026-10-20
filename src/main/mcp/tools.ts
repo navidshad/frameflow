@@ -24,6 +24,8 @@ export interface ToolContext {
 	clientName: string
 	bridge: EditorBridge
 	permissions: () => AgentPermissions
+	/** FrameFlow's own CLI engine: the chat turn these edits belong to. */
+	engineTurnId?: string
 }
 
 /** What the activity feed shows for one call. */
@@ -411,7 +413,7 @@ const applyOps: ToolDef = {
 			rationale: ops.rationale,
 			droppedOps: droppedOps.length ? droppedOps : undefined,
 			notes: notes.length ? notes : undefined,
-			agent: { name: ctx.clientName, sessionId: ctx.sessionId },
+			agent: { name: ctx.clientName, sessionId: ctx.sessionId, ...(ctx.engineTurnId ? { engineTurnId: ctx.engineTurnId } : {}) },
 			createdAt: Date.now()
 		}
 		const outcome = await ctx.bridge.commitTurn({
