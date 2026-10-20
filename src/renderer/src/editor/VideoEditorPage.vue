@@ -10,7 +10,7 @@
 
 		<GraphHeader :title="editorStore.thread?.title || 'Untitled Project'" :total-cost="totalCost" editable
 			@back="router.push('/home')" @rename="editorStore.renameProject($event)">
-			<template v-if="agentStore.liveSession" #center>
+			<template v-if="agentStore.editingSession" #center>
 				<AgentBanner />
 			</template>
 		</GraphHeader>

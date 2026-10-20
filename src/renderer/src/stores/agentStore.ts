@@ -34,6 +34,16 @@ export const useAgentStore = defineStore('agent', () => {
 		[...sessions.value].sort((a, b) => b.lastActivityAt - a.lastActivityAt)[0] || null
 	)
 
+	/**
+	 * The banner's subject: a live session that acted in the last two minutes.
+	 * A connected client that has gone quiet is not "editing".
+	 */
+	const EDITING_WINDOW_MS = 2 * 60_000
+	const editingSession = computed<AgentSessionInfo | null>(() => {
+		const s = liveSession.value
+		return s && now.value - s.lastActivityAt < EDITING_WINDOW_MS ? s : null
+	})
+
 	/** Every session seen this run, so a feed outlives its connection. */
 	const known = ref<Record<string, AgentSessionInfo>>({})
 	const isLive = (sessionId: string | undefined) => !!sessionId && sessions.value.some((s) => s.id === sessionId)
@@ -139,7 +149,7 @@ export const useAgentStore = defineStore('agent', () => {
 	}
 
 	return {
-		access, activities, sessions, liveSession, shownSession, isLive, now,
+		access, activities, sessions, liveSession, editingSession, shownSession, isLive, now,
 		feedFor, baselineRevision, refresh, disconnect
 	}
 })

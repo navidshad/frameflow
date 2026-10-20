@@ -99,27 +99,28 @@
 		<div class="mt-6">
 			<span class="block text-sm font-bold text-zinc-700 dark:text-zinc-300 mb-2.5">Recent agent sessions</span>
 			<table class="w-full border-collapse text-[13px]">
+				<!-- `!` beats pilotui's global table fill and padding, which the design does not have -->
 				<thead>
-					<tr>
-						<th class="text-left text-xs font-bold uppercase text-zinc-500 dark:text-zinc-400 pb-2.5">Agent</th>
-						<th class="text-left text-xs font-bold uppercase text-zinc-500 dark:text-zinc-400 pb-2.5">Project</th>
-						<th class="text-left text-xs font-bold uppercase text-zinc-500 dark:text-zinc-400 pb-2.5">When</th>
-						<th class="text-right text-xs font-bold uppercase text-zinc-500 dark:text-zinc-400 pb-2.5">Steps</th>
+					<tr class="!bg-transparent">
+						<th class="text-left text-xs font-bold uppercase text-zinc-500 dark:text-zinc-400 !px-0 !pt-0 !pb-2.5">Agent</th>
+						<th class="text-left text-xs font-bold uppercase text-zinc-500 dark:text-zinc-400 !px-0 !pt-0 !pb-2.5">Project</th>
+						<th class="text-left text-xs font-bold uppercase text-zinc-500 dark:text-zinc-400 !px-0 !pt-0 !pb-2.5">When</th>
+						<th class="!text-right text-xs font-bold uppercase text-zinc-500 dark:text-zinc-400 !px-0 !pt-0 !pb-2.5">Steps</th>
 					</tr>
 				</thead>
 				<tbody>
 					<tr v-for="row in rows" :key="row.key" class="border-t border-zinc-200 dark:border-zinc-800/50">
-						<td class="py-3.5 font-bold text-zinc-900 dark:text-white">
+						<td class="!px-0 !py-3.5 font-bold text-zinc-900 dark:text-white">
 							{{ row.clientName }}
 							<span v-if="row.live"
 								class="ml-1.5 px-1.5 py-0.5 rounded bg-emerald-500/10 text-emerald-500 text-[9px] font-bold uppercase">Live</span>
 						</td>
-						<td class="text-zinc-600 dark:text-zinc-300">{{ row.project }}</td>
-						<td class="font-mono text-xs text-zinc-500 dark:text-zinc-400">{{ when(row.startedAt) }}</td>
-						<td class="font-mono text-right text-zinc-600 dark:text-zinc-300">{{ row.steps }}</td>
+						<td class="!px-0 !py-3.5 text-zinc-600 dark:text-zinc-300">{{ row.project }}</td>
+						<td class="!px-0 !py-3.5 font-mono text-xs text-zinc-500 dark:text-zinc-400">{{ when(row.startedAt) }}</td>
+						<td class="!px-0 !py-3.5 !text-right font-mono text-zinc-600 dark:text-zinc-300">{{ row.steps }}</td>
 					</tr>
 					<tr v-if="!rows.length" class="border-t border-zinc-200 dark:border-zinc-800/50">
-						<td colspan="4" class="py-3.5 text-xs text-zinc-500">No agent has connected yet.</td>
+						<td colspan="4" class="!px-0 !py-3.5 text-xs text-zinc-500">No agent has connected yet.</td>
 					</tr>
 				</tbody>
 			</table>

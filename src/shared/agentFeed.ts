@@ -194,18 +194,39 @@ export function opChips(ops: Record<string, unknown>, revisionSeq?: number | nul
  * Badge per item the agent's latest edit touched: "AI" for something it added,
  * the signed length change ("−2.4s") when it retimed or trimmed one, "AI" for
  * any other change. Removed items are gone and need no mark.
+ *
+ * A cut INSIDE a clip splits it: the clip is trimmed and its remainder added
+ * as a new item. Badging the trimmed piece with its own change would report a
+ * 1s cut from a 39s clip as "−28.0s", so when one asset has both a trimmed
+ * clip and an added piece, the trimmed one carries the NET change across all
+ * of them and the added pieces read "AI".
  */
 export function agentChangeBadges(forward: TimelineDiff, before: TimelineItem[]): Record<string, string> {
 	const marks: Record<string, string> = {}
 	const prior = new Map(before.map((item) => [item.id, item]))
-	for (const item of forward.addItems || []) marks[item.id] = 'AI'
+	const signed = (delta: number) => `${delta < 0 ? '−' : '+'}${Math.abs(delta).toFixed(1)}s`
+	const EPS = 0.01
+	const added = forward.addItems || []
+	for (const item of added) marks[item.id] = 'AI'
+
 	for (const update of forward.updateItems || []) {
 		const was = prior.get(update.id)
-		const duration = update.duration
-		if (was && typeof duration === 'number' && Math.abs(duration - was.duration) >= 0.05) {
-			const delta = duration - was.duration
-			marks[update.id] = `${delta < 0 ? '−' : '+'}${Math.abs(delta).toFixed(1)}s`
-		} else marks[update.id] = 'AI'
+		if (!was) {
+			marks[update.id] = 'AI'
+			continue
+		}
+		const duration = typeof update.duration === 'number' ? update.duration : was.duration
+		const keptIn = typeof update.in === 'number' ? update.in : was.in
+		const keptOut = typeof update.out === 'number' ? update.out : was.out
+		// The remainder of a split: same source, inside the original range, and
+		// on the far side of what the trimmed piece kept.
+		const remainder = added.filter((piece) =>
+			piece.sourceAssetId === was.sourceAssetId && !!was.sourceAssetId &&
+			piece.in >= was.in - EPS && piece.out <= was.out + EPS &&
+			(piece.in >= keptOut - EPS || piece.out <= keptIn + EPS)
+		)
+		const delta = duration + remainder.reduce((sum, piece) => sum + piece.duration, 0) - was.duration
+		marks[update.id] = Math.abs(delta) >= 0.05 ? signed(delta) : 'AI'
 	}
 	return marks
 }

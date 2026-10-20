@@ -38,10 +38,20 @@ export interface AgentServerOptions {
 	version: string
 	tools?: ToolDef[]
 	onEvent?: (event: AgentServerEvent) => void
+	/**
+	 * A session with no requests for this long is closed. `claude -p` and the
+	 * like exit without the DELETE that ends a session, so without this one
+	 * would read as connected forever. A client that comes back gets a 404 and,
+	 * per the spec, starts a new session. Default 15 minutes.
+	 */
+	idleTimeoutMs?: number
+	sweepEveryMs?: number
 }
 
 interface Session {
 	info: AgentSessionInfo
+	/** Any request at all, not just tool calls. */
+	lastSeenAt: number
 	transport: StreamableHTTPServerTransport
 	server: Server
 }
@@ -99,6 +109,7 @@ export class AgentServer {
 	private httpServer: http.Server | null = null
 	private sessions = new Map<string, Session>()
 	private writeChain: Promise<unknown> = Promise.resolve()
+	private sweeper: NodeJS.Timeout | null = null
 	private readonly tools: ToolDef[]
 	port: number | null = null
 
@@ -149,10 +160,20 @@ export class AgentServer {
 		if (port === null) port = await listen(0)
 		this.httpServer = server
 		this.port = port
+		const idle = this.options.idleTimeoutMs ?? 15 * 60_000
+		this.sweeper = setInterval(() => {
+			const cutoff = Date.now() - idle
+			for (const [id, session] of this.sessions) {
+				if (session.lastSeenAt < cutoff) void this.disconnect(id)
+			}
+		}, this.options.sweepEveryMs ?? 60_000)
+		this.sweeper.unref()
 		return port
 	}
 
 	async stop(): Promise<void> {
+		if (this.sweeper) clearInterval(this.sweeper)
+		this.sweeper = null
 		await this.disconnectAll()
 		const server = this.httpServer
 		this.httpServer = null
@@ -201,6 +222,7 @@ export class AgentServer {
 		if (sessionId) {
 			const session = this.sessions.get(sessionId)
 			if (!session) return sendError(res, 404, 'Session not found: it was disconnected from FrameFlow. Reconnect to continue.')
+			session.lastSeenAt = Date.now()
 			return session.transport.handleRequest(req, res, body)
 		}
 		if (req.method === 'POST' && isInitializeRequest(body)) {
@@ -223,7 +245,7 @@ export class AgentServer {
 				const now = Date.now()
 				this.sessions.set(id, {
 					info: { id, clientName: 'An agent', connectedAt: now, lastActivityAt: now, steps: 0 },
-					transport, server
+					lastSeenAt: now, transport, server
 				})
 			}
 		})

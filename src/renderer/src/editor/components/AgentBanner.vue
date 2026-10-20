@@ -24,7 +24,7 @@ import { useAgentStore } from '../../stores/agentStore'
  */
 
 const agent = useAgentStore()
-const session = computed(() => agent.liveSession)
+const session = computed(() => agent.editingSession)
 
 const steps = computed(() => {
 	const n = session.value?.steps ?? 0

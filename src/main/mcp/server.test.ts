@@ -305,6 +305,23 @@ describe('AgentServer over Streamable HTTP', () => {
 		await expect(client.callTool({ name: 'get_project', arguments: {} })).rejects.toThrow()
 	})
 
+	it('closes a session that has gone quiet (CLIs exit without saying goodbye)', async () => {
+		const quiet = new AgentServer({
+			bridge: editor, token: () => TOKEN, permissions: () => permissions, version: 'test',
+			idleTimeoutMs: 150, sweepEveryMs: 50
+		})
+		const port = await quiet.start(0)
+		const client = new Client({ name: 'claude-code', version: '1' })
+		await client.connect(new StreamableHTTPClientTransport(new URL(`http://127.0.0.1:${port}/mcp`), {
+			requestInit: { headers: { Authorization: `Bearer ${TOKEN}` } }
+		}))
+		expect(quiet.listSessions()).toHaveLength(1)
+		await new Promise((r) => setTimeout(r, 400))
+		expect(quiet.listSessions()).toHaveLength(0)
+		await client.close().catch(() => undefined)
+		await quiet.stop()
+	})
+
 	it('falls back to another port when the preferred one is taken', async () => {
 		const other = new AgentServer({ bridge: editor, token: () => TOKEN, permissions: () => permissions, version: 'test' })
 		const port = await other.start(Number(url.port))

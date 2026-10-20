@@ -53,7 +53,8 @@
     </div>
 
     <!-- Centre: live status (the editor's agent banner) -->
-    <div v-if="$slots.center" class="flex-1 flex justify-center min-w-0 px-3">
+    <div v-if="$slots.center" class="flex-1 flex justify-center min-w-0 px-3"
+      :style="{ marginRight: `${reservedRight}px` }">
       <slot name="center" />
     </div>
 
@@ -65,7 +66,7 @@
 </template>
 
 <script setup lang="ts">
-import { nextTick, ref } from 'vue'
+import { nextTick, onBeforeUnmount, onMounted, ref } from 'vue'
 import SlimTooltip from '../SlimTooltip.vue'
 
 const props = defineProps<{
@@ -101,4 +102,31 @@ const commitRename = () => {
 const cancelRename = () => {
   renaming.value = false
 }
+
+/**
+ * The app's top-right cluster (Export, Settings, theme) is absolutely placed
+ * OVER this header, and its width changes ("Export" → "Exporting 42%"). The
+ * centre slot is measured against it so nothing slides underneath; the right
+ * action area's own 68px (min-width + margin) already covers part of it.
+ */
+const reservedRight = ref(0)
+let observer: ResizeObserver | null = null
+let cluster: HTMLElement | null = null
+const measure = () => {
+  if (!cluster) return
+  const fromRight = window.innerWidth - cluster.getBoundingClientRect().left
+  reservedRight.value = Math.max(0, Math.round(fromRight - 68 + 12))
+}
+onMounted(() => {
+  cluster = document.getElementById('header-actions-portal')?.parentElement || null
+  if (!cluster) return
+  observer = new ResizeObserver(measure)
+  observer.observe(cluster)
+  window.addEventListener('resize', measure)
+  measure()
+})
+onBeforeUnmount(() => {
+  observer?.disconnect()
+  window.removeEventListener('resize', measure)
+})
 </script>

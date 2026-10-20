@@ -73,6 +73,18 @@ describe('agentChangeBadges', () => {
 		}, before)
 		expect(marks).toEqual({ new: 'AI', a: '−2.4s', b: 'AI' })
 	})
+
+	it('reports a cut inside a clip as what was cut, not as the split piece’s new length', () => {
+		// Seen live: removing 0.96s from a 39s clip split it into 11.18s + 26.9s,
+		// and the first piece was badged "−28.0s".
+		const before = [item({ id: 'a', in: 0, out: 39, duration: 39 })]
+		const marks = agentChangeBadges({
+			schemaVersion: 1,
+			updateItems: [{ id: 'a', out: 11.18, duration: 11.18 }],
+			addItems: [item({ id: 'rest', in: 12.14, out: 39, duration: 26.86, timelineStart: 11.18 })]
+		}, before)
+		expect(marks).toEqual({ a: '−1.0s', rest: 'AI' })
+	})
 })
 
 describe('moment search', () => {
