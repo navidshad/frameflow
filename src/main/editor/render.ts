@@ -5,16 +5,30 @@ import path from 'path'
 import process from 'node:process'
 import { v4 as uuidv4 } from 'uuid'
 import type {
+	DeliveryFormat,
 	EditorDocument, EditorRenderProgress, ExportQuality, MediaAsset,
 	TimelineItem, TimelineSegment, Track
 } from '@shared/types'
 import { findOrphanItems, itemEnd } from '@shared/timeline'
+import { isCompositedItem } from '@shared/tracks'
+import { planTransitions, sourceDurationsFrom, type TransitionWindow } from '@shared/transitionPlan'
+import { sequenceFrame, type FrameSource } from '@shared/framing'
+import { hasRenderableEffects } from '@shared/effects'
+import { speechIntervals } from '@shared/ducking'
+import { hasTransform } from '@shared/transform'
+import { hasKeyframes } from '@shared/keyframes'
+import { hasKey } from '@shared/keying'
+import { generatorSource } from '@shared/generators'
+import type { TranscriptEntry } from '@shared/captions'
+import { burnCaptions, cuesForDoc, transcriptsForDoc } from './captions'
+import { normaliseLoudness } from './loudness'
+import { deliver } from './deliver'
 import { threadManager } from '../threads'
 import { assembleVideo, sanitizeFilename } from '../ffmpeg'
 import { THREAD_DIRS } from '../constants/paths'
 import {
-	audioBuilders, buildChain, videoBuilders,
-	type BuildCtx, type Region, type RegionPlan, type SourceSlice
+	allSlices, buildRegionGraph,
+	type Region, type RegionPlan, type SourceSlice
 } from './renderBuilders'
 
 export { atempoChain } from './renderBuilders'
@@ -37,7 +51,14 @@ export { atempoChain } from './renderBuilders'
  */
 
 const IS_MAC = process.platform === 'darwin'
-const GAP_EPS = 0.05
+/**
+ * Boundaries closer together than this are the SAME boundary. Used to collapse
+ * near-coincident cuts so the walker never emits a sliver region — which it used
+ * to DROP outright, silently shortening the export.
+ */
+const SNAP_EPS = 0.05
+/** Float slack for geometry comparisons. Never a tolerance on real content. */
+const TIME_EPS = 1e-6
 
 // ===== Region planning =====
 // Regions are sliced at the UNION of every video- AND audio-item boundary, so
@@ -55,7 +76,16 @@ function sliceSource(item: TimelineItem, t0: number, t1: number): { in: number; 
 	}
 }
 
-export function computeRegions(doc: EditorDocument, quality: ExportQuality): RegionPlan {
+export function computeRegions(
+	doc: EditorDocument,
+	quality: ExportQuality,
+	/**
+	 * Transcripts, when the caller has them. Optional because every existing
+	 * caller renders a document alone: without them a bed still ducks, just
+	 * across whole clips rather than around the pauses between phrases.
+	 */
+	transcripts: Record<string, TranscriptEntry[]> = {}
+): RegionPlan {
 	// Video tracks TOP-most first (highest order wins visually); [0] of a
 	// region's videoLayers is the layer v1 actually renders.
 	const videoTracks = doc.tracks
@@ -67,8 +97,12 @@ export function computeRegions(doc: EditorDocument, quality: ExportQuality): Reg
 
 	const trackById = new Map(doc.tracks.map((t) => [t.id, t]))
 	const videoTrackIds = new Set(videoTracks.map((t) => t.id))
+	// `isCompositedItem` is what keeps a TITLE out of the picture pipeline. A
+	// title burns over the finished file with the captions, so it renders from
+	// whichever track it sits on; treated as a layer it would reach `toSlice`,
+	// which would look up its empty `sourceAssetId` and throw.
 	const videoItems = doc.timeline
-		.filter((i) => videoTrackIds.has(i.trackId))
+		.filter((i) => videoTrackIds.has(i.trackId) && isCompositedItem(i))
 		.sort((a, b) => a.timelineStart - b.timelineStart)
 	const audioItems = doc.timeline
 		.filter((i) => audioTrackById.has(i.trackId))
@@ -83,9 +117,9 @@ export function computeRegions(doc: EditorDocument, quality: ExportQuality): Reg
 	// ---- Orphan pre-flight ----
 	// A clip whose media was removed cannot be rendered. Report EVERY offender
 	// at once with enough detail to find them, instead of dying on the first one
-	// with a bare label. Scoped to the items the render actually consumes:
-	// hidden tracks and overlay/text lanes never reach ffmpeg, so an orphan
-	// parked there must not block an export that would otherwise succeed.
+	// with a bare label. Scoped to the items the render actually consumes: a
+	// hidden track never reaches ffmpeg, so an orphan parked there must not
+	// block an export that would otherwise succeed.
 	const orphans = findOrphanItems([...videoItems, ...audioItems], new Set(assetById.keys()))
 	if (orphans.length) {
 		const at = (t: number) => `${Math.floor(t / 60)}:${String(Math.floor(t % 60)).padStart(2, '0')}`
@@ -107,42 +141,136 @@ export function computeRegions(doc: EditorDocument, quality: ExportQuality): Reg
 	const usedVideoAssets = [...new Set(videoItems.map((i) => i.sourceAssetId))]
 		.map((id) => assetById.get(id))
 		.filter((a): a is MediaAsset => !!a)
-	const even = (n: number) => Math.max(2, Math.floor(n / 2) * 2)
-	const largest = usedVideoAssets.reduce((best, a) => {
-		const area = (a.metadata?.width || 0) * (a.metadata?.height || 0)
-		return area > best.area ? { area, w: a.metadata!.width, h: a.metadata!.height } : best
-	}, { area: 0, w: 1280, h: 720 })
-	const width = even(largest.w)
-	const height = even(largest.h)
+	// The SEQUENCE decides its own shape when the project has chosen one — that is
+	// what makes a 9:16 export from 16:9 footage possible at all. The monitor
+	// resolves the frame through the same function.
+	const { width, height } = sequenceFrame(
+		doc.timelineMeta,
+		usedVideoAssets.map((a) => a.metadata ?? {})
+	)
 	const fps = Math.min(60, Math.max(10,
 		usedVideoAssets.reduce((max, a) => Math.max(max, a.metadata?.fps || 0), 0) || 30
 	))
 
-	// Boundary set = every video- and audio-item edge, clamped to [0, end].
 	const allItems = [...videoItems, ...audioItems]
 	const end = allItems.reduce((max, it) => Math.max(max, itemEnd(it)), 0)
-	const cuts = new Set<number>([0, end])
+
+	// ---- Transition windows ----
+	// Resolved BEFORE the cut set, because a window suppresses the cuts inside it.
+	const sourceDurations = sourceDurationsFrom(doc.media)
+	const windows = planTransitions(videoItems, sourceDurations)
+		.flatMap((seam) => (seam.window ? [seam.window] : []))
+	validateWindows(windows, end, trackById)
+
+	// ---- Boundary set ----
+	// Every video- and audio-item edge, clamped to [0, end], plus each window's
+	// own edges. Priority decides which survives when two land within SNAP_EPS:
+	// a sequence bound outranks a window edge, which outranks an item edge.
+	type Cut = { t: number; rank: 0 | 1 | 2 }  // 0 = bound, 1 = window, 2 = item
+	const raw: Cut[] = [{ t: 0, rank: 0 }, { t: end, rank: 0 }]
 	for (const it of allItems) {
-		cuts.add(Math.min(Math.max(it.timelineStart, 0), end))
-		cuts.add(Math.min(Math.max(itemEnd(it), 0), end))
+		raw.push({ t: Math.min(Math.max(it.timelineStart, 0), end), rank: 2 })
+		raw.push({ t: Math.min(Math.max(itemEnd(it), 0), end), rank: 2 })
 	}
-	const points = [...cuts].sort((a, b) => a - b)
+	for (const w of windows) {
+		raw.push({ t: w.start, rank: 1 }, { t: w.end, rank: 1 })
+	}
+	raw.sort((a, b) => a.t - b.t || a.rank - b.rank)
+
+	// Collapse each run of near-coincident cuts to its highest-priority member.
+	// This is what keeps total duration exact: a boundary moves by < SNAP_EPS in
+	// the PLAN only (the document is untouched), instead of a sliver of the
+	// timeline being deleted. It rides on slack `covers()` already allows.
+	const collapsed: Cut[] = []
+	for (const cut of raw) {
+		const last = collapsed[collapsed.length - 1]
+		if (last && cut.t - last.t < SNAP_EPS) {
+			if (cut.rank === 1 && last.rank === 1 && Math.abs(cut.t - last.t) > TIME_EPS) {
+				throw new Error('Two transition windows are too close together to render separately.')
+			}
+			if (cut.rank < last.rank) collapsed[collapsed.length - 1] = cut
+			continue
+		}
+		collapsed.push(cut)
+	}
+
+	// Suppress every cut strictly inside a window — an xfade cannot start
+	// mid-ramp, so the window has to be one atomic region. Unambiguous after the
+	// collapse: an item edge within SNAP_EPS of a window edge has already BECOME
+	// that window edge.
+	const points = collapsed
+		.filter((c) => !windows.some((w) => c.t > w.start + TIME_EPS && c.t < w.end - TIME_EPS))
+		.map((c) => c.t)
 
 	// A video item's own audio contributes when unmuted and the source has audio.
-	const videoAudioActive = (item: TimelineItem, asset: MediaAsset) =>
+	// A GENERATED layer has no source and therefore no audio — it is a picture,
+	// not a recording.
+	const videoAudioActive = (item: TimelineItem, asset: MediaAsset | undefined) =>
+		!item.generator && !!asset &&
 		!item.muted && !trackById.get(item.trackId)?.muted && asset.metadata?.hasAudio !== false
 	// An audio-track item contributes when neither it nor its track is muted.
 	const audioItemActive = (item: TimelineItem) =>
 		!item.muted && !audioTrackById.get(item.trackId)?.muted
 
-	const covers = (item: TimelineItem, t0: number, t1: number) =>
-		item.timelineStart <= t0 + GAP_EPS && itemEnd(item) >= t1 - GAP_EPS
+	const intersects = (item: TimelineItem, t0: number, t1: number) =>
+		item.timelineStart < t1 - TIME_EPS && itemEnd(item) > t0 + TIME_EPS
 
+	/**
+	 * The item's content clipped to [t0,t1), carrying where inside the region it
+	 * belongs. `offset` is usually 0 — but NOT always, and an earlier version of
+	 * this comment wrongly claimed it was: collapsing near-coincident boundaries
+	 * means a region no longer starts at every item edge, so an item can begin
+	 * partway through one. The renderer places it with `tpad` / `adelay`.
+	 */
 	const toSlice = (item: TimelineItem, t0: number, t1: number): SourceSlice => {
+		const s = Math.max(t0, item.timelineStart)
+		const e = Math.min(t1, itemEnd(item))
+		const { in: sIn, out: sOut } = sliceSource(item, s, e)
+		const common = {
+			in: sIn, out: sOut,
+			offset: s - t0, duration: e - s, freezeHead: 0, freezeTail: 0,
+			item, track: trackById.get(item.trackId)!
+		}
+		// A generated layer has no footage behind it. It is synthesised for
+		// exactly the window it fills, which is why the source string carries the
+		// region's own duration rather than the item's.
+		if (item.generator) {
+			return {
+				...common,
+				lavfi: true,
+				srcPath: generatorSource(item.generator, { width, height, fps }, e - s)
+			}
+		}
 		const asset = assetById.get(item.sourceAssetId)
 		if (!asset) throw new Error(`Missing media asset for clip "${item.label || item.id}".`)
-		const { in: sIn, out: sOut } = sliceSource(item, t0, t1)
-		return { srcPath: srcFor(asset), in: sIn, out: sOut, item, track: trackById.get(item.trackId)! }
+		return { ...common, srcPath: srcFor(asset) }
+	}
+
+	/** One side of a transition, extended into its handle and frozen past it. */
+	const toTransitionSlice = (
+		side: TransitionWindow['outgoing'], duration: number
+	): SourceSlice => {
+		const item = side.item
+		const asset = assetById.get(item.sourceAssetId)
+		if (!asset) throw new Error(`Missing media asset for clip "${item.label || item.id}".`)
+		const speed = item.speed || 1
+		const slice: SourceSlice = {
+			srcPath: srcFor(asset), in: side.in, out: side.out,
+			offset: 0, duration,
+			freezeHead: side.freeze && side.in <= item.in + TIME_EPS ? side.freeze : 0,
+			freezeTail: side.freeze && side.out >= item.out - TIME_EPS ? side.freeze : 0,
+			item, track: trackById.get(item.trackId)!
+		}
+		// The freeze convention is easy to invert silently, so pin it with the one
+		// identity that only closes when each side is padded at the correct end.
+		const covered = slice.freezeHead + (slice.out - slice.in) / speed + slice.freezeTail
+		if (Math.abs(covered - duration) > TIME_EPS) {
+			throw new Error(
+				`Transition slice for "${item.label || item.id}" covers ${covered.toFixed(3)}s ` +
+				`of a ${duration.toFixed(3)}s window.`
+			)
+		}
+		return slice
 	}
 
 	const regions: Region[] = []
@@ -150,35 +278,150 @@ export function computeRegions(doc: EditorDocument, quality: ExportQuality): Reg
 		const t0 = points[i]
 		const t1 = points[i + 1]
 		const duration = t1 - t0
-		if (duration <= GAP_EPS) continue
+		// After the collapse this is an invariant, not a filter. It used to be
+		// `continue`, which silently deleted a legally-trimmed sub-50ms clip.
+		if (duration <= TIME_EPS) {
+			throw new Error(`Region plan produced a zero-length span at ${t0.toFixed(3)}s.`)
+		}
+
+		const window = windows.find(
+			(w) => Math.abs(w.start - t0) < TIME_EPS && Math.abs(w.end - t1) < TIME_EPS
+		)
+
+		// ---- Audio-track bystanders: shared by both region kinds ----
+		const audioSources: SourceSlice[] = []
+		const addTrackAudio = () => {
+			for (const aItem of audioItems) {
+				if (!intersects(aItem, t0, t1) || !audioItemActive(aItem)) continue
+				// No missing-asset check here: the pre-flight above already threw.
+				// Silently skipping would drop audio from the export without a word.
+				audioSources.push(toSlice(aItem, t0, t1))
+			}
+		}
+
+		if (window) {
+			// Any OTHER video track crossing the window would have to composite with
+			// the blend, which nothing renders yet. Throw rather than quietly drop it.
+			for (const track of videoTracks) {
+				if (track.id === window.trackId) continue
+				const clash = videoItems.find((it) => it.trackId === track.id && intersects(it, t0, t1))
+				if (clash) {
+					throw new Error(
+						`Clip "${clash.label || clash.id}" on track "${track.name}" overlaps a transition. ` +
+						'Move it clear of the transition, or remove the transition, then export again.'
+					)
+				}
+			}
+			addTrackAudio()
+			const fromAsset = assetById.get(window.outgoing.item.sourceAssetId)!
+			const toAsset = assetById.get(window.incoming.item.sourceAssetId)!
+			regions.push({
+				kind: 'overlap',
+				duration,
+				transition: { kind: window.kind, duration: window.duration },
+				from: toTransitionSlice(window.outgoing, duration),
+				to: toTransitionSlice(window.incoming, duration),
+				cutAt: window.cut - t0,
+				fromAudioActive: videoAudioActive(window.outgoing.item, fromAsset),
+				toAudioActive: videoAudioActive(window.incoming.item, toAsset),
+				audioSources
+			})
+			continue
+		}
 
 		// ---- Video: covering item per video track, top-most first ----
 		const videoLayers: SourceSlice[] = []
 		for (const track of videoTracks) {
-			const vItem = videoItems.find((it) => it.trackId === track.id && covers(it, t0, t1))
-			if (vItem) videoLayers.push(toSlice(vItem, t0, t1))
+			const hits = videoItems.filter((it) => it.trackId === track.id && intersects(it, t0, t1))
+			if (hits.length > 1) {
+				// Illegal in the document model (repairOverlaps guarantees it), and the
+				// old `.find()` silently rendered the first and discarded the rest.
+				throw new Error(
+					`Clips "${hits[0].label || hits[0].id}" and "${hits[1].label || hits[1].id}" ` +
+					`overlap on track "${track.name}".`
+				)
+			}
+			if (!hits.length) continue
+			const slice = toSlice(hits[0], t0, t1)
+			if (slice.offset + slice.duration > duration + TIME_EPS) {
+				throw new Error(`Clip "${hits[0].label || hits[0].id}" overruns its region.`)
+			}
+			videoLayers.push(slice)
 		}
 
 		// ---- Audio: each video layer's own audio + covering audio-track items ----
-		const audioSources: SourceSlice[] = []
 		for (const layer of videoLayers) {
-			const asset = assetById.get(layer.item.sourceAssetId)!
+			const asset = assetById.get(layer.item.sourceAssetId)
 			if (videoAudioActive(layer.item, asset)) audioSources.push(toSlice(layer.item, t0, t1))
 		}
-		for (const aItem of audioItems) {
-			if (!covers(aItem, t0, t1) || !audioItemActive(aItem)) continue
-			// No missing-asset check here: the pre-flight above already threw.
-			// Silently skipping would drop audio from the export without a word.
-			audioSources.push(toSlice(aItem, t0, t1))
-		}
+		addTrackAudio()
 
-		regions.push({ duration, videoLayers, audioSources })
+		regions.push({ kind: 'cut', duration, videoLayers, audioSources })
 	}
 
-	return { regions, width, height, fps }
+	// Nothing downstream checks export length — concat just stitches whatever it
+	// is given — so a slip in the window arithmetic would ship as a silently
+	// wrong-length file. One reduce is the whole defence.
+	const total = regions.reduce((sum, r) => sum + r.duration, 0)
+	if (Math.abs(total - end) > TIME_EPS) {
+		throw new Error(
+			`Region plan covers ${total.toFixed(3)}s of a ${end.toFixed(3)}s timeline.`
+		)
+	}
+
+	// Resolved once for the whole timeline rather than per region, which is what
+	// makes the duck immune to where the region boundaries happen to fall.
+	const hasBed = doc.tracks.some((t) => t.role === 'music')
+
+	return {
+		regions, width, height, fps,
+		duration: end,
+		hasOverlap: regions.some((r) => r.kind === 'overlap'),
+		...(hasBed ? { speech: speechIntervals(doc, transcripts) } : {})
+	}
+}
+
+/**
+ * Windows come from a pure module that cannot see the document, so the walker
+ * checks the properties it depends on rather than trusting them.
+ */
+function validateWindows(
+	windows: TransitionWindow[],
+	end: number,
+	trackById: Map<string, Track>
+): void {
+	const sorted = [...windows].sort((a, b) => a.start - b.start)
+	for (let i = 0; i < sorted.length; i++) {
+		const w = sorted[i]
+		const name = trackById.get(w.trackId)?.name || w.trackId
+		if (w.start < -TIME_EPS || w.end > end + TIME_EPS) {
+			throw new Error(`A transition on track "${name}" runs outside the timeline.`)
+		}
+		if (w.duration <= SNAP_EPS) {
+			throw new Error(`A transition on track "${name}" is too short to render.`)
+		}
+		if (w.start < w.outgoing.item.timelineStart - TIME_EPS || w.end > itemEnd(w.incoming.item) + TIME_EPS) {
+			throw new Error(`A transition on track "${name}" runs past the clips it joins.`)
+		}
+		const next = sorted[i + 1]
+		if (next && next.start < w.end - TIME_EPS) {
+			throw new Error(`Two transitions on track "${name}" overlap each other.`)
+		}
+	}
 }
 
 // ===== Fast path =====
+
+/**
+ * The same blind spot again, from the other side: `assembleVideo` emits no
+ * scaling filter, so its output is the SOURCE's dimensions. It can therefore
+ * only serve a sequence whose frame already matches — otherwise a project set
+ * to 9:16 would quietly export at the footage's 16:9 with no error and no log.
+ */
+export const fastPathMatchesFrame = (
+	source: FrameSource | undefined,
+	plan: { width: number; height: number }
+): boolean => !!source && source.width === plan.width && source.height === plan.height
 
 export function isFastPathEligible(items: TimelineItem[], track: Track, hasAudioItems = false): boolean {
 	if (items.length === 0) return false
@@ -192,22 +435,36 @@ export function isFastPathEligible(items: TimelineItem[], track: Track, hasAudio
 	if ((track.gain ?? 1) !== 1) return false
 	if (!items.every((i) => (i.gain ?? 1) === 1)) return false
 	if (items.some((i) => (i.fadeInSec ?? 0) > 0 || (i.fadeOutSec ?? 0) > 0)) return false
-	if (Math.abs(items[0].timelineStart) > GAP_EPS) return false // leading gap needs black
+	// A butt-joined single-source timeline is EXACTLY what a beginner applies a
+	// transition to, and assembleVideo has no blend — without this it exports hard
+	// cuts with no error and no log. Deliberately checks the raw annotation rather
+	// than resolving the window: declining the fast path costs a re-encode, and
+	// resolving here would be a second place the geometry could disagree.
+	if (items.some((i) => i.transition?.in || i.transition?.out)) return false
+	// assembleVideo emits no scale/crop filter whatsoever — its output is the
+	// source's own dimensions. Any clip asked to fill a differently-shaped frame
+	// would silently come out letterboxed at the source size instead.
+	if (items.some((i) => i.framing && i.framing.mode !== 'fit')) return false
+	// Same blind spot, third time: assembleVideo emits no filter chain at all,
+	// so a graded clip would export ungraded with no error and no log.
+	if (items.some((i) => hasRenderableEffects(i.effects))) return false
+	if (items.some((i) => hasTransform(i.transform))) return false
+	if (items.some((i) => hasKeyframes(i.keyframes))) return false
+	if (items.some((i) => hasKey(i.key))) return false
+	// assembleVideo re-muxes ONE source file; a synthesised layer is not one.
+	if (items.some((i) => !isCompositedItem(i) || !!i.generator)) return false
+	if (Math.abs(items[0].timelineStart) > SNAP_EPS) return false // leading gap needs black
 	for (let i = 1; i < items.length; i++) {
-		if (Math.abs(items[i].timelineStart - itemEnd(items[i - 1])) > GAP_EPS) return false
+		if (Math.abs(items[i].timelineStart - itemEnd(items[i - 1])) > SNAP_EPS) return false
 	}
 	return true
 }
 
 // ===== ffmpeg building blocks =====
 
-const vnorm = (w: number, h: number, fps: number) =>
-	`scale=${w}:${h}:force_original_aspect_ratio=decrease,` +
-	`pad=${w}:${h}:(ow-iw)/2:(oh-ih)/2,setsar=1,fps=${fps},format=yuv420p`
-
 // Uniform intermediates: identical codec/res/fps/rate/layout is REQUIRED for
 // concat -c copy. Forced h264+aac mp4 on all platforms (incl. webm sources).
-const intermediateOpts = (): string[] => [
+export const intermediateOpts = (): string[] => [
 	...(IS_MAC
 		? ['-c:v', 'h264_videotoolbox', '-b:v', '8M', '-realtime', 'true']
 		: ['-c:v', 'libx264', '-preset', 'veryfast', '-crf', '18']),
@@ -216,7 +473,7 @@ const intermediateOpts = (): string[] => [
 	'-threads', '0'
 ]
 
-function runCommand(
+export function runCommand(
 	command: ffmpeg.FfmpegCommand,
 	outputPath: string,
 	signal: AbortSignal,
@@ -257,64 +514,24 @@ async function renderRegion(
 	signal: AbortSignal,
 	onProgress: (percent: number) => void
 ): Promise<string> {
-	const duration = region.duration
-	const dur = duration.toFixed(3)
+	const dur = region.duration.toFixed(3)
 	const outputPath = path.join(workDir, `region-${String(index).padStart(3, '0')}.mp4`)
 
+	const graph = buildRegionGraph(region, plan)
 	const command = ffmpeg()
-	const filters: string[] = []
-	let inputIdx = 0
-	const ctxFor = (slice: SourceSlice): BuildCtx => ({ slice, regionDur: duration, plan })
-
-	// ---- Video: top layer's slice, or black of exactly `duration`.
-	// videoLayers[1..n] are the compositing seam (PiP/overlay, deferred). ----
-	const topLayer = region.videoLayers[0]
-	if (topLayer) {
-		const cut = (topLayer.out - topLayer.in).toFixed(3)
-		command.input(topLayer.srcPath).inputOptions(['-ss', topLayer.in.toFixed(3), '-t', cut])
-		const chain = [...buildChain(videoBuilders, ctxFor(topLayer)), vnorm(plan.width, plan.height, plan.fps)]
-		filters.push(`[${inputIdx++}:v]${chain.join(',')}[v]`)
-	} else {
-		command.input(`color=black:size=${plan.width}x${plan.height}:rate=${plan.fps}`)
-			.inputFormat('lavfi').inputOptions(['-t', dur])
-		filters.push(`[${inputIdx++}:v]setsar=1,format=yuv420p[v]`)
-	}
-
-	// ---- Audio: silence, single stream, or amix of k streams ----
-	let audioLabel = '[a]'
-	if (region.audioSources.length === 0) {
-		command.input('anullsrc=r=48000:cl=stereo').inputFormat('lavfi').inputOptions(['-t', dur])
-		filters.push(`[${inputIdx++}:a]atrim=0:${dur},asetpts=PTS-STARTPTS[a]`)
-	} else {
-		const labels: string[] = []
-		region.audioSources.forEach((a, k) => {
-			const cut = (a.out - a.in).toFixed(3)
-			command.input(a.srcPath).inputOptions(['-ss', a.in.toFixed(3), '-t', cut])
-			const label = `[a${k}]`
-			// Head: PTS reset. Builders: speed → gain → fade → effects. Tail:
-			// conform + apad + atrim pin every stream to EXACTLY the region
-			// duration so amix aligns them and the intermediate stays A/V
-			// frame-aligned for concat.
-			const chain = [
-				'asetpts=PTS-STARTPTS',
-				...buildChain(audioBuilders, ctxFor(a)),
-				'aresample=48000',
-				`aformat=sample_fmts=fltp:channel_layouts=stereo,apad=whole_dur=${dur},atrim=0:${dur}`
-			]
-			filters.push(`[${inputIdx++}:a]${chain.join(',')}${label}`)
-			labels.push(label)
-		})
-		if (labels.length === 1) {
-			audioLabel = labels[0]
-		} else {
-			filters.push(`${labels.join('')}amix=inputs=${labels.length}:normalize=0[a]`)
-		}
+	for (const input of graph.inputs) {
+		const added = command.input(input.path)
+		// NOT `.inputFormat()`: fluent-ffmpeg validates that against `-formats`,
+		// and lavfi is a DEVICE, not a format — the check rejects it and the
+		// whole render dies with "Input format lavfi is not available". Passing
+		// `-f` as a plain option skips the misguided validation.
+		added.inputOptions(input.format ? ['-f', input.format, ...input.options] : input.options)
 	}
 
 	command
-		.complexFilter(filters.join(';'))
-		.map('[v]')
-		.map(audioLabel)
+		.complexFilter(graph.filters.join(';'))
+		.map(graph.video)
+		.map(graph.audio)
 		.outputOptions([...intermediateOpts(), '-t', dur])
 
 	await runCommand(command, outputPath, signal, onProgress)
@@ -380,6 +597,8 @@ export function startEditorRender(options: {
 	 * is persisted. Falls back to the persisted thread doc when absent.
 	 */
 	doc?: EditorDocument
+	/** What kind of file to deliver. Defaults to the h264 mp4 already produced. */
+	format?: DeliveryFormat
 }): { renderId: string } {
 	const { threadId, quality } = options
 	const thread = threadManager.getThread(threadId)
@@ -390,12 +609,14 @@ export function startEditorRender(options: {
 
 	// ---- Pre-flight (synchronous — a bad timeline rejects the invoke
 	// immediately instead of producing a ghost render) ----
-	const plan = computeRegions(doc, quality)
+	// The transcript sharpens ducking from whole-clip to phrase-level; reading it
+	// here costs one file per asset and nothing when no bed exists.
+	const plan = computeRegions(doc, quality, transcriptsForDoc(doc))
+	// `allSlices` is exhaustive over region kinds, so a slice can never escape this
+	// check by living in a field the pre-flight forgot — which would turn a clean
+	// synchronous rejection into a failure halfway through a long render.
 	const srcPaths = [...new Set(
-		plan.regions.flatMap((r) => [
-			...r.videoLayers.map((v) => v.srcPath),
-			...r.audioSources.map((a) => a.srcPath)
-		])
+		plan.regions.flatMap(allSlices).filter((s) => !s.lavfi).map((s) => s.srcPath)
 	)]
 	const missing = srcPaths.filter((p) => !fs.existsSync(p))
 	if (missing.length > 0) {
@@ -418,6 +639,10 @@ export function startEditorRender(options: {
 	void (async () => {
 		const baseName = sanitizeFilename(thread.title || 'export')
 		let finalPath = path.join(exportsDir, `${baseName}_${renderId.slice(0, 8)}.mp4`)
+		// Held outside the try so the cleanup can remove a half-written
+		// intermediate too; these live beside finalPath, not inside workDir,
+		// which the `finally` sweeps.
+		let sidecarPath: string | null = null
 		try {
 			progress(0, 'rendering')
 
@@ -426,22 +651,30 @@ export function startEditorRender(options: {
 				.sort((a, b) => a.order - b.order)[0] || null
 			const items = videoTrack
 				? doc.timeline
-					.filter((i) => i.trackId === videoTrack.id)
+					.filter((i) => i.trackId === videoTrack.id && isCompositedItem(i))
 					.sort((a, b) => a.timelineStart - b.timelineStart)
 				: []
 			const audioTrackIds = new Set(
 				doc.tracks.filter((t) => t.kind === 'audio' && !t.hidden).map((t) => t.id)
 			)
 			const hasAudioItems = doc.timeline.some((i) => audioTrackIds.has(i.trackId))
-			// Items on a SECOND video track need the region path (layering).
+			// Items on a SECOND video track need the region path (layering). A title
+			// is not one of them — it burns over the finished file either way, so a
+			// project whose only other lane holds titles keeps the fast path.
 			const videoTrackIds = new Set(
 				doc.tracks.filter((t) => t.kind === 'video' && !t.hidden).map((t) => t.id)
 			)
 			const hasOtherVideoItems = doc.timeline.some(
-				(i) => videoTrackIds.has(i.trackId) && i.trackId !== videoTrack?.id
+				(i) => videoTrackIds.has(i.trackId) && i.trackId !== videoTrack?.id && isCompositedItem(i)
 			)
 
-			if (videoTrack && !hasOtherVideoItems && isFastPathEligible(items, videoTrack, hasAudioItems)) {
+			const fastSource = doc.media.find((a) => a.id === items[0]?.sourceAssetId)?.metadata
+
+			// `!plan.hasOverlap` reads the walker's OWN output, so a future source of
+			// transitions the predicate does not know about still cannot slip through.
+			if (videoTrack && !hasOtherVideoItems && !plan.hasOverlap
+				&& fastPathMatchesFrame(fastSource, plan)
+				&& isFastPathEligible(items, videoTrack, hasAudioItems)) {
 				// ---- Fast path: single-source trim+concat via assembleVideo ----
 				// computeRegions' orphan pre-flight already ran, so this resolves —
 				// but assert rather than `!`, so a future reordering fails loudly.
@@ -499,12 +732,59 @@ export function startEditorRender(options: {
 				}
 			}
 
+			// ---- Burned-in text: captions and titles ----
+			// One pass over the finished file, so it covers the fast path and the
+			// region path alike — both have assigned finalPath by here. Titles go
+			// through the same pass, because a title IS a cue that carries its own
+			// placement; there is no second text pipeline.
+			{
+				const frame = { width: plan.width, height: plan.height }
+				const cues = cuesForDoc(doc, frame)
+				if (cues.length) {
+					progress(97, 'stitching')
+					sidecarPath = await burnCaptions({
+						sourcePath: finalPath, workDir, cues, frame, signal,
+						onProgress: (pct) => progress(97 + pct * 0.02, 'stitching')
+					})
+					// Replace the uncaptioned render only once the burn has landed.
+					fs.renameSync(sidecarPath, finalPath)
+					sidecarPath = null
+				}
+			}
+
+			// ---- Loudness ----
+			// After the caption burn, so it measures the file that ships. Audio
+			// only, so it is cheap next to everything above it.
+			if (doc.loudnessEnabled) {
+				progress(99, 'stitching')
+				sidecarPath = await normaliseLoudness({ sourcePath: finalPath, signal })
+				fs.renameSync(sidecarPath, finalPath)
+				sidecarPath = null
+			}
+
+			// ---- Delivery ----
+			// Last, so it transcodes the finished picture and mix rather than
+			// something the caption or loudness pass would then have to redo.
+			const delivered = await deliver({
+				sourcePath: finalPath,
+				format: options.format ?? 'h264',
+				signal,
+				onProgress: (pct) => progress(99 + pct * 0.01, 'stitching')
+			})
+			if (delivered) {
+				// A different container, so the mp4 is replaced rather than
+				// renamed over — and removed, because nobody asked for two files.
+				try { fs.unlinkSync(finalPath) } catch { /* ignore */ }
+				finalPath = delivered
+			}
+
 			emitRenderProgress({ threadId, renderId, percent: 100, phase: 'done', outputPath: finalPath })
 		} catch (error: any) {
 			const message = signal.aborted ? 'aborted' : (error?.message || 'Export failed')
 			if (!signal.aborted) console.error('[render] Export failed:', error)
 			// Remove a partial final file
 			try { if (fs.existsSync(finalPath)) fs.unlinkSync(finalPath) } catch { /* ignore */ }
+			try { if (sidecarPath && fs.existsSync(sidecarPath)) fs.unlinkSync(sidecarPath) } catch { /* ignore */ }
 			emitRenderProgress({ threadId, renderId, percent: 0, phase: 'error', error: message })
 		} finally {
 			try { fs.rmSync(workDir, { recursive: true, force: true }) } catch { /* ignore */ }

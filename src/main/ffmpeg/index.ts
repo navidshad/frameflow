@@ -18,6 +18,19 @@ export { getFFmpegBinaryPath, getFFprobeBinaryPath } from './binaries'
 ffmpeg.setFfmpegPath(getFFmpegBinaryPath())
 ffmpeg.setFfprobePath(getFFprobeBinaryPath())
 
+// fluent-ffmpeg validates every input's `-f` against `ffmpeg -formats` before
+// running — and `lavfi` is a DEVICE, not a format, so it is never in that list
+// and any command with a synthesised input (silence under a still frame, black
+// under a gap, a generated background) dies with "Input format lavfi is not
+// available" IN THE APP while passing every test that calls the binary
+// directly. The capability cache is one shared object, so teaching it about
+// lavfi once fixes every command.
+ffmpeg.getAvailableFormats((error, formats) => {
+	if (!error && formats && !formats.lavfi) {
+		formats.lavfi = { description: 'Libavfilter virtual input device', canDemux: true, canMux: false }
+	}
+})
+
 /**
  * Checks whether ffmpeg is available and functional.
  * Returns true if the embedded binary responds correctly, false otherwise.

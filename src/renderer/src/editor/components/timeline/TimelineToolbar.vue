@@ -16,23 +16,66 @@
 					{{ view }}
 				</button>
 			</div>
+
+			<div class="w-px h-4 bg-zinc-200 dark:bg-zinc-800 mx-0.5"></div>
+
+			<!-- Transport. It sits here rather than under the monitor because these
+			     move the playhead, and the playhead is a timeline object — the
+			     picture is what happens as a result, not what is being driven. -->
+			<ToolButton icon="tabler--player-track-prev-filled"
+				:title="`Back one frame (${keysFor('step')})`"
+				@click="step(-1)" />
+			<SlimTooltip :text="store.isPlaying ? `Pause (${keysFor('play')})` : `Play (${keysFor('play')})`" placement="top">
+				<button
+					class="w-7 h-7 rounded-full bg-primary text-white flex items-center justify-center
+					       shadow-md shadow-primary/20 hover:bg-primary-dark transition active:scale-95"
+					:aria-label="store.isPlaying ? 'Pause' : 'Play'"
+					@click="store.isPlaying = !store.isPlaying">
+					<span class="w-3 h-3"
+						:class="store.isPlaying ? 'iconify tabler--player-pause-filled' : 'iconify tabler--player-play-filled'"></span>
+				</button>
+			</SlimTooltip>
+			<ToolButton icon="tabler--player-track-next-filled"
+				:title="`Forward one frame (${keysFor('step')})`"
+				@click="step(1)" />
+
+			<span class="text-[10px] font-mono text-zinc-500 tabular-nums pl-1">{{ timecode }}</span>
 		</div>
 
 		<div class="flex items-center gap-1">
 			<!-- Undo / Redo -->
-			<ToolButton icon="tabler--arrow-back-up" title="Undo (⌘Z)" :disabled="!store.canUndo" @click="store.undo()" />
-			<ToolButton icon="tabler--arrow-forward-up" title="Redo (⌘⇧Z)" :disabled="!store.canRedo" @click="store.redo()" />
+			<ToolButton icon="tabler--arrow-back-up" :title="`Undo (${keysFor('undo')})`" :disabled="!store.canUndo" @click="store.undo()" />
+			<ToolButton icon="tabler--arrow-forward-up" :title="`Redo (${keysFor('redo')})`" :disabled="!store.canRedo" @click="store.redo()" />
 			<div class="w-px h-4 bg-zinc-200 dark:bg-zinc-800 mx-1"></div>
 
 			<!-- Edit tools -->
-			<ToolButton icon="tabler--blade-filled" title="Split at playhead (S)" @click="store.splitAtPlayhead()" />
-			<ToolButton icon="tabler--trash" title="Ripple delete selection (⌫)"
+			<ToolButton icon="tabler--blade-filled" :title="`Split at the playhead (${keysFor('split')})`" @click="store.splitAtPlayhead()" />
+			<ToolButton icon="tabler--trash" :title="`Ripple delete the selection (${keysFor('delete')})`"
 				:disabled="!store.selectedItemIds.length"
 				@click="store.deleteItems(store.selectedItemIds)" />
 			<ToolButton icon="tabler--arrows-join" title="Close gaps — pull every clip left so the timeline runs back to back"
 				:disabled="!store.hasGaps" @click="store.closeGaps()" />
-			<ToolButton icon="tabler--magnet" :title="store.snapEnabled ? 'Snapping on' : 'Snapping off'"
+			<ToolButton icon="tabler--copy"
+				:title="`Duplicate the selection (${keysFor('duplicate')})`"
+				:disabled="!store.selectedItemIds.length"
+				@click="store.duplicateItems()" />
+			<ToolButton icon="tabler--magnet"
+				:title="`${store.snapEnabled ? 'Snapping on' : 'Snapping off'} (${keysFor('snapping')})`"
 				:active="store.snapEnabled" @click="store.snapEnabled = !store.snapEnabled" />
+			<ToolButton icon="tabler--badge-cc" :disabled="!store.hasTranscript"
+				:title="!store.hasTranscript
+					? 'Captions — transcribe a clip first'
+					: store.captionsEnabled
+						? 'Captions on — burned into the export'
+						: 'Captions off'"
+				:active="store.captionsEnabled"
+				@click="store.setCaptionsEnabled(!store.captionsEnabled)" />
+			<ToolButton icon="tabler--wave-sine"
+				:title="store.loudnessEnabled
+					? 'Loudness on — the mix is normalised to -14 LUFS on export'
+					: 'Loudness off — the export keeps whatever level the sources had'"
+				:active="store.loudnessEnabled"
+				@click="store.setLoudnessEnabled(!store.loudnessEnabled)" />
 			<div class="w-px h-4 bg-zinc-200 dark:bg-zinc-800 mx-1"></div>
 
 			<!-- Marker / chapter jump list (§5.3) -->
@@ -74,23 +117,49 @@
 				@click="viewport.fitToSelection()" />
 			<div class="w-px h-4 bg-zinc-200 dark:bg-zinc-800 mx-1"></div>
 
-			<ToolButton icon="tabler--plus" title="Add overlay track" @click="store.addOverlayTrack()" />
+			<ToolButton icon="tabler--typography" title="Add a title at the playhead"
+				@click="store.addTitle()" />
+			<ToolButton icon="tabler--color-swatch"
+				title="Add a generated background at the playhead — something for a keyed layer to sit in front of"
+				@click="store.addGeneratedLayer()" />
+			<ToolButton icon="tabler--movie" title="Add a video track — anything you can see, and the upper lanes render in front"
+				@click="store.addVideoTrack()" />
+			<ToolButton icon="tabler--music" title="Add an audio track — anything you can hear"
+				@click="store.addAudioTrack()" />
 			<ToolButton icon="tabler--bookmark-plus" title="Save revision checkpoint"
 				@click="store.saveCheckpoint()" />
+			<div class="w-px h-4 bg-zinc-200 dark:bg-zinc-800 mx-1"></div>
+			<ToolButton icon="tabler--keyboard" :title="`Keyboard shortcuts (${keysFor('help')})`"
+				:active="store.shortcutsOpen" @click="store.shortcutsOpen = !store.shortcutsOpen" />
 		</div>
 	</div>
 </template>
 
 <script setup lang="ts">
-import { h, inject, ref } from 'vue'
+import { computed, h, inject, ref } from 'vue'
 import type { FunctionalComponent } from 'vue'
 import { useEditorStore } from '../../../stores/editorStore'
 import { TimelineViewportKey } from '../../composables/useTimelineViewport'
+import { keysFor } from '../../shortcuts'
+import SlimTooltip from '../../../components/SlimTooltip.vue'
 
 const store = useEditorStore()
 const viewport = inject(TimelineViewportKey)!
 
 const markersOpen = ref(false)
+
+/** One frame, at the sequence's own rate — the same step the arrow keys take. */
+const step = (direction: 1 | -1) => {
+	const fps = store.doc?.timelineMeta.fps || 30
+	store.seekTo(store.playheadSec + direction / fps)
+}
+
+const timecode = computed(() => {
+	const total = store.playheadSec
+	const m = Math.floor(total / 60)
+	const s = Math.floor(total % 60)
+	return `${m}:${String(s).padStart(2, '0')}`
+})
 
 const jumpToMarker = (time: number) => {
 	store.seekTo(time)
@@ -104,23 +173,31 @@ const formatTime = (seconds: number) => {
 	return `${m}:${String(s).padStart(2, '0')}`
 }
 
+/**
+ * A toolbar icon in a STYLED tooltip. Native `title` tooltips take a second to
+ * appear and are easy to miss entirely, which made a toolbar of bare icons
+ * read as unlabelled — the tooltips existed, nobody saw them. SlimTooltip is
+ * what every panel already uses.
+ */
 const ToolButton: FunctionalComponent<
 	{ icon: string; title: string; disabled?: boolean; active?: boolean },
 	{ click: () => void }
 > = (props, { emit }) =>
-	h('button', {
-		class: [
-			'w-6 h-6 flex items-center justify-center rounded-lg transition active:scale-95',
-			props.disabled
-				? 'text-zinc-300 dark:text-zinc-700 cursor-not-allowed'
-				: props.active
-					? 'text-primary bg-primary/10'
-					: 'text-zinc-500 hover:text-primary hover:bg-primary/10'
-		],
-		title: props.title,
-		disabled: props.disabled,
-		onClick: () => { if (!props.disabled) emit('click') }
-	}, [h('span', { class: `iconify ${props.icon} w-3.5 h-3.5` })])
+	h(SlimTooltip, { text: props.title, placement: 'top' }, {
+		default: () => h('button', {
+			class: [
+				'w-6 h-6 flex items-center justify-center rounded-lg transition active:scale-95',
+				props.disabled
+					? 'text-zinc-300 dark:text-zinc-700 cursor-not-allowed'
+					: props.active
+						? 'text-primary bg-primary/10'
+						: 'text-zinc-500 hover:text-primary hover:bg-primary/10'
+			],
+			'aria-label': props.title,
+			disabled: props.disabled,
+			onClick: () => { if (!props.disabled) emit('click') }
+		}, [h('span', { class: `iconify ${props.icon} w-3.5 h-3.5` })])
+	})
 ToolButton.props = ['icon', 'title', 'disabled', 'active']
 ToolButton.emits = ['click']
 </script>

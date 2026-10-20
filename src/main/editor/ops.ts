@@ -7,6 +7,17 @@ import {
 	rippleTimeline, TIMELINE_DIFF_SCHEMA_VERSION, type RippleChange
 } from '@shared/timeline'
 import { DETAIL_MAX_PIECES, EXPAND_MAX_REGIONS } from './context'
+import { clampPan } from '@shared/framing'
+import { planRangeRemoval } from '@shared/rangeEdit'
+import { KEY_DEFAULTS } from '@shared/keying'
+import { GENERATOR_DEFAULTS, GENERATORS } from '@shared/generators'
+import { hasTransform, OFFSET_RANGE, SCALE_RANGE } from '@shared/transform'
+import { defaultParams, effectDef } from '@shared/effects'
+import { findTitleTrack, nextTrackOrder, TITLE_TRACK_NAME } from '@shared/tracks'
+import { isTransitionKind } from '@shared/transitionPresets'
+import {
+	DEFAULT_TRANSITION_SEC, MAX_TRANSITION_SEC, MIN_TRANSITION_SEC
+} from '@shared/transitionPlan'
 
 /**
  * The editor's AI contract: the ops schema the model fills in, the system
@@ -70,10 +81,140 @@ export const EDITOR_OPS_SCHEMA = {
 					label: { type: 'string' },
 					gain: { type: 'number' },
 					fadeInSec: { type: 'number' },
-					fadeOutSec: { type: 'number' }
+					fadeOutSec: { type: 'number' },
+					transform: {
+						type: 'object',
+						description: 'Move, scale or rotate this clip inside the frame. x/y are fractions of the frame from centre; scale 1 is untouched; rotation in degrees.',
+						properties: {
+							x: { type: 'number' },
+							y: { type: 'number' },
+							scale: { type: 'number' },
+							rotation: { type: 'number' }
+						}
+					},
+					framing: {
+						type: 'object',
+						description: 'Only matters when the clip and the sequence are different shapes. fit letterboxes, fill crops; pan -1..1 chooses which part of a filled clip survives.',
+						properties: {
+							mode: { type: 'string', enum: ['fit', 'fill'] },
+							pan: { type: 'number' }
+						},
+						required: ['mode']
+					},
+					key: {
+						type: 'object',
+						description: 'Remove this clip’s background so it sits IN FRONT of the layer below. Only meaningful on a clip above another video track. chroma removes a colour (green screen); luma removes the dark end (footage shot on black).',
+						properties: {
+							kind: { type: 'string', enum: ['chroma', 'luma'] },
+							colour: { type: 'string', description: '#RRGGBB of the screen, for chroma' },
+							similarity: { type: 'number', description: '0-1, how far from the colour still counts' },
+							blend: { type: 'number', description: '0-1 edge softness' },
+							despill: { type: 'number', description: '0-1, how much of the screen colour to pull out of the edges' }
+						},
+						required: ['kind']
+					},
+					layerRole: {
+						type: 'string',
+						enum: ['subject', 'background', 'overlay'],
+						description: 'What this clip is FOR in a stacked shot. Descriptive; it does not change the render.'
+					}
 				},
 				required: ['id']
 			}
+		},
+		setTransitions: {
+			type: 'array',
+			description: 'Put a transition on the cut AFTER an item. Use "none" as the kind to remove one.',
+			items: {
+				type: 'object',
+				properties: {
+					afterItemId: { type: 'string', description: 'The OUTGOING clip — the transition sits on the cut at its end' },
+					kind: { type: 'string', description: 'A transition kind from the AVAILABLE TRANSITIONS list, or "none"' },
+					durationSec: { type: 'number', description: 'Seconds, 0.1-5. Shortened automatically when the clips are too short.' }
+				},
+				required: ['afterItemId', 'kind']
+			}
+		},
+		applyLook: {
+			type: 'array',
+			description: 'Add a colour look or an audio repair to clips. Appends, so calling twice stacks two.',
+			items: {
+				type: 'object',
+				properties: {
+					itemIds: { type: 'array', items: { type: 'string' } },
+					kind: { type: 'string', description: 'An effect kind from the AVAILABLE EFFECTS list' },
+					params: {
+						type: 'object',
+						description: 'Parameter values for that effect. Omit to use its neutral defaults.',
+						properties: {
+							amount: { type: 'number' },
+							intensity: { type: 'number' },
+							radius: { type: 'number' },
+							degrees: { type: 'number' },
+							kelvin: { type: 'number' },
+							hz: { type: 'number' },
+							strength: { type: 'number' },
+							ratio: { type: 'number' }
+						}
+					}
+				},
+				required: ['itemIds', 'kind']
+			}
+		},
+		clearLooks: {
+			type: 'array',
+			description: 'Item ids to strip every effect from.',
+			items: { type: 'string' }
+		},
+		addTitles: {
+			type: 'array',
+			description: 'Text burned onto the picture. Position and size are fractions of the frame.',
+			items: {
+				type: 'object',
+				properties: {
+					text: { type: 'string' },
+					atSec: { type: 'number', description: 'Timeline seconds where it appears' },
+					durationSec: { type: 'number', description: 'How long it stays up (default 3)' },
+					x: { type: 'number', description: '0 left, 0.5 centre, 1 right (default 0.5)' },
+					y: { type: 'number', description: '0 top, 1 bottom (default 0.85)' },
+					size: { type: 'number', description: 'Cap height as a fraction of frame height (default 0.07)' }
+				},
+				required: ['text', 'atSec']
+			}
+		},
+		removeRanges: {
+			type: 'array',
+			description: 'Cut spans of TIMELINE time out, splitting a clip when the span falls inside it. Use this to remove a sentence or a stumble without removing the whole piece it sits in. Timeline seconds, not source seconds.',
+			items: {
+				type: 'object',
+				properties: {
+					fromSec: { type: 'number' },
+					toSec: { type: 'number' }
+				},
+				required: ['fromSec', 'toSec']
+			}
+		},
+		addBackgrounds: {
+			type: 'array',
+			description: 'Add a synthesised background — a gradient or a colour — on its own track below everything. This is what a keyed clip sits in front of.',
+			items: {
+				type: 'object',
+				properties: {
+					kind: { type: 'string', enum: ['solid', 'gradient', 'bars', 'noise'] },
+					colour: { type: 'string', description: '#RRGGBB' },
+					colour2: { type: 'string', description: '#RRGGBB, the second colour of a gradient' },
+					atSec: { type: 'number' },
+					durationSec: { type: 'number' }
+				}
+			}
+		},
+		captions: {
+			type: 'boolean',
+			description: 'Burn the spoken transcript into the picture as captions. Only useful when a clip has been transcribed.'
+		},
+		loudness: {
+			type: 'boolean',
+			description: 'Normalise the finished mix to -14 LUFS, the level streaming platforms expect.'
 		},
 		addSceneRanges: {
 			type: 'array',
@@ -136,6 +277,37 @@ export const EDITOR_OPS_SCHEMA = {
 			}
 		}
 	}
+}
+
+/**
+ * The persona's house style, as instruction.
+ *
+ * Preferences, not a whitelist — the catalogues are listed in full elsewhere in
+ * the context, and a persona that could only reach four transitions would be a
+ * worse editor than one that knows which four it likes. The point is that a
+ * user should not have to re-describe a house style in every prompt.
+ */
+function personaStyleLines(persona: EditorPersona): string[] {
+	const style = persona.style
+	if (!style) return []
+	const lines: string[] = []
+	if (style.note) lines.push(`House style: ${style.note}`)
+	if (style.transitions?.length) {
+		lines.push(`Preferred transitions: ${style.transitions.join(', ')} — reach for these first.`)
+	}
+	if (style.looks?.length) {
+		lines.push(`Signature looks: ${style.looks.join(', ')}.`)
+	}
+	if (style.captions !== undefined) {
+		lines.push(style.captions
+			? 'Captions belong on this kind of edit — set `captions: true` when the material has a transcript.'
+			: 'This kind of edit is not usually captioned; leave `captions` alone unless asked.')
+	}
+	if (style.loudness) {
+		lines.push('Set `loudness: true` — this is meant to be posted.')
+	}
+	lines.push('These are this voice\'s habits, not limits. Anything in the catalogues is available.')
+	return lines
 }
 
 // ===== System instruction composition =====
@@ -516,11 +688,33 @@ export function composeSystemInstruction(
 		'  - Order material by the `recorded` window in the asset list when one is shown, not by',
 		'    the order the assets happen to be listed in. Fall back to filenames only when no',
 		'    recorded window is given.',
+		'  - Look and sound (use sparingly — a cut nobody asked to be graded should not be):',
+		'    `setTransitions` puts a transition on the cut AFTER a clip; it is shortened',
+		'    automatically when the clips are too short, so ask for what you want. `applyLook`',
+		'    adds a colour look or an audio repair and APPENDS, so two calls stack.',
+		'    `clearLooks` strips a clip back. Kinds must come from the AVAILABLE lists —',
+		'    an invented one is dropped.',
+		'  - `updateItems.transform` moves, scales and rotates a clip inside the frame; x/y are',
+		'    fractions of the frame from centre and scale 1 is untouched. `framing` only matters',
+		'    when the clip and the sequence are different shapes.',
+		'  - Layers: a clip on a HIGHER video track composites over the one below it.',
+		'    `updateItems.key` removes a clip’s background so it sits IN FRONT rather than',
+		'    covering everything, and `addBackgrounds` makes something for it to sit in front',
+		'    of. Combine with `transform` for a picture-in-picture. Only worth doing when the',
+		'    material actually suits it — a key on ordinary footage removes the wrong thing.',
+		'  - `removeRanges` cuts spans of TIMELINE time out, splitting a clip where the span falls',
+		'    inside it. This is how you remove one sentence, a stumble or a repeated take without',
+		'    losing the whole piece around it. Use `removeItemIds` when a whole piece should go.',
+		'  - `addTitles` puts text on the picture. `captions: true` burns the spoken transcript',
+		'    in, and only helps when the material has actually been transcribed.',
+		'    `loudness: true` normalises the mix to the level streaming platforms expect —',
+		'    a safe finishing touch on anything meant to be posted.',
 		'- Always include a short `rationale` describing what you changed and why, citing what is',
 		'  actually in the pieces.',
 		'',
 		'=== ACTIVE PERSONA DEFAULTS ===',
 		`Tone: ${persona.tone || 'neutral'}. Pacing: ${defaults.pacing || 'balanced'}.`,
+		...personaStyleLines(persona),
 		...outputLengthLines(stats, phase),
 		...phaseLines
 	].filter(Boolean).join('\n')
@@ -618,6 +812,11 @@ interface Run {
 export interface OpsToDiffResult {
 	diff: TimelineDiff
 	addMarkers: { time: number; label: string }[]
+	/**
+	 * Project settings the model asked for. They live outside TimelineState —
+	 * like markers — so they ride beside the diff rather than inside it.
+	 */
+	docSettings: { captionsEnabled?: boolean; loudnessEnabled?: boolean }
 	droppedOps: string[]
 	notes: string[]
 }
@@ -658,9 +857,79 @@ export function opsToDiff(ops: EditorOps, doc: EditorDocument): OpsToDiffResult 
 			if (typeof update.gain === 'number') clean.gain = Math.max(0, Math.min(2, update.gain))
 			if (typeof update.fadeInSec === 'number') clean.fadeInSec = Math.max(0, update.fadeInSec)
 			if (typeof update.fadeOutSec === 'number') clean.fadeOutSec = Math.max(0, update.fadeOutSec)
+			// Everything below is clamped by the same shared code the UI uses, so
+			// a model cannot reach a value a person could not.
+			if (update.transform) {
+				const t = update.transform
+				const clamp = (n: unknown, lo: number, hi: number, fallback: number) =>
+					typeof n === 'number' && Number.isFinite(n) ? Math.max(lo, Math.min(hi, n)) : fallback
+				const next = {
+					x: clamp(t.x, OFFSET_RANGE.min, OFFSET_RANGE.max, 0),
+					y: clamp(t.y, OFFSET_RANGE.min, OFFSET_RANGE.max, 0),
+					scale: clamp(t.scale, SCALE_RANGE.min, SCALE_RANGE.max, 1),
+					rotation: clamp(t.rotation, -360, 360, 0)
+				}
+				clean.transform = hasTransform(next) ? next : undefined
+			}
+			if (update.framing) {
+				clean.framing = update.framing.mode === 'fill'
+					? { mode: 'fill' as const, pan: clampPan(update.framing.pan) }
+					: undefined
+			}
+			if (update.key) {
+				// The shared clamps again: a model cannot reach a key a person
+				// could not set with the sliders.
+				const unit = (n: unknown, fallback: number) =>
+					typeof n === 'number' && Number.isFinite(n) ? Math.max(0, Math.min(1, n)) : fallback
+				clean.key = update.key.kind === 'chroma' || update.key.kind === 'luma'
+					? {
+						kind: update.key.kind,
+						colour: update.key.colour || KEY_DEFAULTS.colour,
+						similarity: unit(update.key.similarity, KEY_DEFAULTS.similarity),
+						blend: unit(update.key.blend, KEY_DEFAULTS.blend),
+						despill: unit(update.key.despill, KEY_DEFAULTS.despill)
+					}
+					: undefined
+			}
+			if (update.layerRole && ['subject', 'background', 'overlay'].includes(update.layerRole)) {
+				clean.layerRole = update.layerRole
+			}
 			if (Object.keys(clean).length > 1) updates.push(clean)
 		}
 		if (updates.length) diff.updateItems = updates
+	}
+
+	// Sub-clip removals. Folded into the same removeItemIds/updateItems the rest
+	// of this function speaks, so everything downstream — ripple, revisions,
+	// undo — treats a cut sentence exactly like a deleted clip.
+	if (ops.removeRanges?.length) {
+		const survivors = doc.timeline.filter((i) => !diff.removeItemIds?.includes(i.id))
+		const plan = planRangeRemoval(
+			survivors,
+			ops.removeRanges.map((r) => ({ start: r.fromSec, end: r.toSec })),
+			() => uuidv4()
+		)
+		if (!plan.removedSec) {
+			droppedOps.push('removeRanges: nothing on the timeline in those spans')
+		} else {
+			if (plan.removeIds.length) {
+				diff.removeItemIds = [...(diff.removeItemIds || []), ...plan.removeIds]
+			}
+			for (const shaped of plan.updated) {
+				const updates = (diff.updateItems ||= [])
+				const existing = updates.find((u) => u.id === shaped.id)
+				const fields = {
+					timelineStart: shaped.timelineStart, in: shaped.in, out: shaped.out,
+					duration: shaped.duration, masterSegmentIndex: undefined,
+					...(shaped.transition === undefined ? { transition: undefined } : {})
+				}
+				if (existing) Object.assign(existing, fields)
+				else updates.push({ id: shaped.id, ...fields })
+			}
+			if (plan.added.length) diff.addItems = [...(diff.addItems || []), ...plan.added]
+			notes.push(`Cut ${plan.removedSec.toFixed(1)}s from inside ${
+				plan.updated.length + plan.removeIds.length} clip(s).`)
+		}
 	}
 
 	// ===== Adds: one phase, one cursor, ids generated HERE and never by the model =====
@@ -1042,7 +1311,193 @@ export function opsToDiff(ops: EditorOps, doc: EditorDocument): OpsToDiffResult 
 		addMarkers.push(marker)
 	}
 
-	return { diff, addMarkers, droppedOps, notes }
+	// ===== Transitions, looks, titles and project settings =====
+	// All AFTER the adds, so they can name an item this same response created —
+	// `newIds` maps the model's placement back to the id generated here.
+
+	/** Every item the finished diff will contain, by id. */
+	const finalItems = new Map<string, TimelineItem>()
+	for (const item of doc.timeline) if (!removed.has(item.id)) finalItems.set(item.id, item)
+	for (const item of diff.addItems ?? []) finalItems.set(item.id, item)
+
+	/**
+	 * Field patches by item id, merged into `diff.updateItems` at the end.
+	 *
+	 * Collected rather than pushed as we go for two reasons: several ops can
+	 * touch the same clip in one response and two entries for one id would make
+	 * the diff order-dependent, and an op that turns out to be invalid must not
+	 * leave an empty `updateItems: []` behind for everything downstream to
+	 * special-case.
+	 */
+	const patches = new Map<string, Partial<TimelineItem>>()
+	const patchUpdate = (id: string, fields: Partial<TimelineItem>) => {
+		patches.set(id, { ...patches.get(id), ...fields })
+	}
+
+	if (ops.setTransitions?.length) {
+		for (const request of ops.setTransitions) {
+			const item = finalItems.get(request.afterItemId)
+			if (!item) {
+				droppedOps.push(`transition: unknown item ${request.afterItemId}`)
+				continue
+			}
+			if (request.kind === 'none') {
+				patchUpdate(item.id, { transition: undefined })
+				continue
+			}
+			// The catalogue is the gate: a kind this ffmpeg build cannot render
+			// would fail the export rather than the request.
+			if (!isTransitionKind(request.kind)) {
+				droppedOps.push(`transition: unknown kind "${request.kind}"`)
+				continue
+			}
+			const duration = Math.max(MIN_TRANSITION_SEC, Math.min(MAX_TRANSITION_SEC,
+				typeof request.durationSec === 'number' && Number.isFinite(request.durationSec)
+					? request.durationSec
+					: DEFAULT_TRANSITION_SEC))
+			patchUpdate(item.id, {
+				transition: { ...item.transition, out: { kind: request.kind, duration } }
+			})
+		}
+	}
+
+	if (ops.clearLooks?.length) {
+		for (const id of ops.clearLooks) {
+			if (finalItems.has(id)) patchUpdate(id, { effects: undefined })
+			else droppedOps.push(`clearLooks: unknown item ${id}`)
+		}
+	}
+
+	if (ops.applyLook?.length) {
+		// Accumulated per item so two looks in one response stack instead of the
+		// second replacing the first.
+		const pending = new Map<string, NonNullable<TimelineItem['effects']>>()
+		for (const request of ops.applyLook) {
+			const def = effectDef(request.kind)
+			if (!def) {
+				droppedOps.push(`applyLook: unknown effect "${request.kind}"`)
+				continue
+			}
+			for (const id of request.itemIds ?? []) {
+				const item = finalItems.get(id)
+				if (!item) {
+					droppedOps.push(`applyLook: unknown item ${id}`)
+					continue
+				}
+				const cleared = ops.clearLooks?.includes(id)
+				const base = pending.get(id) ?? (cleared ? [] : item.effects ?? [])
+				pending.set(id, [
+					...base,
+					// Neutral defaults merged under the request, so a model that
+					// names a look without parameters gets the look rather than
+					// a no-op, and one that names a parameter we do not have is
+					// simply ignored by the catalogue's own clamping.
+					{ id: uuidv4(), kind: request.kind, params: { ...defaultParams(def), ...request.params } }
+				])
+			}
+		}
+		for (const [id, effects] of pending) patchUpdate(id, { effects })
+	}
+
+	if (ops.addTitles?.length) {
+		// An ordinary video track, found by name — titles render from any lane, but
+		// they get one of their own so they can sit OVER a clip rather than having
+		// to fit beside it.
+		let textTrack = findTitleTrack(doc.tracks)
+		if (!textTrack) {
+			textTrack = {
+				id: uuidv4(), kind: 'video', name: TITLE_TRACK_NAME,
+				order: nextTrackOrder(doc.tracks, 'video'),
+				muted: false, locked: false, hidden: false, height: 40
+			}
+			;(diff.addTracks ||= []).push(textTrack)
+		}
+		const clamp01 = (n: unknown, fallback: number) =>
+			typeof n === 'number' && Number.isFinite(n) ? Math.max(0, Math.min(1, n)) : fallback
+		for (const request of ops.addTitles) {
+			const text = (request.text || '').trim()
+			if (!text) {
+				droppedOps.push('title: empty text')
+				continue
+			}
+			const duration = Math.max(0.2, Math.min(60,
+				typeof request.durationSec === 'number' && Number.isFinite(request.durationSec)
+					? request.durationSec
+					: 3))
+			const start = Math.max(0, typeof request.atSec === 'number' ? request.atSec : 0)
+			;(diff.addItems ||= []).push({
+				id: uuidv4(), trackId: textTrack.id, sourceAssetId: '',
+				timelineStart: start, in: 0, out: duration,
+				speed: 1, preservePitch: true, duration,
+				label: text.slice(0, 40),
+				text: {
+					content: text,
+					x: clamp01(request.x, 0.5),
+					y: clamp01(request.y, 0.85),
+					size: Math.max(0.02, Math.min(0.3, typeof request.size === 'number' ? request.size : 0.07))
+				}
+			})
+		}
+	}
+
+	if (patches.size) {
+		const updates = (diff.updateItems ||= [])
+		for (const [id, fields] of patches) {
+			const existing = updates.find((u) => u.id === id)
+			if (existing) Object.assign(existing, fields)
+			else updates.push({ id, ...fields })
+		}
+	}
+
+	if (ops.addBackgrounds?.length) {
+		// Its own track below everything, for the same reason the UI does it:
+		// on an existing track the background overlaps the footage and the
+		// overlap repair discards it.
+		let bgTrack = doc.tracks.find((t) => t.kind === 'video' && t.name === 'BG')
+		if (!bgTrack) {
+			bgTrack = {
+				id: uuidv4(), kind: 'video', name: 'BG',
+				order: Math.min(0, ...doc.tracks.map((t) => t.order)) - 1,
+				muted: false, locked: false, hidden: false, height: 48
+			}
+			;(diff.addTracks ||= []).push(bgTrack)
+		}
+		let cursor = 0
+		for (const request of ops.addBackgrounds) {
+			const kind = GENERATORS.some((g) => g.kind === request.kind)
+				? request.kind!
+				: 'gradient'
+			const duration = Math.max(0.2, Math.min(600,
+				typeof request.durationSec === 'number' && Number.isFinite(request.durationSec)
+					? request.durationSec
+					: 5))
+			// Butt-joined when unpositioned, so several in one response do not
+			// land on top of each other and get repaired away.
+			const start = typeof request.atSec === 'number' && request.atSec >= 0
+				? request.atSec
+				: cursor
+			cursor = start + duration
+			;(diff.addItems ||= []).push({
+				id: uuidv4(), trackId: bgTrack.id, sourceAssetId: '',
+				timelineStart: start, in: 0, out: duration,
+				speed: 1, preservePitch: true, duration,
+				label: GENERATORS.find((g) => g.kind === kind)?.label || 'Background',
+				layerRole: 'background',
+				generator: {
+					kind,
+					colour: request.colour || GENERATOR_DEFAULTS.colour,
+					colour2: request.colour2 || GENERATOR_DEFAULTS.colour2,
+					speed: GENERATOR_DEFAULTS.speed
+				}
+			})
+		}
+	}
+
+	const docSettings: OpsToDiffResult['docSettings'] = {}
+	if (typeof ops.captions === 'boolean') docSettings.captionsEnabled = ops.captions
+	if (typeof ops.loudness === 'boolean') docSettings.loudnessEnabled = ops.loudness
+
+	return { diff, addMarkers, docSettings, droppedOps, notes }
 }
 
 

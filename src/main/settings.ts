@@ -1,4 +1,4 @@
-import { app } from 'electron'
+import { app, safeStorage } from 'electron'
 import { join } from 'path'
 import { existsSync, mkdirSync, readFileSync, writeFileSync, realpathSync } from 'fs'
 import os from 'os'
@@ -8,10 +8,52 @@ import { BUILTIN_PERSONAS } from './constants/personas'
 
 interface Settings {
 	tempDir: string
+	/** In memory only. On disk it is `geminiApiKeyEnc`. */
 	geminiApiKey?: string
 	modelSettings?: ModelSettings
 	/** User-defined editor personas ONLY — built-ins are merged at read time. */
 	personas?: EditorPersona[]
+}
+
+/**
+ * The API key, encrypted at rest with the OS keychain.
+ *
+ * `settings.json` sits in userData with ordinary file permissions: readable by
+ * anything running as the user, backed up, and synced by whatever the user has
+ * syncing their home directory. A billable key does not belong there in plain
+ * text.
+ *
+ * `safeStorage` is Electron's wrapper over Keychain on macOS, DPAPI on Windows
+ * and the desktop keyring on Linux. It can be UNAVAILABLE — a Linux session
+ * with no keyring, notably — and the honest fallback there is to keep working
+ * with the key in plain text rather than to lose it, because a key that
+ * silently stops working is worse than one stored the way it was yesterday.
+ * The file records WHICH it is, so a key never gets read back as the wrong one.
+ */
+const encryptKey = (key: string): { enc?: string; plain?: string } => {
+	if (!key) return {}
+	try {
+		if (safeStorage.isEncryptionAvailable()) {
+			return { enc: safeStorage.encryptString(key).toString('base64') }
+		}
+	} catch (error) {
+		console.warn('[SettingsManager] safeStorage unavailable, key stays in plain text:', error)
+	}
+	return { plain: key }
+}
+
+const decryptKey = (parsed: { geminiApiKeyEnc?: string; geminiApiKey?: string }): string | undefined => {
+	if (parsed.geminiApiKeyEnc) {
+		try {
+			return safeStorage.decryptString(Buffer.from(parsed.geminiApiKeyEnc, 'base64'))
+		} catch (error) {
+			// A key encrypted on another machine, or after a keychain reset. It is
+			// not recoverable, and saying so beats an authentication error later.
+			console.error('[SettingsManager] Could not decrypt the stored API key:', error)
+			return undefined
+		}
+	}
+	return parsed.geminiApiKey
 }
 
 class SettingsManager {
@@ -34,6 +76,18 @@ class SettingsManager {
 			const userDataPath = app.getPath('userData')
 			this.settingsPath = join(userDataPath, 'settings.json')
 			this.settings = this.loadSettings()
+			// Migrate a key that predates encryption, on the first launch that
+			// can do it. Waiting for the user to change some unrelated setting
+			// would leave it in plain text indefinitely.
+			if (this.settings.geminiApiKey && this.isKeyEncrypted()) {
+				const raw = existsSync(this.settingsPath)
+					? JSON.parse(readFileSync(this.settingsPath, 'utf-8'))
+					: {}
+				if (raw.geminiApiKey) {
+					this.saveSettings()
+					console.log('[SettingsManager] Encrypted the stored API key at rest.')
+				}
+			}
 			console.log(`[SettingsManager] Initialized with userData: ${userDataPath}`)
 		} catch (error) {
 			console.error('[SettingsManager] Failed to initialize:', error)
@@ -54,7 +108,7 @@ class SettingsManager {
 				const parsed = JSON.parse(data)
 				return {
 					tempDir: parsed.tempDir || this.defaultTempDir,
-					geminiApiKey: parsed.geminiApiKey,
+					geminiApiKey: decryptKey(parsed),
 					modelSettings: this.mergeModelSettings(parsed.modelSettings || DEFAULT_MODEL_SETTINGS),
 					personas: Array.isArray(parsed.personas) ? parsed.personas : []
 				}
@@ -75,7 +129,16 @@ class SettingsManager {
 				console.error('Failed to save settings: settingsPath is unset (init() did not run)')
 				return false
 			}
-			writeFileSync(this.settingsPath, JSON.stringify(this.settings, null, 2))
+			// The key is written encrypted under its own name and NEVER under the
+			// plaintext one — otherwise an upgrade would leave the old copy behind
+			// beside the new one.
+			const { geminiApiKey, ...rest } = this.settings
+			const { enc, plain } = encryptKey(geminiApiKey ?? '')
+			writeFileSync(this.settingsPath, JSON.stringify({
+				...rest,
+				...(enc ? { geminiApiKeyEnc: enc } : {}),
+				...(plain ? { geminiApiKey: plain } : {})
+			}, null, 2))
 			return true
 		} catch (error) {
 			console.error('Failed to save settings:', error)
@@ -155,6 +218,15 @@ class SettingsManager {
 	setGeminiApiKey(key: string): void {
 		this.settings.geminiApiKey = key
 		this.saveSettings()
+	}
+
+	/** Whether the key on disk is encrypted, so Settings can say which it is. */
+	isKeyEncrypted(): boolean {
+		try {
+			return safeStorage.isEncryptionAvailable()
+		} catch {
+			return false
+		}
 	}
 
 	getModelSettings(): ModelSettings {

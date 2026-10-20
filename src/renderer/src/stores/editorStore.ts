@@ -3,7 +3,7 @@ import { ref, computed, watch } from 'vue'
 import type {
 	BackgroundTask, Clip, EditorDocument, EditorHistoryStep, EditorMarker,
 	EditorPersona, EditorRevision, MediaAsset, PromptTurn, Thread, TimelineDiff,
-	TimelineItem, TimelineSnapshot, Track
+	DeliveryFormat, TimelineItem, TimelineItemTransform, TimelineSnapshot, Track
 } from '@shared/types'
 import {
 	applyTimelineDiff, clampSpeed, clipToItem, computeContentEnd,
@@ -12,9 +12,30 @@ import {
 	type TimelineState
 } from '@shared/timeline'
 import { computeScope } from '@shared/ai-scope'
+import { hasTransform, TRANSFORM_DEFAULTS } from '@shared/transform'
+import { isAnimatable, valueAt } from '@shared/keyframes'
+import { planRangeRemoval } from '@shared/rangeEdit'
+import { hasKey, KEY_DEFAULTS, type KeySpec } from '@shared/keying'
+import { GENERATOR_DEFAULTS, GENERATORS, type GeneratorSpec } from '@shared/generators'
+import { defaultParams, effectDef, registerEffects } from '@shared/effects'
+import { parsePack } from '@shared/packs'
+import {
+	captionsFromTimeline, type CaptionCue, type TranscriptEntry
+} from '@shared/captions'
+import { sequenceFrame as resolveSequenceFrame } from '@shared/framing'
 import { childrenByParent, collectSubtree, hasBranch } from '@shared/revision-tree'
 import { DEFAULT_PERSONA_ID } from '@shared/personas'
 import { toMediaUrl } from '@shared/media-url'
+import {
+	canHostItem, findTitleTrack, isCompositedItem, nextTrackName, nextTrackOrder,
+	orderedTracks, trackFamily, TITLE_TRACK_NAME
+} from '@shared/tracks'
+import { isTransitionKind, transitionLabel } from '@shared/transitionPresets'
+import { seamFingerprint, type PreviewEntry } from '@shared/previewFrame'
+import {
+	MAX_TRANSITION_SEC, MIN_TRANSITION_SEC, planTransitions, seamAt, sourceDurationsFrom,
+	type Seam
+} from '@shared/transitionPlan'
 
 /**
  * Store for the timeline video editor (/editor/:id).
@@ -70,6 +91,11 @@ export const useEditorStore = defineStore('editor', () => {
 	const pxPerSecond = ref(40)
 	const timelineView = ref<'filmstrip' | 'context'>('filmstrip')
 	const snapEnabled = ref(true)
+	/** UI state the keyboard reaches but the timeline does not own. */
+	const shortcutsOpen = ref(false)
+	const monitorFullscreen = ref(false)
+	/** Which framing guide the monitor draws, if any. A view setting, not an edit. */
+	const activeGuideId = ref<string | null>(null)
 	// Incremented on every external seek; the playback engine watches it.
 	const seekRequest = ref<{ n: number; time: number }>({ n: 0, time: 0 })
 	const selectedItemIds = ref<string[]>([])
@@ -167,9 +193,13 @@ export const useEditorStore = defineStore('editor', () => {
 	}
 
 	// ===== Timeline computeds (M2) =====
-	const sortedTracks = computed<Track[]>(() =>
-		[...(doc.value?.tracks || [])].sort((a, b) => a.order - b.order)
-	)
+	/**
+	 * The lanes top to bottom: video family first with the FRONT-MOST layer at
+	 * the top, then audio. Sorting every track into one ascending list put a new
+	 * video lane underneath the audio — and had the timeline reading the picture
+	 * upside down, since the compositor takes the HIGHEST order as the front.
+	 */
+	const sortedTracks = computed<Track[]>(() => orderedTracks(doc.value?.tracks || []))
 
 	const itemsByTrack = computed<Record<string, TimelineItem[]>>(() => {
 		const map: Record<string, TimelineItem[]> = {}
@@ -183,6 +213,184 @@ export const useEditorStore = defineStore('editor', () => {
 		return map
 	})
 
+	// ===== Captions =====
+
+	/** Transcripts by asset id, in SOURCE seconds. Fetched from the main process,
+	 *  which owns the files; refreshed whenever a transcript lands or moves. */
+	const transcripts = ref<Record<string, TranscriptEntry[]>>({})
+
+	const refreshTranscripts = async () => {
+		if (!threadId.value) return
+		try {
+			transcripts.value = await api.getEditorTranscripts(threadId.value) || {}
+		} catch (error) {
+			console.error('[editorStore] transcript fetch failed:', error)
+		}
+	}
+
+	/**
+	 * Every caption the sequence shows, from the SAME function the export burns
+	 * with — so what the monitor draws is what ends up in the file.
+	 */
+	const captionCues = computed<CaptionCue[]>(() => {
+		if (!doc.value?.captionsEnabled) return []
+		return captionsFromTimeline(doc.value, transcripts.value)
+	})
+
+	const captionsEnabled = computed(() => doc.value?.captionsEnabled === true)
+
+	/**
+	 * The spoken words on the timeline, whether or not captions are switched on.
+	 *
+	 * `captionCues` answers "what is burned in"; this answers "what is said",
+	 * which is what a transcript panel and word-level editing need — you should
+	 * be able to cut a sentence without turning captions on first.
+	 */
+	const transcriptCues = computed<CaptionCue[]>(() =>
+		doc.value ? captionsFromTimeline(doc.value, transcripts.value) : []
+	)
+
+	/** Whether there is anything to caption — the toggle is dead weight without it. */
+	const hasTranscript = computed(() => {
+		const d = doc.value
+		if (!d) return false
+		return d.timeline.some((i) => transcripts.value[i.sourceAssetId]?.length)
+	})
+
+	/** Project-level, and NOT undoable: it is a setting, like markers. */
+	const setCaptionsEnabled = (enabled: boolean) => {
+		if (!doc.value) return
+		doc.value.captionsEnabled = enabled
+		markDirty()
+	}
+
+	/**
+	 * Mark an audio track as a music bed, so it ducks under speech everywhere
+	 * else. Absent means the track IS speech as far as ducking is concerned.
+	 */
+	const toggleTrackMusic = (trackId: string) => {
+		const track = doc.value?.tracks.find((t) => t.id === trackId)
+		if (!track) return
+		const before = snapshotState()
+		track.role = track.role === 'music' ? undefined : 'music'
+		commitStep({ before, label: track.role === 'music' ? 'Mark as music bed' : 'Unmark music bed' })
+	}
+
+	// ===== Titles =====
+
+	const DEFAULT_TITLE_SEC = 3
+
+	/**
+	 * Add a title at the playhead, making its lane if there is not one.
+	 *
+	 * The lane is an ordinary VIDEO track named `T1`, the same way a generated
+	 * background is the video track named `BG`. Titles burn over the finished
+	 * picture from wherever they sit, so the lane is only there to give a title
+	 * somewhere to be that is not already occupied by a clip.
+	 *
+	 * A title item carries no `sourceAssetId` — it references no media — which
+	 * is why `findOrphanItems` exempts anything holding a `text` spec. Without
+	 * that, main would read the empty id as media that had been removed and
+	 * prune the title on the next autosave.
+	 */
+	const addTitle = (content = 'Title') => {
+		if (!doc.value) return null
+		const before = snapshotState()
+		let track = findTitleTrack(doc.value.tracks)
+		if (!track) {
+			track = {
+				id: newId('tr'), kind: 'video', name: TITLE_TRACK_NAME,
+				order: nextTrackOrder(doc.value.tracks, 'video'),
+				muted: false, locked: false, hidden: false, height: 40
+			}
+			doc.value.tracks.push(track)
+		}
+		const start = Math.max(0, playheadSec.value)
+		const id = newId('ti')
+		doc.value.timeline.push({
+			id, trackId: track.id, sourceAssetId: '',
+			timelineStart: start, in: 0, out: DEFAULT_TITLE_SEC,
+			speed: 1, preservePitch: true, duration: DEFAULT_TITLE_SEC,
+			label: content,
+			text: { content }
+		})
+		commitStep({ before, label: 'Add title' })
+		selectItems([id])
+		return id
+	}
+
+	/** Generated layers covering the playhead — the monitor draws them in CSS. */
+	const activeGenerators = computed(() => {
+		const d = doc.value
+		if (!d) return []
+		const hidden = new Set(d.tracks.filter((t) => t.hidden).map((t) => t.id))
+		const t = playheadSec.value
+		return d.timeline.filter((i) =>
+			i.generator && !hidden.has(i.trackId) &&
+			t >= i.timelineStart && t < i.timelineStart + i.duration
+		)
+	})
+
+	/** Titles covering the playhead, so the monitor can draw them. */
+	const activeTitles = computed(() => {
+		const d = doc.value
+		if (!d) return []
+		const hidden = new Set(d.tracks.filter((t) => t.hidden).map((t) => t.id))
+		const t = playheadSec.value
+		return d.timeline.filter((i) =>
+			i.text?.content?.trim() &&
+			!hidden.has(i.trackId) &&
+			t >= i.timelineStart && t < i.timelineStart + i.duration
+		)
+	})
+
+	const setTitle = (itemId: string, patch: Partial<NonNullable<TimelineItem['text']>>) => {
+		const item = doc.value?.timeline.find((i) => i.id === itemId)
+		if (!item?.text) return
+		const before = snapshotState()
+		// Replace, never mutate — the diff compares by value.
+		item.text = { ...item.text, ...patch }
+		if (patch.content !== undefined) item.label = patch.content
+		commitStep({ before, label: 'Edit title' })
+	}
+
+	// ===== Loudness =====
+
+	const loudnessEnabled = computed(() => doc.value?.loudnessEnabled === true)
+
+	/** Project-level and not undoable, exactly like captions. */
+	const setLoudnessEnabled = (enabled: boolean) => {
+		if (!doc.value) return
+		doc.value.loudnessEnabled = enabled
+		markDirty()
+	}
+
+	// Transcripts live on disk and arrive from preprocessing, not from an edit —
+	// so the trigger is a transcript appearing, moving or being cleared. The
+	// preprocess state rides along because a RE-transcribe rewrites the same
+	// path, and the path alone would look unchanged.
+	watch(
+		() => (doc.value?.media || [])
+			.map((a) => `${a.id}:${a.preprocessing?.transcriptPath || ''}:${a.preprocessState || ''}`)
+			.join('|'),
+		() => { void refreshTranscripts() },
+		{ immediate: true }
+	)
+
+	/**
+	 * The shape this project exports in. Resolved through the same function the
+	 * render uses, so the frame drawn in the monitor is the frame that encodes.
+	 */
+	const sequenceFrame = computed(() => {
+		const d = doc.value
+		if (!d) return { width: 1920, height: 1080 }
+		const used = new Set(d.timeline.map((i) => i.sourceAssetId))
+		return resolveSequenceFrame(
+			d.timelineMeta,
+			d.media.filter((a) => used.has(a.id) && a.kind !== 'audio').map((a) => a.metadata ?? {})
+		)
+	})
+
 	const contentEnd = computed(() => computeContentEnd(doc.value?.timeline || []))
 	const timelineTail = computed(() => Math.max(60, 0.25 * contentEnd.value))
 
@@ -192,17 +400,190 @@ export const useEditorStore = defineStore('editor', () => {
 		(doc.value?.timeline || []).filter((i) => selectedItemIds.value.includes(i.id))
 	)
 
-	/** Ordered playable segments for EDL preview (unhidden video tracks). */
-	const videoSegments = computed(() => {
+	/**
+	 * Every cut between adjacent video clips, with what a transition there could
+	 * support and the window any annotation resolves to. One list serves the drag
+	 * affordance, the timeline blocks and the inspector.
+	 *
+	 * VIDEO tracks only: findJunctions pairs whatever it is given, and the export
+	 * planner passes video items for the same reason.
+	 */
+	const seams = computed<Seam[]>(() => {
 		if (!doc.value) return []
-		const hiddenOrVideoless = new Set(
-			doc.value.tracks.filter((t) => t.kind !== 'video' || t.hidden).map((t) => t.id)
+		const videoTrackIds = new Set(
+			doc.value.tracks.filter((t) => t.kind === 'video' && !t.hidden).map((t) => t.id)
 		)
+		return planTransitions(
+			doc.value.timeline.filter((i) => videoTrackIds.has(i.trackId)),
+			sourceDurationsFrom(doc.value.media)
+		)
+	})
+
+	/**
+	 * Junction ids whose window a clip on ANOTHER video track crosses — the
+	 * exact condition the export refuses with a throw (render.ts). Computed
+	 * here so the timeline can say so while you are still editing, instead of
+	 * the export failing after you have waited for it.
+	 */
+	const conflictedSeamIds = computed<Set<string>>(() => {
+		const out = new Set<string>()
+		const d = doc.value
+		if (!d) return out
+		const videoTrackIds = new Set(
+			d.tracks.filter((t) => t.kind === 'video' && !t.hidden).map((t) => t.id)
+		)
+		for (const seam of seams.value) {
+			const w = seam.window
+			if (!w) continue
+			const clash = d.timeline.some((i) =>
+				i.trackId !== w.trackId && videoTrackIds.has(i.trackId) &&
+				i.timelineStart < w.end - 1e-6 && itemEnd(i) > w.start + 1e-6
+			)
+			if (clash) out.add(w.junctionId)
+		}
+		return out
+	})
+
+	/** Ephemeral, like silenceScan — a seam is not an item, so it stays out of
+	 *  doc.selection, which pruneSelection would strip of any non-item id. */
+	const selectedSeamId = ref<string | null>(null)
+	const selectedSeam = computed<Seam | null>(() =>
+		seams.value.find((s) => s.junction.id === selectedSeamId.value) || null
+	)
+	const selectSeam = (id: string | null) => {
+		selectedSeamId.value = id
+		if (id) clearItemSelection()
+	}
+
+	/**
+	 * Cached exact previews of each transition window, junction id -> state.
+	 *
+	 * The monitor stacks two <video> elements, so unaided it can only cross-fade
+	 * — a wipe or a slide would preview as a dissolve. Instead the main process
+	 * renders each window with the real filter and the monitor plays that file;
+	 * the cross-fade is only the stand-in until it lands.
+	 *
+	 * Ephemeral and never persisted: the files live in the thread's temp dir.
+	 */
+	const transitionPreviews = ref<Map<string, PreviewEntry>>(new Map())
+
+	const setPreview = (junctionId: string, entry: PreviewEntry) => {
+		const next = new Map(transitionPreviews.value)
+		next.set(junctionId, entry)
+		transitionPreviews.value = next
+	}
+
+	/** Items the EDL can actually play. `seams` keeps clips whose media is gone;
+	 *  blending against one that will never load would just show black. */
+	const playableItemIds = computed(() => new Set(videoSegments.value.map((s) => s.itemId)))
+
+	let previewTimer: ReturnType<typeof setTimeout> | null = null
+
+	/** Ask main for any window we do not have yet. Debounced, because dragging the
+	 *  duration slider would otherwise queue an encode per step. */
+	const requestTransitionPreviews = () => {
+		if (previewTimer) clearTimeout(previewTimer)
+		previewTimer = setTimeout(async () => {
+			if (!doc.value || !threadId.value) return
+			const wanted = seams.value.filter((s) => s.window)
+			if (!wanted.length) return
+			const snapshot = JSON.parse(JSON.stringify(doc.value))
+			for (const seam of wanted) {
+				const id = seam.junction.id
+				if (transitionPreviews.value.get(id)?.status === 'rendering') continue
+				setPreview(id, { status: 'rendering' })
+				try {
+					const result = await api.ensureTransitionPreview({
+						threadId: threadId.value,
+						doc: snapshot,
+						outgoingId: seam.junction.outgoing.id,
+						incomingId: seam.junction.incoming.id
+					})
+					setPreview(id, { status: 'ready', src: toMediaUrl(result.path) })
+				} catch (error) {
+					console.warn('[preview] transition render failed:', error)
+					setPreview(id, { status: 'error' })
+				}
+			}
+		}, 400)
+	}
+
+	// Re-request whenever a window's geometry OR either flanking clip's render
+	// state changes. The fingerprint deliberately includes the WHOLE items:
+	// enumerating "render-relevant" fields is how the main-side cache key went
+	// stale, and over-triggering costs nothing — main hashes the actual graph,
+	// so a no-op change (a label edit) resolves to the same file instantly.
+	watch(() => {
+		const flanks = seams.value
+			.filter((s) => s.window)
+			.map((s) => JSON.stringify([s.junction.outgoing, s.junction.incoming]))
+			.join('\u0000')
+		return `${seamFingerprint(seams.value)}#${flanks}`
+	}, (next, previous) => {
+		if (next === previous) return
+		transitionPreviews.value = new Map()
+		if (next) requestTransitionPreviews()
+	})
+
+	/** The preset kind currently being dragged, so lanes know to reveal seams. */
+	const draggingTransitionKind = ref<string | null>(null)
+
+	/** Seam nearest `t`, within a tolerance the caller derives from zoom. */
+	const seamNear = (t: number, toleranceSec: number) => seamAt(seams.value, t, toleranceSec)
+
+	/** Visible video tracks, bottom-most first — the render's stacking order. */
+	const visibleVideoTracks = computed(() =>
+		(doc.value?.tracks ?? [])
+			.filter((t) => t.kind === 'video' && !t.hidden)
+			.sort((a, b) => a.order - b.order)
+	)
+
+	/**
+	 * Video tracks the monitor's <video> pair can actually play — ones carrying
+	 * at least one item with a real file behind it.
+	 *
+	 * A generated background is a video track with no footage on it, and it sits
+	 * BELOW everything by design. Taking the lowest track as the timebase would
+	 * hand the pair a track with nothing to play and blank the monitor, which is
+	 * exactly what happened the first time a background was added.
+	 */
+	const playableVideoTracks = computed(() => {
+		const withMedia = new Set(
+			(doc.value?.timeline ?? [])
+				.filter((i) => !i.generator && isCompositedItem(i))
+				.map((i) => i.trackId)
+		)
+		return visibleVideoTracks.value.filter((t) => withMedia.has(t.id))
+	})
+
+	/** The layer everything else composites onto, and the monitor's timebase. */
+	const baseVideoTrackId = computed(() => playableVideoTracks.value[0]?.id ?? null)
+
+	/**
+	 * How deep each video track sits, 1 = furthest back.
+	 *
+	 * The export composites by `order`, higher in front (`render.ts` sorts the
+	 * tracks by it). The monitor used to draw generated layers under every video
+	 * element unconditionally, on the assumption that a generator is a
+	 * background — which stopped being true when anything visible could share a
+	 * video track: a gradient on the TOP lane belongs in front of the footage,
+	 * and previewing it behind hid it completely. One number, read by every
+	 * layer the monitor stacks, so the picture agrees with the render.
+	 */
+	const videoLayerDepth = computed<Record<string, number>>(() => {
+		const depth: Record<string, number> = {}
+		visibleVideoTracks.value.forEach((track, i) => { depth[track.id] = i + 1 })
+		return depth
+	})
+
+	const segmentsForTracks = (trackIds: Set<string>) => {
+		if (!doc.value || !trackIds.size) return []
+		const trackById = new Map(doc.value.tracks.map((t) => [t.id, t]))
 		const trackMuted = new Map(doc.value.tracks.map((t) => [t.id, t.muted]))
 		const assetById = new Map(doc.value.media.map((a) => [a.id, a]))
 
 		return doc.value.timeline
-			.filter((item) => !hiddenOrVideoless.has(item.trackId))
+			.filter((item) => trackIds.has(item.trackId))
 			.sort((a, b) => a.timelineStart - b.timelineStart)
 			.flatMap((item) => {
 				const asset = assetById.get(item.sourceAssetId)
@@ -215,9 +596,42 @@ export const useEditorStore = defineStore('editor', () => {
 					src: toMediaUrl(src),
 					sourceIn: item.in,
 					speed: item.speed || 1,
-					muted: !!item.muted || !!trackMuted.get(item.trackId)
+					muted: !!item.muted || !!trackMuted.get(item.trackId),
+					// The MIX state, so the monitor plays what the export mixes.
+					// These were simply absent, so a video clip's gain and fades
+					// were silently ignored in preview — while the inspector
+					// claimed otherwise. Gain multiplies item × track, the same
+					// product `effectiveGain` gives the export.
+					gain: (item.gain ?? 1) * (trackById.get(item.trackId)?.gain ?? 1),
+					fadeInSec: item.fadeInSec ?? 0,
+					fadeOutSec: item.fadeOutSec ?? 0,
+					preservePitch: item.preservePitch !== false
 				}]
 			})
+	}
+
+	/**
+	 * Ordered playable segments for the monitor's A/B pair.
+	 *
+	 * Only the BASE track: the pair assumes its segments never overlap, and two
+	 * video tracks overlap by definition — that is what compositing is. Higher
+	 * layers get their own element below.
+	 */
+	const videoSegments = computed(() =>
+		segmentsForTracks(new Set(baseVideoTrackId.value ? [baseVideoTrackId.value] : []))
+	)
+
+	/**
+	 * The layer drawn ON TOP of the pair, from the highest visible video track.
+	 *
+	 * One layer, not n: the monitor has one overlay element. The export
+	 * composites every layer, so a three-track stack still renders correctly —
+	 * it just previews as base plus top.
+	 */
+	const overlaySegments = computed(() => {
+		const tracks = playableVideoTracks.value
+		if (tracks.length < 2) return []
+		return segmentsForTracks(new Set([tracks[tracks.length - 1].id]))
 	})
 
 	// Audio-track segments for preview (PRD §5.3): items on audio-kind tracks.
@@ -248,7 +662,9 @@ export const useEditorStore = defineStore('editor', () => {
 					sourceIn: item.in,
 					speed: item.speed || 1,
 					muted: !!item.muted || !!trackMuted.get(item.trackId),
-					gain: item.gain ?? 1,
+					// Item × track, as the export mixes it — track gain was dropped.
+					gain: (item.gain ?? 1) * (doc.value!.tracks.find((t) => t.id === item.trackId)?.gain ?? 1),
+					preservePitch: item.preservePitch !== false,
 					fadeInSec: item.fadeInSec ?? 0,
 					fadeOutSec: item.fadeOutSec ?? 0
 				}]
@@ -383,15 +799,18 @@ export const useEditorStore = defineStore('editor', () => {
 
 	const canExport = computed(() => {
 		if (!doc.value || isRendering.value) return false
-		const videoTrack = sortedTracks.value.find((t) => t.kind === 'video')
-		if (!videoTrack || videoTrack.hidden) return false
-		return doc.value.timeline.some((i) => i.trackId === videoTrack.id)
+		// ANY visible video lane carrying a picture will do. Asking the lowest one
+		// specifically was already wrong the day generated backgrounds landed —
+		// `BG` sits below everything, so an export with a background and footage
+		// above it was judged on the wrong lane.
+		const lanes = new Set(visibleVideoTracks.value.map((t) => t.id))
+		return doc.value.timeline.some((i) => lanes.has(i.trackId) && isCompositedItem(i))
 	})
 
 	/**
 	 * Pre-flight export warnings (PRD §5.9): content that exists on the timeline
 	 * but will be missing from the render — muted/hidden tracks with clips,
-	 * individually muted clips, overlay/text items. Warnings with an `action`
+	 * individually muted clips. Warnings with an `action`
 	 * offer a one-click fix (e.g. Unmute) in the export dialog.
 	 */
 	const exportWarnings = computed<Array<{
@@ -409,7 +828,7 @@ export const useEditorStore = defineStore('editor', () => {
 
 		for (const track of doc.value.tracks) {
 			const count = itemsByTrack.get(track.id) || 0
-			if (count === 0 || track.kind === 'overlay' || track.kind === 'text') continue
+			if (count === 0) continue
 			if (track.hidden) {
 				warnings.push({
 					id: `hidden-${track.id}`,
@@ -430,8 +849,7 @@ export const useEditorStore = defineStore('editor', () => {
 		const trackById = new Map(doc.value.tracks.map((t) => [t.id, t]))
 		const mutedItems = doc.value.timeline.filter((i) => {
 			const track = trackById.get(i.trackId)
-			return i.muted && track && !track.muted && !track.hidden &&
-				(track.kind === 'video' || track.kind === 'audio')
+			return i.muted && track && !track.muted && !track.hidden
 		})
 		if (mutedItems.length > 0) {
 			warnings.push({
@@ -440,12 +858,27 @@ export const useEditorStore = defineStore('editor', () => {
 			})
 		}
 
-		const hasOverlayItems = doc.value.timeline.some((item) => {
-			const track = trackById.get(item.trackId)
-			return track && (track.kind === 'overlay' || track.kind === 'text')
-		})
-		if (hasOverlayItems) {
-			warnings.push({ id: 'overlay', text: "Overlay/text tracks won't appear in this export." })
+		if (doc.value.loudnessEnabled) {
+			warnings.push({
+				id: 'loudness',
+				text: 'The mix will be normalised to -14 LUFS, the level streaming platforms expect.'
+			})
+		}
+
+		if (conflictedSeamIds.value.size) {
+			warnings.push({
+				id: 'transition-clash',
+				text: `${conflictedSeamIds.value.size === 1 ? 'A clip on another track crosses' : 'Clips on other tracks cross'} a transition — the export will refuse until it is moved clear.`
+			})
+		}
+
+		// Not a mistake to fix — a cost to know about. Every other export stitches
+		// with a stream copy; painting captions onto the picture cannot.
+		if (doc.value.captionsEnabled && captionCues.value.length) {
+			warnings.push({
+				id: 'captions',
+				text: 'Captions are burned in, so the whole video is re-encoded. This export will take longer.'
+			})
 		}
 
 		return warnings
@@ -483,7 +916,12 @@ export const useEditorStore = defineStore('editor', () => {
 				// Undo pointer rides with the doc: state + pointer land atomically
 				historyRef: doc.value.historyRef,
 				markers: doc.value.markers,
-				currentRevisionId: doc.value.currentRevisionId
+				currentRevisionId: doc.value.currentRevisionId,
+				// `?? false` because JSON.stringify drops an undefined, and the main
+				// handler would then read the patch as "no opinion" and keep the old
+				// value — the same trap the cleared-transition bug fell into.
+				captionsEnabled: doc.value.captionsEnabled ?? false,
+				loudnessEnabled: doc.value.loudnessEnabled ?? false
 			}))
 			await api.saveEditorDoc({ threadId: threadId.value, patch })
 			dirty.value = false
@@ -631,6 +1069,25 @@ export const useEditorStore = defineStore('editor', () => {
 	}
 
 	// ===== Media actions (M1) =====
+
+	/**
+	 * The first import decides the sequence's shape, the way an NLE does — so a
+	 * project shot on a phone does not start life landscape. Fires at most once
+	 * per project: it marks the frame chosen, and the picker owns it after that.
+	 *
+	 * Called on every upsert rather than only on insert, because dimensions
+	 * arrive with the main process's probe, which often lands after the asset.
+	 */
+	const seedSequenceFrame = (asset: MediaAsset) => {
+		const meta = doc.value?.timelineMeta
+		if (!meta || meta.frameChosen || asset.kind === 'audio') return
+		const width = asset.metadata?.width
+		const height = asset.metadata?.height
+		if (!width || !height) return
+		doc.value!.timelineMeta = { ...meta, width, height, frameChosen: true }
+		markDirty()
+	}
+
 	const upsertAsset = (incoming: MediaAsset) => {
 		if (!doc.value) return
 		const index = doc.value.media.findIndex((a) => a.id === incoming.id)
@@ -639,6 +1096,7 @@ export const useEditorStore = defineStore('editor', () => {
 		} else {
 			doc.value.media[index] = mergeMainOwnedAsset(doc.value.media[index], incoming)
 		}
+		seedSequenceFrame(doc.value.media[index === -1 ? doc.value.media.length - 1 : index])
 	}
 
 	const addLocalMedia = async () => {
@@ -1074,13 +1532,21 @@ export const useEditorStore = defineStore('editor', () => {
 
 	// ===== Timeline actions (each commits ONE history step) =====
 
-	const firstVideoTrackId = computed(() =>
-		sortedTracks.value.find((t) => t.kind === 'video' && !t.locked && !t.hidden)?.id || null
-	)
+	/**
+	 * Where a clip lands when nobody says which lane: the BASE of its family —
+	 * the bottom-most video lane, the first audio one. Deliberately not the top
+	 * of `sortedTracks`, which is now the front-most layer; dropping footage into
+	 * the layer in front of everything is not what "add this to the timeline"
+	 * means.
+	 */
+	const baseOfFamily = (family: 'video' | 'audio') =>
+		(doc.value?.tracks || [])
+			.filter((t) => trackFamily(t) === family && !t.locked && !t.hidden)
+			.sort((a, b) => a.order - b.order)[0]?.id || null
 
-	const firstAudioTrackId = computed(() =>
-		sortedTracks.value.find((t) => t.kind === 'audio' && !t.locked && !t.hidden)?.id || null
-	)
+	const firstVideoTrackId = computed(() => baseOfFamily('video'))
+
+	const firstAudioTrackId = computed(() => baseOfFamily('audio'))
 
 	const findClip = (clipId: string): Clip | null => {
 		for (const asset of doc.value?.media || []) {
@@ -1114,8 +1580,8 @@ export const useEditorStore = defineStore('editor', () => {
 			|| (asset?.kind === 'audio' ? firstAudioTrackId.value : firstVideoTrackId.value)
 		if (!targetTrackId) return null
 		const track = doc.value.tracks.find((t) => t.id === targetTrackId)
-		if (!track || track.locked || track.hidden) return null
-		if (track.kind !== 'video' && track.kind !== (asset?.kind || 'video')) return null
+		if (!track) return null
+		if (!canHostItem(track, { sourceAssetId: clip.sourceAssetId }, doc.value.media).ok) return null
 
 		const before = snapshotState()
 		const start = resolveFreePosition(targetTrackId, atSec ?? playheadSec.value, clip.duration)
@@ -1128,8 +1594,8 @@ export const useEditorStore = defineStore('editor', () => {
 
 	/**
 	 * Drop a WHOLE asset onto the timeline as a single full-span item. Defaults
-	 * the target track by kind (audio→A-lane, video→V-lane); kind must match
-	 * (audio assets only on audio tracks, video only on video tracks).
+	 * the target track by family (something you hear → an audio lane, anything
+	 * you see → a video lane), which is the same rule a drag across lanes obeys.
 	 */
 	const addItemFromAsset = (assetId: string, trackId?: string | null, atSec?: number): TimelineItem | null => {
 		if (!doc.value) return null
@@ -1138,9 +1604,8 @@ export const useEditorStore = defineStore('editor', () => {
 		const targetTrackId = trackId || (asset.kind === 'audio' ? firstAudioTrackId.value : firstVideoTrackId.value)
 		if (!targetTrackId) return null
 		const track = doc.value.tracks.find((t) => t.id === targetTrackId)
-		if (!track || track.locked || track.hidden) return null
-		const compatible = asset.kind === 'audio' ? track.kind === 'audio' : track.kind === 'video'
-		if (!compatible) return null
+		if (!track) return null
+		if (!canHostItem(track, { sourceAssetId: assetId }, doc.value.media).ok) return null
 		const duration = asset.metadata?.duration || 0
 		if (duration <= 0) return null
 
@@ -1151,6 +1616,32 @@ export const useEditorStore = defineStore('editor', () => {
 		commitStep({ before, label: `Add ${asset.name}` })
 		selectItems([item.id])
 		return item
+	}
+
+	/**
+	 * Remove spans of timeline rather than whole clips — what "cut the bit where
+	 * he says that" needs.
+	 *
+	 * The granularity comes from wherever the span does: a caption cue, a
+	 * transcript search, or the AI naming a time. Afterwards it closes the gaps
+	 * exactly as a normal delete does, so the result is indistinguishable from
+	 * having trimmed by hand.
+	 */
+	const removeRanges = (ranges: { start: number; end: number }[], label = 'Remove range') => {
+		if (!doc.value) return 0
+		const plan = planRangeRemoval(doc.value.timeline, ranges, () => newId('ti'))
+		if (!plan.removeIds.length && !plan.updated.length && !plan.added.length) return 0
+
+		const before = snapshotState()
+		const dead = new Set(plan.removeIds)
+		const reshaped = new Map(plan.updated.map((i) => [i.id, i]))
+		doc.value.timeline = [
+			...doc.value.timeline.filter((i) => !dead.has(i.id)).map((i) => reshaped.get(i.id) ?? i),
+			...plan.added
+		]
+		closeTimelineGaps({ tracks: doc.value.tracks, timeline: doc.value.timeline })
+		commitStep({ before, label })
+		return plan.removedSec
 	}
 
 	const splitAtPlayhead = () => {
@@ -1175,6 +1666,15 @@ export const useEditorStore = defineStore('editor', () => {
 			item.out = sourceSplit
 			item.duration = (item.out - item.in) / (item.speed || 1)
 			item.masterSegmentIndex = undefined
+			// The deep clone above copied `transition.out` onto BOTH halves. It
+			// belongs to the cut at the original clip's END, which only the right
+			// half still has — the left half's would sit on the split itself, a cut
+			// the user just created and never asked to soften.
+			if (item.transition?.out) {
+				const rest = { ...item.transition }
+				delete rest.out
+				item.transition = Object.keys(rest).length ? rest : undefined
+			}
 			doc.value.timeline.push(right)
 			newIds.push(item.id, right.id)
 		}
@@ -1283,6 +1783,469 @@ export const useEditorStore = defineStore('editor', () => {
 		if (edge === 'in') item.fadeInSec = clamped || undefined
 		else item.fadeOutSec = clamped || undefined
 		commitStep({ before, label: `Fade ${edge} ${clamped.toFixed(1)}s` })
+	}
+
+	// ===== Effect packs =====
+
+	/**
+	 * Bumped once packs are registered. `allEffects()` reads a module-level
+	 * registry, which Vue cannot see into — this is what tells the library to
+	 * re-render once the extra looks are in it.
+	 */
+	const effectsVersion = ref(0)
+
+	/**
+	 * Register the packs main found.
+	 *
+	 * The renderer parses the manifests ITSELF, with the same `parsePack`, rather
+	 * than receiving finished definitions: an EffectDef carries a `build`
+	 * function and cannot cross IPC. One parser, one set of rules, two processes.
+	 */
+	const loadEffectPacks = async () => {
+		try {
+			const packs = await api.getEffectPacks() as { manifest: unknown; files: Record<string, string> }[]
+			let added = 0
+			for (const pack of packs || []) {
+				const parsed = parsePack(pack.manifest, (name) => pack.files[name] ?? null)
+				if (parsed.effects.length) {
+					registerEffects(parsed.effects)
+					added += parsed.effects.length
+				}
+			}
+			if (added) effectsVersion.value++
+		} catch (error) {
+			console.error('[editorStore] effect packs failed to load:', error)
+		}
+	}
+
+	// ===== Effects =====
+
+	/** The id idiom used throughout this store, in one place. */
+	const newId = (prefix: string) =>
+		(crypto as any).randomUUID ? crypto.randomUUID() : `${prefix}-${Date.now()}-${Math.random().toString(36).slice(2)}`
+
+	/** The kind currently being dragged, so clips can light up as a target. */
+	const draggingEffectKind = ref<string | null>(null)
+
+	/**
+	 * Append an effect to a clip, at its identity settings — adding one and
+	 * applying it stay separate gestures, so you can see what your own
+	 * adjustment did.
+	 */
+	const addEffect = (itemId: string, kind: string) => {
+		const item = doc.value?.timeline.find((i) => i.id === itemId)
+		const def = effectDef(kind)
+		if (!item || !def) return
+		const before = snapshotState()
+		// Replace, never mutate — the diff compares by value and a mutated array
+		// makes the before/after snapshots alias, recording no edit at all.
+		item.effects = [
+			...(item.effects ?? []),
+			{ id: newId('fx'), kind, params: defaultParams(def) }
+		]
+		commitStep({ before, label: `Add ${def.label}` })
+	}
+
+	const removeEffect = (itemId: string, effectId: string) => {
+		const item = doc.value?.timeline.find((i) => i.id === itemId)
+		if (!item?.effects?.length) return
+		const before = snapshotState()
+		const next = item.effects.filter((e) => e.id !== effectId)
+		item.effects = next.length ? next : undefined
+		commitStep({ before, label: 'Remove effect' })
+	}
+
+	const setEffectParam = (itemId: string, effectId: string, key: string, value: number | string) => {
+		const item = doc.value?.timeline.find((i) => i.id === itemId)
+		const effect = item?.effects?.find((e) => e.id === effectId)
+		if (!item || !effect) return
+		const before = snapshotState()
+		item.effects = item.effects!.map((e) =>
+			e.id === effectId ? { ...e, params: { ...(e.params ?? {}), [key]: value } } : e
+		)
+		commitStep({ before, label: 'Adjust effect' })
+	}
+
+	/** Reorder within the chain. A filter chain is not commutative, so this is
+	 *  a real edit rather than a cosmetic one. */
+	const moveEffect = (itemId: string, effectId: string, delta: number) => {
+		const item = doc.value?.timeline.find((i) => i.id === itemId)
+		if (!item?.effects?.length) return
+		const from = item.effects.findIndex((e) => e.id === effectId)
+		const to = from + delta
+		if (from < 0 || to < 0 || to >= item.effects.length) return
+		const before = snapshotState()
+		const next = [...item.effects]
+		next.splice(to, 0, ...next.splice(from, 1))
+		item.effects = next
+		commitStep({ before, label: 'Reorder effects' })
+	}
+
+	const DEFAULT_GENERATED_SEC = 5
+
+	/**
+	 * Add a generated layer on its own track BELOW everything else.
+	 *
+	 * Not on the bottom existing track: the footage is already there, the two
+	 * would overlap, and `repairOverlaps` would quietly throw the background
+	 * away — which is exactly what happened the first time this was tried. The
+	 * compositor draws bottom-up, so a background wants to be genuinely
+	 * underneath, and that means a track of its own.
+	 */
+	const addGeneratedLayer = (kind: GeneratorSpec['kind'] = 'gradient') => {
+		if (!doc.value) return null
+		const before = snapshotState()
+		let track = doc.value.tracks.find((t) => t.kind === 'video' && t.name === 'BG')
+		if (!track) {
+			track = {
+				id: newId('tr'), kind: 'video', name: 'BG',
+				// Below every existing track. Order is only a sort key, so a
+				// negative one is the honest way to say "underneath".
+				order: Math.min(0, ...doc.value.tracks.map((t) => t.order)) - 1,
+				muted: false, locked: false, hidden: false, height: 48
+			}
+			doc.value.tracks.push(track)
+		}
+		const id = newId('ti')
+		const duration = DEFAULT_GENERATED_SEC
+		const start = Math.max(0, playheadSec.value)
+		// Its own track, so the only thing it can collide with is another
+		// background — push past one rather than let the repair discard this.
+		const busyUntil = doc.value.timeline
+			.filter((i) => i.trackId === track!.id && itemEnd(i) > start)
+			.reduce((max, i) => Math.max(max, itemEnd(i)), start)
+		doc.value.timeline.push({
+			id, trackId: track.id, sourceAssetId: '',
+			timelineStart: busyUntil,
+			in: 0, out: duration, speed: 1, preservePitch: true, duration,
+			label: GENERATORS.find((g) => g.kind === kind)?.label || 'Background',
+			layerRole: 'background',
+			generator: { kind, ...GENERATOR_DEFAULTS }
+		})
+		commitStep({ before, label: 'Add background' })
+		selectItems([id])
+		return id
+	}
+
+	const setGenerator = (id: string, patch: Partial<GeneratorSpec>) => {
+		const item = doc.value?.timeline.find((i) => i.id === id)
+		if (!item?.generator) return
+		const before = snapshotState()
+		item.generator = { ...item.generator, ...patch }
+		commitStep({ before, label: 'Edit background' })
+	}
+
+	/**
+	 * Key a clip's background out, so it sits IN FRONT of the layer below
+	 * rather than beside it. `undefined` puts the background back.
+	 */
+	const setItemKey = (id: string, key: KeySpec | undefined) => {
+		const item = doc.value?.timeline.find((i) => i.id === id)
+		if (!item) return
+		const before = snapshotState()
+		// Replace, never mutate — the diff compares by value.
+		item.key = key && hasKey(key) ? { ...key } : undefined
+		commitStep({ before, label: key ? 'Key background' : 'Remove key' })
+	}
+
+	/** What this clip is FOR in a stack. Descriptive, and read by the AI. */
+	const setLayerRole = (id: string, role: TimelineItem['layerRole']) => {
+		const item = doc.value?.timeline.find((i) => i.id === id)
+		if (!item) return
+		const before = snapshotState()
+		item.layerRole = role
+		commitStep({ before, label: 'Set layer role' })
+	}
+
+	/**
+	 * A continuous gesture — dragging a handle on the canvas — as ONE history
+	 * step. The snapshot is taken when the pointer goes down, the item is
+	 * updated live while it moves (replacing objects, never mutating, so the
+	 * value-comparing diff still works), and the step commits on release.
+	 * Without this a drag would bury the undo stack under a step per pixel —
+	 * the same reason the sliders commit on `change` rather than `input`.
+	 */
+	let gestureBefore: TimelineState | null = null
+
+	const beginItemGesture = () => {
+		if (!doc.value || gestureBefore) return
+		gestureBefore = snapshotState()
+	}
+
+	/**
+	 * Live update mid-gesture: no history, no autosave — just the picture.
+	 *
+	 * Serves the canvas handles AND the inspector's sliders on `input`, so a
+	 * value is seen the moment it moves rather than on release. Object fields
+	 * are REPLACED, never mutated, keeping the value-comparing diff honest for
+	 * the commit at the end.
+	 */
+	const updateItemGesture = (id: string, patch: {
+		transform?: TimelineItemTransform
+		text?: Partial<NonNullable<TimelineItem['text']>>
+		framing?: TimelineItem['framing']
+		generator?: Partial<NonNullable<TimelineItem['generator']>>
+		key?: TimelineItem['key']
+		effects?: TimelineItem['effects']
+		gain?: number
+		fadeInSec?: number
+		fadeOutSec?: number
+	}) => {
+		const item = doc.value?.timeline.find((i) => i.id === id)
+		if (!item) return
+		if (patch.transform) {
+			item.transform = hasTransform(patch.transform) ? { ...patch.transform } : undefined
+		}
+		if (patch.text && item.text) item.text = { ...item.text, ...patch.text }
+		if ('framing' in patch) item.framing = patch.framing ? { ...patch.framing } : undefined
+		if (patch.generator && item.generator) item.generator = { ...item.generator, ...patch.generator }
+		if ('key' in patch) item.key = patch.key ? { ...patch.key } : undefined
+		if (patch.effects) item.effects = patch.effects.map((e) => ({ ...e, params: { ...e.params } }))
+		if (patch.gain !== undefined) item.gain = patch.gain
+		if (patch.fadeInSec !== undefined) item.fadeInSec = patch.fadeInSec
+		if (patch.fadeOutSec !== undefined) item.fadeOutSec = patch.fadeOutSec
+	}
+
+	const endItemGesture = (label: string) => {
+		if (!gestureBefore) return
+		commitStep({ before: gestureBefore, label })
+		gestureBefore = null
+	}
+
+	/**
+	 * Move, scale or rotate a clip inside the frame — the free transform, and
+	 * what PiP is built on. Replace, never mutate: the diff compares by value.
+	 */
+	const setItemTransform = (id: string, patch: Partial<TimelineItemTransform>) => {
+		const item = doc.value?.timeline.find((i) => i.id === id)
+		if (!item) return
+		const before = snapshotState()
+		const next = { ...TRANSFORM_DEFAULTS, ...item.transform, ...patch }
+		item.transform = hasTransform(next) ? next : undefined
+		commitStep({ before, label: 'Transform clip' })
+	}
+
+	/**
+	 * Add or replace a keyframe on `path` at clip-local time `t`.
+	 *
+	 * Times are clip-local so a keyframe survives the clip being moved, and
+	 * SNAPPED to a hundredth of a second so clicking the same spot twice edits
+	 * one keyframe rather than stacking two a microsecond apart.
+	 */
+	const setKeyframe = (id: string, path: string, t: number, value: number) => {
+		const item = doc.value?.timeline.find((i) => i.id === id)
+		if (!item || !isAnimatable(path) || !Number.isFinite(value)) return
+		const at = Math.max(0, Math.round(t * 100) / 100)
+		const before = snapshotState()
+		const existing = item.keyframes?.[path] ?? []
+		const next = [...existing.filter((k) => Math.abs(k.t - at) > 0.005), { t: at, value }]
+			.sort((a, b) => a.t - b.t)
+		item.keyframes = { ...item.keyframes, [path]: next }
+		commitStep({ before, label: 'Add keyframe' })
+	}
+
+	const removeKeyframe = (id: string, path: string, t: number) => {
+		const item = doc.value?.timeline.find((i) => i.id === id)
+		if (!item?.keyframes?.[path]) return
+		const before = snapshotState()
+		const next = item.keyframes[path].filter((k) => Math.abs(k.t - t) > 0.005)
+		const tracks = { ...item.keyframes }
+		if (next.length) tracks[path] = next
+		else delete tracks[path]
+		item.keyframes = Object.keys(tracks).length ? tracks : undefined
+		commitStep({ before, label: 'Remove keyframe' })
+	}
+
+	/** Stop animating a parameter, leaving its static value in charge. */
+	const clearKeyframes = (id: string, path: string) => {
+		const item = doc.value?.timeline.find((i) => i.id === id)
+		if (!item?.keyframes?.[path]) return
+		const before = snapshotState()
+		const tracks = { ...item.keyframes }
+		delete tracks[path]
+		item.keyframes = Object.keys(tracks).length ? tracks : undefined
+		commitStep({ before, label: 'Clear keyframes' })
+	}
+
+	/**
+	 * How a clip fills a sequence frame of a different shape: letterbox it (`fit`,
+	 * the default and today's behaviour) or crop it to the frame (`fill`), with a
+	 * pan choosing which part survives. Part of the timeline, so it undoes.
+	 */
+	const setItemFraming = (id: string, mode: 'fit' | 'fill', pan = 0) => {
+		const item = doc.value?.timeline.find((i) => i.id === id)
+		if (!item || !Number.isFinite(pan)) return
+		const before = snapshotState()
+		const clamped = Math.max(-1, Math.min(1, pan))
+		// Replace, never mutate — same contract as `transition`; the diff compares
+		// this object by value and mutating it makes the snapshots alias.
+		item.framing = mode === 'fit' ? undefined : { mode, pan: clamped }
+		commitStep({ before, label: mode === 'fit' ? 'Fit to frame' : 'Fill frame' })
+	}
+
+	/**
+	 * The sequence's own frame. Deliberately NOT undoable: `timelineMeta` sits
+	 * outside TimelineState, which is what the history diffs, and a project's
+	 * shape is a setting rather than an edit — the same call markers make.
+	 */
+	const setSequenceFrame = (width: number, height: number) => {
+		if (!doc.value || !Number.isFinite(width) || !Number.isFinite(height)) return
+		if (width < 2 || height < 2) return
+		doc.value.timelineMeta = { ...doc.value.timelineMeta, width, height, frameChosen: true }
+		markDirty()
+	}
+
+	/** Back to following the footage. Picking a frame was otherwise one-way. */
+	const clearSequenceFrame = () => {
+		if (!doc.value) return
+		doc.value.timelineMeta = { ...doc.value.timelineMeta, frameChosen: false }
+		markDirty()
+	}
+
+	/**
+	 * Attach a transition to the cut AFTER this clip. The annotation lives on the
+	 * outgoing item; no clip moves and the sequence length is unchanged — the
+	 * window is resolved at render time from each side's trimmed-away handles.
+	 */
+	const setTransition = (id: string, kind: string, seconds: number) => {
+		const item = doc.value?.timeline.find((i) => i.id === id)
+		if (!item || !isTransitionKind(kind) || !Number.isFinite(seconds)) return
+		const before = snapshotState()
+		const duration = Math.max(MIN_TRANSITION_SEC, Math.min(MAX_TRANSITION_SEC, seconds))
+		// REPLACE, never mutate: diffTimelines compares `transition` by value, and
+		// mutating in place makes the before/after snapshots alias so the edit is
+		// never recorded. See the contract in shared/timeline.ts.
+		item.transition = { ...item.transition, out: { kind, duration } }
+		commitStep({ before, label: `Transition ${transitionLabel(kind)}` })
+	}
+
+	const clearTransition = (id: string) => {
+		const item = doc.value?.timeline.find((i) => i.id === id)
+		if (!item?.transition?.out) return
+		const before = snapshotState()
+		const rest = { ...item.transition }
+		delete rest.out
+		item.transition = Object.keys(rest).length ? rest : undefined
+		commitStep({ before, label: 'Remove transition' })
+	}
+
+	/**
+	 * Copy a selection, so it can be pasted somewhere else.
+	 *
+	 * The clipboard is a deep snapshot rather than a list of ids: paste has to
+	 * keep working after the originals are deleted, and a shallow copy would
+	 * hand the pasted clip the SAME effects and transition objects as the one it
+	 * came from — the diff compares those by value and two items sharing one
+	 * would make every later edit ambiguous.
+	 */
+	const clipboard = ref<TimelineItem[]>([])
+
+	const copyItems = (ids: string[] = selectedItemIds.value) => {
+		const wanted = new Set(ids)
+		const picked = (doc.value?.timeline ?? []).filter((i) => wanted.has(i.id))
+		if (!picked.length) return 0
+		clipboard.value = JSON.parse(JSON.stringify(picked))
+		return picked.length
+	}
+
+	/**
+	 * Paste at the playhead, keeping the selection's internal spacing.
+	 *
+	 * Relative to the EARLIEST item copied, so pasting a three-clip run puts it
+	 * back as a run rather than stacking all three on the playhead.
+	 */
+	const pasteItems = (atSec = playheadSec.value) => {
+		if (!doc.value || !clipboard.value.length) return []
+		const trackIds = new Set(doc.value.tracks.map((t) => t.id))
+		const origin = Math.min(...clipboard.value.map((i) => i.timelineStart))
+		const fallbackTrack = visibleVideoTracks.value[0]?.id
+			?? doc.value.tracks.find((t) => t.kind === 'video')?.id
+		const before = snapshotState()
+		const made: string[] = []
+		for (const source of clipboard.value) {
+			// A track the copy came from may be gone by now.
+			const trackId = trackIds.has(source.trackId) ? source.trackId : fallbackTrack
+			if (!trackId) continue
+			const id = newId('ti')
+			doc.value.timeline.push({
+				...JSON.parse(JSON.stringify(source)),
+				id,
+				trackId,
+				timelineStart: Math.max(0, atSec + (source.timelineStart - origin))
+			})
+			made.push(id)
+		}
+		if (!made.length) return []
+		// Pasting onto occupied time is normal; the existing repair decides.
+		repairOverlaps({ tracks: doc.value.tracks, timeline: doc.value.timeline })
+		commitStep({ before, label: made.length > 1 ? `Paste ${made.length} clips` : 'Paste' })
+		selectItems(made)
+		return made
+	}
+
+	/** Copy and paste in one step, landing each copy right after its original. */
+	const duplicateItems = (ids: string[] = selectedItemIds.value) => {
+		if (!doc.value) return []
+		const wanted = new Set(ids)
+		const picked = doc.value.timeline.filter((i) => wanted.has(i.id))
+		if (!picked.length) return []
+		const before = snapshotState()
+		const made: string[] = []
+		for (const source of picked) {
+			const id = newId('ti')
+			doc.value.timeline.push({
+				...JSON.parse(JSON.stringify(source)),
+				id,
+				timelineStart: itemEnd(source)
+			})
+			made.push(id)
+		}
+		repairOverlaps({ tracks: doc.value.tracks, timeline: doc.value.timeline })
+		commitStep({ before, label: made.length > 1 ? `Duplicate ${made.length} clips` : 'Duplicate' })
+		selectItems(made)
+		return made
+	}
+
+	/** Everything on unlocked tracks — locked means locked, including from here. */
+	const selectAllItems = () => {
+		if (!doc.value) return
+		const locked = new Set(doc.value.tracks.filter((t) => t.locked).map((t) => t.id))
+		selectItems(doc.value.timeline.filter((i) => !locked.has(i.trackId)).map((i) => i.id))
+	}
+
+	/**
+	 * Trim everything on one side of the playhead away from a clip.
+	 *
+	 * `side: 'left'` keeps what is AFTER the playhead — the gesture for "the
+	 * take starts here". Trims rather than splitting-and-deleting so it is one
+	 * history step and leaves no fragment behind.
+	 *
+	 * Ripples afterwards, like every other removal here. Leaving the hole would
+	 * be a different gesture from the delete key on the same timeline, and a
+	 * user who tightens a clip is not asking for a gap where it used to be.
+	 */
+	const trimToPlayhead = (side: 'left' | 'right') => {
+		if (!doc.value) return 0
+		const t = playheadSec.value
+		const candidates = (selectedItems.value.length ? selectedItems.value : doc.value.timeline)
+			.filter((i) => t > i.timelineStart + 0.01 && t < itemEnd(i) - 0.01)
+		if (!candidates.length) return 0
+		const before = snapshotState()
+		for (const item of candidates) {
+			const speed = item.speed || 1
+			const cut = item.in + (t - item.timelineStart) * speed
+			if (side === 'left') {
+				item.in = cut
+				item.timelineStart = t
+			} else {
+				item.out = cut
+			}
+			item.duration = (item.out - item.in) / speed
+			item.masterSegmentIndex = undefined
+		}
+		closeTimelineGaps({ tracks: doc.value.tracks, timeline: doc.value.timeline })
+		commitStep({ before, label: side === 'left' ? 'Trim start' : 'Trim end' })
+		return candidates.length
 	}
 
 	const nudgeItems = (ids: string[], deltaSec: number) => {
@@ -1461,21 +2424,67 @@ export const useEditorStore = defineStore('editor', () => {
 		commitStep({ before, label: `Track ${flag}` })
 	}
 
-	const addOverlayTrack = () => {
+	/**
+	 * A second video track, which is what makes picture-in-picture reachable:
+	 * the render composites every visible video track bottom-up, and until now
+	 * there was no way to make a second one.
+	 */
+	const addVideoTrack = () => {
 		if (!doc.value) return
 		const before = snapshotState()
-		const count = doc.value.tracks.filter((t) => t.kind === 'overlay').length
 		doc.value.tracks.push({
-			id: (crypto as any).randomUUID ? crypto.randomUUID() : `tr-${Date.now()}`,
-			kind: 'overlay',
-			name: `OV${count + 1}`,
-			order: Math.max(...doc.value.tracks.map((t) => t.order)) + 1,
-			muted: false,
-			locked: false,
-			hidden: false,
-			height: 48
+			id: newId('tr'),
+			kind: 'video',
+			name: nextTrackName(doc.value.tracks, 'video'),
+			// Above its OWN family, not the end of a flat list — which is how a new
+			// lane used to land underneath the audio and off the bottom of a
+			// viewport this short.
+			order: nextTrackOrder(doc.value.tracks, 'video'),
+			muted: false, locked: false, hidden: false, height: 64
 		})
-		commitStep({ before, label: 'Add overlay track' })
+		commitStep({ before, label: 'Add video track' })
+	}
+
+	/** The audio half of the same thing. There was no way to add one before. */
+	const addAudioTrack = () => {
+		if (!doc.value) return
+		const before = snapshotState()
+		doc.value.tracks.push({
+			id: newId('tr'),
+			kind: 'audio',
+			name: nextTrackName(doc.value.tracks, 'audio'),
+			order: nextTrackOrder(doc.value.tracks, 'audio'),
+			muted: false, locked: false, hidden: false, height: 64
+		})
+		commitStep({ before, label: 'Add audio track' })
+	}
+
+	/**
+	 * Delete a track and everything on it.
+	 *
+	 * The last video track is kept: a sequence with nowhere to put a picture is
+	 * not a state worth being able to reach. Audio has no such floor — a project
+	 * that only ever uses the sound its clips carry needs no audio lane at all.
+	 */
+	const removeTrack = (trackId: string) => {
+		if (!doc.value) return false
+		const track = doc.value.tracks.find((t) => t.id === trackId)
+		if (!track) return false
+		if (!canRemoveTrack(trackId)) return false
+		const before = snapshotState()
+		doc.value.tracks = doc.value.tracks.filter((t) => t.id !== trackId)
+		doc.value.timeline = doc.value.timeline.filter((i) => i.trackId !== trackId)
+		commitStep({ before, label: `Remove ${track.name}` })
+		return true
+	}
+
+	/** Whether removing this track is offered at all. */
+	const canRemoveTrack = (trackId: string) => {
+		const d = doc.value
+		const track = d?.tracks.find((t) => t.id === trackId)
+		if (!d || !track) return false
+		return trackFamily(track) !== 'video' ||
+			d.tracks.filter((t) => trackFamily(t) === 'video').length > 1
 	}
 
 	// ===== Persona actions (M3) =====
@@ -1766,7 +2775,38 @@ export const useEditorStore = defineStore('editor', () => {
 	}
 
 	// ===== Export actions (M4 + background exports) =====
-	const startExport = async (quality: 'original' | 'preview') => {
+
+	/**
+	 * Formats still to render for this project, after the one in flight.
+	 *
+	 * A queue rather than concurrency: an export saturates the machine, and two
+	 * at once finishes later than two in sequence while making the progress bar
+	 * meaningless. `renders` is keyed by thread, so there is one slot anyway.
+	 */
+	const exportQueue = ref<{ quality: 'original' | 'preview'; format: DeliveryFormat }[]>([])
+
+	/**
+	 * Render the timeline once per format, in order.
+	 *
+	 * The snapshot is taken PER JOB rather than once for the batch — each render
+	 * detaches from the live doc, and a doc that changed between jobs should
+	 * produce what it says at the moment each one starts.
+	 */
+	const startExportBatch = (quality: 'original' | 'preview', formats: DeliveryFormat[]) => {
+		const wanted = formats.length ? formats : ['h264' as const]
+		exportQueue.value = wanted.slice(1).map((format) => ({ quality, format }))
+		void startExport(quality, wanted[0])
+	}
+
+	/** Start the next queued format, if a finished export left one waiting. */
+	const drainExportQueue = () => {
+		const next = exportQueue.value[0]
+		if (!next) return
+		exportQueue.value = exportQueue.value.slice(1)
+		void startExport(next.quality, next.format)
+	}
+
+	const startExport = async (quality: 'original' | 'preview', format: DeliveryFormat = 'h264') => {
 		if (!threadId.value || !canExport.value || !doc.value) return
 		const tid = threadId.value
 		const entry: RenderEntry = {
@@ -1783,7 +2823,7 @@ export const useEditorStore = defineStore('editor', () => {
 			// from the editor entirely (keep editing / switch revision / load
 			// another project), and the snapshot is never persisted.
 			const snapshot = JSON.parse(JSON.stringify(doc.value))
-			const result = await api.exportEditorTimeline({ threadId: tid, quality, doc: snapshot })
+			const result = await api.exportEditorTimeline({ threadId: tid, quality, doc: snapshot, format })
 			if (result?.renderId && renders.value[tid]) {
 				renders.value = { ...renders.value, [tid]: { ...renders.value[tid], renderId: result.renderId } }
 			}
@@ -1824,6 +2864,7 @@ export const useEditorStore = defineStore('editor', () => {
 		threadId: string
 		turn: PromptTurn
 		addMarkers?: { time: number; label: string }[]
+		docSettings?: { captionsEnabled?: boolean; loudnessEnabled?: boolean }
 		thinContext?: boolean
 		truncated?: boolean
 	}) => {
@@ -1844,7 +2885,8 @@ export const useEditorStore = defineStore('editor', () => {
 				return
 			}
 			const markers = payload.addMarkers || []
-			if (!hasOps(turn.diff) && !markers.length) {
+			const settings = payload.docSettings
+			if (!hasOps(turn.diff) && !markers.length && !settings) {
 				promptError.value = 'The AI proposed no changes. Try a more specific request.'
 				return
 			}
@@ -1853,7 +2895,7 @@ export const useEditorStore = defineStore('editor', () => {
 			const { applied, pruned } = dryRunProposal(turn.diff!)
 			const before = currentState()
 			const diffed = diffTimelines(before, applied)
-			if (!diffed && !markers.length) {
+			if (!diffed && !markers.length && !settings) {
 				promptError.value = 'Nothing applicable — the timeline changed while the AI was working.'
 				return
 			}
@@ -1874,6 +2916,10 @@ export const useEditorStore = defineStore('editor', () => {
 				commitStep({ prebuilt: diffed, origin: 'ai', turnId: turn.id, label: persona?.name || 'AI edit' })
 			}
 			for (const m of markers) addMarker(m.time, m.label)
+			// Project settings sit outside TimelineState, so they are applied
+			// directly rather than through the diff — the same route markers take.
+			if (settings?.captionsEnabled !== undefined) setCaptionsEnabled(settings.captionsEnabled)
+			if (settings?.loudnessEnabled !== undefined) setLoudnessEnabled(settings.loudnessEnabled)
 
 			const rev = await createRevision({
 				origin: 'ai',
@@ -2051,6 +3097,11 @@ export const useEditorStore = defineStore('editor', () => {
 						error: data.error
 					}
 				}
+				// A batch moves on when the one in flight lands — including on an
+				// error, so one bad format does not strand the rest.
+				if (data.threadId === threadId.value && (data.phase === 'done' || data.phase === 'error')) {
+					drainExportQueue()
+				}
 			})
 		}
 	}
@@ -2075,6 +3126,9 @@ export const useEditorStore = defineStore('editor', () => {
 		pxPerSecond,
 		timelineView,
 		snapEnabled,
+		shortcutsOpen,
+		monitorFullscreen,
+		activeGuideId,
 		seekRequest,
 		selectedItemIds,
 		// computeds
@@ -2132,6 +3186,13 @@ export const useEditorStore = defineStore('editor', () => {
 		addItemFromClip,
 		addItemFromAsset,
 		splitAtPlayhead,
+		removeRanges,
+		copyItems,
+		pasteItems,
+		duplicateItems,
+		selectAllItems,
+		trimToPlayhead,
+		clipboard,
 		deleteItems,
 		closeGaps,
 		hasGaps,
@@ -2141,6 +3202,62 @@ export const useEditorStore = defineStore('editor', () => {
 		toggleItemMuted,
 		setItemGain,
 		setItemFade,
+		setTransition,
+		clearTransition,
+		setItemTransform,
+		beginItemGesture,
+		updateItemGesture,
+		endItemGesture,
+		setItemKey,
+		addGeneratedLayer,
+		setGenerator,
+		setLayerRole,
+		setKeyframe,
+		removeKeyframe,
+		clearKeyframes,
+		setItemFraming,
+		effectsVersion,
+		loadEffectPacks,
+		draggingEffectKind,
+		addEffect,
+		removeEffect,
+		setEffectParam,
+		moveEffect,
+		setSequenceFrame,
+		clearSequenceFrame,
+		sequenceFrame,
+		captionCues,
+		transcriptCues,
+		captionsEnabled,
+		hasTranscript,
+		setCaptionsEnabled,
+		exportQueue,
+		startExportBatch,
+		toggleTrackMusic,
+		addVideoTrack,
+		addAudioTrack,
+		removeTrack,
+		canRemoveTrack,
+		overlaySegments,
+		baseVideoTrackId,
+		videoLayerDepth,
+		addTitle,
+		setTitle,
+		activeTitles,
+		activeGenerators,
+		loudnessEnabled,
+		setLoudnessEnabled,
+		refreshTranscripts,
+		seams,
+		conflictedSeamIds,
+		selectedSeamId,
+		selectedSeam,
+		selectSeam,
+		draggingTransitionKind,
+		seamNear,
+		transitionPreviews,
+		playableItemIds,
+		requestTransitionPreviews,
 		nudgeItems,
 		addMarker,
 		removeMarker,
@@ -2155,7 +3272,6 @@ export const useEditorStore = defineStore('editor', () => {
 		sourceTimeToTimeline,
 		applySilenceRegions,
 		toggleTrackFlag,
-		addOverlayTrack,
 		// personas
 		personas,
 		activePersona,

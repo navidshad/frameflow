@@ -19,6 +19,29 @@
 					</label>
 				</div>
 
+				<div>
+					<label class="text-[10px] font-bold uppercase tracking-widest text-zinc-500 block mb-1.5">
+						Format
+					</label>
+					<div class="space-y-1">
+						<label v-for="f in FORMATS" :key="f.value"
+							class="flex items-start gap-2 px-2 py-1.5 rounded-lg border cursor-pointer transition"
+							:class="formats.includes(f.value)
+								? 'border-primary bg-primary/5'
+								: 'border-zinc-200 dark:border-zinc-700 hover:border-primary/40'">
+							<input type="checkbox" class="accent-primary mt-0.5"
+								:checked="formats.includes(f.value)" @change="toggleFormat(f.value)" />
+							<span class="min-w-0">
+								<span class="block text-[11px] font-bold text-zinc-800 dark:text-zinc-200">{{ f.label }}</span>
+								<span class="block text-[9px] text-zinc-400 leading-snug">{{ f.description }}</span>
+							</span>
+						</label>
+					</div>
+					<p v-if="formats.length > 1" class="mt-1 text-[9px] text-zinc-400 leading-snug">
+						Rendered one after another — two at once finishes later than two in a row.
+					</p>
+				</div>
+
 				<div v-if="store.exportWarnings.length" class="space-y-1.5">
 					<div v-for="warning in store.exportWarnings" :key="warning.id"
 						class="flex items-center gap-2 px-2.5 py-1.5 rounded-lg bg-amber-500/10 border border-amber-500/20">
@@ -83,7 +106,8 @@
 				<!-- Idle -->
 				<template v-if="!state">
 					<button class="btn-ghost" @click="close">Cancel</button>
-					<button class="btn-primary" :disabled="!store.canExport" @click="store.startExport(quality)">
+					<button class="btn-primary" :disabled="!store.canExport || !formats.length"
+						@click="store.startExportBatch(quality, formats)">
 						<span class="iconify tabler--file-export w-3.5 h-3.5 inline-block align-[-2px] mr-1"></span>
 						Export
 					</button>
@@ -120,6 +144,7 @@
 
 <script setup lang="ts">
 import { computed, ref } from 'vue'
+import type { DeliveryFormat } from '@shared/types'
 import { Modal } from 'pilotui/complex'
 import { useEditorStore } from '../../stores/editorStore'
 
@@ -128,6 +153,26 @@ const emit = defineEmits<{ (e: 'update:modelValue', value: boolean): void }>()
 
 const store = useEditorStore()
 const quality = ref<'original' | 'preview'>('original')
+const formats = ref<DeliveryFormat[]>(['h264'])
+
+const toggleFormat = (value: DeliveryFormat) => {
+	formats.value = formats.value.includes(value)
+		? formats.value.filter((f) => f !== value)
+		: [...formats.value, value]
+}
+
+const FORMATS: { value: DeliveryFormat; label: string; description: string }[] = [
+	{
+		value: 'h264',
+		label: 'MP4 (H.264)',
+		description: 'What you post. Plays everywhere, small file.'
+	},
+	{
+		value: 'prores',
+		label: 'ProRes 422 HQ',
+		description: 'What you hand to another editor. Large file, no generation loss.'
+	}
+]
 
 const state = computed(() => store.renderState)
 const isCanceled = computed(() => state.value?.error === 'aborted')
