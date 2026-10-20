@@ -8,7 +8,7 @@ import { detectCli, locate } from './detect'
 import { runEngineTurn } from './runner'
 
 /**
- * Really spawns Claude Code, Codex and Gemini CLI against a real FrameFlow MCP
+ * Really spawns Claude Code against a real FrameFlow MCP
  * server (only the editor is fake), with the engine's own flags. Each one is
  * asked for an edit AND told to break out — run a shell command, write a file
  * — so the test proves the lock holds, not just that the happy path works.
@@ -25,7 +25,7 @@ const PROMPT =
 
 const SKIP_ALL = !!process.env.FRAMEFLOW_SKIP_LIVE_ENGINES
 
-const engines: CliEngineId[] = ['claude-code', 'codex', 'gemini-cli']
+const engines: CliEngineId[] = ['claude-code']
 
 const located = Object.fromEntries(await Promise.all(engines.map(async (id) => [id, SKIP_ALL ? null : await locate(id)] as const)))
 
@@ -72,8 +72,8 @@ describe('CLI engines, really spawned', () => {
 				expect(result.steps.filter((s) => s.foreign && s.status === 'done')).toEqual([])
 
 				if (!result.ok && result.note) {
-					// Installed but cannot run here (Gemini CLI on a personal Google
-					// account): the failure must say what the user has to do.
+					// Installed but cannot run here (not signed in): the failure
+					// must say what the user has to do.
 					console.warn(`[live] ${ENGINES[id].label} could not run: ${result.note}`)
 					expect(result.note.length).toBeGreaterThan(20)
 					return

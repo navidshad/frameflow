@@ -98,7 +98,8 @@ export const rendererBridge: EditorBridge = {
 	},
 
 	async renderFrame(project, timeSec) {
-		const { path } = await renderExactFrame({ threadId: project.threadId, doc: project.doc, timeSec })
+		// burnText: an agent has no monitor overlay, so titles and captions must be in the picture.
+		const { path } = await renderExactFrame({ threadId: project.threadId, doc: project.doc, timeSec, burnText: true })
 		const image = nativeImage.createFromPath(path)
 		if (image.isEmpty()) throw new ToolError('The frame rendered but could not be read back. Try again.')
 		const { width } = image.getSize()

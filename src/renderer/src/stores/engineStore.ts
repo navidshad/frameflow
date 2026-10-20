@@ -30,9 +30,9 @@ export const useEngineStore = defineStore('engine', () => {
 	const current = computed(() => ENGINES[settings.value.engine])
 	const isCli = computed(() => isCliEngine(settings.value.engine))
 
-	/** Engines for the chip menu: the CLIs found here, then Gemini API. */
+	/** Engines for the chip menu: a CLI found here, then Gemini API. */
 	const available = computed(() =>
-		(['claude-code', 'codex', 'gemini-cli', 'gemini-api'] as EngineId[]).filter((id) => {
+		(['claude-code', 'gemini-api'] as EngineId[]).filter((id) => {
 			const d = detectionFor(id)
 			return id === settings.value.engine || (d && d.status !== 'missing')
 		})

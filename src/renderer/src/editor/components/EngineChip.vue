@@ -56,8 +56,7 @@ const router = useRouter()
 const open = ref(false)
 const rootRef = ref<HTMLElement | null>(null)
 
-/** "Codex CLI" reads as "Codex" on a chip this small. */
-const chipLabel = computed(() => (engine.settings.engine === 'codex' ? 'Codex' : engine.current.label))
+const chipLabel = computed(() => engine.current.label)
 
 const runnable = (id: EngineId) => engineRunnable(engine.detectionFor(id))
 

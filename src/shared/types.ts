@@ -559,7 +559,7 @@ export interface EditorRevisionsFile {
 }
 
 export interface PromptTurnEngine {
-	id: 'claude-code' | 'codex' | 'gemini-cli'
+	id: 'claude-code'
 	label: string
 	/** The model the CLI reported, when it did. */
 	model?: string
@@ -605,7 +605,7 @@ export interface PromptTurn {
 		engineTurnId?: string
 	}
 	/**
-	 * Set on a turn a CLI engine (Claude Code, Codex, Gemini CLI) ran. Its
+	 * Set on a turn a CLI engine (Claude Code) ran. Its
 	 * edits arrive as their own agent turns (above); this carries the steps
 	 * and, once done, the revisions they made.
 	 */

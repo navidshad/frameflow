@@ -5,7 +5,7 @@ import os from 'node:os'
 
 /**
  * Finding and running the user's CLIs. No Electron, so the tests that really
- * spawn Claude Code, Codex and Gemini CLI use exactly this.
+ * spawn the CLI use exactly this.
  *
  * A GUI app on macOS starts with PATH=/usr/bin:/bin:/usr/sbin:/sbin, which
  * holds none of them. So the search adds the login shell's PATH and the
@@ -35,7 +35,7 @@ function extraDirs(): string[] {
 	const dirs = [
 		'/opt/homebrew/bin', '/usr/local/bin',
 		join(home, '.local', 'bin'), join(home, '.npm-global', 'bin'), join(home, '.claude', 'local'),
-		join(home, '.bun', 'bin'), join(home, '.volta', 'bin'), join(home, '.codex', 'bin')
+		join(home, '.bun', 'bin'), join(home, '.volta', 'bin')
 	]
 	if (isWin && process.env.APPDATA) dirs.push(join(process.env.APPDATA, 'npm'))
 	// nvm: every installed node's bin, newest first.

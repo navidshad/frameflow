@@ -4,23 +4,24 @@ import { opKeys } from './agent'
 /**
  * AI engines: which AI edits when the user chats in FrameFlow.
  *
- * The Gemini API engine is today's single-shot structured call. The three CLI
- * engines run the user's own Claude Code, Codex or Gemini CLI agentically,
- * pointed at FrameFlow's MCP server and allowed nothing else.
+ * The Gemini API engine is today's single-shot structured call. A CLI engine
+ * runs the user's own AI CLI agentically, pointed at FrameFlow's MCP server and
+ * allowed nothing else. Claude Code is the one shipped; the tables below
+ * (ENGINES, CLI_MODELS, LINE_PARSERS, buildCommand) are where another CLI plugs in.
  *
  * Everything decidable lives here, with tests: the command line for each CLI,
  * what each CLI's version and sign-in output means, and how each CLI's JSONL
  * stream becomes one common list of steps. main/engine/* only spawns.
  */
 
-export type EngineId = 'claude-code' | 'codex' | 'gemini-cli' | 'gemini-api'
+export type EngineId = 'claude-code' | 'gemini-api'
 export type CliEngineId = Exclude<EngineId, 'gemini-api'>
 
-export const ENGINE_IDS: EngineId[] = ['claude-code', 'codex', 'gemini-cli', 'gemini-api']
-export const CLI_ENGINE_IDS: CliEngineId[] = ['claude-code', 'codex', 'gemini-cli']
+export const ENGINE_IDS: EngineId[] = ['claude-code', 'gemini-api']
+export const CLI_ENGINE_IDS: CliEngineId[] = ['claude-code']
 
 export const isCliEngine = (id: EngineId | string | undefined): id is CliEngineId =>
-	id === 'claude-code' || id === 'codex' || id === 'gemini-cli'
+	id === 'claude-code'
 
 export interface EngineMeta {
 	id: EngineId
@@ -39,16 +40,6 @@ export const ENGINES: Record<EngineId, EngineMeta> = {
 		id: 'claude-code', label: 'Claude Code', bin: 'claude',
 		blurb: 'Uses your Claude plan. Looks at frames while it edits, and drives FrameFlow through its own tools.',
 		footer: 'Claude Code · subscription'
-	},
-	codex: {
-		id: 'codex', label: 'Codex CLI', bin: 'codex',
-		blurb: 'Uses your ChatGPT plan.',
-		footer: 'Codex CLI · subscription'
-	},
-	'gemini-cli': {
-		id: 'gemini-cli', label: 'Gemini CLI', bin: 'gemini',
-		blurb: 'Uses your Google account.',
-		footer: 'Gemini CLI · Google account'
 	},
 	'gemini-api': {
 		id: 'gemini-api', label: 'Gemini API',
@@ -90,8 +81,8 @@ export interface ModelOption { value: string; label: string }
 
 /**
  * Models each CLI accepts by name. Claude Code takes aliases that follow the
- * latest model; Gemini CLI's come from its own constants. Codex reports its
- * catalogue at run time (`codex debug models`), so detection fills that in.
+ * latest model. A CLI that reports its own catalogue at run time can fill
+ * `EngineDetection.models` instead.
  */
 export const CLI_MODELS: Record<CliEngineId, ModelOption[]> = {
 	'claude-code': [
@@ -100,22 +91,10 @@ export const CLI_MODELS: Record<CliEngineId, ModelOption[]> = {
 		{ value: 'sonnet', label: 'Sonnet' },
 		{ value: 'haiku', label: 'Haiku' }
 	],
-	codex: [],
-	'gemini-cli': [
-		{ value: 'auto', label: 'Auto' },
-		{ value: 'gemini-3-pro-preview', label: 'Gemini 3 Pro (preview)' },
-		{ value: 'gemini-3-flash-preview', label: 'Gemini 3 Flash (preview)' },
-		{ value: 'gemini-2.5-pro', label: 'Gemini 2.5 Pro' },
-		{ value: 'gemini-2.5-flash', label: 'Gemini 2.5 Flash' }
-	]
 }
 
-/**
- * The default option, which passes no model flag. Codex runs without the
- * user's config.toml (so their MCP servers and plugins stay out), so for it
- * this is Codex's own default rather than their configured model.
- */
-export const asSetIn = (id: CliEngineId) => (id === 'codex' ? 'Codex default' : `As set in ${ENGINES[id].label}`)
+/** The default option, which passes no model flag: the CLI uses its own setting. */
+export const asSetIn = (id: CliEngineId) => `As set in ${ENGINES[id].label}`
 
 /**
  * CLIs often print an API error as raw JSON. The turn card wants its message:
@@ -146,11 +125,11 @@ export interface EngineDetection {
 	status: EngineStatus
 	version?: string
 	path?: string
-	/** "~/.local/bin/codex". */
+	/** "/opt/homebrew/bin/claude", with the home folder shown as ~. */
 	displayPath?: string
 	/** Why it is unusable, or how to sign in. */
 	note?: string
-	/** Extra models the CLI reported (Codex). */
+	/** Extra models the CLI reported, when it can. */
 	models?: ModelOption[]
 }
 
@@ -169,7 +148,7 @@ export const STATUS_TONE: Record<EngineStatus, StatusTone> = {
 export const engineRunnable = (d: EngineDetection | undefined): boolean =>
 	!!d && (d.status === 'signed-in' || d.status === 'found' || d.status === 'per-token' || d.status === 'unusable')
 
-/** The first x.y.z in `--version` output: "2.1.231 (Claude Code)", "codex-cli 0.152.0", "0.46.0". */
+/** The first x.y.z in `--version` output: "2.1.231 (Claude Code)". */
 export function parseVersion(output: string): string | undefined {
 	return /(\d+\.\d+\.\d+(?:[-.][0-9A-Za-z.]+)?)/.exec(output || '')?.[1]
 }
@@ -184,42 +163,7 @@ export function parseClaudeAuth(output: string): boolean | null {
 	}
 }
 
-/** `codex login status`: "Logged in using ChatGPT" (exit 0) or "Not logged in" (exit 1). */
-export function parseCodexLogin(output: string, exitCode: number | null): boolean | null {
-	const text = (output || '').toLowerCase()
-	if (/not logged in|logged out/.test(text)) return false
-	if (/logged in/.test(text)) return exitCode === 0 || exitCode === null
-	return null
-}
-
-/** `codex debug models`: the models it lists to users. */
-export function parseCodexModels(output: string): ModelOption[] {
-	try {
-		const data = JSON.parse(output)
-		const models: any[] = Array.isArray(data) ? data : Array.isArray(data?.models) ? data.models : []
-		return models
-			.filter((m) => m && typeof m.slug === 'string' && m.visibility !== 'hide')
-			.map((m) => ({ value: m.slug, label: typeof m.display_name === 'string' ? m.display_name : m.slug }))
-	} catch {
-		return []
-	}
-}
-
-/**
- * Gemini CLI has no status command; its settings say how it signs in. Returns
- * null when it does not say.
- */
-export function geminiAuthType(settingsJson: string | undefined, env: Record<string, string | undefined>): string | null {
-	try {
-		const data = settingsJson ? JSON.parse(settingsJson) : {}
-		const type = data?.security?.auth?.selectedType ?? data?.selectedAuthType
-		if (typeof type === 'string') return type
-	} catch { /* unreadable settings say nothing */ }
-	if (env.GEMINI_API_KEY) return 'gemini-api-key'
-	return null
-}
-
-/** "/Users/me/.local/bin/codex" → "~/.local/bin/codex". */
+/** "/Users/me/.local/bin/claude" → "~/.local/bin/claude". */
 export function displayPath(path: string, home: string | undefined): string {
 	if (home && (path === home || path.startsWith(home.endsWith('/') ? home : `${home}/`))) return `~${path.slice(home.replace(/\/$/, '').length)}`
 	return path
@@ -231,20 +175,8 @@ export function displayPath(path: string, home: string | undefined): string {
  */
 export function engineFailureNote(id: CliEngineId, output: string): string | null {
 	const text = output || ''
-	if (id === 'gemini-cli') {
-		if (/IneligibleTierError|UNSUPPORTED_CLIENT|no longer supported for Gemini Code Assist/i.test(text)) {
-			return 'Google no longer serves Gemini CLI to personal Google accounts. Sign Gemini CLI in with an API key or a Workspace account (run `gemini` in a terminal), then Detect again.'
-		}
-		if (/API key not valid|API_KEY_INVALID/i.test(text)) return 'Gemini CLI’s API key was rejected. Fix it in Gemini CLI, then try again.'
-		if (/Please set an Auth method|auth method/i.test(text) && /not set|set an auth/i.test(text)) {
-			return 'Gemini CLI is not signed in. Run `gemini` in a terminal once to sign in.'
-		}
-	}
 	if (id === 'claude-code' && /not logged in|please run \/login|invalid api key|OAuth token has expired/i.test(text)) {
 		return 'Claude Code is not signed in. Run `claude` in a terminal and sign in, then try again.'
-	}
-	if (id === 'codex' && /not logged in|401 Unauthorized|please log in|codex login/i.test(text)) {
-		return 'Codex is not signed in. Run `codex login` in a terminal, then try again.'
 	}
 	return null
 }
@@ -275,16 +207,13 @@ export interface EngineStep {
 export const MCP_SERVER_KEY = 'frameflow'
 
 /**
- * Each CLI names an MCP tool its own way: Claude `mcp__frameflow__get_project`,
- * Gemini `mcp_frameflow_get_project` (or the bare name), Codex reports the
- * server beside the bare tool.
+ * Each CLI names an MCP tool its own way: Claude Code `mcp__frameflow__get_project`.
+ * A CLI that reports the server beside the bare tool passes it as `server`.
  */
 export function normalizeToolName(name: string, server?: string | null): { tool: string; server: string | null } {
 	if (server) return { tool: name, server }
 	const claude = /^mcp__([^_].*?)__(.+)$/.exec(name)
 	if (claude) return { server: claude[1], tool: claude[2] }
-	const prefix = `mcp_${MCP_SERVER_KEY}_`
-	if (name.startsWith(prefix)) return { server: MCP_SERVER_KEY, tool: name.slice(prefix.length) }
 	return { tool: name, server: null }
 }
 
@@ -430,76 +359,8 @@ function parseClaudeLine(d: any): EngineEvent[] {
 	}
 }
 
-function parseCodexLine(d: any): EngineEvent[] {
-	switch (d?.type) {
-		case 'thread.started':
-			return [{ type: 'init', sessionId: d.thread_id }]
-		case 'item.started':
-		case 'item.completed': {
-			const item = d.item || {}
-			const started = d.type === 'item.started'
-			if (item.type === 'mcp_tool_call') {
-				return started
-					? [{ type: 'tool-start', callId: String(item.id), tool: String(item.tool), server: item.server ?? null, args: item.arguments || {} }]
-					: [{
-						type: 'tool-end', callId: String(item.id),
-						ok: item.status === 'completed' && !item.error && !item.result?.isError,
-						error: item.error?.message || (item.result?.isError ? asText(item.result?.content).split('\n')[0] || 'Tool error' : undefined)
-					}]
-			}
-			// Anything that is not FrameFlow's (a shell command, a patch, a search)
-			// still shows as a step, so a restriction that failed is visible.
-			if (['command_execution', 'file_change', 'web_search'].includes(item.type)) {
-				return started
-					? [{ type: 'tool-start', callId: String(item.id), tool: item.type, server: 'codex', args: {} }]
-					: [{ type: 'tool-end', callId: String(item.id), ok: item.status === 'completed', error: item.status === 'completed' ? undefined : item.status }]
-			}
-			if (!started && item.type === 'agent_message' && item.text) return [{ type: 'text', text: item.text }]
-			if (!started && item.type === 'error' && item.message) return [{ type: 'error', message: item.message }]
-			return []
-		}
-		case 'error':
-			// "Reconnecting... 2/5" and the like: Codex retries on its own.
-			return [{ type: 'error', message: String(d.message || 'Codex error') }]
-		case 'turn.completed':
-			return [{ type: 'done', ok: true }]
-		case 'turn.failed':
-			return [{ type: 'done', ok: false, error: d.error?.message || 'Codex failed' }]
-		default:
-			return []
-	}
-}
-
-function parseGeminiLine(d: any): EngineEvent[] {
-	switch (d?.type) {
-		case 'init':
-			return [{ type: 'init', model: d.model, sessionId: d.session_id }]
-		case 'message':
-			return d.role === 'assistant' && typeof d.content === 'string' && d.content
-				? [{ type: 'text', text: d.content, delta: !!d.delta }]
-				: []
-		case 'tool_use': {
-			const { tool, server } = normalizeToolName(String(d.tool_name || ''))
-			return [{ type: 'tool-start', callId: String(d.tool_id), tool, server, args: d.parameters || {} }]
-		}
-		case 'tool_result':
-			return [{
-				type: 'tool-end', callId: String(d.tool_id), ok: d.status === 'success',
-				error: d.status === 'success' ? undefined : d.error?.message || 'Tool error'
-			}]
-		case 'error':
-			return [{ type: 'error', message: String(d.message || d.error?.message || 'Gemini CLI error'), fatal: d.severity === 'error' }]
-		case 'result':
-			return [{ type: 'done', ok: d.status === 'success', error: d.status === 'success' ? undefined : d.error?.message || 'Gemini CLI failed' }]
-		default:
-			return []
-	}
-}
-
 const LINE_PARSERS: Record<CliEngineId, (d: any) => EngineEvent[]> = {
-	'claude-code': parseClaudeLine,
-	codex: parseCodexLine,
-	'gemini-cli': parseGeminiLine
+	'claude-code': parseClaudeLine
 }
 
 /** One JSONL line → common events. Lines that are not JSON (banners, warnings) are ignored. */
@@ -693,26 +554,6 @@ export interface CommandSpec {
 
 const join = (dir: string, name: string, sep: '/' | '\\' = '/') => `${dir.replace(/[\\/]+$/, '')}${sep}${name}`
 
-/** TOML basic string: JSON's escaping is a subset that TOML accepts. */
-const tomlString = (value: string) => JSON.stringify(value)
-
-/**
- * Features Codex turns off for a FrameFlow run. Shell and code execution go,
- * along with everything that reaches outside (browser, apps, plugins, web).
- * Its patch tool cannot be removed; the read-only sandbox rejects every write
- * it attempts, which the restriction test checks.
- */
-export const CODEX_DISABLED_FEATURES = [
-	'shell_tool', 'unified_exec', 'multi_agent', 'apps', 'plugins', 'browser_use', 'computer_use',
-	'image_generation', 'view_image', 'hooks', 'memories', 'skill_search', 'tool_suggest', 'goals', 'in_app_browser'
-]
-
-/** Gemini CLI policy: nothing but FrameFlow's server, at the admin tier so user policies cannot widen it. */
-export const GEMINI_POLICY = [
-	'[[rule]]', 'toolName = "*"', 'decision = "deny"', 'priority = 100', '',
-	'[[rule]]', `mcpName = "${MCP_SERVER_KEY}"`, 'toolName = "*"', 'decision = "allow"', 'priority = 200', ''
-].join('\n')
-
 export function buildCommand(input: CommandInput): CommandSpec {
 	const sep = input.pathSep || '/'
 	const model = input.model?.trim()
@@ -740,66 +581,6 @@ export function buildCommand(input: CommandInput): CommandSpec {
 					'--setting-sources', 'user',
 					'--system-prompt', input.systemPrompt,
 					...(model ? ['--model', model] : [])
-				]
-			}
-		}
-		case 'codex': {
-			const config = [
-				`approval_policy=${tomlString('never')}`,
-				`web_search=${tomlString('disabled')}`,
-				`developer_instructions=${tomlString(input.systemPrompt)}`,
-				`mcp_servers.${MCP_SERVER_KEY}.url=${tomlString(input.mcpUrl)}`,
-				`mcp_servers.${MCP_SERVER_KEY}.bearer_token_env_var=${tomlString(TOKEN_ENV)}`,
-				// Without this every MCP call "requires approval" and `never` refuses it.
-				`mcp_servers.${MCP_SERVER_KEY}.default_tools_approval_mode=${tomlString('approve')}`
-			]
-			return {
-				files: [],
-				env: {},
-				args: [
-					'exec', '--json',
-					'--skip-git-repo-check', '--ephemeral',
-					// No user config (their MCP servers, profiles); auth still comes from CODEX_HOME.
-					'--ignore-user-config', '--ignore-rules',
-					'-s', 'read-only',
-					'-C', input.workDir,
-					...CODEX_DISABLED_FEATURES.flatMap((f) => ['--disable', f]),
-					...config.flatMap((c) => ['-c', c]),
-					...(model ? ['-m', model] : []),
-					input.prompt
-				]
-			}
-		}
-		case 'gemini-cli': {
-			const settings = {
-				mcpServers: {
-					[MCP_SERVER_KEY]: {
-						httpUrl: input.mcpUrl,
-						headers: { Authorization: `Bearer \${${TOKEN_ENV}}` },
-						trust: true
-					}
-				}
-			}
-			return {
-				files: [
-					{ name: 'settings.json', content: JSON.stringify(settings, null, 2) },
-					{ name: 'policy.toml', content: GEMINI_POLICY },
-					{ name: 'system.md', content: input.systemPrompt }
-				],
-				env: {
-					// Read as system settings, which merge over the user's; the server
-					// allow-list below keeps the user's own MCP servers out.
-					GEMINI_CLI_SYSTEM_SETTINGS_PATH: join(input.workDir, 'settings.json', sep),
-					GEMINI_SYSTEM_MD: join(input.workDir, 'system.md', sep)
-				},
-				args: [
-					'-p', input.prompt,
-					'-o', 'stream-json',
-					'--allowed-mcp-server-names', MCP_SERVER_KEY,
-					'--admin-policy', join(input.workDir, 'policy.toml', sep),
-					'-e', 'none',
-					'--skip-trust',
-					...(model ? ['-m', model] : [])
 				]
 			}
 		}

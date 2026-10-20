@@ -2,10 +2,9 @@ import { describe, expect, it } from 'vitest'
 import { readFileSync } from 'node:fs'
 import { resolve } from 'node:path'
 import {
-	agentFocus, buildCommand, buildEngineSystemPrompt, buildEngineUserPrompt, CODEX_DISABLED_FEATURES, displayPath,
-	editTime, engineFailureNote, geminiAuthType, lineSplitter, normalizeEngineSettings, normalizeToolName,
-	parseClaudeAuth, parseCodexLogin, readableError, parseCodexModels, parseStreamLine, parseVersion,
-	StepTracker, stepTitle, TOKEN_ENV, unexpectedTools, type CliEngineId
+	agentFocus, buildCommand, buildEngineSystemPrompt, buildEngineUserPrompt, displayPath, editTime,
+	engineFailureNote, lineSplitter, normalizeEngineSettings, normalizeToolName, parseClaudeAuth,
+	parseStreamLine, parseVersion, readableError, StepTracker, stepTitle, TOKEN_ENV, unexpectedTools, type CliEngineId
 } from './engines'
 
 const fixture = (name: string) => readFileSync(resolve(__dirname, '../main/engine/fixtures', name), 'utf-8')
@@ -30,40 +29,11 @@ describe('recorded streams', () => {
 		expect(t.answer).toMatch(/FrameFlow ones/)
 		expect(t.foreignTools).toEqual([])
 	})
-
-	it('Codex: MCP calls by server, agent messages, turn.completed', () => {
-		const t = track('codex', fixture('codex.stream.jsonl'))
-		expect(t.steps.map((s) => s.title)).toEqual(['get_project', 'search_moments “faster”', 'apply_ops addMarkers @ 0:24.0'])
-		expect(t.steps.every((s) => s.status === 'done')).toBe(true)
-		expect(t.done?.ok).toBe(true)
-		expect(t.answer).toMatch(/V2/)
-	})
-
-	it('Gemini CLI: a failed run ends with its error', () => {
-		const t = track('gemini-cli', fixture('gemini-badkey.stream.jsonl'))
-		expect(t.model).toBe('auto')
-		expect(t.steps).toEqual([])
-		expect(t.done?.ok).toBe(false)
-		expect(t.done?.error).toMatch(/API key not valid/)
-		expect(engineFailureNote('gemini-cli', t.done!.error!)).toMatch(/API key was rejected/)
-	})
-
-	it('Gemini CLI: tool calls and streamed text (shape from its stream formatter)', () => {
-		const t = track('gemini-cli', fixture('gemini-tools.synthetic.jsonl'))
-		expect(t.steps.map((s) => [s.title, s.status])).toEqual([
-			['get_project', 'done'],
-			['render_frame 0:04.2 — checked', 'done'],
-			['run_shell_command — not allowed', 'error']
-		])
-		expect(t.foreignTools).toEqual(['run_shell_command'])
-		expect(t.answer).toBe('Added the lower third at 0:03.0.')
-		expect(t.done?.ok).toBe(true)
-	})
 })
 
 describe('parsing edge cases', () => {
 	it('ignores banners and broken JSON', () => {
-		expect(parseStreamLine('gemini-cli', 'Warning: 256-color support not detected.')).toEqual([])
+		expect(parseStreamLine('claude-code', 'Warning: 256-color support not detected.')).toEqual([])
 		expect(parseStreamLine('claude-code', '{"type": "assistant", ')).toEqual([])
 	})
 
@@ -83,16 +53,15 @@ describe('parsing edge cases', () => {
 		expect(t.steps[0]).toMatchObject({ status: 'error', error: 'Stopped' })
 	})
 
-	it('Codex shell commands show up as foreign steps', () => {
-		const events = parseStreamLine('codex', JSON.stringify({ type: 'item.started', item: { id: 'i', type: 'command_execution', command: 'ls' } }))
+	it('a step outside FrameFlow is flagged as foreign', () => {
 		const t = new StepTracker()
-		events.forEach((e) => t.apply(e))
-		expect(t.foreignTools).toEqual(['command_execution'])
+		t.apply({ type: 'tool-start', callId: 'y', tool: 'Bash', server: null, args: { command: 'ls' } })
+		expect(t.foreignTools).toEqual(['Bash'])
+		expect(t.steps[0].title).toBe('Bash — not allowed')
 	})
 
-	it('normalises every CLI’s tool names', () => {
+	it('normalises Claude Code’s tool names', () => {
 		expect(normalizeToolName('mcp__frameflow__get_media')).toEqual({ server: 'frameflow', tool: 'get_media' })
-		expect(normalizeToolName('mcp_frameflow_render_frame')).toEqual({ server: 'frameflow', tool: 'render_frame' })
 		expect(normalizeToolName('get_project', 'frameflow')).toEqual({ server: 'frameflow', tool: 'get_project' })
 		expect(normalizeToolName('Bash')).toEqual({ server: null, tool: 'Bash' })
 		expect(unexpectedTools(['mcp__frameflow__get_project', 'Bash', 'mcp__other__x'])).toEqual(['Bash', 'mcp__other__x'])
@@ -123,10 +92,8 @@ describe('step titles and focus', () => {
 })
 
 describe('detection parsing', () => {
-	it('versions from each CLI', () => {
+	it('version from --version', () => {
 		expect(parseVersion('2.1.231 (Claude Code)\n')).toBe('2.1.231')
-		expect(parseVersion('codex-cli 0.152.0')).toBe('0.152.0')
-		expect(parseVersion('0.46.0\n')).toBe('0.46.0')
 		expect(parseVersion('nope')).toBeUndefined()
 	})
 
@@ -134,38 +101,24 @@ describe('detection parsing', () => {
 		expect(parseClaudeAuth('{"loggedIn": true, "authMethod": "claude.ai"}')).toBe(true)
 		expect(parseClaudeAuth('{"loggedIn": false}')).toBe(false)
 		expect(parseClaudeAuth('garbage')).toBeNull()
-		expect(parseCodexLogin('Logged in using ChatGPT\n', 0)).toBe(true)
-		expect(parseCodexLogin('Not logged in\n', 1)).toBe(false)
-		expect(geminiAuthType('{"security":{"auth":{"selectedType":"oauth-personal"}}}', {})).toBe('oauth-personal')
-		expect(geminiAuthType(undefined, { GEMINI_API_KEY: 'x' })).toBe('gemini-api-key')
-		expect(geminiAuthType('{}', {})).toBeNull()
-	})
-
-	it('Codex models and its configured model', () => {
-		const json = JSON.stringify({ models: [
-			{ slug: 'gpt-reserve', display_name: 'GPT-Reserve', visibility: 'hide' },
-			{ slug: 'gpt-5.6-terra', display_name: 'GPT-5.6-Terra', visibility: 'list' }
-		] })
-		expect(parseCodexModels(json)).toEqual([{ value: 'gpt-5.6-terra', label: 'GPT-5.6-Terra' }])
 	})
 
 	it('paths under home are shortened', () => {
-		expect(displayPath('/Users/me/.local/bin/codex', '/Users/me')).toBe('~/.local/bin/codex')
+		expect(displayPath('/Users/me/.local/bin/claude', '/Users/me')).toBe('~/.local/bin/claude')
 		expect(displayPath('/opt/homebrew/bin/claude', '/Users/me')).toBe('/opt/homebrew/bin/claude')
 		expect(displayPath('/Users/meg/x', '/Users/me')).toBe('/Users/meg/x')
 	})
 
-	it('recognises the Gemini CLI personal-account refusal', () => {
-		const stderr = 'IneligibleTierError: This client is no longer supported for Gemini Code Assist for individuals.'
-		expect(engineFailureNote('gemini-cli', stderr)).toMatch(/personal Google accounts/)
-		expect(engineFailureNote('codex', 'some other failure')).toBeNull()
+	it('recognises a sign-in the user has to fix', () => {
+		expect(engineFailureNote('claude-code', 'Not logged in · Please run /login')).toMatch(/not signed in/)
+		expect(engineFailureNote('claude-code', 'some other failure')).toBeNull()
 	})
 })
 
 describe('errors', () => {
 	it('pulls the message out of a raw API error', () => {
-		const raw = '{"type":"error","status":400,"error":{"type":"invalid_request_error","message":"The \'gpt-5.5\' model is not supported when using Codex with a ChatGPT account."}}'
-		expect(readableError(raw)).toBe("The 'gpt-5.5' model is not supported when using Codex with a ChatGPT account.")
+		const raw = '{"type":"error","status":400,"error":{"type":"invalid_request_error","message":"The \'x\' model is not supported with this account."}}'
+		expect(readableError(raw)).toBe("The 'x' model is not supported with this account.")
 		expect(readableError('Plain failure')).toBe('Plain failure')
 	})
 })
@@ -173,8 +126,9 @@ describe('errors', () => {
 describe('settings', () => {
 	it('clamps and fills', () => {
 		expect(normalizeEngineSettings(undefined)).toEqual({ engine: 'gemini-api', models: {}, maxSteps: 20 })
-		expect(normalizeEngineSettings({ engine: 'codex', maxSteps: 900, models: { codex: ' gpt-5.6-luna ', 'claude-code': '' } }))
-			.toEqual({ engine: 'codex', models: { codex: 'gpt-5.6-luna' }, maxSteps: 50 })
+		expect(normalizeEngineSettings({ engine: 'claude-code', maxSteps: 900, models: { 'claude-code': ' opus ' } }))
+			.toEqual({ engine: 'claude-code', models: { 'claude-code': 'opus' }, maxSteps: 50 })
+		expect(normalizeEngineSettings({ engine: 'claude-code', models: { 'claude-code': '' } }).models).toEqual({})
 		expect(normalizeEngineSettings({ engine: 'nope' as any }).engine).toBe('gemini-api')
 	})
 })
@@ -197,35 +151,6 @@ describe('command lines', () => {
 		expect(JSON.stringify(spec)).not.toMatch(/ff_/)
 	})
 
-	it('Codex: read-only sandbox, shell off, approved MCP, no model flag by default', () => {
-		const a = buildCommand({ ...base, engine: 'codex' }).args
-		expect(a.slice(0, 2)).toEqual(['exec', '--json'])
-		expect(a[a.indexOf('-s') + 1]).toBe('read-only')
-		for (const f of CODEX_DISABLED_FEATURES) expect(a).toContain(f)
-		expect(a).toContain('mcp_servers.frameflow.default_tools_approval_mode="approve"')
-		expect(a).toContain(`mcp_servers.frameflow.bearer_token_env_var="${TOKEN_ENV}"`)
-		expect(a).toContain('developer_instructions="SYS"')
-		expect(a).not.toContain('-m')
-		expect(a[a.length - 1]).toBe('Cut the pauses')
-	})
-
-	it('Codex: instructions with quotes and newlines stay one TOML string', () => {
-		const a = buildCommand({ ...base, engine: 'codex', systemPrompt: 'say "hi"\nnow' }).args
-		expect(a).toContain('developer_instructions="say \\"hi\\"\\nnow"')
-	})
-
-	it('Gemini CLI: admin policy, allow-listed server, system prompt file', () => {
-		const spec = buildCommand({ ...base, engine: 'gemini-cli', model: 'gemini-2.5-pro' })
-		expect(spec.args.slice(0, 2)).toEqual(['-p', 'Cut the pauses'])
-		expect(spec.args[spec.args.indexOf('--admin-policy') + 1]).toBe('/tmp/run/policy.toml')
-		expect(spec.args[spec.args.indexOf('--allowed-mcp-server-names') + 1]).toBe('frameflow')
-		expect(spec.env.GEMINI_CLI_SYSTEM_SETTINGS_PATH).toBe('/tmp/run/settings.json')
-		const policy = spec.files.find((f) => f.name === 'policy.toml')!.content
-		expect(policy).toMatch(/toolName = "\*"\ndecision = "deny"/)
-		expect(policy).toMatch(/mcpName = "frameflow"/)
-		expect(spec.args.slice(-2)).toEqual(['-m', 'gemini-2.5-pro'])
-	})
-
 	it('Windows paths', () => {
 		const spec = buildCommand({ ...base, engine: 'claude-code', workDir: 'C:\\Temp\\run', pathSep: '\\' })
 		expect(spec.args[spec.args.indexOf('--mcp-config') + 1]).toBe('C:\\Temp\\run\\mcp.json')
@@ -243,15 +168,5 @@ describe('prompts', () => {
 		expect(buildEngineUserPrompt({ prompt: 'Trim it', playheadSec: 63, selectedItemIds: ['a', 'b'] }))
 			.toBe('Trim it\n\n---\nPlayhead: 1:03.0. Scope: the selected timeline items (a, b). Change only them unless the request needs more.')
 		expect(buildEngineUserPrompt({ prompt: 'x', playheadSec: 0, selectedItemIds: ['a'], widen: 'full' })).toMatch(/whole timeline/)
-	})
-})
-
-describe('Codex tool errors', () => {
-	it('a refused MCP call carries the tool’s own message', () => {
-		const t = new StepTracker()
-		const start = { type: 'item.started', item: { id: 'i9', type: 'mcp_tool_call', server: 'frameflow', tool: 'revert_to_version', arguments: { version: 9 }, status: 'in_progress' } }
-		const end = { type: 'item.completed', item: { ...start.item, status: 'completed', result: { isError: true, content: [{ type: 'text', text: 'The editor could not switch to that revision.' }] } } }
-		for (const line of [start, end]) parseStreamLine('codex', JSON.stringify(line)).forEach((e) => t.apply(e))
-		expect(t.steps[0]).toMatchObject({ status: 'error', error: 'The editor could not switch to that revision.' })
 	})
 })

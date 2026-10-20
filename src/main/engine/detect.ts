@@ -1,18 +1,15 @@
-import { readFileSync } from 'node:fs'
-import { join } from 'node:path'
 import os from 'node:os'
 import {
-	displayPath, ENGINES, geminiAuthType, parseClaudeAuth, parseCodexLogin, parseCodexModels,
+	displayPath, ENGINES, parseClaudeAuth,
 	parseVersion, type CliEngineId, type EngineDetection
 } from '@shared/engines'
 import { findBinary, runQuick, searchPath } from './proc'
 
 /**
  * Is each CLI installed, which version, and is it signed in — as far as the
- * CLI itself can say. Claude Code and Codex have status commands; Gemini CLI
- * does not, so its settings file is read instead.
+ * CLI itself can say (`claude auth status`).
  *
- * A failure a run discovered (Gemini CLI's personal-account refusal) is
+ * A failure a run discovered (a sign-in the CLI refused) is
  * remembered here, so the Settings card shows it instead of "Found".
  */
 
@@ -21,10 +18,6 @@ const runFailures = new Map<CliEngineId, string>()
 export function recordRunFailure(id: CliEngineId, note: string | null): void {
 	if (note) runFailures.set(id, note)
 	else runFailures.delete(id)
-}
-
-const readText = (path: string): string | undefined => {
-	try { return readFileSync(path, 'utf-8') } catch { return undefined }
 }
 
 export interface Located { id: CliEngineId; path: string; env: NodeJS.ProcessEnv }
@@ -56,24 +49,6 @@ export async function detectCli(id: CliEngineId): Promise<EngineDetection> {
 			note: signedIn === false ? 'Run `claude` in a terminal and sign in.' : undefined
 		})
 	}
-	if (id === 'codex') {
-		const [login, models] = await Promise.all([
-			runQuick(found.path, ['login', 'status'], found.env),
-			runQuick(found.path, ['debug', 'models'], found.env, 15_000)
-		])
-		const signedIn = parseCodexLogin(`${login.stdout}\n${login.stderr}`, login.code)
-		return withFailure({
-			...base, version,
-			status: signedIn === true ? 'signed-in' : signedIn === false ? 'signed-out' : 'found',
-			note: signedIn === false ? 'Run `codex login` in a terminal.' : undefined,
-			models: parseCodexModels(models.stdout)
-		})
-	}
-	// Gemini CLI: no status command.
-	const authType = geminiAuthType(readText(join(home, '.gemini', 'settings.json')), process.env)
-	return withFailure({
-		...base, version,
-		status: authType ? 'found' : 'signed-out',
-		note: authType ? undefined : 'Run `gemini` in a terminal once to sign in.'
-	})
+	// A CLI added later gets its own branch above; until then, found is all we know.
+	return withFailure({ ...base, version, status: 'found' })
 }
