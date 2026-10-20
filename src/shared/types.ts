@@ -561,6 +561,11 @@ export interface PromptTurn {
 	error?: string
 	diff?: TimelineDiff
 	rationale?: string
+	/**
+	 * Set when an external agent made this edit over MCP rather than the
+	 * built-in turn runner: its display name labels the revision ("Claude Code").
+	 */
+	agent?: { name: string; sessionId: string }
 	/** The runtime the model said it was aiming for — measureBuild judges against it. */
 	targetLengthSec?: number
 	answer?: string             // set when the request was a question, not an edit
