@@ -5,7 +5,7 @@ import { motionFrameState, type MotionSpec } from './motion'
 import {
 	addKey, adjacentKeyTime, applyEaseToLane, chooseSnap, deleteKeys, easeInto, emptyLaneText,
 	formatKeyTime, heldSegments, itemLanes, keyIndex, keySnapCandidates, keyTimes, keyToPx,
-	laneLayout, lanePath, laneRange, laneValueAt, mirrorEntranceOntoExit, motionPath, moveKeys,
+	laneLayout, lanePath, nudgeKeys, laneRange, laneValueAt, mirrorEntranceOntoExit, motionPath, moveKeys,
 	parseLaneValue, pruneSelection, pxToKey, sampleLane, selectKey, setEaseInto, setKeyValue,
 	snapLabelAt, valueToY, wordsFromCues, CURVE_BOTTOM_PX, CURVE_TOP_PX, LANE_ROW_PX, type KeyRef
 } from './keyframeLanes'
@@ -65,6 +65,11 @@ describe('lane geometry', () => {
 		expect(LANE_ROW_PX).toBe(26)
 		expect(layout.height).toBe(6 * 26)
 		expect(layout.rows[3]).toEqual({ path: 'opacity', top: 78 })
+	})
+
+	it('draws a rotation across its own keys, so a small turn still reads', () => {
+		const rotation = itemLanes(clip(), 'video')[2]
+		expect(laneRange(rotation, [{ t: 0, value: 0 }, { t: 1, value: -12 }])).toEqual({ min: -12, max: 0 })
 	})
 
 	it('maps clip time to px and back through the clip’s start', () => {
@@ -189,6 +194,20 @@ describe('edits replace, never mutate', () => {
 		const moved = moveKeys(tracks, [{ path: 'opacity', t: 0.4 }], 3.2, 4)
 		expect(moved.tracks!.opacity.map((k) => k.t)).toEqual([0, 3.6, 4])
 		expect(moved.tracks!.opacity[1].value).toBe(1)
+	})
+
+	it('nudges by whole frames on the sequence’s grid, without drift', () => {
+		let t: KeyframeTracks | undefined = tracks
+		let sel: KeyRef[] = [{ path: 'opacity', t: 0.4 }]
+		for (let i = 0; i < 3; i++) {
+			const r = nudgeKeys(t, sel, 1, { fps: 30, clipStart: 3, clipDuration: 4 })
+			t = r.tracks
+			sel = r.selection
+		}
+		expect(sel[0].t).toBe(0.5)
+		// A key off the grid lands on it first.
+		const off = nudgeKeys({ opacity: [{ t: 0.41, value: 1 }] }, [{ path: 'opacity', t: 0.41 }], -1, { fps: 30, clipStart: 3, clipDuration: 4 })
+		expect(off.selection[0].t).toBe(0.4)
 	})
 
 	it('sets a value', () => {
@@ -319,7 +338,8 @@ describe('formatting and parsing', () => {
 		const lanes = itemLanes(motionItem({ template: 'lower-third' }))
 		const byPath = (p: string) => lanes.find((l) => l.path === p)!
 		expect(parseLaneValue(byPath('opacity'), '100%')).toBe(1)
-		expect(parseLaneValue(byPath('transform.x'), '60%')).toBeCloseTo(0.1)
+		expect(parseLaneValue(byPath('transform.x'), '60%')).toBe(0.1)
+		expect(parseLaneValue(byPath('transform.x'), '40%')).toBe(-0.1)
 		expect(parseLaneValue(byPath('transform.rotation'), '−12°')).toBe(-12)
 		expect(parseLaneValue(byPath('motion.slide'), '24px')).toBe(24)
 		expect(parseLaneValue(byPath('motion.slide'), '999')).toBe(60)

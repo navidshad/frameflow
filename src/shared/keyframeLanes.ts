@@ -113,19 +113,21 @@ export function itemLanes(
 			path: `transform.${key}`, label, own: false, kind: 'number', still: transform[key],
 			min: 0, max: 1, bounded: true,
 			toDisplay: (v) => 0.5 + v,
-			fromDisplay: (d) => clamp(d - 0.5, OFFSET_RANGE.min, OFFSET_RANGE.max),
+			// Rounded, so a typed 40% is stored as −0.1, not −0.09999999999999998.
+			fromDisplay: (d) => clamp(Math.round((d - 0.5) * 10000) / 10000, OFFSET_RANGE.min, OFFSET_RANGE.max),
 			format: (v) => pct(0.5 + v)
 		}
 		: {
 			path: `transform.${key}`, label, own: false, kind: 'number', still: transform[key],
 			min: -1, max: 1, bounded: true,
 			toDisplay: identity,
-			fromDisplay: (d) => clamp(d, OFFSET_RANGE.min, OFFSET_RANGE.max),
+			fromDisplay: (d) => clamp(Math.round(d * 10000) / 10000, OFFSET_RANGE.min, OFFSET_RANGE.max),
 			format: pct
 		}
 	const rotation: LaneDef = {
+		// Drawn across its own keys: a 12° turn on a ±180° scale is a flat line.
 		path: 'transform.rotation', label: 'Rotation', own: false, kind: 'number', still: transform.rotation,
-		min: -180, max: 180, bounded: true, toDisplay: identity,
+		min: -180, max: 180, bounded: false, toDisplay: identity,
 		fromDisplay: (d) => clamp(Math.round(d), -180, 180),
 		format: (v) => `${Math.round(v)}°`
 	}
@@ -146,7 +148,7 @@ export function itemLanes(
 			{
 				path: OPACITY_PATH, label: 'Opacity', own: false, kind: 'number', still: 1,
 				min: 0, max: 1, bounded: true, toDisplay: identity,
-				fromDisplay: (d) => clamp(d, 0, 1), format: pct
+				fromDisplay: (d) => clamp(Math.round(d * 10000) / 10000, 0, 1), format: pct
 			}
 		]
 		for (const s of def.settings) {
@@ -394,6 +396,29 @@ export function moveKeys(
 	const order = chosen.map((s) => moved.find((m) => m.path === s.path && Math.abs(m.t - roundT(s.t + d)) < TIME_TOL))
 		.filter((m): m is KeyRef => !!m)
 	return { tracks: tidyTracks(next), selection: order, delta: d }
+}
+
+/**
+ * −1 / +1 frame: the grabbed (primary) key lands on the NEXT frame of the
+ * sequence's own grid, and the rest of the selection moves with it. Stepping
+ * by 1/fps and rounding each time would drift (0.4 + 3 × 1/30 → 0.4999); the
+ * grid never does.
+ */
+export function nudgeKeys(
+	tracks: KeyframeTracks | undefined,
+	selection: readonly KeyRef[],
+	frames: number,
+	options: { fps: number; clipStart: number; clipDuration: number }
+): { tracks: KeyframeTracks | undefined; selection: KeyRef[]; delta: number } {
+	const primary = selection.at(-1)
+	if (!primary || !options.fps) return { tracks, selection: [...selection], delta: 0 }
+	const abs = options.clipStart + primary.t
+	const frame = Math.round(abs * options.fps)
+	// Off the grid already? The first step only lands on it. Keys keep times to
+	// 0.1ms, so "on the grid" allows that much — far less than any frame.
+	const onGrid = Math.abs(frame / options.fps - abs) < 5e-4
+	const target = (onGrid ? frame + frames : frames > 0 ? Math.ceil(abs * options.fps) : Math.floor(abs * options.fps)) / options.fps
+	return moveKeys(tracks, selection, target - abs, options.clipDuration)
 }
 
 /** One key's value replaced. */
