@@ -1,7 +1,9 @@
 import type { Clip, EditorDocument, MediaAsset, TimelineItem } from '@shared/types'
 import { applyTimelineDiff } from '@shared/timeline'
 import type { TranscriptEntry } from '@shared/captions'
-import type { EditorBridge, LiveProject, RevisionSummary, TurnCommit } from './bridge'
+import type { AudioAnalysis } from '@shared/audio'
+import { normaliseRecipe, presetOf, recipeKey, soundLength, type SoundRecipe } from '@shared/synth'
+import type { EditorBridge, LiveProject, RevisionSummary, SoundReport, TurnCommit } from './bridge'
 
 /**
  * A fake editor for tests: a document in memory that applies diffs the way the
@@ -64,6 +66,10 @@ export class FakeEditor implements EditorBridge {
 
 	async commitTurn(commit: TurnCommit) {
 		this.commits.push(commit)
+		// The renderer upserts the sounds a turn places before it applies the diff.
+		for (const asset of commit.addAssets ?? []) {
+			if (!this.doc.media.some((a) => a.id === asset.id)) this.doc.media.push(asset)
+		}
 		const state = { tracks: this.doc.tracks, timeline: this.doc.timeline }
 		const result = applyTimelineDiff(state, commit.turn.diff!, this.doc.media)
 		// It replaces arrays rather than mutating them, as the store expects
@@ -104,5 +110,40 @@ export class FakeEditor implements EditorBridge {
 	async startExport() {
 		this.exports++
 		return { ok: true as const, detail: 'Export started.' }
+	}
+
+	/** Sounds "rendered" so far, in the order asked. */
+	renderedSounds: SoundRecipe[] = []
+
+	async prepareSounds(_project: LiveProject, recipes: SoundRecipe[]): Promise<MediaAsset[]> {
+		this.renderedSounds.push(...recipes)
+		return recipes.map((r) => {
+			const synth = normaliseRecipe(r)
+			const preset = presetOf(r.kind)
+			return {
+				id: `synth-${recipeKey(r).replace(/[^a-z0-9]/gi, '')}`, kind: 'audio' as const,
+				name: preset.variants > 1 ? `${preset.label} ${synth.variant + 1}` : preset.label,
+				originalPath: '/tmp/sound.wav', metadata: { duration: soundLength(r) } as MediaAsset['metadata'],
+				preprocessing: {}, preprocessState: 'completed' as const, clips: [], createdAt: 0, synth
+			}
+		})
+	}
+
+	async inspectSound(_project: LiveProject, target: { recipe: SoundRecipe } | { assetId: string }): Promise<SoundReport> {
+		const recipe = 'recipe' in target ? target.recipe : this.doc.media.find((a) => a.id === target.assetId)?.synth
+		if (!recipe) throw new Error('No such sound')
+		const n = normaliseRecipe(recipe)
+		return { lengthSec: soundLength(recipe), truePeakDb: n.levelDb, lufs: n.levelDb - 12, renderMs: 40, spectrogram: PIXEL }
+	}
+
+	async audioAnalyses(_project: LiveProject, assetIds: string[]): Promise<Record<string, AudioAnalysis>> {
+		return Object.fromEntries(assetIds.map((id) => {
+			const asset = this.doc.media.find((a) => a.id === id)
+			const sound = asset?.synth
+			return [id, {
+				v: 1 as const, hasAudio: true, durationSec: asset?.metadata?.duration ?? 0, peakRate: 50, peaks: [],
+				lufs: sound ? sound.levelDb - 12 : -16, truePeakDb: sound ? sound.levelDb : -3, lra: null
+			}]
+		}))
 	}
 }

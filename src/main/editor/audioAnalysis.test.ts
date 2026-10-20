@@ -4,7 +4,7 @@ import os from 'os'
 import path from 'path'
 import { afterAll, beforeAll, describe, expect, it } from 'vitest'
 import { getFFmpegBinaryPath } from '../ffmpeg/binaries'
-import { analyzeAudioFile, getAudioAnalysis } from './audioAnalysis'
+import { analyzeAudioFile, getAudioAnalysis, spectrogramBase64 } from './audioAnalysis'
 
 /**
  * Against the real bundled ffmpeg, like the other render tests: a synthesised
@@ -76,5 +76,21 @@ describe('getAudioAnalysis', () => {
 	it('does not even look at a file known to have no audio', async () => {
 		const a = await getAudioAnalysis(path.join(dir, 'asset-3'), path.join(dir, 'gone.wav'), { hasAudio: false })
 		expect(a.hasAudio).toBe(false)
+	})
+})
+
+describe('spectrogramBase64', () => {
+	it('draws a sound as a PNG an agent can read', async () => {
+		const png = Buffer.from(await spectrogramBase64(loud), 'base64')
+		// The PNG signature, then an IHDR chunk with the size asked for.
+		expect(png.subarray(0, 8).toString('hex')).toBe('89504e470d0a1a0a')
+		expect(png.readUInt32BE(16)).toBe(640)
+		expect(png.readUInt32BE(20)).toBe(256)
+	})
+
+	it('leaves no file behind and refuses a file that is not audio', async () => {
+		const bad = path.join(dir, 'nope.txt')
+		fs.writeFileSync(bad, 'not audio')
+		await expect(spectrogramBase64(bad)).rejects.toThrow()
 	})
 })

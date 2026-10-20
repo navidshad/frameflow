@@ -22,23 +22,30 @@ export const AGENT_SERVER_NAME = 'frameflow'
  * the Agent access card. `html` is stored here and enforced by the motion
  * layer's tools when they exist.
  */
-export type AgentPermission = 'read' | 'edit' | 'html' | 'export'
+export type AgentPermission = 'read' | 'edit' | 'html' | 'export' | 'sound'
 
 export interface AgentPermissions {
 	edit: boolean
 	html: boolean
 	export: boolean
+	/**
+	 * Make sounds with the built-in synth: free, offline, and nothing is spent.
+	 * A provider that costs money (generating sound or voice) is a separate
+	 * permission, off by default, which arrives with providers.
+	 */
+	sound: boolean
 }
 
-/** As drawn: editing and HTML motion on, export off until the user allows it. */
-export const DEFAULT_AGENT_PERMISSIONS: AgentPermissions = { edit: true, html: true, export: false }
+/** As drawn: editing, HTML motion and the built-in synth on, export off until the user allows it. */
+export const DEFAULT_AGENT_PERMISSIONS: AgentPermissions = { edit: true, html: true, export: false, sound: true }
 
 export function normalizePermissions(value: unknown): AgentPermissions {
 	const v = (value && typeof value === 'object' ? value : {}) as Partial<AgentPermissions>
 	return {
 		edit: typeof v.edit === 'boolean' ? v.edit : DEFAULT_AGENT_PERMISSIONS.edit,
 		html: typeof v.html === 'boolean' ? v.html : DEFAULT_AGENT_PERMISSIONS.html,
-		export: typeof v.export === 'boolean' ? v.export : DEFAULT_AGENT_PERMISSIONS.export
+		export: typeof v.export === 'boolean' ? v.export : DEFAULT_AGENT_PERMISSIONS.export,
+		sound: typeof v.sound === 'boolean' ? v.sound : DEFAULT_AGENT_PERMISSIONS.sound
 	}
 }
 
@@ -58,6 +65,11 @@ export function permissionRefusal(permission: AgentPermission, perms: AgentPermi
 		return 'Refused: the user has not allowed agents to write custom HTML motion layers ' +
 			'(Settings → Agent access → "Write custom HTML motion layers"). Use a built-in template, ' +
 			'or ask the user to allow it.'
+	}
+	if (permission === 'sound' && !perms.sound) {
+		return 'Refused: the user has not allowed agents to make sounds with the built-in synth ' +
+			'(Settings → Agent access → "Make sounds with the built-in synth"). Describe the sounds you would ' +
+			'add and ask the user to allow it, or to add them from the Sound tab.'
 	}
 	if (permission === 'export' && !perms.export) {
 		return 'Refused: exporting is turned off for agents. Ask the user to press Export in FrameFlow, ' +

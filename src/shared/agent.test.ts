@@ -46,14 +46,16 @@ describe('checkRequest', () => {
 })
 
 describe('permissions', () => {
-	it('defaults to edit + html on, export off', () => {
-		expect(DEFAULT_AGENT_PERMISSIONS).toEqual({ edit: true, html: true, export: false })
+	it('defaults to edit, html and the synth on, export off', () => {
+		expect(DEFAULT_AGENT_PERMISSIONS).toEqual({ edit: true, html: true, export: false, sound: true })
 		expect(normalizePermissions(undefined)).toEqual(DEFAULT_AGENT_PERMISSIONS)
-		expect(normalizePermissions({ export: true, edit: 'yes' })).toEqual({ edit: true, html: true, export: true })
+		expect(normalizePermissions({ export: true, edit: 'yes' })).toEqual({ edit: true, html: true, export: true, sound: true })
+		// A settings file from before sound existed gets the default.
+		expect(normalizePermissions({ edit: false, html: false, export: true })).toMatchObject({ sound: true })
 	})
 
 	it('always allows reading', () => {
-		expect(permissionRefusal('read', { edit: false, html: false, export: false })).toBeNull()
+		expect(permissionRefusal('read', { edit: false, html: false, export: false, sound: false })).toBeNull()
 	})
 
 	it('refuses export by default, telling the agent to ask the user', () => {
@@ -64,8 +66,15 @@ describe('permissions', () => {
 	})
 
 	it('refuses edits and HTML when they are switched off', () => {
-		expect(permissionRefusal('edit', { edit: false, html: true, export: false })).toMatch(/Edit the timeline/)
-		expect(permissionRefusal('html', { edit: true, html: false, export: false })).toMatch(/HTML motion/)
+		expect(permissionRefusal('edit', { edit: false, html: true, export: false, sound: true })).toMatch(/Edit the timeline/)
+		expect(permissionRefusal('html', { edit: true, html: false, export: false, sound: true })).toMatch(/HTML motion/)
+	})
+
+	it('refuses the synth when it is switched off, and says where to turn it on', () => {
+		const refusal = permissionRefusal('sound', { ...DEFAULT_AGENT_PERMISSIONS, sound: false })
+		expect(refusal).toMatch(/built-in synth/)
+		expect(refusal).toMatch(/Agent access/)
+		expect(permissionRefusal('sound', DEFAULT_AGENT_PERMISSIONS)).toBeNull()
 	})
 })
 

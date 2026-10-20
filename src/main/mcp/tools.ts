@@ -12,6 +12,13 @@ import { EDITOR_OPS_SCHEMA, opsToDiff, opsWriteHtml } from '../editor/ops'
 import { vetHtmlOps, type MotionProbe } from '../editor/vetHtml'
 import { MOTION_TEMPLATES, userMotionTemplates } from '@shared/motionTemplates'
 import { motionGuideText } from '@shared/motionGuide'
+import { soundGuideText } from '@shared/soundGuide'
+import { estimateMix } from '@shared/mix'
+import { cueLead, describeCue, suggestCues } from '@shared/sound'
+import {
+	isSoundKind, normaliseRecipe, presetOf, recipeKey, SOUND_PRESETS, soundLength, soundPeakDb, type SoundRecipe
+} from '@shared/synth'
+import { opsMakeSound, soundRecipesOf } from '../editor/soundOps'
 import type { EditorBridge, LiveProject } from './bridge'
 
 /**
@@ -108,11 +115,15 @@ const versionLabel = (project: LiveProject, revisionId: string | null | undefine
 	return rev ? `V${rev.seq}` : null
 }
 
-function describeItem(item: TimelineItem, names: Map<string, string>) {
-	const { masterSegmentIndex, sourceClipId, preservePitch, ...rest } = item
+function describeItem(item: TimelineItem, names: Map<string, string>, recipes?: Map<string, MediaAsset['synth']>) {
+	const { masterSegmentIndex, sourceClipId, preservePitch, bind, ...rest } = item
+	const sound = recipes?.get(item.sourceAssetId)
 	return {
 		...rest,
 		asset: item.sourceAssetId ? names.get(item.sourceAssetId) : undefined,
+		// A synthesised sound: its recipe, and the moment it follows (pass these to setSounds).
+		sound: sound ? { kind: sound.kind, variant: sound.variant, pitch: sound.pitch, levelDb: sound.levelDb, air: sound.air, seed: sound.seed, durationSec: sound.durationSec || undefined } : undefined,
+		follows: bind ? { item: bind.itemId, at: bind.at, leadSec: r3(bind.leadSec) } : undefined,
 		timelineStart: r3(item.timelineStart),
 		endSec: r3(item.timelineStart + item.duration),
 		in: r3(item.in),
@@ -172,7 +183,7 @@ const getProject: ToolDef = {
 				}))
 			},
 			permissions: {
-				read: true, editTimeline: perms.edit, writeHtmlMotion: perms.html, exportVideos: perms.export
+				read: true, editTimeline: perms.edit, writeHtmlMotion: perms.html, exportVideos: perms.export, makeSounds: perms.sound
 			},
 			catalog: {
 				// For apply_ops addMotion.template. Saved templates are the user's own
@@ -187,6 +198,8 @@ const getProject: ToolDef = {
 						settings: t.definition.settings.map((s) => s.key), saved: true
 					}))
 				],
+				// For apply_ops addSounds.kind. get_sound_guide / list_sounds say more.
+				sounds: SOUND_PRESETS.map((p) => p.kind),
 				transitions: TRANSITION_PRESETS.map((p) => p.kind),
 				effects: allEffects().map((e) => ({
 					kind: e.kind, stream: e.stream, label: e.label,
@@ -224,12 +237,13 @@ const getTimeline: ToolDef = {
 		const project = await requireProject(ctx)
 		const { doc } = project
 		const names = new Map(doc.media.map((a) => [a.id, a.name]))
+		const recipes = new Map(doc.media.filter((a) => a.synth).map((a) => [a.id, a.synth]))
 		const items = [...doc.timeline]
 			.filter((i) => !args.trackId || i.trackId === args.trackId)
 			.filter((i) => args.fromSec === undefined || i.timelineStart + i.duration > args.fromSec)
 			.filter((i) => args.toSec === undefined || i.timelineStart < args.toSec)
 			.sort((a, b) => a.timelineStart - b.timelineStart)
-			.map((i) => describeItem(i, names))
+			.map((i) => describeItem(i, names, recipes))
 		const page = pageRows(items, { offset: args.offset, limit: args.limit ?? 200, maxChars: 60_000 })
 		return {
 			content: [json({
@@ -402,7 +416,243 @@ const renderFrame: ToolDef = {
 	}
 }
 
-const OPS_INPUT_SCHEMA = opsInputSchema(EDITOR_OPS_SCHEMA)
+
+// ===== Sound =====
+
+const SOUND_RECIPE_PROPS = {
+	variant: { type: 'integer', minimum: 0, maximum: 4, description: 'Which take, for the sounds that have several (key has five, appear two)' },
+	pitch: { type: 'number', minimum: -12, maximum: 12, description: 'Semitones. Keep the SAME pitch on every pitched sound and on the bed' },
+	levelDb: { type: 'number', minimum: -40, maximum: 0, description: 'The sound’s peak in dBFS. Defaults to the sound’s own level; most never need it' },
+	air: { type: 'number', minimum: 0, maximum: 1, description: 'How much airy noise a sweep (send, whoosh, swish, flight) carries. Default 0.4' },
+	seed: { type: 'integer', minimum: 0, maximum: 9999, description: 'Which noise. The same seed is the same sound everywhere' },
+	durationSec: { type: 'number', minimum: 0.2, maximum: 600, description: 'For the sounds that follow a move (flight, rise) and the ambient bed: how long' }
+}
+const FOLLOW_SCHEMA = {
+	type: 'object',
+	properties: {
+		item: { type: 'string', description: 'The clip whose moment this sound is for (an id from get_timeline or suggest_cues)' },
+		at: { type: 'string', enum: ['start', 'out', 'end'], description: 'start: its entrance or the cut into it. out: where a motion layer begins to leave. end: where it ends. Default start' },
+		leadSec: { type: 'number', minimum: 0, maximum: 2, description: 'How early the sound starts. Leave it out: each sound has the right lead' }
+	},
+	required: ['item'],
+	additionalProperties: false
+}
+/** Added to apply_ops over MCP only: the built-in AI’s own schema is unchanged. */
+const SOUND_OPS_SCHEMA = {
+	addSounds: {
+		type: 'array',
+		description:
+			'Sounds from the built-in synth (read get_sound_guide first). Each is rendered by FrameFlow and placed on a free effects lane. ' +
+			'Give follow {item, at} to land on a moment of another clip and stay there when it moves; or atSec for a fixed time.',
+		items: {
+			type: 'object',
+			properties: {
+				kind: { type: 'string', enum: SOUND_PRESETS.map((p) => p.kind), description: 'Which sound' },
+				...SOUND_RECIPE_PROPS,
+				atSec: { type: 'number', minimum: 0, description: 'Timeline seconds. Not needed with follow' },
+				follow: FOLLOW_SCHEMA
+			},
+			required: ['kind'],
+			additionalProperties: false
+		}
+	},
+	setSounds: {
+		type: 'array',
+		description: 'Change a sound already on the timeline: its recipe (kind, pitch, levelDb, seed…) or the moment it follows. id is the sound’s item id from get_timeline.',
+		items: {
+			type: 'object',
+			properties: {
+				id: { type: 'string' },
+				kind: { type: 'string', enum: SOUND_PRESETS.map((p) => p.kind) },
+				...SOUND_RECIPE_PROPS,
+				follow: FOLLOW_SCHEMA,
+				unfollow: { type: 'boolean', description: 'True stops it following anything' }
+			},
+			required: ['id'],
+			additionalProperties: false
+		}
+	},
+	setTrackRoles: {
+		type: 'array',
+		description: 'Say what an audio track is for. A music bed ducks under speech; the mix levels each role against the voice.',
+		items: {
+			type: 'object',
+			properties: {
+				trackId: { type: 'string' },
+				role: { type: 'string', enum: ['voice', 'music', 'sfx', 'none'] }
+			},
+			required: ['trackId', 'role'],
+			additionalProperties: false
+		}
+	}
+}
+
+const getSoundGuide: ToolDef = {
+	name: 'get_sound_guide',
+	permission: 'read',
+	description:
+		'How to use sound well. Every sound the synth makes with its length, level and lead; the roles and where each ' +
+		'sits against the voice; the one rule about key; how to choose; and the loop to follow. You cannot hear: this ' +
+		'and render_sound / analyze_audio are how you work by numbers. Read it before your first apply_ops with addSounds.',
+	inputSchema: { type: 'object', properties: {}, additionalProperties: false },
+	async run() {
+		return { content: [{ type: 'text', text: soundGuideText() }], feed: { detail: 'read the sound guide' } }
+	}
+}
+
+const listSounds: ToolDef = {
+	name: 'list_sounds',
+	permission: 'read',
+	description:
+		'The palette of built-in sounds, and what is on this timeline now. Each palette sound: kind, group, what it is for, ' +
+		'length, peak level, lead, takes. Then every synthesised sound already placed (item id, recipe, the moment it follows) ' +
+		'and the audio tracks with their roles. Use the kinds with apply_ops addSounds.',
+	inputSchema: { type: 'object', properties: {}, additionalProperties: false },
+	async run(_args, ctx) {
+		const project = await requireProject(ctx)
+		const { doc } = project
+		const placed = doc.timeline.flatMap((i) => {
+			const synth = doc.media.find((a) => a.id === i.sourceAssetId)?.synth
+			return synth ? [{
+				item: i.id, sound: synth.kind, variant: synth.variant, pitch: synth.pitch, levelDb: synth.levelDb, seed: synth.seed,
+				atSec: r3(i.timelineStart), lengthSec: r3(i.duration),
+				follows: i.bind ? { item: i.bind.itemId, at: i.bind.at } : undefined,
+				track: doc.tracks.find((t) => t.id === i.trackId)?.name
+			}] : []
+		})
+		const palette = SOUND_PRESETS.map((p) => ({
+			kind: p.kind, group: p.group, label: p.label, for: p.description,
+			lengthSec: p.follows ? 'as long as durationSec' : r3(soundLength({ kind: p.kind })),
+			peakDb: p.level, leadMs: Math.round(p.lead * 1000), takes: p.variants
+		}))
+		const audioTracks = doc.tracks.filter((t) => t.kind === 'audio').map((t) => ({ id: t.id, name: t.name, role: t.role ?? null }))
+		return {
+			content: [json({ palette, placed, audioTracks, providers: [] })],
+			feed: { detail: `${palette.length} sounds · ${placed.length} on the timeline` }
+		}
+	}
+}
+
+const suggestCuesTool: ToolDef = {
+	name: 'suggest_cues',
+	permission: 'read',
+	description:
+		'The moments on this timeline that want a sound: a motion layer coming in and leaving, a cut between two clips, ' +
+		'a transition, an end card. Each has the time, a label, the sound it suggests and why, whether it already has one ' +
+		'(taken), and whether it is worth adding by default (suggested). The same list the user sees in “Sound the motion”. ' +
+		'Pass a cue’s `follow` to apply_ops addSounds. Skip the ones you do not want: fewer is better.',
+	inputSchema: { type: 'object', properties: {}, additionalProperties: false },
+	async run(_args, ctx) {
+		const project = await requireProject(ctx)
+		const cues = suggestCues({ tracks: project.doc.tracks, timeline: project.doc.timeline })
+		const rows = cues.map((c) => ({
+			cue: c.id, atSec: r3(c.atSec), label: c.label, sound: c.kind, why: c.reason,
+			taken: c.taken, suggested: c.suggested,
+			follow: { item: c.bind.itemId, at: c.bind.at },
+			leadMs: Math.round(cueLead(c) * 1000)
+		}))
+		const open = cues.filter((c) => !c.taken)
+		return {
+			content: [json({ cues: rows, open: open.length })],
+			feed: { detail: open.length ? `${open.length} moment${open.length === 1 ? '' : 's'} without a sound` : 'every moment has a sound', quote: open[0] ? describeCue(open[0]) : undefined }
+		}
+	}
+}
+
+const renderSoundTool: ToolDef = {
+	name: 'render_sound',
+	permission: 'read',
+	description:
+		'Hear a sound without hearing it: renders a recipe (or measures a sound already in the project) and returns its ' +
+		'length, peak, loudness, and a spectrogram picture (time left to right, pitch bottom to top, loudness as brightness). ' +
+		'Use it to check a recipe before you add it. Costs nothing and changes nothing in the project.',
+	inputSchema: {
+		type: 'object',
+		properties: {
+			kind: { type: 'string', enum: SOUND_PRESETS.map((p) => p.kind), description: 'A recipe to render…' },
+			...SOUND_RECIPE_PROPS,
+			item: { type: 'string', description: '…or a sound already on the timeline (its item id)' }
+		},
+		additionalProperties: false
+	},
+	title: (args) => `render_sound ${args.kind || args.item || ''}`.trim(),
+	async run(args, ctx) {
+		const project = await requireProject(ctx)
+		let target: { recipe: SoundRecipe } | { assetId: string }
+		let recipe: SoundRecipe | undefined
+		if (args.item) {
+			const item = project.doc.timeline.find((i) => i.id === args.item)
+			const asset = item && project.doc.media.find((a) => a.id === item.sourceAssetId)
+			if (!item || !asset) throw new ToolError(`No clip ${args.item}. Read get_timeline for ids.`)
+			target = { assetId: asset.id }
+			recipe = asset.synth
+		} else {
+			if (!isSoundKind(args.kind)) throw new ToolError(`Name a sound (kind) or a clip (item). The synth makes: ${SOUND_PRESETS.map((p) => p.kind).join(', ')}.`)
+			recipe = { kind: args.kind }
+			for (const f of ['variant', 'pitch', 'levelDb', 'air', 'seed', 'durationSec'] as const) {
+				if (typeof args[f] === 'number') recipe[f] = args[f]
+			}
+			target = { recipe }
+		}
+		const report = await ctx.bridge.inspectSound(project, target)
+		const n = recipe ? normaliseRecipe(recipe) : undefined
+		const body = {
+			recipe: n, lengthSec: r3(report.lengthSec),
+			peakDb: report.truePeakDb === null ? null : r3(report.truePeakDb), loudnessLufs: report.lufs === null ? null : r3(report.lufs),
+			renderedInMs: report.renderMs
+		}
+		const content: ToolContent[] = [json(body)]
+		if (report.spectrogram) content.push({ type: 'image', data: report.spectrogram, mimeType: 'image/png' })
+		return {
+			content,
+			feed: {
+				detail: n ? `${presetOf(n.kind).label.toLowerCase()} · ${r3(report.lengthSec)} s · peak ${report.truePeakDb === null ? '—' : r3(report.truePeakDb)} dB` : undefined,
+				thumbnail: report.spectrogram ? `data:image/png;base64,${report.spectrogram}` : undefined
+			}
+		}
+	}
+}
+
+const analyzeAudio: ToolDef = {
+	name: 'analyze_audio',
+	permission: 'read',
+	description:
+		'How the mix sits: for each role (voice, music, sfx, unassigned) how many clips, their median loudness and loudest ' +
+		'peak, every sounding clip with its estimated loudness and peak after gain, and warnings in words ("Music sits only ' +
+		'2.0 LU under the voice…", "…will clip"). Estimated from each source’s measured loudness and the gain applied, so it ' +
+		'is a fair picture of the whole, not the exported file; it says what it leaves out. Run it after adding sound and fix ' +
+		'what it warns about. Optionally limit to a time range.',
+	inputSchema: {
+		type: 'object',
+		properties: {
+			fromSec: { type: 'number', description: 'Only clips that end after this timeline time' },
+			toSec: { type: 'number', description: 'Only clips that start before this timeline time' }
+		},
+		additionalProperties: false
+	},
+	async run(args, ctx) {
+		const project = await requireProject(ctx)
+		const { doc } = project
+		const sounding = doc.timeline.filter((i) => !i.text && !i.generator && !i.motion && i.sourceAssetId)
+			.filter((i) => args.fromSec === undefined || i.timelineStart + i.duration > args.fromSec)
+			.filter((i) => args.toSec === undefined || i.timelineStart < args.toSec)
+		const ids = [...new Set(sounding.map((i) => i.sourceAssetId))]
+		const analyses = await ctx.bridge.audioAnalyses(project, ids)
+		const report = estimateMix({ ...doc, timeline: sounding }, analyses)
+		return {
+			content: [json({
+				...report,
+				clips: report.clips.slice(0, 80).map((c) => ({ ...c, startSec: r3(c.startSec), endSec: r3(c.endSec) })),
+				clipsTotal: report.clips.length,
+				loudnessEnabled: !!doc.loudnessEnabled
+			})],
+			feed: { detail: report.warnings.length ? `${report.warnings.length} thing${report.warnings.length === 1 ? '' : 's'} to fix` : 'the mix sits well', quote: report.warnings[0] }
+		}
+	}
+}
+
+const OPS_BASE_SCHEMA = opsInputSchema(EDITOR_OPS_SCHEMA)
+const OPS_INPUT_SCHEMA = { ...OPS_BASE_SCHEMA, properties: { ...OPS_BASE_SCHEMA.properties, ...SOUND_OPS_SCHEMA } } as typeof OPS_BASE_SCHEMA
 
 const applyOps: ToolDef = {
 	name: 'apply_ops',
@@ -417,7 +667,7 @@ const applyOps: ToolDef = {
 		'is its own revision — and check the result with render_frame. Before sending a custom page in `html`, ' +
 		'read get_motion_guide. Always include a short rationale: the user reads it.',
 	inputSchema: OPS_INPUT_SCHEMA,
-	alsoNeeds: (args) => (opsWriteHtml(args as EditorOps) ? 'html' : null),
+	alsoNeeds: (args) => (opsWriteHtml(args as EditorOps) ? 'html' : opsMakeSound(args as EditorOps) ? 'sound' : null),
 	async run(args, ctx) {
 		const errors = validateArgs(OPS_INPUT_SCHEMA, args)
 		if (errors.length) throw new ToolError(`Invalid operations — nothing was changed:\n- ${errors.join('\n- ')}`)
@@ -433,7 +683,12 @@ const applyOps: ToolDef = {
 		}
 		const ops = vetted.ops
 		const turnId = randomUUID()
-		const mapped = opsToDiff(ops, project.doc, { by: ctx.clientName, turnId })
+		// Sounds are made first (rendered by ffmpeg, cached by recipe) so the mapping can
+		// place them; the renderer is handed the new assets with the turn.
+		const wanted = soundRecipesOf(ops, project.doc)
+		const rendered = wanted.length ? await ctx.bridge.prepareSounds(project, wanted) : []
+		const soundAssets = new Map(wanted.map((r, i) => [recipeKey(r), rendered[i]]))
+		const mapped = opsToDiff(ops, project.doc, { by: ctx.clientName, turnId }, soundAssets)
 		const { diff, addMarkers, docSettings, notes } = mapped
 		const droppedOps = [...vetted.dropped, ...mapped.droppedOps]
 		const turn: PromptTurn = {
@@ -453,7 +708,8 @@ const applyOps: ToolDef = {
 			threadId: project.threadId,
 			turn,
 			addMarkers: addMarkers.length ? addMarkers : undefined,
-			docSettings: Object.keys(docSettings).length ? docSettings : undefined
+			docSettings: Object.keys(docSettings).length ? docSettings : undefined,
+			addAssets: rendered.length ? rendered : undefined
 		})
 		if (!outcome.ok) {
 			const dropped = droppedOps.length ? `\nDropped as invalid:\n- ${droppedOps.join('\n- ')}` : ''
@@ -540,7 +796,9 @@ const exportTool: ToolDef = {
 }
 
 export const TOOLS: ToolDef[] = [
-	getProject, getTimeline, getMedia, searchMomentsTool, renderFrame, getMotionGuide, applyOps, revertToVersion, exportTool
+	getProject, getTimeline, getMedia, searchMomentsTool, renderFrame, getMotionGuide,
+	getSoundGuide, listSounds, suggestCuesTool, renderSoundTool, analyzeAudio,
+	applyOps, revertToVersion, exportTool
 ]
 
 export const SERVER_INSTRUCTIONS =
@@ -548,5 +806,6 @@ export const SERVER_INSTRUCTIONS =
 	'open in it, live. A good loop: get_project → get_timeline and get_media (or search_moments) to find ' +
 	'material → apply_ops to edit (get_motion_guide first if you will write an HTML motion page) → ' +
 	'render_frame to look at the result → revert_to_version if it is ' +
-	'wrong. Every apply_ops is a revision the user can see and undo; the user may edit at the same time, ' +
+	'wrong. For sound: get_sound_guide, then suggest_cues → apply_ops addSounds (with follow) → analyze_audio; ' +
+	'you cannot hear, so work by the numbers and the spectrogram render_sound gives. Every apply_ops is a revision the user can see and undo; the user may edit at the same time, ' +
 	'so read the timeline again before each edit instead of relying on an old read.'

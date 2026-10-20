@@ -247,6 +247,7 @@ export function normalizeToolName(name: string, server?: string | null): { tool:
 
 const FRAMEFLOW_TOOLS = new Set([
 	'get_project', 'get_timeline', 'get_media', 'search_moments', 'render_frame', 'get_motion_guide', 'apply_ops',
+	'get_sound_guide', 'list_sounds', 'suggest_cues', 'render_sound', 'analyze_audio',
 	'revert_to_version', 'export'
 ])
 
@@ -526,6 +527,7 @@ export function buildEngineSystemPrompt(input: EnginePromptInput): string {
 		'- Edit with apply_ops. Each call is one revision the user can undo, so prefer a few focused calls. Always give a short rationale.',
 		'- Look at your result with render_frame before you finish, and fix it (or revert_to_version) if it is wrong.',
 		'- Before you write a custom HTML motion page (apply_ops with html), call get_motion_guide and follow it.',
+		'- For sound effects or a music bed, call get_sound_guide first. You cannot hear: use suggest_cues, apply_ops addSounds (with follow), render_sound and analyze_audio, and work by their numbers.',
 		'- Timeline times (timelineStart, atSec, removeRanges) are TIMELINE seconds; in/out are SOURCE seconds.',
 		'- Never call export: the user exports.',
 		`- You have at most ${input.maxSteps} tool calls for this turn.`,

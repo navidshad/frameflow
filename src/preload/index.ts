@@ -171,7 +171,7 @@ const api = {
 	// Agent access (MCP). The token itself never reaches the renderer.
 	getAgentAccess: () => ipcRenderer.invoke('get-agent-access'),
 	setAgentAccessEnabled: (enabled: boolean) => ipcRenderer.invoke('set-agent-access-enabled', enabled),
-	setAgentPermission: (key: 'edit' | 'html' | 'export', value: boolean) =>
+	setAgentPermission: (key: 'edit' | 'html' | 'export' | 'sound', value: boolean) =>
 		ipcRenderer.invoke('set-agent-permission', { key, value }),
 	copyAgentToken: () => ipcRenderer.invoke('copy-agent-token'),
 	copyAgentSnippet: (kind: 'claude' | 'codex') => ipcRenderer.invoke('copy-agent-snippet', kind),

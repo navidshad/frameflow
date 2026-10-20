@@ -3439,6 +3439,8 @@ export const useEditorStore = defineStore('editor', () => {
 		turn: PromptTurn
 		addMarkers?: { time: number; label: string }[]
 		docSettings?: { captionsEnabled?: boolean; loudnessEnabled?: boolean }
+		/** Rendered sounds the diff places: they must exist here before it is applied. */
+		addAssets?: MediaAsset[]
 		thinContext?: boolean
 		truncated?: boolean
 	}): Promise<AgentApplyOutcome | undefined> => {
@@ -3451,6 +3453,7 @@ export const useEditorStore = defineStore('editor', () => {
 				: undefined
 		}
 		const turn = payload.turn
+		for (const asset of payload.addAssets ?? []) upsertAsset(asset)
 
 		// Upsert into doc.turns (main-owned; echo also arrives via thread-updated)
 		const index = doc.value.turns.findIndex((t) => t.id === turn.id)

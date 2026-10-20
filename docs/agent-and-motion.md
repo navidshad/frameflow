@@ -88,3 +88,22 @@ against its design board; one PR per stage into `main`.
   into the layer, so a project never depends on the library.
 - The contract accepts the board's authoring shapes too: `settings` as a map, `moments` as
   `name: [start, end]` ranges (the gaps become the flexible hold).
+
+## Sound: the synth and its tools (built)
+
+Sound is made, not fetched. Every effect and the ambient bed is an ffmpeg filter graph (`src/shared/synth.ts`, ported from the Lumi studio's palette), rendered by `src/main/editor/synth.ts`, seeded and offline, normalised to the recipe's **peak** level and cached by a hash of the recipe. A sound is an audio asset that remembers its `synth` recipe; editing a recipe renders a new file and points the clip at it (the old asset stays so undo works).
+
+A sound clip can **follow** a moment on another clip (`TimelineItem.bind`: its start, a motion layer's exit, or its end, less a per-sound lead). Followers move in the same undo step as what they follow: in `commitStep` for the UI, and in `opsToDiff` (`applyFollowers`) for an agent's edit. Dragging a follower by hand drops the binding.
+
+Over MCP an agent has, all read-only except `apply_ops`:
+
+| Tool | What it gives |
+|---|---|
+| `get_sound_guide` | The palette, roles, levels, the key rule, how to choose, the loop. Built from the palette, so it cannot drift. |
+| `list_sounds` | The palette, the sounds already placed (with what they follow), and the audio tracks' roles. |
+| `suggest_cues` | The moments that want a sound, each with a suggested sound, the `follow` to pass back, and whether it is taken. |
+| `render_sound` | A recipe (or a placed sound) measured: length, peak, loudness, and a spectrogram image. Changes nothing. |
+| `analyze_audio` | Per-role loudness and peaks, per-clip estimates, and warnings in words. Estimated from measured sources and gains; it says what it leaves out. |
+| `apply_ops` | Gains `addSounds`, `setSounds` and `setTrackRoles`. Making or changing a sound needs the **Make sounds with the built-in synth** permission (on by default; free and offline). |
+
+Providers that cost money (generated sound, voice) are a separate permission that is off by default and arrives with the provider slot.

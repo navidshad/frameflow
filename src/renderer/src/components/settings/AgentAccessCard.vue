@@ -134,6 +134,11 @@ const PERMISSIONS: { key: keyof AgentPermissions; title: string; on: string; off
 		off: 'Off: agents can only use the built-in motion templates.'
 	},
 	{
+		key: 'sound', title: 'Make sounds with the built-in synth',
+		on: 'Recipes only: free, offline, nothing is spent. Each sound is part of the revision you can undo.',
+		off: 'Off: an agent can describe the sounds it would add, and you add them from the Sound tab.'
+	},
+	{
 		key: 'export', title: 'Export videos to disk',
 		on: 'An agent can start an export; it lands in the project’s exports folder.',
 		off: 'Off: an agent can ask, and you press Export.'

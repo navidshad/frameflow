@@ -29,6 +29,8 @@ export const soundHash = (recipe: SoundRecipe): string =>
 export const soundAssetId = (recipe: SoundRecipe): string => `synth-${soundHash(recipe)}`
 
 const soundDir = (tempDir: string) => path.join(tempDir, 'synth')
+/** Where a project keeps the sounds it has rendered. */
+export const soundDirFor = soundDir
 
 /** A 16-bit PCM WAV: the header, then the samples. */
 function wavBytes(samples: Int16Array, channels: number): Buffer {

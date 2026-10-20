@@ -1,5 +1,6 @@
 import { spawn } from 'child_process'
 import fs from 'fs'
+import os from 'os'
 import path from 'path'
 import { getFFmpegBinaryPath } from '../ffmpeg/binaries'
 import {
@@ -153,6 +154,32 @@ export function previewPeaks(file: string, buckets = 48): Promise<number[]> {
 			const samples = new Int16Array(buf.buffer, buf.byteOffset, Math.floor(buf.length / 2))
 			if (!samples.length) return resolve(new Array(buckets).fill(0))
 			resolve(bucketPeaks(samples, Math.ceil(samples.length / buckets)).slice(0, buckets))
+		})
+	})
+}
+
+/**
+ * A picture of a sound: its spectrogram, as a base64 PNG. An agent cannot hear,
+ * but it can read a picture, the way it already reads frames. Time runs left to
+ * right, pitch bottom to top on a log scale, loudness as brightness.
+ */
+export function spectrogramBase64(file: string): Promise<string> {
+	const out = path.join(os.tmpdir(), `ff-spectrogram-${process.pid}-${Date.now()}-${Math.random().toString(36).slice(2)}.png`)
+	return new Promise((resolve, reject) => {
+		const child = spawn(getFFmpegBinaryPath(), [
+			'-y', '-v', 'error', '-nostdin', '-i', file,
+			'-lavfi', 'showspectrumpic=s=640x256:legend=0:scale=log:color=intensity', '-frames:v', '1', out
+		], { stdio: ['ignore', 'ignore', 'pipe'] })
+		let stderr = ''
+		child.stderr.on('data', (d: Buffer) => { stderr += d.toString() })
+		child.on('error', reject)
+		child.on('close', (code) => {
+			try {
+				if (code !== 0 || !fs.existsSync(out)) return reject(new Error(stderr.trim().split('\n').pop() || `ffmpeg exited with ${code}`))
+				resolve(fs.readFileSync(out).toString('base64'))
+			} finally {
+				fs.rmSync(out, { force: true })
+			}
 		})
 	})
 }

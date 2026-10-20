@@ -709,6 +709,41 @@ export interface EditorOps {
 		layerRole?: 'subject' | 'background' | 'overlay'
 	}>
 	/**
+	 * Sounds from the built-in synth (see shared/synth.ts). Each is a recipe;
+	 * FrameFlow renders it and puts it on a free effects lane. `follow` makes it
+	 * land on a moment of another clip and stay there when that clip moves.
+	 * Needs the "Make sounds with the built-in synth" permission over MCP.
+	 */
+	addSounds?: Array<{
+		kind: string
+		variant?: number
+		pitch?: number
+		levelDb?: number
+		air?: number
+		seed?: number
+		durationSec?: number
+		/** Timeline seconds. Ignored when `follow` is given. */
+		atSec?: number
+		/** A moment on another clip: its entrance (start), its exit (out), or its end. */
+		follow?: { item: string; at?: 'start' | 'out' | 'end'; leadSec?: number }
+	}>
+	/** Change a sound already on the timeline: a different recipe, or a different moment to follow. */
+	setSounds?: Array<{
+		id: string
+		kind?: string
+		variant?: number
+		pitch?: number
+		levelDb?: number
+		air?: number
+		seed?: number
+		durationSec?: number
+		follow?: { item: string; at?: 'start' | 'out' | 'end'; leadSec?: number }
+		/** True stops it following whatever it follows. */
+		unfollow?: boolean
+	}>
+	/** What an audio track is for: the mix levels each by it, and a music bed ducks under speech. */
+	setTrackRoles?: Array<{ trackId: string; role: 'voice' | 'music' | 'sfx' | 'none' }>
+	/**
 	 * Synthesised backgrounds — a gradient or a colour with no footage behind
 	 * them. They go on their own track below everything, which is what a keyed
 	 * subject needs to sit in front of.

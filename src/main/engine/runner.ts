@@ -30,13 +30,13 @@ import type { Located } from './detect'
 
 /**
  * What a CLI engine may do through its private MCP server. It may edit, and
- * exporting stays the user's button. Writing a custom HTML page is the user's
+ * exporting stays the user's button. The built-in synth is free and offline, so it is on. Writing a custom HTML page is the user's
  * "Write custom HTML motion layers" setting, exactly as for an external agent:
  * the engine is an agent too, and a page it writes runs in a window. The caller
  * passes the setting in; absent, the answer is no.
  */
 export const enginePermissions = (htmlAllowed: boolean): AgentPermissions =>
-	({ edit: true, html: htmlAllowed, export: false })
+	({ edit: true, html: htmlAllowed, export: false, sound: true })
 
 /** Calls past the step limit are refused; this many more and the run is stopped. */
 const OVERRUN_GRACE = 5
