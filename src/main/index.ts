@@ -21,6 +21,7 @@ import { checkYtDlpAvailability, downloadVideo, getVideoFormats } from './ytdlp'
 import { dependencyManager } from './dependencies/manager'
 import { checkYtDlpFreshness } from './dependencies/ytdlp-updater'
 import * as editorAssets from './editor/assets'
+import { getAudioAnalysis } from './editor/audioAnalysis'
 import * as editorPreprocess from './editor/preprocess'
 import * as editorHistory from './editor/history'
 import * as editorPrompt from './editor/prompt'
@@ -607,6 +608,16 @@ app.whenReady().then(() => {
 				event.sender.send('editor-silence-progress', { assetId, percent })
 			}
 		})
+	})
+
+	// A source's waveform and loudness, measured once and cached beside the
+	// asset. Read-only: it never touches the media or the document.
+	ipcMain.handle('editor-audio-analysis', async (_event, { threadId, assetId }: { threadId: string, assetId: string }) => {
+		const thread = threadManager.getThread(threadId)
+		const asset = thread?.editor?.media.find((a) => a.id === assetId)
+		if (!thread || !asset) throw new Error('Asset not found')
+		const source = fs.existsSync(asset.originalPath) ? asset.originalPath : (asset.proxyPath || asset.originalPath)
+		return await getAudioAnalysis(editorAssets.getAssetDir(thread, assetId), source, { hasAudio: asset.metadata?.hasAudio })
 	})
 
 	// AI prompt turns (M3): one structured call per turn, streamed via

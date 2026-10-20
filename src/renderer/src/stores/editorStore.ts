@@ -37,6 +37,7 @@ import { childrenByParent, collectSubtree, hasBranch } from '@shared/revision-tr
 import { DEFAULT_PERSONA_ID } from '@shared/personas'
 import { agentChangeBadges, type AgentApplyOutcome } from '@shared/agentFeed'
 import { toMediaUrl } from '@shared/media-url'
+import { roleSpec, type AudioAnalysis, type TrackRole } from '@shared/audio'
 import {
 	canHostItem, findTitleTrack, hasLayerContent, isCompositedItem, nextTrackName, nextTrackOrder,
 	orderedTracks, trackFamily, TITLE_TRACK_NAME
@@ -298,15 +299,46 @@ export const useEditorStore = defineStore('editor', () => {
 	}
 
 	/**
-	 * Mark an audio track as a music bed, so it ducks under speech everywhere
-	 * else. Absent means the track IS speech as far as ducking is concerned.
+	 * Say what an audio track is for. A music bed ducks under speech everywhere
+	 * else; voice and sfx say what the content is so the mix can level it.
+	 * `undefined` clears it: the track is then speech, as far as ducking goes.
 	 */
+	const setTrackRole = (trackId: string, role: TrackRole | undefined) => {
+		const track = doc.value?.tracks.find((t) => t.id === trackId)
+		if (!track || track.kind !== 'audio' || track.role === role) return
+		const before = snapshotState()
+		if (role) track.role = role
+		else delete track.role
+		const spec = roleSpec(role)
+		commitStep({ before, label: spec ? `Mark ${track.name} as ${spec.label.toLowerCase()}` : `Clear role on ${track.name}` })
+	}
+
+	/** The old music-bed switch, kept for callers that only know that one. */
 	const toggleTrackMusic = (trackId: string) => {
 		const track = doc.value?.tracks.find((t) => t.id === trackId)
-		if (!track) return
-		const before = snapshotState()
-		track.role = track.role === 'music' ? undefined : 'music'
-		commitStep({ before, label: track.role === 'music' ? 'Mark as music bed' : 'Unmark music bed' })
+		if (track) setTrackRole(trackId, track.role === 'music' ? undefined : 'music')
+	}
+
+	// ===== What the sources sound like =====
+
+	/**
+	 * Waveform and loudness per asset, measured in the main process the first time
+	 * something asks and cached on disk, so a reload costs nothing. Reactive: a
+	 * clip draws a flat line until its source's analysis lands, then redraws.
+	 */
+	const audioAnalysis = ref<Record<string, AudioAnalysis>>({})
+	const audioAnalysisPending = new Set<string>()
+
+	const ensureAudioAnalysis = async (assetId: string) => {
+		if (!threadId.value || audioAnalysis.value[assetId] || audioAnalysisPending.has(assetId)) return
+		audioAnalysisPending.add(assetId)
+		try {
+			audioAnalysis.value[assetId] = await api.getAudioAnalysis({ threadId: threadId.value, assetId })
+		} catch (error) {
+			console.warn('[audio] analysis failed for', assetId, error)
+		} finally {
+			audioAnalysisPending.delete(assetId)
+		}
 	}
 
 	// ===== Titles =====
@@ -3687,6 +3719,9 @@ export const useEditorStore = defineStore('editor', () => {
 		exportQueue,
 		startExportBatch,
 		toggleTrackMusic,
+		setTrackRole,
+		audioAnalysis,
+		ensureAudioAnalysis,
 		addVideoTrack,
 		addAudioTrack,
 		removeTrack,

@@ -64,6 +64,8 @@ const api = {
 		ipcRenderer.invoke('preprocess-media', data),
 	findSilence: (data: { threadId: string, assetId: string, noiseDb?: number, minDurationSec?: number }) =>
 		ipcRenderer.invoke('find-silence', data),
+	getAudioAnalysis: (data: { threadId: string, assetId: string }) =>
+		ipcRenderer.invoke('editor-audio-analysis', data),
 	clearAssetData: (data: { threadId: string, assetId: string, kind: 'transcript' | 'descriptions' }) =>
 		ipcRenderer.invoke('clear-asset-data', data),
 	mergeClips: (data: { threadId: string, assetId: string, clipIds: string[] }) =>

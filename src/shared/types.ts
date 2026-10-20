@@ -1,3 +1,4 @@
+import type { TrackRole } from './audio'
 
 export enum MessageRole {
 	User = 'user',
@@ -331,10 +332,12 @@ export interface Track {
 	height: number              // px in the timeline UI
 	gain?: number               // track-level audio gain, composed with item gain at render (default 1.0)
 	/**
-	 * 'music' marks a bed: it ducks under speech on every other track. Absent
-	 * means the track IS speech as far as ducking is concerned.
+	 * What the track is for (see shared/audio.ts). 'music' marks a bed: it ducks
+	 * under speech on every other track. 'voice' and 'sfx' say what the content
+	 * is, so the mix can level it; neither ducks. Absent means nothing was said,
+	 * and the track IS speech as far as ducking is concerned — as it always was.
 	 */
-	role?: 'music'
+	role?: TrackRole
 }
 
 export interface TimelineItem {  // an instance of a clip placed on a track
