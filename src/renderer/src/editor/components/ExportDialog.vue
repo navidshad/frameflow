@@ -1,151 +1,92 @@
 <template>
-	<Modal :model-value="modelValue" title="Export video" size="md"
+	<AppDialog :model-value="modelValue" :title="title" size="md"
 		@update:model-value="$emit('update:modelValue', $event)">
-		<div class="py-2 space-y-4">
-			<!-- ===== Idle: options ===== -->
-			<template v-if="!state">
-				<div>
-					<span class="text-[10px] font-bold uppercase tracking-widest text-zinc-500 block mb-2">Quality</span>
-					<label v-for="option in qualityOptions" :key="option.value"
-						class="flex items-start gap-2.5 p-2.5 rounded-xl border cursor-pointer transition mb-2"
-						:class="quality === option.value
-							? 'border-primary/50 bg-primary/5 ring-1 ring-primary/20'
-							: 'border-zinc-200 dark:border-zinc-800 hover:border-primary/30'">
-						<input type="radio" class="accent-primary mt-0.5" :value="option.value" v-model="quality" />
-						<div>
-							<p class="text-xs font-bold text-zinc-800 dark:text-zinc-200">{{ option.label }}</p>
-							<p class="text-[10px] text-zinc-500 leading-snug">{{ option.description }}</p>
-						</div>
-					</label>
-				</div>
+		<!-- ===== Idle: options ===== -->
+		<template v-if="!state">
+			<span class="lbl block">Quality</span>
+			<div role="radiogroup" aria-label="Quality">
+				<OptionRow v-for="option in qualityOptions" :key="option.value" kind="radio" :checked="quality === option.value"
+					:label="option.label" :description="option.description" @toggle="quality = option.value" />
+			</div>
 
-				<div>
-					<label class="text-[10px] font-bold uppercase tracking-widest text-zinc-500 block mb-1.5">
-						Format
-					</label>
-					<div class="space-y-1">
-						<label v-for="f in FORMATS" :key="f.value"
-							class="flex items-start gap-2 px-2 py-1.5 rounded-lg border cursor-pointer transition"
-							:class="formats.includes(f.value)
-								? 'border-primary bg-primary/5'
-								: 'border-zinc-200 dark:border-zinc-700 hover:border-primary/40'">
-							<input type="checkbox" class="accent-primary mt-0.5"
-								:checked="formats.includes(f.value)" @change="toggleFormat(f.value)" />
-							<span class="min-w-0">
-								<span class="block text-[11px] font-bold text-zinc-800 dark:text-zinc-200">{{ f.label }}</span>
-								<span class="block text-[9px] text-zinc-400 leading-snug">{{ f.description }}</span>
-							</span>
-						</label>
-					</div>
-					<p v-if="formats.length > 1" class="mt-1 text-[9px] text-zinc-400 leading-snug">
-						Rendered one after another — two at once finishes later than two in a row.
-					</p>
-				</div>
+			<span class="lbl block mt-3">Format</span>
+			<OptionRow v-for="f in FORMATS" :key="f.value" :checked="formats.includes(f.value)" :label="f.label"
+				:description="f.description" @toggle="toggleFormat(f.value)" />
+			<p v-if="formats.length > 1" class="mt-1 text-[10px] text-zinc-500 leading-snug">
+				Rendered one after another — two at once finishes later than two in a row.
+			</p>
 
-				<div v-if="store.exportWarnings.length" class="space-y-1.5">
-					<div v-for="warning in store.exportWarnings" :key="warning.id"
-						class="flex items-center gap-2 px-2.5 py-1.5 rounded-lg bg-amber-500/10 border border-amber-500/20">
-						<p class="flex-1 text-[10px] font-medium text-amber-600 dark:text-amber-400 leading-snug">
-							<span class="iconify tabler--alert-triangle w-3 h-3 inline-block align-[-1px] mr-1"></span>
-							{{ warning.text }}
-						</p>
-						<button v-if="warning.action"
-							class="shrink-0 px-2 py-1 rounded-md border border-amber-500/40 text-[10px] font-bold text-amber-600 dark:text-amber-400 hover:bg-amber-500/20 transition active:scale-95"
-							@click="store.toggleTrackFlag(warning.action.trackId, warning.action.flag)">
-							{{ warning.action.label }}
-						</button>
-					</div>
-				</div>
-			</template>
-
-			<!-- ===== Rendering / stitching ===== -->
-			<template v-else-if="store.isRendering">
-				<div class="py-3 text-center">
-					<p class="text-sm font-bold text-zinc-800 dark:text-zinc-200 font-heading mb-1">
-						{{ state.phase === 'stitching' ? 'Finalizing…' : 'Rendering regions…' }}
-					</p>
-					<p class="text-[10px] text-zinc-400">
-						Rendering from a snapshot of your timeline — you can keep editing or open another project meanwhile.
-					</p>
-				</div>
-				<div class="h-2 rounded-full bg-zinc-200 dark:bg-zinc-800 overflow-hidden">
-					<div class="h-full bg-primary rounded-full transition-all duration-300"
-						:style="{ width: `${state.percent}%` }"></div>
-				</div>
-				<p class="text-center text-[11px] font-mono text-zinc-500">{{ state.percent }}%</p>
-			</template>
-
-			<!-- ===== Done ===== -->
-			<template v-else-if="state.phase === 'done'">
-				<div class="py-3 text-center">
-					<div class="w-12 h-12 mx-auto rounded-2xl bg-accent/10 flex items-center justify-center text-accent mb-3">
-						<span class="iconify tabler--check w-6 h-6"></span>
-					</div>
-					<p class="text-sm font-bold text-zinc-800 dark:text-zinc-200 font-heading">Export complete</p>
-					<p class="mt-1 text-[10px] font-mono text-zinc-400 break-all px-4">{{ fileName }}</p>
-				</div>
-			</template>
-
-			<!-- ===== Error / canceled ===== -->
-			<template v-else>
-				<div class="py-3 text-center">
-					<div class="w-12 h-12 mx-auto rounded-2xl flex items-center justify-center mb-3"
-						:class="isCanceled ? 'bg-zinc-500/10 text-zinc-400' : 'bg-red-500/10 text-red-500'">
-						<span :class="isCanceled ? 'iconify tabler--player-stop' : 'iconify tabler--alert-triangle'" class="w-6 h-6"></span>
-					</div>
-					<p class="text-sm font-bold text-zinc-800 dark:text-zinc-200 font-heading">
-						{{ isCanceled ? 'Export canceled' : 'Export failed' }}
-					</p>
-					<p v-if="!isCanceled" class="mt-1 text-[11px] text-red-500 leading-snug px-4">{{ state.error }}</p>
-				</div>
-			</template>
-		</div>
-
-		<template #footer>
-			<div class="flex justify-end gap-2 w-full">
-				<!-- Idle -->
-				<template v-if="!state">
-					<button class="btn-ghost" @click="close">Cancel</button>
-					<button class="btn-primary" :disabled="!store.canExport || !formats.length"
-						@click="store.startExportBatch(quality, formats)">
-						<span class="iconify tabler--file-export w-3.5 h-3.5 inline-block align-[-2px] mr-1"></span>
-						Export
-					</button>
-				</template>
-				<!-- Rendering -->
-				<template v-else-if="store.isRendering">
-					<button class="btn-ghost !text-red-500 hover:!bg-red-500/10" @click="store.abortExport()">
-						Cancel render
-					</button>
-					<button class="btn-primary" title="The export keeps running — you can keep editing or open another project"
-						@click="close">
-						<span class="iconify tabler--arrow-bar-to-down w-3.5 h-3.5 inline-block align-[-2px] mr-1"></span>
-						Continue in background
-					</button>
-				</template>
-				<!-- Done -->
-				<template v-else-if="state.phase === 'done'">
-					<button class="btn-ghost" @click="openFolder">Open folder</button>
-					<button class="btn-ghost" @click="finish">Done</button>
-					<button class="btn-primary" @click="saveAs">
-						<span class="iconify tabler--download w-3.5 h-3.5 inline-block align-[-2px] mr-1"></span>
-						Save As…
-					</button>
-				</template>
-				<!-- Error -->
-				<template v-else>
-					<button class="btn-ghost" @click="close">Close</button>
-					<button class="btn-primary" @click="store.clearRenderState()">Retry</button>
-				</template>
+			<div v-if="store.exportWarnings.length" class="mt-3 strip strip-warn !block !py-2 space-y-1">
+				<p v-for="warning in store.exportWarnings" :key="warning.id"
+					class="text-[11px] leading-snug text-amber-600 dark:text-amber-400">
+					{{ warning.text }}
+					<button v-if="warning.action" class="ml-1 font-semibold text-primary hover:text-primary-dark transition-colors"
+						@click="store.toggleTrackFlag(warning.action.trackId, warning.action.flag)">{{ warning.action.label }}</button>
+				</p>
 			</div>
 		</template>
-	</Modal>
+
+		<!-- ===== Rendering / stitching ===== -->
+		<template v-else-if="store.isRendering">
+			<div class="text-xs font-mono tabular-nums text-zinc-500 dark:text-zinc-400">{{ state.percent }}%</div>
+			<div class="h-[3px] mt-2 bg-zinc-200 dark:bg-white/10 overflow-hidden">
+				<div class="h-full bg-primary transition-all duration-300" :style="{ width: `${state.percent}%` }"></div>
+			</div>
+			<p class="mt-3 text-[11px] leading-relaxed text-zinc-500 dark:text-zinc-400">
+				Rendering from a snapshot of your timeline — you can keep editing or open another project meanwhile.
+				It continues in the background if you close this.
+			</p>
+		</template>
+
+		<!-- ===== Done ===== -->
+		<template v-else-if="state.phase === 'done'">
+			<div class="flex items-center gap-2.5">
+				<span class="w-[22px] h-[22px] rounded-full bg-accent/20 text-accent flex items-center justify-center shrink-0">
+					<span class="iconify tabler--check w-3.5 h-3.5"></span>
+				</span>
+				<span class="font-mono text-xs break-all">{{ fileName }}</span>
+			</div>
+		</template>
+
+		<!-- ===== Error / canceled ===== -->
+		<template v-else>
+			<p v-if="!isCanceled" class="text-xs text-red-500 leading-relaxed">{{ state.error }}</p>
+			<p v-else class="text-xs text-zinc-500 dark:text-zinc-400">The render was stopped before it finished.</p>
+		</template>
+
+		<template #footer>
+			<!-- Idle -->
+			<template v-if="!state">
+				<button class="btn-text" @click="close">Cancel</button>
+				<button class="btn-fill" :disabled="!store.canExport || !formats.length"
+					@click="store.startExportBatch(quality, formats)">Export</button>
+			</template>
+			<!-- Rendering -->
+			<template v-else-if="store.isRendering">
+				<button class="btn-text btn-text-danger" @click="store.abortExport()">Cancel render</button>
+				<button class="btn-text btn-text-primary" title="The export keeps running — you can keep editing or open another project"
+					@click="close">Continue in background</button>
+			</template>
+			<!-- Done -->
+			<template v-else-if="state.phase === 'done'">
+				<button class="btn-text btn-text-primary" @click="openFolder">Open folder</button>
+				<button class="btn-text btn-text-primary" @click="saveAs">Save As…</button>
+				<button class="btn-fill" @click="finish">Done</button>
+			</template>
+			<!-- Error -->
+			<template v-else>
+				<button class="btn-text" @click="close">Close</button>
+				<button class="btn-fill" @click="store.clearRenderState()">Retry</button>
+			</template>
+		</template>
+	</AppDialog>
 </template>
 
 <script setup lang="ts">
 import { computed, ref } from 'vue'
 import type { DeliveryFormat } from '@shared/types'
-import { Modal } from 'pilotui/complex'
+import AppDialog from '../../components/AppDialog.vue'
+import OptionRow from '../../components/OptionRow.vue'
 import { useEditorStore } from '../../stores/editorStore'
 
 defineProps<{ modelValue: boolean }>()
@@ -176,6 +117,12 @@ const FORMATS: { value: DeliveryFormat; label: string; description: string }[] =
 
 const state = computed(() => store.renderState)
 const isCanceled = computed(() => state.value?.error === 'aborted')
+const title = computed(() => {
+	if (!state.value) return 'Export video'
+	if (store.isRendering) return state.value.phase === 'stitching' ? 'Finalizing…' : 'Rendering regions…'
+	if (state.value.phase === 'done') return 'Export complete'
+	return isCanceled.value ? 'Export canceled' : 'Export failed'
+})
 const fileName = computed(() => state.value?.outputPath?.split('/').pop() || '')
 
 const qualityOptions = [
@@ -210,12 +157,3 @@ const openFolder = () => {
 	if (store.threadId) (window as any).api.openThreadDir(store.threadId)
 }
 </script>
-
-<style scoped>
-.btn-ghost {
-	@apply px-4 py-2 rounded-xl border border-zinc-200 dark:border-zinc-700 text-xs font-bold text-zinc-600 dark:text-zinc-300 hover:bg-zinc-100 dark:hover:bg-zinc-800 transition active:scale-95;
-}
-.btn-primary {
-	@apply px-4 py-2 rounded-xl bg-primary text-white text-xs font-bold shadow-md shadow-primary/20 hover:bg-primary-dark transition active:scale-95 disabled:opacity-50 disabled:cursor-not-allowed;
-}
-</style>
