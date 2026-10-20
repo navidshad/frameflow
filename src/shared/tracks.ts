@@ -86,6 +86,34 @@ export const isCompositedItem = (
 ): boolean => !item.text && (!!item.generator || !!item.motion || !!item.sourceAssetId)
 
 /**
+ * Whether the timeline draws anything WITHOUT footage: a motion page, a
+ * generated background or a title on a lane that is showing.
+ *
+ * The monitor's footage segments never include these (they have no source
+ * file), so "is there anything to show" cannot be answered from segments
+ * alone — a timeline of motion layers over nothing used to read as empty and
+ * the monitor refused to draw it, though the export renders it fine.
+ */
+export function hasLayerContent(
+	timeline: Pick<TimelineItem, 'trackId' | 'text' | 'generator' | 'motion'>[],
+	tracks: Pick<Track, 'id' | 'hidden'>[]
+): boolean {
+	const showing = new Set(tracks.filter((t) => !t.hidden).map((t) => t.id))
+	return timeline.some((i) => showing.has(i.trackId) && (!!i.motion || !!i.generator || !!i.text))
+}
+
+/**
+ * Whether there is anything for an AI turn to work on: imported media, or
+ * layers that need none. The renderer's chat gate and the two main-process
+ * guards ask this one question, so they cannot disagree about it.
+ */
+export const hasPromptableContent = (doc: {
+	media: unknown[]
+	timeline: Pick<TimelineItem, 'trackId' | 'text' | 'generator' | 'motion'>[]
+	tracks: Pick<Track, 'id' | 'hidden'>[]
+}): boolean => doc.media.length > 0 || hasLayerContent(doc.timeline, doc.tracks)
+
+/**
  * The lanes top to bottom, the way an editor stacks them: the video family
  * first with the FRONT-MOST layer at the top, then the audio family.
  *

@@ -6,7 +6,7 @@ import {
 import {
 	buildChecks, bundledFontsUsed, failedSpec, unverifiedPage, verifiedSpec, coerceDefinition, describePrompt, editedSpec, exposedSettings, extractMotionDefinition,
 	fixPrompt, htmlHash, humaniseKey, lastPassingOf, motionBadge, motionStatus, parseDefineCall, projectCustomLayers,
-	provenanceLabel, saveAsTemplateBlocker, templateId, writtenSpec
+	keyframingNote, provenanceLabel, saveAsTemplateBlocker, templateId, writtenSpec
 } from './motionCode'
 import { setUserMotionTemplates } from './motionTemplates'
 
@@ -478,5 +478,28 @@ describe('the library', () => {
 		expect(htmlHash('abc')).toBe(htmlHash('abc'))
 		expect(htmlHash('abc')).not.toBe(htmlHash('abd'))
 		expect(htmlHash('abc')).toHaveLength(8)
+	})
+})
+
+describe('keyframingNote', () => {
+	const read = (settings: string) =>
+		extractMotionDefinition(`<script>frameflow.define({ duration: 4, settings: ${settings}, seek() {} })</script>`).definition
+
+	it('names a setting written in the bare shorthand, which cannot carry animate', () => {
+		const note = keyframingNote('Doorbell', read('{ jacketColour: "#7A5BC4" }'))
+		expect(note).toMatch(/"Doorbell": "jacketColour" is a setting but is not keyframable/)
+		expect(note).toMatch(/animate: true/)
+	})
+
+	it('lists several, and leaves text alone because text never animates', () => {
+		const note = keyframingNote('Card', read('{ a: 1, b: "#112233", caption: "hello" }'))
+		expect(note).toMatch(/"a", "b" are settings but are not keyframable/)
+		expect(note).not.toMatch(/caption/)
+	})
+
+	it('says nothing when every non-text setting is keyframable, or there are none', () => {
+		expect(keyframingNote('Ok', read('{ a: { default: 1, animate: true }, caption: "hi" }'))).toBeNull()
+		expect(keyframingNote('Ok', read('[]'))).toBeNull()
+		expect(keyframingNote('Ok', undefined)).toBeNull()
 	})
 })

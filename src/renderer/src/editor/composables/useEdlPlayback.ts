@@ -97,7 +97,7 @@ export function useEdlPlayback(
 	const segments = computed<EdlSegment[]>(() => store.videoSegments as EdlSegment[])
 	const overlays = computed<EdlSegment[]>(() => store.overlaySegments as EdlSegment[])
 	const audioSegments = computed<EdlSegment[]>(() => store.audioSegments as EdlSegment[])
-	const hasContent = computed(() => segments.value.length > 0 || audioSegments.value.length > 0)
+	const hasContent = computed(() => segments.value.length > 0 || audioSegments.value.length > 0 || store.hasLayers)
 
 	// Audio segments grouped by track — each track drives its own element.
 	const audioByTrack = computed<Map<string, EdlSegment[]>>(() => {

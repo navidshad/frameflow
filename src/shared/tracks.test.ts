@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import type { MediaAsset, TimelineItem, Track } from './types'
 import {
-	canHostItem, findTitleTrack, isCompositedItem, itemFamily, nextTrackName,
+	canHostItem, findTitleTrack, hasLayerContent, hasPromptableContent, isCompositedItem, itemFamily, nextTrackName,
 	nextTrackOrder, orderedTracks, trackFamily
 } from './tracks'
 
@@ -127,5 +127,39 @@ describe('findTitleTrack', () => {
 	it('finds the named video lane and ignores an audio one', () => {
 		expect(findTitleTrack([track(), track({ id: 't1', name: 'T1', order: 1 })])?.id).toBe('t1')
 		expect(findTitleTrack([track(), track({ id: 'x', kind: 'audio', name: 'T1' })])).toBeUndefined()
+	})
+})
+
+describe('hasLayerContent', () => {
+	const motion = () => item({ sourceAssetId: '', motion: { template: 'lower-third' } })
+
+	it('counts motion pages, generated backgrounds and titles as content without footage', () => {
+		for (const layer of [motion(), generated(), title()]) {
+			expect(hasLayerContent([layer], [track()])).toBe(true)
+		}
+	})
+
+	it('is false for an empty timeline and for footage alone (segments cover that)', () => {
+		expect(hasLayerContent([], [track()])).toBe(false)
+		expect(hasLayerContent([item()], [track()])).toBe(false)
+	})
+
+	it('ignores a layer on a hidden lane or on a lane that does not exist', () => {
+		expect(hasLayerContent([motion()], [track({ hidden: true })])).toBe(false)
+		expect(hasLayerContent([motion()], [])).toBe(false)
+	})
+})
+
+describe('hasPromptableContent', () => {
+	const motion = () => item({ sourceAssetId: '', motion: { template: 'lower-third' } })
+
+	it('is true with media, or with a layer that needs none', () => {
+		expect(hasPromptableContent({ media: [{}], timeline: [], tracks: [] })).toBe(true)
+		expect(hasPromptableContent({ media: [], timeline: [motion()], tracks: [track()] })).toBe(true)
+	})
+
+	it('is false for a project with neither', () => {
+		expect(hasPromptableContent({ media: [], timeline: [], tracks: [track()] })).toBe(false)
+		expect(hasPromptableContent({ media: [], timeline: [motion()], tracks: [track({ hidden: true })] })).toBe(false)
 	})
 })

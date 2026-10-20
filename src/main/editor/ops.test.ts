@@ -1302,6 +1302,42 @@ describe('custom HTML motion ops', () => {
 		expect(bad.notes.join(' ')).toMatch(/the last version that passed stays on screen/)
 	})
 
+	it('tells the writer which settings are not keyframable, so it does not claim they are', () => {
+		const shorthand = GOOD.replace('settings: [{ key: "value", type: "number", default: 3, animate: true }]', 'settings: { jacket: "#7A5BC4" }')
+		const { notes } = opsToDiff({ addMotion: [{ template: 'custom', atSec: 0, html: shorthand, label: 'Doorbell' }] }, makeDoc([asset], [clip]), writer)
+		expect(notes.join(' ')).toMatch(/"Doorbell": "jacket" is a setting but is not keyframable/)
+		// GOOD declares its one setting `animate: true`: nothing to say.
+		expect(opsToDiff({ addMotion: [{ template: 'custom', atSec: 0, html: GOOD }] }, makeDoc([asset], [clip]), writer).notes).toEqual([])
+	})
+
+	describe('a layer follows its page’s length', () => {
+		const longer = GOOD.replace('duration: 5', 'duration: 6').replace('hold", duration: 3.5', 'hold", duration: 4.5')
+
+		it('grows to the new page when it sat at the old page’s own length', () => {
+			const { diff } = opsToDiff({ updateMotion: [{ id: 'cl', html: longer }] }, withLayer(GOOD), writer)
+			expect(diff.updateItems![0]).toMatchObject({ in: 0, out: 6, duration: 6 })
+		})
+
+		it('takes the page’s length for a fresh blank layer, which is 3 s until a page arrives', () => {
+			const d = makeDoc([asset], [clip, { ...placed(GOOD), duration: 3, out: 3, motion: newMotionSpec() }])
+			d.tracks.push({ id: 'm', kind: 'video', name: 'M1', order: 1, muted: false, locked: false, hidden: false, height: 64 })
+			const { diff } = opsToDiff({ updateMotion: [{ id: 'cl', html: longer }] }, d, writer)
+			expect(diff.updateItems![0]).toMatchObject({ duration: 6, out: 6 })
+		})
+
+		it('leaves a layer someone trimmed alone', () => {
+			const d = makeDoc([asset], [clip, { ...placed(GOOD), duration: 3, out: 3 }])
+			d.tracks.push({ id: 'm', kind: 'video', name: 'M1', order: 1, muted: false, locked: false, hidden: false, height: 64 })
+			const { diff } = opsToDiff({ updateMotion: [{ id: 'cl', html: longer }] }, d, writer)
+			expect(diff.updateItems![0].duration).toBeUndefined()
+		})
+
+		it('lets an explicit durationSec win', () => {
+			const { diff } = opsToDiff({ updateMotion: [{ id: 'cl', html: longer, durationSec: 4 }] }, withLayer(GOOD), writer)
+			expect(diff.updateItems![0]).toMatchObject({ duration: 4 })
+		})
+	})
+
 	it('reads settings in the same request against the page that request writes', () => {
 		const { diff, notes } = opsToDiff({ updateMotion: [{ id: 'cl', html: GOOD.replace('key: "value"', 'key: "amount"'), settings: { amount: 9, value: 1 } }] }, withLayer(GOOD), writer)
 		expect(diff.updateItems![0].motion!.settings).toEqual({ amount: 9 })

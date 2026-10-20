@@ -246,7 +246,8 @@ export function normalizeToolName(name: string, server?: string | null): { tool:
 }
 
 const FRAMEFLOW_TOOLS = new Set([
-	'get_project', 'get_timeline', 'get_media', 'search_moments', 'render_frame', 'apply_ops', 'revert_to_version', 'export'
+	'get_project', 'get_timeline', 'get_media', 'search_moments', 'render_frame', 'get_motion_guide', 'apply_ops',
+	'revert_to_version', 'export'
 ])
 
 /** Whether a call reached FrameFlow, by server name or, when a CLI drops it, by tool name. */
@@ -524,6 +525,7 @@ export function buildEngineSystemPrompt(input: EnginePromptInput): string {
 		'- Start with get_project, then read what you need: get_timeline, get_media, search_moments.',
 		'- Edit with apply_ops. Each call is one revision the user can undo, so prefer a few focused calls. Always give a short rationale.',
 		'- Look at your result with render_frame before you finish, and fix it (or revert_to_version) if it is wrong.',
+		'- Before you write a custom HTML motion page (apply_ops with html), call get_motion_guide and follow it.',
 		'- Timeline times (timelineStart, atSec, removeRanges) are TIMELINE seconds; in/out are SOURCE seconds.',
 		'- Never call export: the user exports.',
 		`- You have at most ${input.maxSteps} tool calls for this turn.`,

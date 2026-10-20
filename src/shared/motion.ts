@@ -328,6 +328,23 @@ export function resolveDefinition(spec: MotionSpec | undefined): MotionDefinitio
 	return renderVersion(spec).definition
 }
 
+/**
+ * How long a layer should be once its page changes.
+ *
+ * A layer sitting at its page's own length is following the page, not a
+ * choice: a fresh custom layer is the blank page's 3 s, and the page written
+ * into it runs 6. Leaving the clip at 3 would play the whole scene 2x fast (the
+ * flexible window absorbs the difference), so a layer at its natural length
+ * keeps its natural length. A layer someone TRIMMED or retimed is left alone.
+ */
+export function lengthAfterPageChange(before: MotionSpec | undefined, after: MotionSpec, clipDuration: number): number {
+	const retimed = (spec: MotionSpec | undefined) => Object.keys(spec?.moments ?? {}).length > 0
+	if (retimed(before) || retimed(after)) return clipDuration
+	const was = resolveDefinition(before).duration
+	const now = resolveDefinition(after).duration
+	return Math.abs(clipDuration - was) < 0.02 ? now : clipDuration
+}
+
 /** The page's own source, before composition: the version that is drawn. */
 export function motionSource(spec: MotionSpec | undefined): string {
 	return renderVersion(spec).html

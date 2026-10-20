@@ -11,6 +11,7 @@ import { computeContentEnd } from '@shared/timeline'
 import { EDITOR_OPS_SCHEMA, opsToDiff, opsWriteHtml } from '../editor/ops'
 import { vetHtmlOps, type MotionProbe } from '../editor/vetHtml'
 import { MOTION_TEMPLATES, userMotionTemplates } from '@shared/motionTemplates'
+import { motionGuideText } from '@shared/motionGuide'
 import type { EditorBridge, LiveProject } from './bridge'
 
 /**
@@ -413,8 +414,8 @@ const applyOps: ToolDef = {
 		'number) the user can undo or go back from. Returns that revision, any ops dropped as invalid, and ' +
 		'notes. Times: timelineStart, atSec and removeRanges are TIMELINE seconds; in/out are SOURCE seconds. ' +
 		'Read ids from get_timeline and get_media first. Prefer a few focused calls to one huge one — each ' +
-		'is its own revision — and check the result with render_frame. Always include a short rationale: ' +
-		'the user reads it.',
+		'is its own revision — and check the result with render_frame. Before sending a custom page in `html`, ' +
+		'read get_motion_guide. Always include a short rationale: the user reads it.',
 	inputSchema: OPS_INPUT_SCHEMA,
 	alsoNeeds: (args) => (opsWriteHtml(args as EditorOps) ? 'html' : null),
 	async run(args, ctx) {
@@ -476,6 +477,20 @@ const applyOps: ToolDef = {
 	}
 }
 
+const getMotionGuide: ToolDef = {
+	name: 'get_motion_guide',
+	permission: 'read',
+	description:
+		'How to write a custom HTML motion page that is good, not just valid: the page contract (what is ' +
+		'checked and refused) and the craft rules (fill the frame, match the project’s look, make subjects ' +
+		'readable, ease and settle, time the beats exactly, declare keyframable fields with animate: true, ' +
+		'verify with render_frame). Read it before the first apply_ops that sends `html`.',
+	inputSchema: { type: 'object', properties: {}, additionalProperties: false },
+	async run() {
+		return { content: [{ type: 'text', text: motionGuideText() }], feed: { detail: 'read the motion page guide' } }
+	}
+}
+
 const revertToVersion: ToolDef = {
 	name: 'revert_to_version',
 	permission: 'edit',
@@ -525,12 +540,13 @@ const exportTool: ToolDef = {
 }
 
 export const TOOLS: ToolDef[] = [
-	getProject, getTimeline, getMedia, searchMomentsTool, renderFrame, applyOps, revertToVersion, exportTool
+	getProject, getTimeline, getMedia, searchMomentsTool, renderFrame, getMotionGuide, applyOps, revertToVersion, exportTool
 ]
 
 export const SERVER_INSTRUCTIONS =
 	'FrameFlow is a video editor running on this computer; these tools act on the project the user has ' +
 	'open in it, live. A good loop: get_project → get_timeline and get_media (or search_moments) to find ' +
-	'material → apply_ops to edit → render_frame to look at the result → revert_to_version if it is ' +
+	'material → apply_ops to edit (get_motion_guide first if you will write an HTML motion page) → ' +
+	'render_frame to look at the result → revert_to_version if it is ' +
 	'wrong. Every apply_ops is a revision the user can see and undo; the user may edit at the same time, ' +
 	'so read the timeline again before each edit instead of relying on an old read.'

@@ -89,11 +89,22 @@ describe('AgentServer over Streamable HTTP', () => {
 		expect(foreign.status).toBe(403)
 	})
 
+	it('serves the motion guide: the contract, the craft rules and how to make a field keyframable', async () => {
+		const client = await connect()
+		const result = await client.callTool({ name: 'get_motion_guide', arguments: {} }) as any
+		const guide = result.content.find((c: any) => c.type === 'text').text as string
+		expect(guide).toMatch(/MOTION PAGE CONTRACT/)
+		expect(guide).toMatch(/Fill the frame/)
+		expect(guide).toMatch(/animate: true/)
+		const { tools } = await client.listTools()
+		expect(tools.find((t) => t.name === 'apply_ops')!.description).toMatch(/get_motion_guide/)
+	})
+
 	it('lists the tools with the ops contract as apply_ops input', async () => {
 		const client = await connect()
 		const { tools } = await client.listTools()
 		expect(tools.map((t) => t.name)).toEqual([
-			'get_project', 'get_timeline', 'get_media', 'search_moments', 'render_frame',
+			'get_project', 'get_timeline', 'get_media', 'search_moments', 'render_frame', 'get_motion_guide',
 			'apply_ops', 'revert_to_version', 'export'
 		])
 		const apply = tools.find((t) => t.name === 'apply_ops')!

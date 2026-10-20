@@ -12,6 +12,7 @@ import { rendererBridge, switchRevisionFor } from '../mcp/rendererBridge'
 import { detectCli, locate, recordRunFailure } from './detect'
 import { enginePermissions, runEngineTurn } from './runner'
 import { probeMotionPage } from '../motion/probe'
+import { hasPromptableContent } from '@shared/tracks'
 
 /**
  * The AI engine, wired to the app: the Settings card and engine chip's IPC,
@@ -117,7 +118,7 @@ export function runCliEditorPrompt(options: {
 		try {
 			const thread = threadManager.getThread(threadId)
 			if (!thread || thread.type !== 'editor' || !thread.editor) throw new Error('Not an editor project')
-			if (thread.editor.media.length === 0) throw new Error('Import media before prompting')
+			if (!hasPromptableContent(thread.editor)) throw new Error('Import media or add a layer before prompting')
 			await persistTurn(threadId, turn)
 			emitTurnUpdate({ threadId, turn })
 

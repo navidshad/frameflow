@@ -15,10 +15,11 @@ import { hasTransform, OFFSET_RANGE, SCALE_RANGE } from '@shared/transform'
 import { defaultParams, effectDef } from '@shared/effects'
 import { findTitleTrack, nextTrackOrder, TITLE_TRACK_NAME } from '@shared/tracks'
 import {
-	freeMotionTrack, lintMotionHtml, motionTemplate, newMotionSpec, nextMotionTrackName, resolveDefinition,
+	freeMotionTrack, lengthAfterPageChange, lintMotionHtml, motionTemplate, newMotionSpec, nextMotionTrackName, resolveDefinition,
 	sanitiseSetting, type MotionSpec
 } from '@shared/motion'
-import { writtenSpec } from '@shared/motionCode'
+import { keyframingNote, writtenSpec } from '@shared/motionCode'
+import { MOTION_CRAFT_LINES } from '@shared/motionGuide'
 import { userMotionTemplate } from '@shared/motionTemplates'
 import type { MotionOpSettings } from '@shared/types'
 import { isTransitionKind } from '@shared/transitionPresets'
@@ -799,6 +800,7 @@ export function composeSystemInstruction(
 		'    (plain globals; frameflow.ease.out/inOut/back, frameflow.lerp and frameflow.clamp also exist).',
 		'    Inter and Outfit are bundled. A page that breaks these rules is not drawn — the last version that',
 		'    passed stays, and the result says why.',
+		...MOTION_CRAFT_LINES.map((line) => `    ${line}`),
 		'  - `addTitles` puts text on the picture. `captions: true` burns the spoken transcript',
 		'    in, and only helps when the material has actually been transcribed.',
 		'    `loudness: true` normalises the mix to the level streaming platforms expect —',
@@ -1692,7 +1694,11 @@ export function opsWriteHtml(ops: Pick<EditorOps, 'addMotion' | 'updateMotion'>)
  */
 function reportPageProblems(label: string, html: string, spec: MotionSpec, notes: string[]): void {
 	const lint = lintMotionHtml(html)
-	if (lint.ok) return
+	if (lint.ok) {
+		const note = keyframingNote(label, spec.passed?.definition ?? spec.definition)
+		if (note) notes.push(note)
+		return
+	}
 	const first = lint.issues[0]
 	const more = lint.issues.length > 1 ? ` (+${lint.issues.length - 1} more)` : ''
 	const shown = spec.passed
@@ -1750,7 +1756,8 @@ function applyMotionOps(
 		if (html) {
 			base = writtenSpec(saved ? newMotionSpec(saved.id) : undefined, html, writer)
 			label = saved?.label ?? template?.label ?? 'Custom HTML'
-			reportPageProblems(label, html, base, notes)
+			// By the name the writer gave it, which is the one it will recognise.
+			reportPageProblems(request.label?.trim() || label, html, base, notes)
 		} else if (template) {
 			base = { template: template.id }
 			label = template.label
@@ -1803,7 +1810,8 @@ function applyMotionOps(
 		if (unknown.length) {
 			notes.push(`"${item.label || item.id}" has no setting ${unknown.map((k) => `"${k}"`).join(', ')} — ignored.`)
 		}
-		const timing = motionTiming(current, request.moments, request.durationSec, item.duration)
+		// A layer at its page's own length follows a page that runs longer or shorter.
+		const timing = motionTiming(current, request.moments, request.durationSec, lengthAfterPageChange(item.motion, current, item.duration))
 		const spec = tidyMotion({
 			...current,
 			settings: { ...(current.settings ?? {}), ...values },

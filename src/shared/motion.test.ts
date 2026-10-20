@@ -3,7 +3,7 @@ import type { TimelineItem, Track } from './types'
 import {
 	BLANK_MOTION_HTML, MOTION_CSP, MOTION_TEMPLATES, composeMotionPage, isMotionTrack, lintMotionHtml,
 	colourKeyValue, keyedSettingValue, keyValueColour, settingKeyValue,
-	momentAt, motionAnimatablePaths, motionClipLabel, motionFramePlan, motionFrameState,
+	lengthAfterPageChange, momentAt, motionAnimatablePaths, motionClipLabel, motionFramePlan, motionFrameState,
 	motionRenderRecipe, newMotionSpec, normaliseDefinition, pageTime, resolveDefinition,
 	resolveMoments, sameMotion, settingValues, type MotionSpec
 } from './motion'
@@ -432,5 +432,36 @@ describe('labels', () => {
 	it('falls back to the blank custom definition', () => {
 		expect(resolveDefinition(newMotionSpec()).duration).toBe(3)
 		expect(motionClipLabel(motionItem(newMotionSpec(), 3, { label: '' }))).toBe('Custom HTML')
+	})
+})
+
+describe('lengthAfterPageChange', () => {
+	const page = (duration: number) => ({
+		html: `<script>frameflow.define({ duration: ${duration}, settings: [], moments: [{ name: "all", duration: ${duration}, flex: true }], seek() {} })</script>`,
+		definition: { duration, settings: [], moments: [{ name: 'all', duration, flex: true }] }
+	})
+	const spec = (duration: number, extra: Partial<MotionSpec> = {}): MotionSpec => {
+		const p = page(duration)
+		return { ...p, passed: { html: p.html, definition: p.definition }, ...extra }
+	}
+
+	it('follows the page when the clip sat at the old page’s length', () => {
+		expect(lengthAfterPageChange(spec(3), spec(8), 3)).toBe(8)
+		expect(lengthAfterPageChange(spec(8), spec(5), 8)).toBe(5)
+	})
+
+	it('treats a fresh blank layer as sitting at its natural 3 s', () => {
+		expect(lengthAfterPageChange(newMotionSpec(), spec(8), 3)).toBe(8)
+	})
+
+	it('leaves a trimmed or lengthened clip, and a retimed one, alone', () => {
+		expect(lengthAfterPageChange(spec(3), spec(8), 2)).toBe(2)
+		expect(lengthAfterPageChange(spec(3), spec(8), 12)).toBe(12)
+		expect(lengthAfterPageChange(spec(3, { moments: { all: 1 } }), spec(8), 3)).toBe(3)
+	})
+
+	it('does not move while the new page is failing: the drawn page is still the old one', () => {
+		const failing: MotionSpec = { ...spec(3), html: spec(8).html }
+		expect(lengthAfterPageChange(spec(3), failing, 3)).toBe(3)
 	})
 })

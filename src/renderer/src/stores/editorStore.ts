@@ -16,7 +16,7 @@ import { engineRetry, type EngineRetry } from '@shared/engines'
 import { hasTransform, TRANSFORM_DEFAULTS } from '@shared/transform'
 import { isAnimatableOn, valueAt } from '@shared/keyframes'
 import {
-	freeMotionTrack, motionAnimatablePaths, motionTemplate, newMotionSpec, nextMotionTrackName,
+	freeMotionTrack, lengthAfterPageChange, motionAnimatablePaths, motionTemplate, newMotionSpec, nextMotionTrackName,
 	renderVersion, resolveDefinition, sameMotion, type MotionDefinition, type MotionSettingValue, type MotionSpec
 } from '@shared/motion'
 import {
@@ -38,7 +38,7 @@ import { DEFAULT_PERSONA_ID } from '@shared/personas'
 import { agentChangeBadges, type AgentApplyOutcome } from '@shared/agentFeed'
 import { toMediaUrl } from '@shared/media-url'
 import {
-	canHostItem, findTitleTrack, isCompositedItem, nextTrackName, nextTrackOrder,
+	canHostItem, findTitleTrack, hasLayerContent, isCompositedItem, nextTrackName, nextTrackOrder,
 	orderedTracks, trackFamily, TITLE_TRACK_NAME
 } from '@shared/tracks'
 import { isTransitionKind, transitionLabel } from '@shared/transitionPresets'
@@ -450,6 +450,8 @@ export const useEditorStore = defineStore('editor', () => {
 	})
 
 	const contentEnd = computed(() => computeContentEnd(doc.value?.timeline || []))
+	/** Motion pages, backgrounds or titles are showing — content the footage segments never list. */
+	const hasLayers = computed(() => hasLayerContent(doc.value?.timeline || [], doc.value?.tracks || []))
 	const timelineTail = computed(() => Math.max(60, 0.25 * contentEnd.value))
 
 	const markers = computed<EditorMarker[]>(() => doc.value?.markers || [])
@@ -853,6 +855,13 @@ export const useEditorStore = defineStore('editor', () => {
 	const hasReadyMedia = computed(() =>
 		assets.value.some((a) => a.preprocessState === 'completed' && (a.clips?.length ?? 0) > 0)
 	)
+	/**
+	 * Chat has something to work on: footage that is ready, or layers (motion pages,
+	 * backgrounds, titles) that need no footage. A motion-only timeline used to be
+	 * told to "import media to start" with the input disabled — so the AI could not
+	 * be asked to make the very thing the timeline is for.
+	 */
+	const canPrompt = computed(() => hasReadyMedia.value || hasLayers.value)
 	const mediaProcessing = computed(() =>
 		assets.value.some((a) => a.preprocessState === 'running' || a.preprocessState === 'pending')
 	)
@@ -2069,18 +2078,23 @@ export const useEditorStore = defineStore('editor', () => {
 		if (!item?.motion) return
 		const before = snapshotState()
 		item.motion = tidyMotion({ ...item.motion, moments: { ...item.motion.moments, ...moments } })
-		if (length !== undefined && Number.isFinite(length) && length > 0) {
-			// Lengthening stops at the next layer on the lane rather than pushing
-			// it later: where a motion layer sits is the point of it.
-			const room = doc.value!.timeline
-				.filter((i) => i.id !== item.id && i.trackId === item.trackId && i.timelineStart >= item.timelineStart + 1e-6)
-				.reduce((min, i) => Math.min(min, i.timelineStart - item.timelineStart), Infinity)
-			const next = Math.max(0.2, Math.min(length, room))
-			item.in = 0
-			item.out = next
-			item.duration = next
-		}
+		if (length !== undefined && Number.isFinite(length) && length > 0) setMotionLength(item, length)
 		commitStep({ before, label: 'Retime motion' })
+	}
+
+	/**
+	 * Give a motion layer a new length. Lengthening stops at the next layer on
+	 * the lane rather than pushing it later: where a motion layer sits is the
+	 * point of it. The caller commits the step.
+	 */
+	const setMotionLength = (item: TimelineItem, length: number) => {
+		const room = doc.value!.timeline
+			.filter((i) => i.id !== item.id && i.trackId === item.trackId && i.timelineStart >= item.timelineStart + 1e-6)
+			.reduce((min, i) => Math.min(min, i.timelineStart - item.timelineStart), Infinity)
+		const next = Math.max(0.2, Math.min(length, room))
+		item.in = 0
+		item.out = next
+		item.duration = next
 	}
 
 	/**
@@ -2164,7 +2178,11 @@ export const useEditorStore = defineStore('editor', () => {
 		const next = editedSpec(item.motion, text, outcome)
 		if (sameMotion(next, item.motion)) return false
 		const before = snapshotState()
+		// A layer at its page's own length follows the page: a fresh custom layer is
+		// the blank page's 3 s, and the scene written into it is longer.
+		const length = lengthAfterPageChange(item.motion, next, item.duration)
 		item.motion = next
+		if (Math.abs(length - item.duration) > 1e-6) setMotionLength(item, length)
 		return commitStep({ before, label: outcome.passed ? 'Edit motion HTML' : 'Edit motion HTML (checks failing)' })
 	}
 
@@ -3551,12 +3569,14 @@ export const useEditorStore = defineStore('editor', () => {
 		assets,
 		isEmpty,
 		hasReadyMedia,
+		canPrompt,
 		mediaProcessing,
 		selectedAsset,
 		selectedClip,
 		sortedTracks,
 		itemsByTrack,
 		contentEnd,
+		hasLayers,
 		timelineTail,
 		markers,
 		selectedItems,

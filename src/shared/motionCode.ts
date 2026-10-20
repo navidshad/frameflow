@@ -24,6 +24,26 @@ import {
 	type MotionSnapshot, type MotionSpec
 } from './motion'
 
+// ===== What can be keyframed =====
+
+/**
+ * A line for whoever wrote a page, naming the settings a person can set but
+ * cannot keyframe — or null when there is nothing to say.
+ *
+ * Keyframing is opt-in per setting (`animate: true`), and the bare shorthand
+ * `settings: { jacket: "#7A5BC4" }` has nowhere to say it. A page written that
+ * way is valid, so nothing fails, and an author who was asked for a keyframable
+ * field would report it as done. This puts the fact in the result they read.
+ */
+export function keyframingNote(label: string, definition: MotionDefinition | undefined): string | null {
+	const fixed = (definition?.settings ?? []).filter((s) => s.type !== 'text' && !s.animate).map((s) => s.key)
+	if (!fixed.length) return null
+	const names = fixed.map((k) => `"${k}"`).join(', ')
+	return `"${label}": ${names} ${fixed.length === 1 ? 'is a setting but is' : 'are settings but are'} not keyframable. `
+		+ 'Declare it in the object form with `animate: true` (e.g. `key: { default: "#7A5BC4", animate: true }`) to give it a keyframe lane; '
+		+ 'the bare `key: value` form cannot. Only tell the user it is keyframable if you did.'
+}
+
 // ===== Reading frameflow.define(...) out of the text =====
 
 /** A value the reader could not evaluate (a variable, a call, a function). */
