@@ -6,7 +6,8 @@ import type { EditorDocument } from '@shared/types'
 import { threadManager } from '../threads'
 import { THREAD_DIRS } from '../constants/paths'
 import { computeRegions, intermediateOpts, runCommand } from './render'
-import { transcriptsForDoc } from './captions'
+import { cuesForDoc, transcriptsForDoc } from './captions'
+import { cuesAtInstant, cuesToAss, escapeSubtitlesPath } from '@shared/captions'
 import { motionCacheDir } from '../motion/cache'
 import { ensureMotionJobs } from '../motion'
 import {
@@ -288,6 +289,37 @@ export async function renderExactFrame(options: {
 	const outputPath = path.join(dir, `exact-${Date.now()}.png`)
 	const partial = outputPath.replace(/\.png$/, '.part.png')
 	await runCommand(command, partial, new AbortController().signal)
+
+	// Titles and captions burn over the finished file in the export (render.ts),
+	// not in the region graph — so the exact frame needs that pass too, or an
+	// agent checking its title with render_frame sees none.
+	const frame = { width: plan.width, height: plan.height }
+	const text = cuesAtInstant(cuesForDoc(doc, frame), timeSec)
+	if (text.cues.length) {
+		const assPath = path.join(dir, `exact-${Date.now()}.ass`)
+		fs.writeFileSync(assPath, cuesToAss(text.cues, frame), 'utf-8')
+		const burned = outputPath.replace(/\.png$/, '.text.png')
+		try {
+			// The still loops just long enough to reach the instant, so each cue
+			// is exactly as far into its fade as it is in the export.
+			const burn = ffmpeg()
+				.input(partial)
+				.inputOptions(['-loop', '1', '-framerate', String(plan.fps), '-t', (text.at + 2 / plan.fps).toFixed(3)])
+				.videoFilters(`subtitles=filename=${escapeSubtitlesPath(assPath)}`)
+				.outputOptions(['-ss', text.at.toFixed(3), '-frames:v', '1'])
+			await runCommand(burn, burned, new AbortController().signal)
+			fs.renameSync(burned, outputPath)
+			fs.unlinkSync(partial)
+		} catch (error) {
+			// The picture without its text beats no picture.
+			console.warn('[preview] could not burn text into the exact frame:', error)
+		} finally {
+			try { fs.unlinkSync(assPath) } catch { /* gone */ }
+			if (fs.existsSync(partial)) fs.renameSync(partial, outputPath)
+		}
+		return { path: outputPath }
+	}
+
 	fs.renameSync(partial, outputPath)
 	return { path: outputPath }
 }

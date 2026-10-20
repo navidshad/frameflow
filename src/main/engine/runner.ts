@@ -3,7 +3,7 @@ import { join, sep } from 'node:path'
 import os from 'node:os'
 import { randomBytes } from 'node:crypto'
 import {
-	buildCommand, engineFailureNote, ENGINES, lineSplitter, parseStreamLine, StepTracker, TOKEN_ENV, unexpectedTools,
+	buildCommand, engineFailureNote, ENGINES, lineSplitter, readableError, parseStreamLine, StepTracker, TOKEN_ENV, unexpectedTools,
 	type CliEngineId, type EngineStep
 } from '@shared/engines'
 import type { AgentActivity } from '@shared/agentFeed'
@@ -71,6 +71,8 @@ export interface EngineRunResult {
 	steps: EngineStep[]
 	model?: string
 	commits: CommitRecord[]
+	/** The revision the run left current: its last edit, or a later revert_to_version. */
+	finalRevisionId?: string
 	exitCode: number | null
 	stderr: string
 }
@@ -87,6 +89,7 @@ export async function runEngineTurn(options: EngineRunOptions): Promise<EngineRu
 	const { engine, located } = options
 	const label = ENGINES[engine].label
 	const commits: CommitRecord[] = []
+	let finalRevisionId: string | undefined
 
 	// Records what each apply_ops made, so the turn can say "V7" at the end.
 	const bridge: EditorBridge = {
@@ -94,11 +97,16 @@ export async function runEngineTurn(options: EngineRunOptions): Promise<EngineRu
 		getLiveProject: () => options.bridge.getLiveProject(),
 		readTranscripts: (p, ids) => options.bridge.readTranscripts(p, ids),
 		renderFrame: (p, t) => options.bridge.renderFrame(p, t),
-		switchRevision: (id) => options.bridge.switchRevision(id),
+		async switchRevision(id) {
+			const result = await options.bridge.switchRevision(id)
+			if (result.ok) finalRevisionId = id
+			return result
+		},
 		startExport: () => options.bridge.startExport(),
 		async commitTurn(commit) {
 			const outcome: ApplyOutcome = await options.bridge.commitTurn(commit)
 			if (outcome.ok) {
+				finalRevisionId = outcome.revisionId
 				commits.push({
 					revisionId: outcome.revisionId, revisionSeq: outcome.revisionSeq,
 					parentRevisionId: outcome.parentRevisionId ?? null, counts: outcome.counts
@@ -205,7 +213,7 @@ export async function runEngineTurn(options: EngineRunOptions): Promise<EngineRu
 		tracker.settle(stopReason === 'abort' ? 'Stopped' : 'Did not finish')
 		options.onSteps?.(tracker.steps.map((s) => ({ ...s })), tracker.model)
 
-		const base = { steps: tracker.steps, model: tracker.model, commits, exitCode, stderr: tail(stderr) }
+		const base = { steps: tracker.steps, model: tracker.model, commits, finalRevisionId, exitCode, stderr: tail(stderr) }
 		if (stopReason === 'abort') return { ...base, ok: false, cancelled: true, answer: tracker.answer, error: 'Cancelled' }
 		if (stopReason === 'restricted') {
 			return { ...base, ok: false, cancelled: false, answer: '', error: `Stopped: ${restrictedDetail} Nothing outside FrameFlow’s tools may run.` }
@@ -219,12 +227,12 @@ export async function runEngineTurn(options: EngineRunOptions): Promise<EngineRu
 		const note = engineFailureNote(engine, output)
 		const ok = tracker.done ? tracker.done.ok : exitCode === 0
 		if (ok && exitCode !== 0 && !tracker.done) {
-			return { ...base, ok: false, cancelled: false, answer: tracker.answer, note, error: note || errorLine(stderr) || `${label} exited with code ${exitCode}.` }
+			return { ...base, ok: false, cancelled: false, answer: tracker.answer, note, error: note || readableError(errorLine(stderr) || '') || `${label} exited with code ${exitCode}.` }
 		}
 		if (!ok) {
 			return {
 				...base, ok: false, cancelled: false, answer: tracker.answer, note,
-				error: note || tracker.done?.error || errorLine(stderr) || `${label} exited with code ${exitCode}.`
+				error: note || readableError(tracker.done?.error || errorLine(stderr) || '') || `${label} exited with code ${exitCode}.`
 			}
 		}
 		return { ...base, ok: true, cancelled: false, answer: tracker.answer, note: null }

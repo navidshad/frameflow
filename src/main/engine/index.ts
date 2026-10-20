@@ -9,7 +9,7 @@ import { settingsManager } from '../settings'
 import { threadManager } from '../threads'
 import { emitTurnUpdate, persistTurn, resolvePersona } from '../editor/prompt'
 import { rendererBridge, switchRevisionFor } from '../mcp/rendererBridge'
-import { codexConfiguredModel, detectCli, locate, recordRunFailure } from './detect'
+import { detectCli, locate, recordRunFailure } from './detect'
 import { runEngineTurn } from './runner'
 
 /**
@@ -119,7 +119,8 @@ export function runCliEditorPrompt(options: {
 			if (!located) throw new Error(`${label} is not installed, or FrameFlow cannot find it. Pick another engine, or install it and press Detect again in Settings.`)
 
 			const persona = resolvePersona(thread.editor, options.personaId)
-			const model = settings.models[id] || (id === 'codex' ? codexConfiguredModel() : undefined)
+			// Empty means the CLI's own default: no model flag at all.
+			const model = settings.models[id] || undefined
 			let latest: PromptTurn = turn
 			const result = await runEngineTurn({
 				engine: id,
@@ -151,6 +152,7 @@ export function runCliEditorPrompt(options: {
 				steps: result.steps,
 				model: result.model,
 				revisionIds: commits.map((c) => c.revisionId),
+				finalRevisionId: result.finalRevisionId,
 				parentRevisionId: commits[0]?.parentRevisionId ?? null,
 				counts: commits.reduce(
 					(sum, c) => ({
@@ -173,7 +175,7 @@ export function runCliEditorPrompt(options: {
 				...turn,
 				status: 'completed',
 				engine: finalEngine,
-				revisionId: last?.revisionId,
+				revisionId: result.finalRevisionId ?? last?.revisionId,
 				rationale: commits.length ? result.answer || undefined : undefined,
 				answer: commits.length ? undefined : result.answer || `${label} finished without changing anything.`,
 				notes

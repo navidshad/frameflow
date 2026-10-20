@@ -4,7 +4,7 @@ import { resolve } from 'node:path'
 import {
 	agentFocus, buildCommand, buildEngineSystemPrompt, buildEngineUserPrompt, CODEX_DISABLED_FEATURES, displayPath,
 	editTime, engineFailureNote, geminiAuthType, lineSplitter, normalizeEngineSettings, normalizeToolName,
-	parseClaudeAuth, parseCodexConfigModel, parseCodexLogin, parseCodexModels, parseStreamLine, parseVersion,
+	parseClaudeAuth, parseCodexLogin, readableError, parseCodexModels, parseStreamLine, parseVersion,
 	StepTracker, stepTitle, TOKEN_ENV, unexpectedTools, type CliEngineId
 } from './engines'
 
@@ -147,8 +147,6 @@ describe('detection parsing', () => {
 			{ slug: 'gpt-5.6-terra', display_name: 'GPT-5.6-Terra', visibility: 'list' }
 		] })
 		expect(parseCodexModels(json)).toEqual([{ value: 'gpt-5.6-terra', label: 'GPT-5.6-Terra' }])
-		expect(parseCodexConfigModel('model = "gpt-5.6-luna"\n[mcp_servers.x]\nmodel = "no"')).toBe('gpt-5.6-luna')
-		expect(parseCodexConfigModel('[profile]\nmodel = "no"')).toBeUndefined()
 	})
 
 	it('paths under home are shortened', () => {
@@ -161,6 +159,14 @@ describe('detection parsing', () => {
 		const stderr = 'IneligibleTierError: This client is no longer supported for Gemini Code Assist for individuals.'
 		expect(engineFailureNote('gemini-cli', stderr)).toMatch(/personal Google accounts/)
 		expect(engineFailureNote('codex', 'some other failure')).toBeNull()
+	})
+})
+
+describe('errors', () => {
+	it('pulls the message out of a raw API error', () => {
+		const raw = '{"type":"error","status":400,"error":{"type":"invalid_request_error","message":"The \'gpt-5.5\' model is not supported when using Codex with a ChatGPT account."}}'
+		expect(readableError(raw)).toBe("The 'gpt-5.5' model is not supported when using Codex with a ChatGPT account.")
+		expect(readableError('Plain failure')).toBe('Plain failure')
 	})
 })
 
@@ -237,5 +243,15 @@ describe('prompts', () => {
 		expect(buildEngineUserPrompt({ prompt: 'Trim it', playheadSec: 63, selectedItemIds: ['a', 'b'] }))
 			.toBe('Trim it\n\n---\nPlayhead: 1:03.0. Scope: the selected timeline items (a, b). Change only them unless the request needs more.')
 		expect(buildEngineUserPrompt({ prompt: 'x', playheadSec: 0, selectedItemIds: ['a'], widen: 'full' })).toMatch(/whole timeline/)
+	})
+})
+
+describe('Codex tool errors', () => {
+	it('a refused MCP call carries the tool’s own message', () => {
+		const t = new StepTracker()
+		const start = { type: 'item.started', item: { id: 'i9', type: 'mcp_tool_call', server: 'frameflow', tool: 'revert_to_version', arguments: { version: 9 }, status: 'in_progress' } }
+		const end = { type: 'item.completed', item: { ...start.item, status: 'completed', result: { isError: true, content: [{ type: 'text', text: 'The editor could not switch to that revision.' }] } } }
+		for (const line of [start, end]) parseStreamLine('codex', JSON.stringify(line)).forEach((e) => t.apply(e))
+		expect(t.steps[0]).toMatchObject({ status: 'error', error: 'The editor could not switch to that revision.' })
 	})
 })

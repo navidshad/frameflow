@@ -573,6 +573,8 @@ export interface PromptTurnEngine {
 	}>
 	/** Revisions the run made, oldest first. */
 	revisionIds?: string[]
+	/** Where the run left the project: its last edit, or a later revert. */
+	finalRevisionId?: string
 	/** The revision before the run's first edit: what "Back to V{n}" returns to. */
 	parentRevisionId?: string | null
 	/** Summed over every edit the run made. */

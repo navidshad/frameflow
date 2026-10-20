@@ -163,7 +163,7 @@ export const useAgentStore = defineStore('agent', () => {
 				// Never strand the user's unsaved work: checkpoint it, then switch
 				// without the confirmation dialog an agent cannot answer.
 				if (editor.revisionDirty) await editor.createRevision({ origin: 'manual', label: 'Auto checkpoint' })
-				const ok = await editor.switchRevision(payload.revisionId, { force: true })
+				const ok = await editor.switchRevision(payload.revisionId, { force: true, engineTurnId: payload.engineTurnId })
 				return ok ? { ok: true } : { ok: false, error: 'The editor could not switch to that revision.' }
 			}
 			case 'export': {

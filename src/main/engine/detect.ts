@@ -2,7 +2,7 @@ import { readFileSync } from 'node:fs'
 import { join } from 'node:path'
 import os from 'node:os'
 import {
-	displayPath, ENGINES, geminiAuthType, parseClaudeAuth, parseCodexConfigModel, parseCodexLogin, parseCodexModels,
+	displayPath, ENGINES, geminiAuthType, parseClaudeAuth, parseCodexLogin, parseCodexModels,
 	parseVersion, type CliEngineId, type EngineDetection
 } from '@shared/engines'
 import { findBinary, runQuick, searchPath } from './proc'
@@ -76,13 +76,4 @@ export async function detectCli(id: CliEngineId): Promise<EngineDetection> {
 		status: authType ? 'found' : 'signed-out',
 		note: authType ? undefined : 'Run `gemini` in a terminal once to sign in.'
 	})
-}
-
-/**
- * Codex runs with --ignore-user-config (so the user's own MCP servers stay
- * out), which also drops their model choice. "As set in Codex" reads it here.
- */
-export function codexConfiguredModel(): string | undefined {
-	const home = process.env.CODEX_HOME || join(os.homedir(), '.codex')
-	return parseCodexConfigModel(readText(join(home, 'config.toml')) || '')
 }

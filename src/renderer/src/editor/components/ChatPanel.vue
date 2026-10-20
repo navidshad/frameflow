@@ -73,8 +73,12 @@
 
 						<!-- Question answer -->
 						<div v-else-if="turn.answer"
-							class="px-3 py-2 rounded-2xl rounded-tl-md bg-zinc-100 dark:bg-zinc-900 text-xs text-zinc-700 dark:text-zinc-300 leading-relaxed whitespace-pre-wrap">
-							{{ turn.answer }}
+							class="px-3 py-2 rounded-2xl rounded-tl-md bg-zinc-100 dark:bg-zinc-900 text-xs text-zinc-700 dark:text-zinc-300 leading-relaxed">
+							<p class="whitespace-pre-wrap">{{ turn.answer }}</p>
+							<template v-if="turn.engine">
+								<EngineSteps v-if="turn.engine.steps.length" class="mt-2" :steps="turn.engine.steps" />
+								<p class="mt-2 text-[9px] font-mono text-zinc-400">{{ engineFooter(turn) }}</p>
+							</template>
 						</div>
 
 						<!-- Applied edit -->
@@ -108,7 +112,7 @@
 		</div>
 
 		<!-- Latest applied result actions (Back to parent, etc.) -->
-		<AiResultCard v-if="store.lastResult" class="shrink-0 mx-2 mb-2" />
+		<AiResultCard v-if="store.lastResult" class="shrink-0 mx-2 mb-2 max-h-[60%] overflow-y-auto custom-scrollbar" />
 
 		<!-- Input, pinned — the border-t is the only frame around it -->
 		<div class="shrink-0 border-t border-zinc-200/60 dark:border-zinc-800 px-3 pt-2 pb-2.5">

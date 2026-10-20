@@ -110,8 +110,25 @@ export const CLI_MODELS: Record<CliEngineId, ModelOption[]> = {
 	]
 }
 
-/** "As set in Claude Code" — the default option, which passes no model flag. */
-export const asSetIn = (id: CliEngineId) => `As set in ${id === 'codex' ? 'Codex' : ENGINES[id].label}`
+/**
+ * The default option, which passes no model flag. Codex runs without the
+ * user's config.toml (so their MCP servers and plugins stay out), so for it
+ * this is Codex's own default rather than their configured model.
+ */
+export const asSetIn = (id: CliEngineId) => (id === 'codex' ? 'Codex default' : `As set in ${ENGINES[id].label}`)
+
+/**
+ * CLIs often print an API error as raw JSON. The turn card wants its message:
+ * `{"error":{"message":"The 'x' model is not supported…"}}` → that sentence.
+ */
+export function readableError(text: string): string {
+	const trimmed = (text || '').trim()
+	const quoted = /"message"\s*:\s*"((?:[^"\\]|\\.)*)"/.exec(trimmed)
+	if (quoted && /^[[{]|\{"/.test(trimmed)) {
+		try { return JSON.parse(`"${quoted[1]}"`) } catch { return quoted[1] }
+	}
+	return trimmed.length > 400 ? `${trimmed.slice(0, 400)}…` : trimmed
+}
 
 // ===== Detection =====
 
@@ -186,16 +203,6 @@ export function parseCodexModels(output: string): ModelOption[] {
 	} catch {
 		return []
 	}
-}
-
-/** `model = "gpt-5.6-terra"` at the top level of ~/.codex/config.toml. */
-export function parseCodexConfigModel(toml: string): string | undefined {
-	for (const line of (toml || '').split(/\r?\n/)) {
-		if (/^\s*\[/.test(line)) return undefined // a table starts: past the top level
-		const match = /^\s*model\s*=\s*"([^"]+)"/.exec(line)
-		if (match) return match[1]
-	}
-	return undefined
 }
 
 /**
@@ -434,7 +441,11 @@ function parseCodexLine(d: any): EngineEvent[] {
 			if (item.type === 'mcp_tool_call') {
 				return started
 					? [{ type: 'tool-start', callId: String(item.id), tool: String(item.tool), server: item.server ?? null, args: item.arguments || {} }]
-					: [{ type: 'tool-end', callId: String(item.id), ok: item.status === 'completed' && !item.error, error: item.error?.message }]
+					: [{
+						type: 'tool-end', callId: String(item.id),
+						ok: item.status === 'completed' && !item.error && !item.result?.isError,
+						error: item.error?.message || (item.result?.isError ? asText(item.result?.content).split('\n')[0] || 'Tool error' : undefined)
+					}]
 			}
 			// Anything that is not FrameFlow's (a shell command, a patch, a search)
 			// still shows as a step, so a restriction that failed is visible.
