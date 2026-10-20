@@ -1,8 +1,7 @@
 <template>
-	<div class="glass-card rounded-2xl flex flex-col min-h-0 overflow-hidden">
+	<div class="flat-fields flex flex-col min-h-0 overflow-hidden">
 		<!-- A custom motion layer draws its own header (name, chip, Settings | HTML). -->
-		<div v-if="!ownHeader" class="px-4 pt-4 pb-2 shrink-0 flex items-center justify-between">
-			<span class="text-[10px] font-bold uppercase tracking-widest text-zinc-500">Inspector</span>
+		<div v-if="!ownHeader && (keyframeMode || timelineItem?.motion)" class="px-4 pt-3 pb-1 shrink-0 flex items-center justify-end">
 			<span v-if="!seam && keyframeMode"
 				class="px-1.5 py-0.5 rounded bg-primary/[0.12] text-blue-400 text-[9px] font-bold uppercase tracking-widest">
 				Keyframe

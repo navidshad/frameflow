@@ -3,7 +3,7 @@
 		<div v-if="store.shortcutsOpen"
 			class="fixed inset-0 z-[100] flex items-center justify-center bg-black/60 backdrop-blur-sm p-6"
 			@click.self="store.shortcutsOpen = false">
-			<div class="glass-card rounded-2xl w-full max-w-3xl max-h-full overflow-hidden flex flex-col
+			<div class="pop w-full max-w-3xl max-h-full overflow-hidden flex flex-col
 			            border border-zinc-200 dark:border-zinc-800 shadow-2xl">
 				<div class="px-5 pt-4 pb-3 flex items-center justify-between shrink-0">
 					<h2 class="text-sm font-bold text-zinc-800 dark:text-zinc-100 font-heading">

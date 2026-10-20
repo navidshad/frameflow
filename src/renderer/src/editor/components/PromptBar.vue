@@ -41,7 +41,7 @@
 						</span>
 					</button>
 					<div v-if="scopeMenuOpen"
-						class="absolute bottom-full left-0 mb-2 w-48 rounded-xl border border-zinc-200 dark:border-zinc-800 bg-white/95 dark:bg-zinc-900/95 backdrop-blur-xl shadow-premium z-50 py-1 origin-bottom animate-menu">
+						class="absolute bottom-full left-0 mb-2 w-48 pop z-50 py-1 origin-bottom animate-menu">
 						<button v-for="option in scopeOptions" :key="option.value"
 							class="w-full px-3 py-1.5 flex items-center justify-between text-left hover:bg-primary/5 transition"
 							@click="setScope(option.value)">
@@ -53,7 +53,7 @@
 
 				<!-- Send / Stop -->
 				<button
-					class="ml-2 shrink-0 w-6 h-6 rounded-full flex items-center justify-center transition active:scale-95"
+					class="ml-2 shrink-0 w-7 h-7 rounded-md flex items-center justify-center transition active:scale-95"
 					:class="store.promptRunning
 						? 'bg-red-500 text-white hover:bg-red-600'
 						: canSend

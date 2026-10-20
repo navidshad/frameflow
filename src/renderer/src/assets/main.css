@@ -9,6 +9,20 @@
     --accent: 16, 185, 129;
     --zinc-50: 250, 250, 251;
     --zinc-100: 244, 244, 245;
+
+    /* v2: one surface. Zones are split by a hairline, the picture stage is a
+       step darker than the ground. Light values here, dark under .dark. */
+    --ff-ground: 250 250 250;
+    --ff-stage: 228 228 231;
+    --ff-hairline: rgba(0, 0, 0, 0.08);
+    --ff-hairline-strong: rgba(0, 0, 0, 0.16);
+  }
+
+  .dark {
+    --ff-ground: 9 9 11;
+    --ff-stage: 5 5 6;
+    --ff-hairline: rgba(255, 255, 255, 0.07);
+    --ff-hairline-strong: rgba(255, 255, 255, 0.16);
   }
 
   html {
@@ -29,6 +43,57 @@
 }
 
 @layer components {
+  /* ---- v2 surface vocabulary (editor first; the rest of the app follows) ---- */
+  .hair-t { border-top: 1px solid var(--ff-hairline); }
+  .hair-b { border-bottom: 1px solid var(--ff-hairline); }
+  .hair-l { border-left: 1px solid var(--ff-hairline); }
+  .hair-r { border-right: 1px solid var(--ff-hairline); }
+
+  /* Underline tab: the active one is underlined in the primary colour. */
+  .tab-u {
+    @apply relative h-9 px-0.5 text-xs font-semibold text-zinc-500 dark:text-zinc-400 bg-transparent transition-colors whitespace-nowrap;
+  }
+  .tab-u:hover { @apply text-zinc-800 dark:text-zinc-200; }
+  .tab-u-active {
+    @apply text-zinc-900 dark:text-zinc-50;
+    box-shadow: inset 0 -2px 0 rgb(var(--primary));
+  }
+
+  /* Micro label: the uppercase caption above a field or a group. */
+  .lbl {
+    @apply text-[10px] font-semibold uppercase tracking-[.12em] text-zinc-500 dark:text-zinc-400;
+  }
+
+  /* Popover: a menu that opens over the work. One hairline, one shadow. */
+  .pop {
+    @apply rounded-md bg-white dark:bg-zinc-900 shadow-xl shadow-black/20;
+    border: 1px solid var(--ff-hairline-strong);
+  }
+
+  /* Fields as underlined rows. Applied to a container: it flattens the text
+     fields inside it without touching ranges, colours or checkboxes. */
+  .flat-fields input:not([type]),
+  .flat-fields input[type="text"],
+  .flat-fields input[type="number"],
+  .flat-fields input[type="search"],
+  .flat-fields textarea,
+  .flat-fields select {
+    background: transparent !important;
+    border-radius: 0 !important;
+    border-width: 0 0 1px 0 !important;
+    border-color: var(--ff-hairline-strong) !important;
+    box-shadow: none !important;
+  }
+  .flat-fields input:focus,
+  .flat-fields textarea:focus,
+  .flat-fields select:focus {
+    border-color: rgb(var(--primary)) !important;
+    outline: none !important;
+  }
+
+  .no-scrollbar { scrollbar-width: none; }
+  .no-scrollbar::-webkit-scrollbar { display: none; }
+
   .glass-card {
     @apply bg-white/70 dark:bg-zinc-900/80 backdrop-blur-xl border border-white/40 dark:border-white/10 shadow-premium;
   }

@@ -1,50 +1,22 @@
 <template>
-	<div class="px-3 py-1.5 flex items-center justify-between border-b border-zinc-200 dark:border-zinc-800 shrink-0 gap-2">
-		<div class="flex items-center gap-2">
-			<span class="text-[10px] font-bold uppercase tracking-widest text-zinc-500">Timeline</span>
+	<div class="h-9 px-2.5 flex items-center justify-between hair-b shrink-0 gap-2">
+		<div class="flex items-center gap-2 shrink-0">
+			<span class="lbl !text-zinc-900 dark:!text-zinc-50 mr-2">Timeline</span>
 
-			<!-- View toggle: Filmstrip / Context -->
-			<div class="flex items-center bg-zinc-100/80 dark:bg-zinc-900/80 rounded-md p-0.5 border border-zinc-200 dark:border-zinc-800">
-				<button v-for="view in (['filmstrip', 'context'] as const)" :key="view"
-					:title="`${view} view`"
-					class="px-1.5 py-0.5 rounded text-[9px] font-bold uppercase tracking-widest transition flex items-center gap-1"
-					:class="store.timelineView === view
-						? 'bg-primary text-white shadow-sm shadow-primary/20'
-						: 'text-zinc-500 hover:text-zinc-700 dark:hover:text-zinc-300'"
-					@click="store.timelineView = view">
-					<span :class="view === 'filmstrip' ? 'iconify tabler--photo' : 'iconify tabler--file-text'" class="w-2.5 h-2.5"></span>
-					{{ view }}
-				</button>
-			</div>
-
-			<div class="w-px h-4 bg-zinc-200 dark:bg-zinc-800 mx-0.5"></div>
-
-			<!-- Transport. It sits here rather than under the monitor because these
-			     move the playhead, and the playhead is a timeline object — the
-			     picture is what happens as a result, not what is being driven. -->
-			<ToolButton icon="tabler--player-track-prev-filled"
-				:title="`Back one frame (${keysFor('step')})`"
-				@click="step(-1)" />
-			<SlimTooltip :text="store.isPlaying ? `Pause (${keysFor('play')})` : `Play (${keysFor('play')})`" placement="top">
-				<button
-					class="w-7 h-7 rounded-full bg-primary text-white flex items-center justify-center
-					       shadow-md shadow-primary/20 hover:bg-primary-dark transition active:scale-95"
-					:aria-label="store.isPlaying ? 'Pause' : 'Play'"
-					@click="store.isPlaying = !store.isPlaying">
-					<span class="w-3 h-3"
-						:class="store.isPlaying ? 'iconify tabler--player-pause-filled' : 'iconify tabler--player-play-filled'"></span>
-				</button>
-			</SlimTooltip>
-			<ToolButton icon="tabler--player-track-next-filled"
-				:title="`Forward one frame (${keysFor('step')})`"
-				@click="step(1)" />
-
-			<span class="text-[10px] font-mono text-zinc-500 tabular-nums pl-1">{{ timecode }}</span>
+			<!-- View: Filmstrip / Context, as underline tabs -->
+			<button v-for="view in (['filmstrip', 'context'] as const)" :key="view"
+				:title="`${view} view`"
+				class="tab-u !h-9 !text-[11px] uppercase tracking-[.08em] mr-3"
+				:class="{ 'tab-u-active': store.timelineView === view }"
+				@click="store.timelineView = view">
+				{{ view }}
+			</button>
 
 			<!-- Keyframes (board 2): step between keys, add one at the playhead on
-			     the lane being worked on, and how many are selected. -->
+			     the lane being worked on, and how many are selected. Play and the
+			     frame steps are under the picture now. -->
 			<template v-if="kf.expanded">
-				<div class="w-px h-4 bg-zinc-200 dark:bg-zinc-800 mx-0.5"></div>
+				<div class="w-px h-4 bg-hair mx-0.5"></div>
 				<ToolButton icon="tabler--chevron-left" title="Previous keyframe"
 					:disabled="!kf.canStep(-1)" @click="kf.step(-1)" />
 				<ToolButton icon="tabler--diamond" tint="key"
@@ -52,13 +24,14 @@
 					:disabled="!kf.primary" @click="kf.addAtPlayhead()" />
 				<ToolButton icon="tabler--chevron-right" title="Next keyframe"
 					:disabled="!kf.canStep(1)" @click="kf.step(1)" />
-				<span v-if="kf.selection.length" class="font-mono text-[9px] text-zinc-400 whitespace-nowrap">
+				<span v-if="kf.selection.length" class="text-[11px] text-zinc-500 whitespace-nowrap">
 					{{ kf.selection.length }} key{{ kf.selection.length === 1 ? '' : 's' }} selected
 				</span>
 			</template>
 		</div>
 
-		<div class="flex items-center gap-1">
+		<!-- A narrow window scrolls the tools sideways rather than overlapping the labels. -->
+		<div class="flex items-center gap-1 min-w-0 overflow-x-auto no-scrollbar">
 			<!-- Keyframe lanes. Lit while open — and while closed, when the
 			     selected clip has keys to show (board 1). -->
 			<SlimTooltip :text="kf.open ? 'Hide keyframe lanes' : 'Show keyframe lanes — every animatable property of the selected clip, under its track'" placement="top">
@@ -76,14 +49,14 @@
 			</SlimTooltip>
 			<!-- Legend for the dashed outlines an MCP agent's latest edit leaves -->
 			<span v-if="store.agentMarksSeq !== null && Object.keys(store.agentMarks).length"
-				class="flex items-center gap-1.5 text-[9px] text-zinc-400 mr-2 whitespace-nowrap">
+				class="flex items-center gap-1.5 text-[11px] text-violet-400 mr-2 whitespace-nowrap">
 				<span class="w-3.5 h-2.5 rounded-[3px] outline outline-1 outline-dashed outline-[rgba(167,139,250,0.9)]"></span>
 				changed by the agent in V{{ store.agentMarksSeq }}
 			</span>
 			<!-- Undo / Redo -->
 			<ToolButton icon="tabler--arrow-back-up" :title="`Undo (${keysFor('undo')})`" :disabled="!store.canUndo" @click="store.undo()" />
 			<ToolButton icon="tabler--arrow-forward-up" :title="`Redo (${keysFor('redo')})`" :disabled="!store.canRedo" @click="store.redo()" />
-			<div class="w-px h-4 bg-zinc-200 dark:bg-zinc-800 mx-1"></div>
+			<div class="w-px h-4 bg-hair mx-1"></div>
 
 			<!-- Edit tools -->
 			<ToolButton icon="tabler--blade-filled" :title="`Split at the playhead (${keysFor('split')})`" @click="store.splitAtPlayhead()" />
@@ -113,7 +86,7 @@
 					: 'Loudness off — the export keeps whatever level the sources had'"
 				:active="store.loudnessEnabled"
 				@click="store.setLoudnessEnabled(!store.loudnessEnabled)" />
-			<div class="w-px h-4 bg-zinc-200 dark:bg-zinc-800 mx-1"></div>
+			<div class="w-px h-4 bg-hair mx-1"></div>
 
 			<!-- Marker / chapter jump list (§5.3) -->
 			<div class="relative">
@@ -121,7 +94,7 @@
 					:active="markersOpen" @click="markersOpen = !markersOpen" />
 				<template v-if="markersOpen">
 					<div class="fixed inset-0 z-40" @click="markersOpen = false"></div>
-					<div class="absolute right-0 top-7 z-50 w-60 glass-card rounded-xl border border-zinc-200 dark:border-zinc-800 shadow-lg py-1 max-h-52 overflow-y-auto custom-scrollbar origin-top animate-menu">
+					<div class="absolute right-0 top-8 z-50 w-60 pop py-1 max-h-52 overflow-y-auto custom-scrollbar origin-top animate-menu">
 						<p v-if="!store.markers.length" class="px-3 py-2 text-[11px] text-zinc-400">
 							No markers yet — press <span class="font-mono font-bold">M</span> at the playhead to add one.
 						</p>
@@ -144,7 +117,7 @@
 					</div>
 				</template>
 			</div>
-			<div class="w-px h-4 bg-zinc-200 dark:bg-zinc-800 mx-1"></div>
+			<div class="w-px h-4 bg-hair mx-1"></div>
 
 			<!-- Zoom -->
 			<ToolButton icon="tabler--zoom-out" title="Zoom out (−)" @click="viewport.zoomBy(0.8)" />
@@ -152,7 +125,7 @@
 			<ToolButton icon="tabler--arrows-horizontal" title="Fit timeline" @click="viewport.fitToWindow()" />
 			<ToolButton icon="tabler--focus-2" title="Fit selection" :disabled="!store.selectedItemIds.length"
 				@click="viewport.fitToSelection()" />
-			<div class="w-px h-4 bg-zinc-200 dark:bg-zinc-800 mx-1"></div>
+			<div class="w-px h-4 bg-hair mx-1"></div>
 
 			<ToolButton icon="tabler--typography" title="Add a title at the playhead"
 				@click="store.addTitle()" />
@@ -167,7 +140,7 @@
 				@click="store.addAudioTrack()" />
 			<ToolButton icon="tabler--bookmark-plus" title="Save revision checkpoint"
 				@click="store.saveCheckpoint()" />
-			<div class="w-px h-4 bg-zinc-200 dark:bg-zinc-800 mx-1"></div>
+			<div class="w-px h-4 bg-hair mx-1"></div>
 			<ToolButton icon="tabler--keyboard" :title="`Keyboard shortcuts (${keysFor('help')})`"
 				:active="store.shortcutsOpen" @click="store.shortcutsOpen = !store.shortcutsOpen" />
 		</div>
@@ -175,7 +148,7 @@
 </template>
 
 <script setup lang="ts">
-import { computed, h, inject, ref } from 'vue'
+import { h, inject, ref } from 'vue'
 import type { FunctionalComponent } from 'vue'
 import { useEditorStore } from '../../../stores/editorStore'
 import { useKeyframeLanesStore } from '../../../stores/keyframeLanesStore'
@@ -188,19 +161,6 @@ const kf = useKeyframeLanesStore()
 const viewport = inject(TimelineViewportKey)!
 
 const markersOpen = ref(false)
-
-/** One frame, at the sequence's own rate — the same step the arrow keys take. */
-const step = (direction: 1 | -1) => {
-	const fps = store.doc?.timelineMeta.fps || 30
-	store.seekTo(store.playheadSec + direction / fps)
-}
-
-const timecode = computed(() => {
-	const total = store.playheadSec
-	const m = Math.floor(total / 60)
-	const s = Math.floor(total % 60)
-	return `${m}:${String(s).padStart(2, '0')}`
-})
 
 const jumpToMarker = (time: number) => {
 	store.seekTo(time)
@@ -227,7 +187,7 @@ const ToolButton: FunctionalComponent<
 	h(SlimTooltip, { text: props.title, placement: 'top' }, {
 		default: () => h('button', {
 			class: [
-				'w-6 h-6 flex items-center justify-center rounded-lg transition active:scale-95',
+				'w-[26px] h-7 flex items-center justify-center rounded-md transition active:scale-95',
 				props.disabled
 					? 'text-zinc-300 dark:text-zinc-700 cursor-not-allowed'
 					: props.active

@@ -10,7 +10,7 @@
 			</template>
 		</VueFlow>
 		<p v-if="!compact"
-			class="absolute bottom-2 left-1/2 -translate-x-1/2 text-[10px] text-zinc-400 bg-white/70 dark:bg-zinc-900/70 backdrop-blur px-2 py-1 rounded-lg pointer-events-none">
+			class="absolute bottom-2 left-1/2 -translate-x-1/2 text-[10px] text-zinc-400 px-2 py-1 pointer-events-none">
 			Click a revision to switch — branch by editing or prompting from there
 		</p>
 	</div>

@@ -4,7 +4,7 @@
 	     anchoring, which is exactly what this vertical tree layout wants. Verified
 	     rendering as `M110,95 C… 110,170` for 220px nodes at ROW_H 170. Adding
 	     handles would only put two invisible nodes in every card. -->
-	<div class="group rounded-2xl border-2 bg-white/90 dark:bg-zinc-900/90 backdrop-blur-xl shadow-premium transition relative"
+	<div class="group rounded-md border-2 bg-white dark:bg-zinc-900 transition relative"
 		:class="[
 			compact ? 'w-[148px] p-2' : 'w-[220px] p-2.5',
 			isCurrent

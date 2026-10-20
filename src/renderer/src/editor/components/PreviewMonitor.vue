@@ -2,61 +2,104 @@
 	<!-- Fullscreen is a CSS promotion, not a second monitor: the same element
 	     grows to fill the window, so playback, the guides and the caption
 	     overlay all carry on rather than being torn down and rebuilt. -->
-	<div class="glass-card flex flex-col min-h-0 overflow-hidden"
-		:class="store.monitorFullscreen
-			? 'fixed inset-0 z-[90] rounded-none'
-			: 'rounded-2xl'">
-		<!-- Mode switch -->
-		<div class="px-3 pt-2 pb-1 flex items-center justify-between shrink-0">
-			<div class="flex items-center bg-zinc-100/80 dark:bg-zinc-900/80 rounded-lg p-0.5 border border-zinc-200 dark:border-zinc-800">
-				<button v-for="m in (['source', 'timeline'] as const)" :key="m"
-					class="px-2 py-0.5 rounded-md text-[9px] font-bold uppercase tracking-widest transition"
-					:class="mode === m
-						? 'bg-primary text-white shadow-md shadow-primary/20 ring-1 ring-primary/20'
-						: 'text-zinc-500 hover:text-zinc-700 dark:hover:text-zinc-300'"
-					@click="mode = m">
-					{{ m }}
-				</button>
-			</div>
-			<span v-if="mode === 'timeline' && motionPathShown" class="text-[9px] font-mono text-zinc-400 truncate max-w-[50%]">
-				motion path shown while a position key is selected
-			</span>
-			<span v-else-if="mode === 'timeline' && edl.currentSegmentId.value && !agentStore.agentActive" class="text-[9px] font-mono text-zinc-400 truncate max-w-[50%]">
-				{{ activeSegmentLabel }}
-			</span>
-			<!-- Board 3: while an agent edits, the playhead can follow it. -->
-			<button v-else-if="agentStore.agentActive"
-				class="flex items-center gap-1.5 text-[9px] font-bold uppercase tracking-widest transition"
-				:class="agentStore.followAgent ? 'text-zinc-400 hover:text-zinc-300' : 'text-zinc-500 hover:text-zinc-400'"
-				:title="agentStore.followAgent ? 'The playhead moves to where the agent looks and edits — click to stop' : 'Move the playhead to where the agent looks and edits'"
-				:aria-pressed="agentStore.followAgent"
-				@click="agentStore.setFollowAgent(!agentStore.followAgent)">
-				<span class="w-1.5 h-1.5 rounded-full" :class="agentStore.followAgent ? 'bg-violet-400' : 'bg-zinc-600'"></span>
-				Follow agent
+	<div class="flex flex-col min-h-0 overflow-hidden bg-ground"
+		:class="store.monitorFullscreen ? 'fixed inset-0 z-[90]' : ''">
+		<!-- Header row: the mode, what the picture is telling you, and the frame size.
+		     Everything the monitor says about the picture lives here or in the
+		     transport row below it — nothing is drawn over the picture itself. -->
+		<div class="h-8 shrink-0 hair-b flex items-end gap-4 px-3.5">
+			<button v-for="m in (['source', 'timeline'] as const)" :key="m"
+				class="tab-u !h-[31px] !text-[11px] uppercase tracking-[.08em]"
+				:class="{ 'tab-u-active': mode === m }"
+				@click="mode = m">
+				{{ m }}
 			</button>
+			<div class="flex-1"></div>
+			<div v-if="mode === 'timeline'" class="h-[31px] flex items-center gap-3.5 text-[11px] text-zinc-500 min-w-0">
+				<span v-if="motionPathShown" class="truncate text-primary">Motion path shown while a position key is selected</span>
+				<span v-else-if="edl.currentSegmentId.value && !agentStore.agentActive" class="font-mono truncate max-w-[220px]">
+					{{ activeSegmentLabel }}
+				</span>
+				<!-- While an agent edits, the playhead can follow it. -->
+				<button v-if="agentStore.agentActive"
+					class="flex items-center gap-2 font-semibold transition"
+					:class="agentStore.followAgent ? 'text-violet-500' : 'text-zinc-500 hover:text-zinc-400'"
+					:title="agentStore.followAgent ? 'The playhead moves to where the agent looks and edits — click to stop' : 'Move the playhead to where the agent looks and edits'"
+					:aria-pressed="agentStore.followAgent"
+					@click="agentStore.setFollowAgent(!agentStore.followAgent)">
+					<span class="w-[26px] h-[14px] rounded-full relative transition-colors" :class="agentStore.followAgent ? 'bg-secondary' : 'bg-zinc-600'">
+						<span class="absolute top-[2px] w-[10px] h-[10px] rounded-full bg-white transition-all" :class="agentStore.followAgent ? 'right-[2px]' : 'left-[2px]'"></span>
+					</span>
+					Follow agent
+				</button>
+
+				<!-- What the picture is, right now -->
+				<span v-if="motionWarning" data-motion-warning class="flex items-center gap-1.5 text-amber-500 font-semibold truncate"
+					:title="`${motionWarning.layer}: its HTML fails a check. Open the HTML tab to see which.`">
+					<span class="w-1.5 h-1.5 rounded-full bg-amber-500"></span>{{ motionWarning.text }}
+				</span>
+				<span v-else-if="exactFrame.src" class="flex items-center gap-1.5 text-accent font-semibold">
+					<span class="w-1.5 h-1.5 rounded-full bg-accent"></span>Exact
+				</span>
+				<span v-else-if="store.activeMotion.length" class="flex items-center gap-1.5 text-accent font-semibold"
+					title="Motion layers preview exactly: the export captures this same page.">
+					<span class="w-1.5 h-1.5 rounded-full bg-accent"></span>Motion · exact
+				</span>
+				<span v-if="agentLookedHere" class="flex items-center gap-1.5 text-violet-500 font-semibold">
+					<span class="iconify tabler--eye w-3 h-3"></span>Agent looked at {{ clock(agentStore.lookedAt ?? 0) }}
+				</span>
+
+				<!-- The frame's own label IS the frame picker. -->
+				<div v-if="edl.hasContent.value" class="relative">
+					<button class="font-mono text-[11px] text-zinc-500 hover:text-primary transition"
+						:title="frameChosen ? 'Sequence frame' : 'Sequence frame — following the footage'"
+						@click="frameMenuOpen = !frameMenuOpen">
+						{{ seqWidth }}×{{ seqHeight }}
+						<span v-if="!frameChosen" class="text-zinc-400">auto</span>
+					</button>
+					<template v-if="frameMenuOpen">
+						<div class="fixed inset-0 z-40" @click="frameMenuOpen = false"></div>
+						<div class="absolute right-0 top-7 z-50 w-44 pop p-1 origin-top animate-menu">
+							<button v-for="preset in FRAME_PRESETS" :key="preset.short"
+								class="w-full flex items-center justify-between gap-2 px-2 py-1.5 rounded text-left transition"
+								:class="frameChosen && preset.w === seqWidth && preset.h === seqHeight
+									? 'bg-primary/10 text-primary'
+									: 'text-zinc-600 dark:text-zinc-300 hover:bg-primary/10'"
+								@click="chooseFrame(preset)">
+								<span class="text-[11px] font-semibold">{{ preset.label }}</span>
+								<span class="font-mono text-[9px] text-zinc-400">{{ preset.short }}</span>
+							</button>
+							<button v-if="frameChosen"
+								class="w-full px-2 py-1.5 mt-0.5 rounded text-left text-[11px] text-zinc-500 hover:bg-primary/10 transition"
+								@click="store.clearSequenceFrame(); frameMenuOpen = false">
+								Match footage
+							</button>
+							<p class="px-2 pt-1.5 pb-1 text-[9px] text-zinc-400 leading-snug">
+								Clips of another shape letterbox unless you set them to fill.
+							</p>
+						</div>
+					</template>
+				</div>
+			</div>
 		</div>
 
 		<!-- ============ SOURCE MODE ============ -->
 		<template v-if="mode === 'source'">
-			<div v-if="!sourceSrc" class="flex-1 flex flex-col items-center justify-center gap-3 bg-zinc-950/[0.03] dark:bg-black/40">
-				<div class="w-14 h-14 rounded-2xl bg-zinc-500/10 flex items-center justify-center text-zinc-400">
+			<div v-if="!sourceSrc" class="flex-1 flex flex-col items-center justify-center gap-3 bg-stage">
+				<div class="w-14 h-14 rounded-full bg-zinc-500/10 flex items-center justify-center text-zinc-400">
 					<span class="iconify tabler--player-play w-7 h-7"></span>
 				</div>
 				<p class="text-xs text-zinc-500 dark:text-zinc-400 font-medium">Import or select media to preview</p>
 			</div>
 			<template v-else>
-				<div class="flex-1 min-h-0 bg-black flex items-center justify-center relative">
+				<div class="flex-1 min-h-0 bg-stage flex items-center justify-center relative">
 					<video ref="sourceVideoRef" :src="sourceSrc" class="max-h-full max-w-full" preload="metadata"
 						@loadedmetadata="onSourceLoaded" @timeupdate="onSourceTimeUpdate"
 						@play="sourcePlaying = true" @pause="sourcePlaying = false"></video>
-					<div v-if="activeClip"
-						class="absolute top-2 left-2 px-2 py-1 rounded-lg bg-black/60 backdrop-blur-sm text-[10px] font-mono text-white/90">
-						Piece #{{ activeClip.index }} · {{ format(activeClip.in) }}–{{ format(activeClip.out) }}
-					</div>
 				</div>
-				<div class="px-4 py-2.5 flex items-center gap-3 border-t border-zinc-200 dark:border-zinc-800 shrink-0">
+				<div class="h-11 px-3.5 flex items-center gap-3 hair-t shrink-0">
 					<button
-						class="w-8 h-8 rounded-full bg-primary text-white flex items-center justify-center shadow-md shadow-primary/20 hover:bg-primary-dark transition active:scale-95"
+						class="w-[30px] h-[30px] rounded-full bg-primary text-white flex items-center justify-center hover:bg-primary-dark transition active:scale-95"
 						@click="toggleSourcePlay">
 						<span :class="sourcePlaying ? 'iconify tabler--player-pause-filled' : 'iconify tabler--player-play-filled'"
 							class="w-3.5 h-3.5"></span>
@@ -66,6 +109,9 @@
 					</span>
 					<input type="range" class="flex-1 accent-primary h-1 cursor-pointer" min="0" :max="sourceDuration || 0"
 						step="0.05" :value="sourceTime" @input="onSourceScrub" />
+					<span v-if="activeClip" class="text-[11px] text-zinc-500 whitespace-nowrap">
+						Piece #{{ activeClip.index }} · {{ format(activeClip.in) }}–{{ format(activeClip.out) }}
+					</span>
 				</div>
 			</template>
 		</template>
@@ -73,14 +119,14 @@
 		<!-- ============ TIMELINE MODE (EDL) ============ -->
 		<template v-else>
 			<div v-if="!edl.hasContent.value"
-				class="flex-1 flex flex-col items-center justify-center gap-3 bg-zinc-950/[0.03] dark:bg-black/40">
-				<div class="w-14 h-14 rounded-2xl bg-zinc-500/10 flex items-center justify-center text-zinc-400">
+				class="flex-1 flex flex-col items-center justify-center gap-3 bg-stage">
+				<div class="w-14 h-14 rounded-full bg-zinc-500/10 flex items-center justify-center text-zinc-400">
 					<span class="iconify tabler--layout-list w-7 h-7"></span>
 				</div>
 				<p class="text-xs text-zinc-500 dark:text-zinc-400 font-medium">Timeline is empty — drag pieces onto a track</p>
 			</div>
 			<template v-else>
-				<div ref="stageRef" class="flex-1 min-h-0 bg-zinc-950 relative flex items-center justify-center">
+				<div ref="stageRef" class="flex-1 min-h-0 bg-stage relative flex items-center justify-center">
 					<!-- The sequence frame: what actually gets exported. Sized here
 					     rather than in CSS because letterboxing a plain element
 					     against BOTH axes is not something CSS can express. -->
@@ -145,27 +191,6 @@
 						     DOM, exactly where the export burns them. -->
 						<img v-if="exactFrame.src" :src="exactFrame.src"
 							class="absolute inset-0 w-full h-full object-contain pointer-events-none z-20" />
-						<!-- A custom motion page that fails its checks is never drawn: the
-						     last version that passed is, and this says so (board 5). -->
-						<div v-if="motionWarning"
-							class="absolute top-2 left-2 px-1.5 py-0.5 rounded-md bg-amber-500/85 pointer-events-none z-40"
-							data-motion-warning
-							:title="`${motionWarning.layer}: its HTML fails a check. Open the HTML tab to see which.`">
-							<span class="text-[8px] font-mono uppercase text-white">{{ motionWarning.text }}</span>
-						</div>
-						<div v-else-if="exactFrame.src"
-							class="absolute top-2 left-2 px-1.5 py-0.5 rounded-md bg-accent/80
-							       pointer-events-none z-20">
-							<span class="text-[8px] font-mono uppercase tracking-widest text-white">exact</span>
-						</div>
-						<!-- A motion layer is never an approximation: this IS the page
-						     the export captures, seeked to this instant. -->
-						<div v-else-if="store.activeMotion.length && !motionWarning"
-							class="absolute top-2 left-2 px-1.5 py-0.5 rounded-md bg-accent/80 pointer-events-none z-40"
-							title="Motion layers preview exactly: the export captures this same page.">
-							<span class="text-[8px] font-mono uppercase text-white">Motion · exact</span>
-						</div>
-
 						<!-- Titles. Position and size are fractions of the frame in both
 						     places, so this and the burned-in version land together
 						     without either side converting to the other's units. -->
@@ -225,15 +250,10 @@
 							<span v-else class="text-[10px] font-mono text-white/30 uppercase tracking-widest">gap</span>
 						</div>
 
-						<!-- Board 3: the frame an agent just looked at with render_frame —
-						     a violet frame and its time, while the monitor is on it. -->
-						<template v-if="agentLookedHere">
-							<div class="absolute inset-0 pointer-events-none z-40 shadow-[inset_0_0_0_2px_rgba(167,139,250,0.7)]"></div>
-							<div class="absolute left-2 top-2 z-40 pointer-events-none flex items-center gap-1 px-1.5 py-0.5 rounded-md bg-violet-500/85 text-white font-mono text-[8px] font-bold uppercase tracking-[.05em]">
-								<span class="iconify tabler--eye w-2.5 h-2.5"></span>
-								Agent looked at {{ clock(agentStore.lookedAt ?? 0) }}
-							</div>
-						</template>
+						<!-- The frame an agent just looked at with render_frame: a violet
+						     ring while the monitor is on it (the label is in the header). -->
+						<div v-if="agentLookedHere"
+							class="absolute inset-0 pointer-events-none z-40 shadow-[inset_0_0_0_2px_rgba(167,139,250,0.7)]"></div>
 						</div>
 
 						<!-- Outside the clip, so a corner or the rotation stalk dragged
@@ -244,71 +264,33 @@
 						<!-- Stage 3: the selected position key's motion path. -->
 						<KeyframeMotionPath :frame-width="frameBox.w" :frame-height="frameBox.h" />
 					</div>
-					<!-- The monitor stacks <video> elements; CSS has no chroma key, so
-					     a keyed layer previews UNKEYED. Saying so beats a preview
-					     that quietly disagrees with the export. -->
-					<div v-if="keyedLayer"
-						class="absolute bottom-2 left-2 px-2 py-1 rounded-md bg-black/60 backdrop-blur-sm
-						       pointer-events-none flex items-center gap-1.5">
-						<span class="iconify tabler--eye-off w-3 h-3 text-white/60"></span>
-						<span class="text-[9px] font-mono uppercase tracking-widest text-white/50">
-							{{ store.activeGenerators.some((g) => !hasGeneratorCss(g.generator))
-								? 'generated layer renders on export'
-								: 'key applies on export' }}
-						</span>
 					</div>
-					<div v-if="edl.previewPending.value"
-						class="absolute bottom-2 left-1/2 -translate-x-1/2 flex items-center gap-1.5 px-2 py-1
-						       rounded-md bg-black/60 backdrop-blur-sm pointer-events-none">
-						<span class="iconify tabler--loader-2 w-3 h-3 text-white/70 animate-spin"></span>
-						<span class="text-[9px] font-mono uppercase tracking-widest text-white/60">
-							preparing transition
-						</span>
+				<!-- Transport row, under the picture. Play and the frame steps live here:
+				     this is where you are looking while you use them. What the picture
+				     cannot show honestly is said here too, never over it. -->
+				<div class="h-11 px-3.5 flex items-center gap-3 hair-t shrink-0">
+					<div class="flex items-center gap-1 shrink-0">
+						<SlimTooltip :text="`Back one frame (${keysFor('step')})`" placement="top">
+							<button class="w-7 h-7 flex items-center justify-center rounded-md text-zinc-500 hover:text-primary hover:bg-primary/10 transition active:scale-95"
+								aria-label="Back one frame" @click="stepFrame(-1)">
+								<span class="iconify tabler--player-track-prev-filled w-3.5 h-3.5"></span>
+							</button>
+						</SlimTooltip>
+						<SlimTooltip :text="store.isPlaying ? `Pause (${keysFor('play')})` : `Play (${keysFor('play')})`" placement="top">
+							<button class="w-[30px] h-[30px] rounded-full bg-primary text-white flex items-center justify-center hover:bg-primary-dark transition active:scale-95"
+								:aria-label="store.isPlaying ? 'Pause' : 'Play'" @click="store.isPlaying = !store.isPlaying">
+								<span class="w-3.5 h-3.5" :class="store.isPlaying ? 'iconify tabler--player-pause-filled' : 'iconify tabler--player-play-filled'"></span>
+							</button>
+						</SlimTooltip>
+						<SlimTooltip :text="`Forward one frame (${keysFor('step')})`" placement="top">
+							<button class="w-7 h-7 flex items-center justify-center rounded-md text-zinc-500 hover:text-primary hover:bg-primary/10 transition active:scale-95"
+								aria-label="Forward one frame" @click="stepFrame(1)">
+								<span class="iconify tabler--player-track-next-filled w-3.5 h-3.5"></span>
+							</button>
+						</SlimTooltip>
 					</div>
-					<!-- The frame's own label IS the frame picker. It used to live in
-					     the inspector's empty state, which an auto-selected asset made
-					     unreachable — nobody could ever have found it. -->
-					<div class="absolute top-2 right-2">
-						<button
-							class="px-1.5 py-0.5 rounded-md text-[9px] font-mono transition
-							       text-white/30 hover:text-white/80 hover:bg-white/10"
-							:title="frameChosen ? 'Sequence frame' : 'Sequence frame — following the footage'"
-							@click="frameMenuOpen = !frameMenuOpen">
-							{{ seqWidth }}×{{ seqHeight }}
-							<span v-if="!frameChosen" class="text-white/25">auto</span>
-						</button>
-						<template v-if="frameMenuOpen">
-							<div class="fixed inset-0 z-40" @click="frameMenuOpen = false"></div>
-							<div class="absolute right-0 top-6 z-50 w-40 glass-card rounded-xl border
-							            border-zinc-200 dark:border-zinc-800 shadow-lg p-1 origin-top animate-menu">
-								<button v-for="preset in FRAME_PRESETS" :key="preset.short"
-									class="w-full flex items-center justify-between gap-2 px-2 py-1.5 rounded-lg text-left transition"
-									:class="frameChosen && preset.w === seqWidth && preset.h === seqHeight
-										? 'bg-primary/10 text-primary'
-										: 'text-zinc-600 dark:text-zinc-300 hover:bg-primary/10'"
-									@click="chooseFrame(preset)">
-									<span class="text-[11px] font-semibold">{{ preset.label }}</span>
-									<span class="font-mono text-[9px] text-zinc-400">{{ preset.short }}</span>
-								</button>
-								<button v-if="frameChosen"
-									class="w-full px-2 py-1.5 mt-0.5 rounded-lg text-left text-[11px]
-									       text-zinc-500 hover:bg-primary/10 transition"
-									@click="store.clearSequenceFrame(); frameMenuOpen = false">
-									Match footage
-								</button>
-								<p class="px-2 pt-1.5 pb-1 text-[9px] text-zinc-400 leading-snug">
-									Clips of another shape letterbox unless you set them to fill.
-								</p>
-							</div>
-						</template>
-					</div>
-				</div>
-				<!-- No transport here: play and the frame steps live in the timeline
-				     toolbar, beside the thing they move. What stays is the monitor's
-				     own readout and the tools that change how the frame is shown. -->
-				<div class="px-4 py-2.5 flex items-center gap-3 border-t border-zinc-200 dark:border-zinc-800 shrink-0">
 					<!-- Type a timecode to go there. A scrub bar cannot hit a frame. -->
-					<span class="text-[11px] font-mono text-zinc-600 dark:text-zinc-300 shrink-0">
+					<span class="text-[12px] tabular-nums text-zinc-700 dark:text-zinc-200 shrink-0">
 						<input :value="timecodeText" @focus="onTimecodeFocus" @blur="onTimecodeCommit"
 							@keydown.enter.prevent="($event.target as HTMLInputElement).blur()"
 							@keydown.esc.prevent="onTimecodeCancel"
@@ -320,6 +302,19 @@
 					<input type="range" class="flex-1 accent-primary h-1 cursor-pointer" min="0"
 						:max="store.contentEnd || 0" step="0.05" :value="store.playheadSec"
 						@input="onTimelineScrub" />
+
+					<!-- The monitor stacks <video> elements; CSS has no chroma key, so a keyed
+					     layer previews UNKEYED. Saying so beats a preview that quietly
+					     disagrees with the export — here, not over the picture. -->
+					<span v-if="keyedLayer" class="flex items-center gap-1.5 text-[11px] text-zinc-500 whitespace-nowrap">
+						<span class="iconify tabler--eye-off w-3.5 h-3.5"></span>
+						{{ store.activeGenerators.some((g) => !hasGeneratorCss(g.generator))
+							? 'Generated layer renders on export'
+							: 'Key applies on export' }}
+					</span>
+					<span v-if="edl.previewPending.value" class="flex items-center gap-1.5 text-[11px] text-zinc-500 whitespace-nowrap">
+						<span class="iconify tabler--loader-2 w-3.5 h-3.5 animate-spin"></span>Preparing transition
+					</span>
 
 					<SlimTooltip placement="top"
 						:text="exactFrame.status === 'rendering'
@@ -374,8 +369,7 @@
 						</SlimTooltip>
 						<template v-if="guideMenuOpen">
 							<div class="fixed inset-0 z-40" @click="guideMenuOpen = false"></div>
-							<div class="absolute right-0 bottom-9 z-50 w-56 glass-card rounded-xl border
-							            border-zinc-200 dark:border-zinc-800 shadow-lg p-1 animate-menu">
+							<div class="absolute right-0 bottom-9 z-50 w-56 pop p-1 animate-menu">
 								<button v-for="guide in availableGuides" :key="guide.id"
 									class="w-full text-left px-2 py-1.5 rounded-lg transition"
 									:class="store.activeGuideId === guide.id
@@ -435,6 +429,7 @@ import { useKeyframeLanesStore } from '../../stores/keyframeLanesStore'
 import { useAgentStore } from '../../stores/agentStore'
 import { clock } from '@shared/agentFeed'
 import SlimTooltip from '../../components/SlimTooltip.vue'
+import { keysFor } from '../shortcuts'
 
 const store = useEditorStore()
 const agentStore = useAgentStore()
@@ -856,6 +851,12 @@ const activeSegmentLabel = computed(() => {
 	const item = store.doc?.timeline.find((i) => i.id === edl.currentSegmentId.value)
 	return item?.label || ''
 })
+
+/** One frame, at the sequence's own rate — the same step the arrow keys take. */
+const stepFrame = (direction: 1 | -1) => {
+	const fps = store.doc?.timelineMeta.fps || 30
+	store.seekTo(store.playheadSec + direction / fps)
+}
 
 const onTimelineScrub = (event: Event) => {
 	store.seekTo(parseFloat((event.target as HTMLInputElement).value))

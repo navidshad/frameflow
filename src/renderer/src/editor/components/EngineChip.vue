@@ -2,17 +2,17 @@
 	<div class="relative shrink-0" ref="rootRef">
 		<!-- Board 1: the violet chip before the persona -->
 		<button
-			class="flex items-center gap-1 px-1.5 py-0.5 rounded-md border border-violet-500/25 bg-violet-500/[0.08] text-violet-400 hover:border-violet-500/50 transition"
+			class="flex items-center gap-1.5 px-1 py-0.5 rounded-md text-violet-500 dark:text-violet-400 hover:text-violet-300 transition"
 			:title="`AI engine: ${engine.current.label} — click to switch`"
 			:disabled="editor.promptRunning"
 			@click="toggle">
-			<span class="iconify tabler--terminal w-2.5 h-2.5"></span>
-			<span class="text-[9px] font-bold uppercase tracking-widest max-w-[96px] truncate">{{ chipLabel }}</span>
+			<span class="w-1.5 h-1.5 rounded-full bg-secondary-light shrink-0"></span>
+			<span class="text-[11px] font-semibold max-w-[110px] truncate">{{ chipLabel }}</span>
 			<span class="iconify tabler--chevron-up w-2.5 h-2.5 opacity-50 transition-transform" :class="{ 'rotate-180': open }"></span>
 		</button>
 
 		<div v-if="open"
-			class="absolute bottom-full left-0 mb-2 w-64 rounded-2xl border border-zinc-200 dark:border-zinc-800 bg-white/95 dark:bg-zinc-900/95 backdrop-blur-xl shadow-premium z-50 py-2 origin-bottom animate-menu">
+			class="absolute bottom-full left-0 mb-2 w-64 pop z-50 py-2 origin-bottom animate-menu">
 			<div class="px-3 pt-1 pb-1">
 				<span class="text-[9px] font-bold uppercase tracking-widest text-zinc-400">AI engine</span>
 			</div>

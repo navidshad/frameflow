@@ -1,8 +1,7 @@
 <template>
-	<div class="glass-card rounded-2xl flex flex-col min-h-0 overflow-hidden">
-		<!-- Panel header -->
-		<div class="px-4 pt-4 pb-2 flex items-center justify-between shrink-0">
-			<span class="text-[10px] font-bold uppercase tracking-widest text-zinc-500">Media</span>
+	<div class="flex flex-col min-h-0 overflow-hidden">
+		<div class="px-3 pt-3 pb-1 flex items-center justify-between shrink-0">
+			<span class="lbl whitespace-nowrap truncate">Footage &amp; audio</span>
 			<div class="flex items-center gap-1">
 				<SlimTooltip text="Add local media" placement="bottom">
 					<button
@@ -16,13 +15,6 @@
 						class="w-7 h-7 flex items-center justify-center rounded-lg text-zinc-500 hover:text-primary hover:bg-primary/10 transition active:scale-95"
 						@click="showImportModal = true">
 						<span class="iconify tabler--link w-4 h-4"></span>
-					</button>
-				</SlimTooltip>
-				<SlimTooltip text="Collapse panel" placement="bottom">
-					<button
-						class="w-7 h-7 flex items-center justify-center rounded-lg text-zinc-400 hover:text-primary hover:bg-primary/10 transition active:scale-95"
-						@click="$emit('update:collapsed', true)">
-						<span class="iconify tabler--layout-sidebar-left-collapse w-4 h-4"></span>
 					</button>
 				</SlimTooltip>
 			</div>

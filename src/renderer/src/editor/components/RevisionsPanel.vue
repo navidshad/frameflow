@@ -1,5 +1,5 @@
 <template>
-	<div class="glass-card rounded-2xl flex flex-col min-h-0 overflow-hidden">
+	<div class="flex flex-col min-h-0 overflow-hidden">
 		<!-- Header. No "Revisions" label — ChatColumn already renders it as the tab,
 		     and dropping the duplicate frees the room the mode toggle needs. -->
 		<div class="px-3 pt-3 pb-2 flex items-center justify-between gap-2 shrink-0">

@@ -4,15 +4,16 @@
       class="h-screen w-screen overflow-hidden bg-zinc-50 dark:bg-zinc-950 text-zinc-900 dark:text-zinc-50 transition-colors duration-700 relative selection:bg-primary/20">
       
 
-      <!-- Theme Toggle (Temporary for testing) -->
-      <div class="absolute top-4 right-4 z-50 flex space-x-2">
+      <!-- Settings and theme. The editor draws its own top bar (its chat column
+           runs the full window height), so the cluster stays out of its way. -->
+      <div v-if="!ownsTopBar" class="absolute top-4 right-4 z-50 flex space-x-2">
         <div id="header-actions-portal"></div>
         <IconButton @click="router.push('/settings')" icon="IconSettings" size="sm"/>
         <IconButton @click="toggleTheme" :icon="appStore.theme === 'light' ? 'IconMoon' : 'IconSun'" size="sm"/>
       </div>
 
       <!-- Background export pills (renders keep running across page/project switches) -->
-      <div class="absolute top-16 right-4 z-50">
+      <div class="absolute right-4 z-50" :class="ownsTopBar ? 'top-12' : 'top-16'">
         <GlobalRenderPill />
       </div>
       
@@ -28,12 +29,15 @@
 import { App as AppRoot } from 'pilotui/shell'
 import { useAppStore } from 'pilotui/store'
 import { IconButton } from 'pilotui/elements'
-import { onMounted, watch } from 'vue'
-import { useRouter } from 'vue-router'
+import { computed, onMounted, watch } from 'vue'
+import { useRoute, useRouter } from 'vue-router'
 import GlobalRenderPill from './components/GlobalRenderPill.vue'
 
 const appStore = useAppStore()
 const router = useRouter()
+const route = useRoute()
+/** Screens that draw their own top bar, with their own settings and theme. */
+const ownsTopBar = computed(() => route.name === 'editor')
 
 const toggleTheme = () => {
   appStore.toggleTheme(appStore.theme === 'light' ? 'dark' : 'light')

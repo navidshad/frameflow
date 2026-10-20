@@ -1,13 +1,13 @@
 <template>
-	<div class="glass-card rounded-2xl flex flex-col overflow-hidden relative">
+	<div class="hair-t flex flex-col overflow-hidden relative">
 		<TimelineToolbar />
 		<TimelineMinimap />
 
-		<div class="flex-1 min-h-0 grid grid-cols-[112px_1fr]">
+		<div class="flex-1 min-h-0 grid grid-cols-[128px_1fr]">
 			<!-- Left: track headers. The ruler spacer stays pinned; the header
 			     stack is translated to follow the lanes' vertical scroll. -->
-			<div class="border-r border-zinc-200 dark:border-zinc-800 bg-zinc-50/50 dark:bg-zinc-950/40 overflow-hidden flex flex-col">
-				<div class="h-6 border-b border-zinc-200 dark:border-zinc-800 shrink-0"></div> <!-- ruler spacer -->
+			<div class="hair-r overflow-hidden flex flex-col">
+				<div class="h-6 hair-b shrink-0"></div> <!-- ruler spacer -->
 				<div :style="{ transform: `translateY(${-vScroll}px)` }">
 					<template v-for="track in store.sortedTracks" :key="track.id">
 						<TrackHeader :track="track" />
@@ -24,7 +24,7 @@
 				@scroll="onScroll" @wheel="onWheel">
 				<div class="relative" :style="{ width: `${viewport.contentWidth.value}px`, minWidth: '100%' }">
 					<!-- Ruler pinned to the top while the lanes scroll vertically -->
-					<div class="sticky top-0 z-30 bg-zinc-50/95 dark:bg-zinc-950/95 backdrop-blur-sm">
+					<div class="sticky top-0 z-30 bg-ground">
 						<TimelineRuler />
 					</div>
 					<!-- Drag past the top of the stack and a video lane is offered.
