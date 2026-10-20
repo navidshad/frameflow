@@ -1108,3 +1108,117 @@ describe('opsToDiff / layers', () => {
 		expect(diff.addItems![0].trackId).toBe('bg')
 	})
 })
+
+describe('motion ops', () => {
+	const asset = makeAsset('a', uniform(4, 5))
+	const clip: TimelineItem = {
+		id: 'v', trackId: 'v1', sourceAssetId: 'a', timelineStart: 0, in: 0, out: 20,
+		speed: 1, preservePitch: true, duration: 20
+	}
+	const doc = () => makeDoc([asset], [clip])
+
+	it('places a template on a new M1 track above the footage, at its own length', () => {
+		const { diff, droppedOps } = opsToDiff({ addMotion: [{ template: 'lower-third', atSec: 3 }] }, doc())
+		expect(droppedOps).toEqual([])
+		const track = diff.addTracks![0]
+		expect(track).toMatchObject({ name: 'M1', kind: 'video' })
+		expect(track.order).toBeGreaterThan(0)
+		const item = diff.addItems![0]
+		expect(item).toMatchObject({
+			trackId: track.id, sourceAssetId: '', timelineStart: 3,
+			in: 0, out: 4, duration: 4, speed: 1, label: 'Lower third',
+			motion: { template: 'lower-third' }
+		})
+	})
+
+	it('takes settings as pairs or as a map, typed for each setting', () => {
+		const pairs = opsToDiff({ addMotion: [{
+			template: 'lower-third', atSec: 0,
+			settings: [{ key: 'name', value: 'Navid' }, { key: 'slide', value: '999' }, { key: 'accent', value: '#00ff00' }]
+		}] }, doc())
+		expect(pairs.diff.addItems![0].motion!.settings).toEqual({ name: 'Navid', slide: 60, accent: '#00FF00' })
+		const map = opsToDiff({ addMotion: [{ template: 'stat-counter', atSec: 0, settings: { value: 12 } }] }, doc())
+		expect(map.diff.addItems![0].motion!.settings).toEqual({ value: 12 })
+	})
+
+	it('says so when a setting does not exist, and keeps the rest', () => {
+		const { diff, notes } = opsToDiff({ addMotion: [{ template: 'lower-third', atSec: 0, settings: { name: 'X', sparkle: 'yes' } }] }, doc())
+		expect(diff.addItems![0].motion!.settings).toEqual({ name: 'X' })
+		expect(notes.join(' ')).toMatch(/no setting "sparkle"/)
+	})
+
+	it('drops an unknown template rather than inventing one', () => {
+		const { diff, droppedOps } = opsToDiff({ addMotion: [{ template: 'confetti', atSec: 0 }] }, doc())
+		expect(diff.addItems).toBeUndefined()
+		expect(droppedOps).toEqual(['addMotion: unknown template "confetti"'])
+	})
+
+	it('reads a hold as a length, and an explicit duration over it', () => {
+		const held = opsToDiff({ addMotion: [{ template: 'lower-third', atSec: 0, moments: { in: 1, hold: 5 } }] }, doc())
+		const item = held.diff.addItems![0]
+		expect(item.duration).toBeCloseTo(6.4, 9) // in 1 + hold 5 + out 0.4
+		expect(item.motion!.moments).toEqual({ in: 1 })
+		const fixed = opsToDiff({ addMotion: [{ template: 'lower-third', atSec: 0, durationSec: 3, moments: { hold: 99 } }] }, doc())
+		expect(fixed.diff.addItems![0].duration).toBe(3)
+	})
+
+	it('never slides a clashing layer later — it stacks it on the next motion track', () => {
+		const { diff } = opsToDiff({ addMotion: [
+			{ template: 'lower-third', atSec: 3 },
+			{ template: 'callout-ring', atSec: 4 },
+			{ template: 'chapter-card', atSec: 8 }
+		] }, doc())
+		expect(diff.addTracks!.map((t) => t.name)).toEqual(['M1', 'M2'])
+		const [a, b, c] = diff.addItems!
+		expect(a.trackId).toBe(diff.addTracks![0].id)
+		expect(b.trackId).toBe(diff.addTracks![1].id)
+		expect(b.timelineStart).toBe(4)
+		expect(c.trackId).toBe(diff.addTracks![0].id) // free again by 8s
+	})
+
+	it('reuses an M1 that already exists', () => {
+		const withM1 = doc()
+		withM1.tracks.push({ id: 'm', kind: 'video', name: 'M1', order: 1, muted: false, locked: false, hidden: false, height: 64 })
+		const { diff } = opsToDiff({ addMotion: [{ template: 'title-card', atSec: 0 }] }, withM1)
+		expect(diff.addTracks).toBeUndefined()
+		expect(diff.addItems![0].trackId).toBe('m')
+	})
+
+	describe('updateMotion', () => {
+		const placed: TimelineItem = {
+			id: 'lt', trackId: 'm', sourceAssetId: '', timelineStart: 3, in: 0, out: 4,
+			speed: 1, preservePitch: true, duration: 4, label: 'Lower third',
+			motion: { template: 'lower-third', settings: { name: 'Sara' } }
+		}
+		const withLayer = () => {
+			const d = makeDoc([asset], [clip, placed])
+			d.tracks.push({ id: 'm', kind: 'video', name: 'M1', order: 1, muted: false, locked: false, hidden: false, height: 64 })
+			return d
+		}
+
+		it('merges settings into what is there', () => {
+			const { diff } = opsToDiff({ updateMotion: [{ id: 'lt', settings: [{ key: 'role', value: 'CTO' }] }] }, withLayer())
+			expect(diff.updateItems).toEqual([{ id: 'lt', motion: { template: 'lower-third', settings: { name: 'Sara', role: 'CTO' } } }])
+		})
+
+		it('retimes: the out window, a new start and a new length', () => {
+			const { diff } = opsToDiff({ updateMotion: [{ id: 'lt', moments: { out: 0.8 }, atSec: 3.1, durationSec: 4.4 }] }, withLayer())
+			expect(diff.updateItems![0]).toMatchObject({
+				id: 'lt', timelineStart: 3.1, in: 0, out: 4.4, duration: 4.4,
+				motion: { template: 'lower-third', settings: { name: 'Sara' }, moments: { out: 0.8 } }
+			})
+		})
+
+		it('refuses an item that is not a motion layer, or does not exist', () => {
+			const { diff, droppedOps } = opsToDiff({ updateMotion: [{ id: 'v', settings: { name: 'x' } }, { id: 'nope' }] }, withLayer())
+			expect(diff.updateItems).toBeUndefined()
+			expect(droppedOps).toEqual(['updateMotion: v is not a motion layer', 'updateMotion: unknown item nope'])
+		})
+
+		it('is offered to the model only when there is something to update', () => {
+			expect('updateMotion' in editorOpsSchema(false).properties).toBe(false)
+			expect('updateMotion' in editorOpsSchema(true).properties).toBe(true)
+			expect('addMotion' in editorOpsSchema(false).properties).toBe(true)
+		})
+	})
+})

@@ -592,6 +592,11 @@ export interface PromptTurn {
 	createdAt: number
 }
 
+/** A motion layer's settings as an agent may send them: a map, or key/value pairs. */
+export type MotionOpSettings =
+	| Record<string, number | string>
+	| Array<{ key: string; value: number | string }>
+
 /**
  * Constrained edit-operation schema the AI model returns (M3).
  * Deliberately NOT a raw TimelineDiff: item ids for adds are generated
@@ -638,6 +643,30 @@ export interface EditorOps {
 		kind?: 'solid' | 'gradient' | 'bars' | 'noise'
 		colour?: string
 		colour2?: string
+		atSec?: number
+		durationSec?: number
+	}>
+	/**
+	 * Motion layers: an HTML page from the template library placed on a motion
+	 * track (`M1`, made when there is none). `template` is an id from AVAILABLE
+	 * MOTION TEMPLATES. Settings may be a map or `{key, value}` pairs — the
+	 * pairs form exists because constrained decoding cannot express a free map.
+	 */
+	addMotion?: Array<{
+		template: string
+		atSec: number
+		/** Clip length. Defaults to the template's own; the hold absorbs the difference. */
+		durationSec?: number
+		settings?: MotionOpSettings
+		/** Window lengths in seconds by moment name; `hold` sets the length when no durationSec. */
+		moments?: Record<string, number>
+		label?: string
+	}>
+	/** Change a motion layer already on the timeline: its fields, its windows, its timing. */
+	updateMotion?: Array<{
+		id: string
+		settings?: MotionOpSettings
+		moments?: Record<string, number>
 		atSec?: number
 		durationSec?: number
 	}>

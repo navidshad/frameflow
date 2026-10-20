@@ -14,6 +14,11 @@ import { GENERATOR_DEFAULTS, GENERATORS } from '@shared/generators'
 import { hasTransform, OFFSET_RANGE, SCALE_RANGE } from '@shared/transform'
 import { defaultParams, effectDef } from '@shared/effects'
 import { findTitleTrack, nextTrackOrder, TITLE_TRACK_NAME } from '@shared/tracks'
+import {
+	isMotionTrack, motionTemplate, resolveDefinition, sanitiseSetting, MOTION_TRACK_NAME,
+	type MotionSpec
+} from '@shared/motion'
+import type { MotionOpSettings } from '@shared/types'
 import { isTransitionKind } from '@shared/transitionPresets'
 import {
 	DEFAULT_TRANSITION_SEC, MAX_TRANSITION_SEC, MIN_TRANSITION_SEC
@@ -41,6 +46,35 @@ const PROPERTY_ORDERING = [
 	'removeItemIds', 'closeGaps', 'updateItems',
 	'addSceneRanges', 'addClips', 'addMarkers'
 ]
+
+/**
+ * Settings travel as key/value PAIRS in the model's schema: constrained
+ * decoding cannot express "any key from this template", and a free-form object
+ * comes back empty. Values are strings so one type covers text, colours, enum
+ * options and numbers alike; `sanitiseSetting` types them on the way in.
+ */
+const MOTION_SETTINGS_SCHEMA = {
+	type: 'array',
+	description: 'Template settings to set, by key from AVAILABLE MOTION TEMPLATES. Anything left out keeps its value.',
+	items: {
+		type: 'object',
+		properties: {
+			key: { type: 'string' },
+			value: { type: 'string', description: 'Text, a #RRGGBB colour, an option, or a number written as text' }
+		},
+		required: ['key', 'value']
+	}
+}
+
+const MOTION_MOMENTS_SCHEMA = {
+	type: 'object',
+	description: 'Window lengths in seconds. `in` and `out` are the entrance and exit; `hold` is the time fully on screen.',
+	properties: {
+		in: { type: 'number' },
+		hold: { type: 'number' },
+		out: { type: 'number' }
+	}
+}
 
 export const EDITOR_OPS_SCHEMA = {
 	type: 'object',
@@ -206,6 +240,37 @@ export const EDITOR_OPS_SCHEMA = {
 					atSec: { type: 'number' },
 					durationSec: { type: 'number' }
 				}
+			}
+		},
+		addMotion: {
+			type: 'array',
+			description: 'Add a motion graphic — a lower third, a title card, a stat — from AVAILABLE MOTION TEMPLATES. It goes on a motion track above the footage.',
+			items: {
+				type: 'object',
+				properties: {
+					template: { type: 'string', description: 'A template id from AVAILABLE MOTION TEMPLATES' },
+					atSec: { type: 'number', description: 'Timeline seconds where it starts. Land it on the beat it belongs to — the word, not after it.' },
+					durationSec: { type: 'number', description: 'How long it stays. Omit for the template’s own length.' },
+					settings: MOTION_SETTINGS_SCHEMA,
+					moments: MOTION_MOMENTS_SCHEMA,
+					label: { type: 'string' }
+				},
+				required: ['template', 'atSec']
+			}
+		},
+		updateMotion: {
+			type: 'array',
+			description: 'Change a motion layer already on the timeline (an item listed with `motion`): its text and colours, its in/hold/out windows, or when it starts and how long it stays.',
+			items: {
+				type: 'object',
+				properties: {
+					id: { type: 'string' },
+					settings: MOTION_SETTINGS_SCHEMA,
+					moments: MOTION_MOMENTS_SCHEMA,
+					atSec: { type: 'number' },
+					durationSec: { type: 'number' }
+				},
+				required: ['id']
 			}
 		},
 		captions: {
@@ -487,7 +552,7 @@ const EXPAND_REGIONS_SCHEMA = {
 export function editorOpsSchema(hasTimelineItems: boolean, offerExpandRegions = false) {
 	let properties = EDITOR_OPS_SCHEMA.properties as any
 	if (!hasTimelineItems) {
-		const { removeItemIds, closeGaps, updateItems, ...buildOnly } = properties
+		const { removeItemIds, closeGaps, updateItems, updateMotion, ...buildOnly } = properties
 		properties = buildOnly
 	}
 	if (offerExpandRegions) {
@@ -705,6 +770,11 @@ export function composeSystemInstruction(
 		'  - `removeRanges` cuts spans of TIMELINE time out, splitting a clip where the span falls',
 		'    inside it. This is how you remove one sentence, a stumble or a repeated take without',
 		'    losing the whole piece around it. Use `removeItemIds` when a whole piece should go.',
+		'  - `addMotion` places a motion graphic from AVAILABLE MOTION TEMPLATES — a lower third',
+		'    when someone introduces themselves, a stat card when a number is said, a chapter card',
+		'    at a turn in the story. Time it to the words: start it on the beat, and set the `out`',
+		'    window to finish before the next shot. `updateMotion` retimes or rewrites one that is',
+		'    already placed. Prefer these over `addTitles` for anything designed.',
 		'  - `addTitles` puts text on the picture. `captions: true` burns the spoken transcript',
 		'    in, and only helps when the material has actually been transcribed.',
 		'    `loudness: true` normalises the mix to the level streaming platforms expect —',
@@ -1493,6 +1563,10 @@ export function opsToDiff(ops: EditorOps, doc: EditorDocument): OpsToDiffResult 
 		}
 	}
 
+	if (ops.addMotion?.length || ops.updateMotion?.length) {
+		applyMotionOps(ops, doc, diff, droppedOps, notes)
+	}
+
 	const docSettings: OpsToDiffResult['docSettings'] = {}
 	if (typeof ops.captions === 'boolean') docSettings.captionsEnabled = ops.captions
 	if (typeof ops.loudness === 'boolean') docSettings.loudnessEnabled = ops.loudness
@@ -1500,6 +1574,179 @@ export function opsToDiff(ops: EditorOps, doc: EditorDocument): OpsToDiffResult 
 	return { diff, addMarkers, docSettings, droppedOps, notes }
 }
 
+
+// ===== Motion layers =====
+
+const MIN_MOTION_SEC = 0.2
+const MAX_MOTION_SEC = 600
+const MAX_MOMENT_SEC = 60
+
+const finiteNumber = (n: unknown): n is number => typeof n === 'number' && Number.isFinite(n)
+
+/** An op's settings, reduced to the template's own keys and typed for them. */
+function motionSettingsFrom(
+	raw: MotionOpSettings | undefined,
+	spec: MotionSpec
+): { values: Record<string, number | string>; unknown: string[] } {
+	const def = resolveDefinition(spec)
+	const pairs: [unknown, unknown][] = Array.isArray(raw)
+		? raw.map((p) => [p?.key, p?.value])
+		: Object.entries(raw ?? {})
+	const values: Record<string, number | string> = {}
+	const unknown: string[] = []
+	for (const [key, value] of pairs) {
+		const setting = def.settings.find((s) => s.key === key)
+		if (!setting) { unknown.push(String(key)); continue }
+		values[setting.key] = sanitiseSetting(setting, value)
+	}
+	return { values, unknown }
+}
+
+/**
+ * New window lengths and the clip length they imply.
+ *
+ * Fixed windows (in, out) are stored; the flexible one (hold) never is — it is
+ * whatever the clip's length leaves. So a `hold` in an op is really a request
+ * for a LENGTH: in + hold + out. An explicit `durationSec` wins over it.
+ */
+function motionTiming(
+	spec: MotionSpec,
+	moments: Record<string, number> | undefined,
+	durationSec: number | undefined,
+	currentDuration: number
+): { moments: Record<string, number>; duration: number } {
+	const def = resolveDefinition(spec)
+	const fixed: Record<string, number> = { ...(spec.moments ?? {}) }
+	let flexAsked: number | undefined
+	for (const m of def.moments) {
+		const asked = moments?.[m.name]
+		if (!finiteNumber(asked) || asked < 0) continue
+		if (m.flex) flexAsked = Math.min(asked, MAX_MOTION_SEC)
+		else fixed[m.name] = Math.min(asked, MAX_MOMENT_SEC)
+	}
+	let duration = currentDuration
+	if (finiteNumber(durationSec)) {
+		duration = durationSec
+	} else if (flexAsked !== undefined) {
+		duration = flexAsked + def.moments
+			.filter((m) => !m.flex)
+			.reduce((sum, m) => sum + (fixed[m.name] ?? m.duration), 0)
+	}
+	return {
+		moments: fixed,
+		duration: Math.max(MIN_MOTION_SEC, Math.min(MAX_MOTION_SEC, duration))
+	}
+}
+
+/** The spec with empty maps dropped, so an untouched setting compares equal. */
+function tidyMotion(spec: MotionSpec): MotionSpec {
+	const out: MotionSpec = { ...spec }
+	if (!out.settings || !Object.keys(out.settings).length) delete out.settings
+	if (!out.moments || !Object.keys(out.moments).length) delete out.moments
+	return out
+}
+
+/**
+ * `addMotion` / `updateMotion` → the diff.
+ *
+ * A motion layer lands on a motion track (`M1`, made on top of the video
+ * family when absent). Timing is the whole point of a lower third, so a clash
+ * on M1 is never resolved by sliding the new layer later: it goes on the next
+ * motion track that is free at that moment, made when none is.
+ */
+function applyMotionOps(
+	ops: EditorOps,
+	doc: EditorDocument,
+	diff: TimelineDiff,
+	droppedOps: string[],
+	notes: string[]
+): void {
+	const removed = new Set(diff.removeItemIds ?? [])
+	const tracks = [...doc.tracks, ...(diff.addTracks ?? [])]
+	const placed: TimelineItem[] = [
+		...doc.timeline.filter((i) => !removed.has(i.id)),
+		...(diff.addItems ?? [])
+	]
+
+	const freeMotionTrack = (start: number, duration: number) => {
+		const end = start + duration
+		for (const track of tracks.filter(isMotionTrack).sort((a, b) => a.name.localeCompare(b.name, undefined, { numeric: true }))) {
+			if (track.locked || track.hidden) continue
+			const clash = placed.some((i) =>
+				i.trackId === track.id && i.timelineStart < end - 1e-6 && itemEnd(i) > start + 1e-6)
+			if (!clash) return track
+		}
+		const taken = new Set(tracks.map((t) => t.name))
+		let n = 1
+		while (taken.has(`M${n}`)) n++
+		const track = {
+			id: uuidv4(), kind: 'video' as const,
+			name: n === 1 ? MOTION_TRACK_NAME : `M${n}`,
+			// On top of the video family: a graphic is in front of the picture.
+			order: nextTrackOrder(tracks, 'video'),
+			muted: false, locked: false, hidden: false, height: 64
+		}
+		tracks.push(track)
+		;(diff.addTracks ||= []).push(track)
+		return track
+	}
+
+	for (const request of ops.addMotion ?? []) {
+		const template = motionTemplate(request?.template)
+		if (!template) {
+			droppedOps.push(`addMotion: unknown template "${request?.template}"`)
+			continue
+		}
+		const base: MotionSpec = { template: template.id }
+		const { values, unknown } = motionSettingsFrom(request.settings, base)
+		if (unknown.length) notes.push(`${template.label} has no setting ${unknown.map((k) => `"${k}"`).join(', ')} — ignored.`)
+		const timing = motionTiming(base, request.moments, request.durationSec, template.definition.duration)
+		const spec = tidyMotion({ ...base, settings: values, moments: timing.moments })
+		const start = Math.max(0, finiteNumber(request.atSec) ? request.atSec : 0)
+		const track = freeMotionTrack(start, timing.duration)
+		const item: TimelineItem = {
+			id: uuidv4(), trackId: track.id, sourceAssetId: '',
+			timelineStart: start, in: 0, out: timing.duration,
+			speed: 1, preservePitch: true, duration: timing.duration,
+			label: request.label?.trim() || template.label,
+			layerRole: 'overlay',
+			motion: spec
+		}
+		placed.push(item)
+		;(diff.addItems ||= []).push(item)
+	}
+
+	for (const request of ops.updateMotion ?? []) {
+		const item = doc.timeline.find((i) => i.id === request?.id)
+		if (!item || removed.has(item.id)) {
+			droppedOps.push(`updateMotion: unknown item ${request?.id}`)
+			continue
+		}
+		if (!item.motion) {
+			droppedOps.push(`updateMotion: ${item.id} is not a motion layer`)
+			continue
+		}
+		const { values, unknown } = motionSettingsFrom(request.settings, item.motion)
+		if (unknown.length) {
+			notes.push(`"${item.label || item.id}" has no setting ${unknown.map((k) => `"${k}"`).join(', ')} — ignored.`)
+		}
+		const timing = motionTiming(item.motion, request.moments, request.durationSec, item.duration)
+		const spec = tidyMotion({
+			...item.motion,
+			settings: { ...(item.motion.settings ?? {}), ...values },
+			moments: timing.moments
+		})
+		const fields: Partial<TimelineItem> = { motion: spec }
+		if (Math.abs(timing.duration - item.duration) > 1e-6 || item.in !== 0) {
+			Object.assign(fields, { in: 0, out: timing.duration, duration: timing.duration })
+		}
+		if (finiteNumber(request.atSec)) fields.timelineStart = Math.max(0, request.atSec)
+		const updates = (diff.updateItems ||= [])
+		const existing = updates.find((u) => u.id === item.id)
+		if (existing) Object.assign(existing, fields)
+		else updates.push({ id: item.id, ...fields })
+	}
+}
 
 // ===== Post-hoc length check =====
 
