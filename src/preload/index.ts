@@ -161,7 +161,7 @@ const api = {
 	setAgentPermission: (key: 'edit' | 'html' | 'export', value: boolean) =>
 		ipcRenderer.invoke('set-agent-permission', { key, value }),
 	copyAgentToken: () => ipcRenderer.invoke('copy-agent-token'),
-	copyAgentSnippet: (kind: 'claude' | 'codex' | 'gemini') => ipcRenderer.invoke('copy-agent-snippet', kind),
+	copyAgentSnippet: (kind: 'claude' | 'codex') => ipcRenderer.invoke('copy-agent-snippet', kind),
 	newAgentToken: () => ipcRenderer.invoke('new-agent-token'),
 	disconnectAgentSession: (sessionId: string) => ipcRenderer.invoke('disconnect-agent-session', sessionId),
 	onAgentAccessState: (callback: (state: any) => void) => {
