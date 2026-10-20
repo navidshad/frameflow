@@ -19,6 +19,7 @@ import '@vue-flow/controls/dist/style.css'
 import LibVueComponents from 'pilotui'
 import 'pilotui/style.css'
 import { createPinia } from 'pinia'
+import { useAgentStore } from './stores/agentStore'
 
 const app = createApp(App)
 const pinia = createPinia()
@@ -28,4 +29,7 @@ app.use(router)
 app.use(LibVueComponents, {
 	dontInstallPinia: false
 })
+// Answers MCP agents' requests from anywhere in the app, not only the editor.
+useAgentStore(pinia)
+
 app.mount('#app')

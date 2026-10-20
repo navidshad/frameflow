@@ -35,6 +35,7 @@ import { THREAD_DIRS } from './constants/paths'
 import { GEMINI_MODEL_2_5_FLASH, MODEL_METADATA } from './constants/gemini'
 import { electronApp, optimizer, is } from '@electron-toolkit/utils'
 import { registerMediaProtocol } from './media-protocol'
+import { initAgentAccess } from './mcp'
 
 const activePipelines = new Map<string, Pipeline>()
 
@@ -115,6 +116,9 @@ app.whenReady().then(() => {
 
 	// Register custom protocol for local media
 	registerMediaProtocol()
+
+	// MCP agent access: off unless the user turned it on in Settings.
+	initAgentAccess()
 
 	createWindow()
 

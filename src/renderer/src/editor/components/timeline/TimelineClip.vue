@@ -6,7 +6,8 @@
 				: 'border-zinc-300/60 dark:border-zinc-700/80 hover:border-primary/40',
 			track?.locked ? 'pointer-events-none opacity-60' : 'cursor-grab active:cursor-grabbing',
 			effectHover ? 'ring-2 ring-accent border-accent' : '',
-			dragging ? 'opacity-80 shadow-lg shadow-black/30 z-30' : ''
+			dragging ? 'opacity-80 shadow-lg shadow-black/30 z-30' : '',
+			agentBadge ? 'outline outline-1 outline-dashed outline-offset-1 outline-[rgba(167,139,250,0.9)]' : ''
 		]"
 		:style="{ transform: `translateX(${viewport.secToPx(item.timelineStart)}px)`, width: `${Math.max(viewport.secToPx(item.duration), 6)}px` }"
 		role="option" :aria-selected="selected" tabindex="0"
@@ -55,6 +56,11 @@
 				class="absolute top-0.5 right-0.5 px-1 py-px rounded bg-secondary text-white text-[8px] font-bold font-mono pointer-events-none">
 				{{ item.speed.toFixed(2).replace(/\.?0+$/, '') }}×
 			</span>
+			<!-- Changed by an MCP agent's latest edit (board 3) -->
+			<span v-if="agentBadge"
+				class="absolute top-0.5 px-1.5 py-0.5 rounded bg-secondary text-white text-[8px] font-bold font-mono pointer-events-none"
+				:class="item.speed !== 1 ? 'right-9' : 'right-0.5'"
+				:title="`Changed by the agent in V${store.agentMarksSeq}`">{{ agentBadge }}</span>
 			<!-- Item muted badge -->
 			<span v-if="item.muted"
 				class="absolute top-0.5 left-0.5 w-3.5 h-3.5 rounded bg-black/50 flex items-center justify-center pointer-events-none">
@@ -117,6 +123,7 @@ const dragging = computed(() =>
 const hovering = ref(false)
 
 const selected = computed(() => store.selectedItemIds.includes(props.item.id))
+const agentBadge = computed(() => store.agentMarks[props.item.id] || null)
 const end = computed(() => itemEnd(props.item))
 const track = computed(() => store.doc?.tracks.find((t) => t.id === props.item.trackId))
 const isAudio = computed(() =>

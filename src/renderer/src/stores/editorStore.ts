@@ -25,6 +25,7 @@ import {
 import { sequenceFrame as resolveSequenceFrame } from '@shared/framing'
 import { childrenByParent, collectSubtree, hasBranch } from '@shared/revision-tree'
 import { DEFAULT_PERSONA_ID } from '@shared/personas'
+import { agentChangeBadges, type AgentApplyOutcome } from '@shared/agentFeed'
 import { toMediaUrl } from '@shared/media-url'
 import {
 	canHostItem, findTitleTrack, isCompositedItem, nextTrackName, nextTrackOrder,
@@ -130,6 +131,19 @@ export const useEditorStore = defineStore('editor', () => {
 		truncated: boolean
 	}
 	const lastResult = ref<AiResult | null>(null)
+
+	// ===== External agents (MCP) =====
+	/**
+	 * Items the agent's latest edit touched, with their badge ("AI", "−2.4s"),
+	 * and the revision it made: the timeline's dashed violet outlines and the
+	 * "changed by the agent in V8" legend. Cleared on any revision switch.
+	 */
+	const agentMarks = ref<Record<string, string>>({})
+	const agentMarksSeq = ref<number | null>(null)
+	const clearAgentMarks = () => {
+		agentMarks.value = {}
+		agentMarksSeq.value = null
+	}
 
 	// ===== Export / render (M4 + background exports) =====
 	// Renders are keyed by THREAD id and survive project switches: the render
@@ -947,6 +961,7 @@ export const useEditorStore = defineStore('editor', () => {
 			selectedItemIds.value = doc.value?.selection?.itemIds || []
 			playheadSec.value = 0
 			isPlaying.value = false
+			clearAgentMarks()
 
 			// A prompt queued by Home lands in the bar but is NOT run: preprocessing
 			// has not finished, so the AI would see an empty clip tray.
@@ -2674,6 +2689,7 @@ export const useEditorStore = defineStore('editor', () => {
 		refreshMetaDuration()
 		seekTo(Math.min(playheadSec.value, contentEnd.value))
 		lastResult.value = null
+		clearAgentMarks()
 		markDirty()
 		return true
 	}
@@ -2867,8 +2883,15 @@ export const useEditorStore = defineStore('editor', () => {
 		docSettings?: { captionsEnabled?: boolean; loudnessEnabled?: boolean }
 		thinContext?: boolean
 		truncated?: boolean
-	}) => {
-		if (payload.threadId !== threadId.value || !doc.value) return
+	}): Promise<AgentApplyOutcome | undefined> => {
+		// An external agent's turn (MCP) answers the agent instead of the chat:
+		// its failures go back as the tool's error, not into promptError.
+		const isAgent = !!payload.turn.agent
+		if (payload.threadId !== threadId.value || !doc.value) {
+			return isAgent
+				? { ok: false, error: 'The project the edit was built against is no longer open in the editor. Read it again.' }
+				: undefined
+		}
 		const turn = payload.turn
 
 		// Upsert into doc.turns (main-owned; echo also arrives via thread-updated)
@@ -2879,7 +2902,8 @@ export const useEditorStore = defineStore('editor', () => {
 		if (turn.id !== activeTurnId.value && turn.status === 'running') return
 
 		if (turn.status === 'completed') {
-			activeTurnId.value = null
+			// An agent's turn must not end the user's own prompt still in flight.
+			if (!isAgent || turn.id === activeTurnId.value) activeTurnId.value = null
 			if (turn.answer && !hasOps(turn.diff)) {
 				lastAnswer.value = { turnId: turn.id, text: turn.answer }
 				return
@@ -2887,6 +2911,8 @@ export const useEditorStore = defineStore('editor', () => {
 			const markers = payload.addMarkers || []
 			const settings = payload.docSettings
 			if (!hasOps(turn.diff) && !markers.length && !settings) {
+				const dropped = turn.droppedOps?.length ? ` Dropped: ${turn.droppedOps.join('; ')}` : ''
+				if (isAgent) return { ok: false, error: `Those operations change nothing on the timeline.${dropped}` }
 				promptError.value = 'The AI proposed no changes. Try a more specific request.'
 				return
 			}
@@ -2896,6 +2922,9 @@ export const useEditorStore = defineStore('editor', () => {
 			const before = currentState()
 			const diffed = diffTimelines(before, applied)
 			if (!diffed && !markers.length && !settings) {
+				if (isAgent) {
+					return { ok: false, error: `Nothing applicable against the live timeline.${pruned.length ? ` Rejected: ${pruned.join('; ')}` : ''}` }
+				}
 				promptError.value = 'Nothing applicable — the timeline changed while the AI was working.'
 				return
 			}
@@ -2909,11 +2938,13 @@ export const useEditorStore = defineStore('editor', () => {
 			}
 
 			const persona = findPersona(turn.personaId)
+			// An agent's turn is labelled with the agent: "Claude Code", not a persona.
+			const label = turn.agent?.name || persona?.name || 'AI edit'
 			if (diffed) {
 				doc.value.tracks = applied.tracks
 				doc.value.timeline = applied.timeline
 				// Ring step preserved: Cmd+Z undoes the AI diff in place
-				commitStep({ prebuilt: diffed, origin: 'ai', turnId: turn.id, label: persona?.name || 'AI edit' })
+				commitStep({ prebuilt: diffed, origin: 'ai', turnId: turn.id, label })
 			}
 			for (const m of markers) addMarker(m.time, m.label)
 			// Project settings sit outside TimelineState, so they are applied
@@ -2925,8 +2956,19 @@ export const useEditorStore = defineStore('editor', () => {
 				origin: 'ai',
 				turnId: turn.id,
 				personaId: turn.personaId,
-				label: persona?.name || 'AI edit'
+				label
 			})
+			if (!rev) return isAgent ? { ok: false, error: 'The edit applied but its revision could not be saved.' } : undefined
+			const counts = {
+				added: diffed?.forward.addItems?.length || 0,
+				removed: diffed?.forward.removeItemIds?.length || 0,
+				updated: diffed?.forward.updateItems?.length || 0,
+				markers: markers.length
+			}
+			if (isAgent) {
+				agentMarks.value = diffed ? agentChangeBadges(diffed.forward, before.timeline) : {}
+				agentMarksSeq.value = rev.seq
+			}
 			if (rev && threadId.value) {
 				api.updateEditorTurn({
 					threadId: threadId.value,
@@ -2939,18 +2981,17 @@ export const useEditorStore = defineStore('editor', () => {
 					revisionId: rev.id,
 					revisionSeq: rev.seq,
 					parentRevisionId: rev.parentId,
-					counts: {
-						added: diffed?.forward.addItems?.length || 0,
-						removed: diffed?.forward.removeItemIds?.length || 0,
-						updated: diffed?.forward.updateItems?.length || 0,
-						markers: markers.length
-					},
+					counts,
 					rationale: turn.rationale,
 					droppedOps: [...(turn.droppedOps || []), ...pruned],
 					scopeLabel: turn.scopeLabel,
 					thinContext: !!payload.thinContext,
 					truncated: !!payload.truncated
 				}
+			}
+			return {
+				ok: true, revisionId: rev.id, revisionSeq: rev.seq, parentRevisionId: rev.parentId,
+				counts, pruned
 			}
 		} else if (turn.status === 'error') {
 			activeTurnId.value = null
@@ -3067,9 +3108,16 @@ export const useEditorStore = defineStore('editor', () => {
 
 		if (api.onEditorTurnUpdate) {
 			api.onEditorTurnUpdate((data: any) => {
-				onTurnUpdate(data).catch((error: unknown) => {
-					console.error('[editorStore] turn update failed:', error)
-				})
+				// `replyId` = an MCP agent is waiting on this turn (main/mcp/rendererBridge).
+				const reply = (response: { ok: boolean; result?: unknown; error?: string }) => {
+					if (data?.replyId) api.mcpRespond({ id: data.replyId, ...response })
+				}
+				onTurnUpdate(data)
+					.then((outcome) => reply({ ok: true, result: outcome ?? { ok: false, error: 'The editor did not apply the edit.' } }))
+					.catch((error: any) => {
+						console.error('[editorStore] turn update failed:', error)
+						reply({ ok: false, error: error?.message || 'The editor failed to apply the edit.' })
+					})
 			})
 		}
 
@@ -3300,6 +3348,9 @@ export const useEditorStore = defineStore('editor', () => {
 		revisionChildren,
 		revisionHasBranch,
 		lastResult,
+		agentMarks,
+		agentMarksSeq,
+		clearAgentMarks,
 		ensureRootRevision,
 		createRevision,
 		switchRevision,

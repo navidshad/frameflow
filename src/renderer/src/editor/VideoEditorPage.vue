@@ -9,7 +9,11 @@
 		</div>
 
 		<GraphHeader :title="editorStore.thread?.title || 'Untitled Project'" :total-cost="totalCost" editable
-			@back="router.push('/home')" @rename="editorStore.renameProject($event)" />
+			@back="router.push('/home')" @rename="editorStore.renameProject($event)">
+			<template v-if="agentStore.editingSession" #center>
+				<AgentBanner />
+			</template>
+		</GraphHeader>
 
 		<!-- Export lives in the app's fixed top-right cluster so it composes
 		     with the settings/theme buttons instead of colliding with them -->
@@ -123,10 +127,13 @@ import ChatColumn from './components/ChatColumn.vue'
 import InspectorColumn from './components/InspectorColumn.vue'
 import ExportDialog from './components/ExportDialog.vue'
 import ResizeHandle from './components/ResizeHandle.vue'
+import AgentBanner from './components/AgentBanner.vue'
+import { useAgentStore } from '../stores/agentStore'
 
 const route = useRoute()
 const router = useRouter()
 const editorStore = useEditorStore()
+const agentStore = useAgentStore()
 
 const notFound = ref(false)
 const showExport = ref(false)
@@ -198,7 +205,7 @@ CollapsedRail.emits = ['open']
 
 // ===== Right rail =====
 // Row 1 toggles Chat | Revisions; Row 2 is the Inspector.
-const chatTab = ref<'chat' | 'revisions'>('chat')
+const chatTab = ref<'chat' | 'revisions' | 'agent'>('chat')
 const revisionsBadge = ref(false)
 const chatBadge = ref(false)
 

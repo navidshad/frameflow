@@ -154,7 +154,34 @@ const api = {
 		ipcRenderer.invoke('upscale-image', data),
 	improviseMessage: (threadId: string, messageId: string) =>
 		ipcRenderer.invoke('improvise-message', { threadId, messageId }),
-	getModelMetadata: () => ipcRenderer.invoke('get-model-metadata')
+	getModelMetadata: () => ipcRenderer.invoke('get-model-metadata'),
+	// Agent access (MCP). The token itself never reaches the renderer.
+	getAgentAccess: () => ipcRenderer.invoke('get-agent-access'),
+	setAgentAccessEnabled: (enabled: boolean) => ipcRenderer.invoke('set-agent-access-enabled', enabled),
+	setAgentPermission: (key: 'edit' | 'html' | 'export', value: boolean) =>
+		ipcRenderer.invoke('set-agent-permission', { key, value }),
+	copyAgentToken: () => ipcRenderer.invoke('copy-agent-token'),
+	copyAgentSnippet: (kind: 'claude' | 'codex' | 'gemini') => ipcRenderer.invoke('copy-agent-snippet', kind),
+	newAgentToken: () => ipcRenderer.invoke('new-agent-token'),
+	disconnectAgentSession: (sessionId: string) => ipcRenderer.invoke('disconnect-agent-session', sessionId),
+	onAgentAccessState: (callback: (state: any) => void) => {
+		const listener = (_event: any, state: any) => callback(state)
+		ipcRenderer.on('agent-access-state', listener)
+		return () => ipcRenderer.removeListener('agent-access-state', listener)
+	},
+	onAgentActivity: (callback: (activity: any) => void) => {
+		const listener = (_event: any, activity: any) => callback(activity)
+		ipcRenderer.on('agent-activity', listener)
+		return () => ipcRenderer.removeListener('agent-activity', listener)
+	},
+	// The live-document bridge: main asks, the editor store answers.
+	onMcpRequest: (callback: (request: { id: string; kind: string; payload: any }) => void) => {
+		const listener = (_event: any, request: any) => callback(request)
+		ipcRenderer.on('mcp-request', listener)
+		return () => ipcRenderer.removeListener('mcp-request', listener)
+	},
+	mcpRespond: (response: { id: string; ok: boolean; result?: unknown; error?: string }) =>
+		ipcRenderer.send('mcp-response', response)
 }
 
 if (process.contextIsolated) {
