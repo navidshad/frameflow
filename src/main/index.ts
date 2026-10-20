@@ -22,6 +22,8 @@ import { dependencyManager } from './dependencies/manager'
 import { checkYtDlpFreshness } from './dependencies/ytdlp-updater'
 import * as editorAssets from './editor/assets'
 import { getAudioAnalysis } from './editor/audioAnalysis'
+import { ensureSoundAsset, previewSound } from './editor/synth'
+import { isSoundKind } from '../shared/synth'
 import * as editorPreprocess from './editor/preprocess'
 import * as editorHistory from './editor/history'
 import * as editorPrompt from './editor/prompt'
@@ -618,6 +620,18 @@ app.whenReady().then(() => {
 		if (!thread || !asset) throw new Error('Asset not found')
 		const source = fs.existsSync(asset.originalPath) ? asset.originalPath : (asset.proxyPath || asset.originalPath)
 		return await getAudioAnalysis(editorAssets.getAssetDir(thread, assetId), source, { hasAudio: asset.metadata?.hasAudio })
+	})
+
+	// Synthesised sound: a recipe rendered to a file by ffmpeg, no network. Preview
+	// renders (and caches) a recipe so the palette can audition it; the asset call
+	// makes it part of the project. Both are keyed by the recipe, so a repeat is free.
+	ipcMain.handle('editor-sound-preview', async (_event, { threadId, recipe }: { threadId: string, recipe: { kind: string } }) => {
+		if (!isSoundKind(recipe?.kind)) throw new Error(`Unknown sound: ${String(recipe?.kind)}`)
+		return await previewSound(threadId, recipe as never)
+	})
+	ipcMain.handle('editor-sound-asset', async (_event, { threadId, recipe }: { threadId: string, recipe: { kind: string } }) => {
+		if (!isSoundKind(recipe?.kind)) throw new Error(`Unknown sound: ${String(recipe?.kind)}`)
+		return await ensureSoundAsset(threadId, recipe as never)
 	})
 
 	// AI prompt turns (M3): one structured call per turn, streamed via

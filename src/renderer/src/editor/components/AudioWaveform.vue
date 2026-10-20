@@ -32,6 +32,8 @@ const props = defineProps<{
 	height: number
 	/** The clip's own gain scales the bars, so a boosted clip looks it. */
 	gain?: number
+	/** Scale a quiet sound up so its shape is readable (for the inspector's strip, not the lane). */
+	autoScale?: boolean
 	muted?: boolean
 	/** Fade lengths in px, to draw the envelope. */
 	fadeInPx?: number
@@ -51,7 +53,9 @@ const d = computed(() => {
 	if (!a?.hasAudio || props.width < 3) return ''
 	const bars = Math.min(MAX_BARS, Math.max(1, Math.floor(props.width / 3)))
 	const peaks = peaksForRange(a, props.inSec, props.outSec, bars)
-	return waveformPath(peaks, props.height, props.width / bars, props.gain ?? 1)
+	const loudest = Math.max(1, ...peaks)
+	const lift = props.autoScale ? Math.min(8, Math.max(1, 70 / loudest)) : 1
+	return waveformPath(peaks, props.height, props.width / bars, (props.gain ?? 1) * lift)
 })
 
 const envelope = computed(() => {

@@ -63,6 +63,7 @@
 				<LibraryPanel v-if="tab === 'transitions'" class="flex-1 min-h-0 min-w-0" />
 				<EffectsPanel v-if="tab === 'effects'" class="flex-1 min-h-0 min-w-0" />
 				<TranscriptPanel v-if="tab === 'words'" class="flex-1 min-h-0 min-w-0" />
+				<SoundPanel v-if="tab === 'sound'" class="flex-1 min-h-0 min-w-0" />
 			</div>
 			<InspectorPanel v-if="mode === 'inspect'" class="flex-1 min-h-0 min-w-0" />
 		</section>
@@ -79,6 +80,7 @@ import LibraryPanel from './LibraryPanel.vue'
 import MotionPanel from './MotionPanel.vue'
 import EffectsPanel from './EffectsPanel.vue'
 import TranscriptPanel from './TranscriptPanel.vue'
+import SoundPanel from './SoundPanel.vue'
 import InspectorPanel from './InspectorPanel.vue'
 import SlimTooltip from '../../components/SlimTooltip.vue'
 
@@ -89,7 +91,7 @@ import SlimTooltip from '../../components/SlimTooltip.vue'
  *
  * Collapse and resize stay with VideoEditorPage; this only routes the events.
  */
-export type LeftTab = 'media' | 'motion' | 'transitions' | 'effects' | 'words'
+export type LeftTab = 'media' | 'motion' | 'transitions' | 'effects' | 'words' | 'sound'
 export type LeftMode = 'library' | 'inspect'
 
 const TABS: { value: LeftTab; label: string; icon: string }[] = [
@@ -97,7 +99,8 @@ const TABS: { value: LeftTab; label: string; icon: string }[] = [
 	{ value: 'motion', label: 'Motion', icon: 'tabler--sparkles' },
 	{ value: 'transitions', label: 'Transitions', icon: 'tabler--transition-right' },
 	{ value: 'effects', label: 'Effects', icon: 'tabler--wand' },
-	{ value: 'words', label: 'Words', icon: 'tabler--text-caption' }
+	{ value: 'words', label: 'Words', icon: 'tabler--text-caption' },
+	{ value: 'sound', label: 'Sound', icon: 'tabler--wave-square' }
 ]
 
 const props = defineProps<{

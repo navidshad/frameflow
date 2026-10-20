@@ -1,4 +1,5 @@
 import type { TrackRole } from './audio'
+import type { SoundRecipe } from './synth'
 
 export enum MessageRole {
 	User = 'user',
@@ -259,6 +260,11 @@ export interface MediaAsset {
 	preprocessTasks?: Record<string, BackgroundTask>
 	preprocessState?: MediaPreprocessState
 	preprocessError?: string
+	/**
+	 * Set when this sound was synthesised rather than imported: the recipe that
+	 * makes it. The file is a cache of the recipe, so it can be re-rolled.
+	 */
+	synth?: Required<SoundRecipe>
 	clips: Clip[]               // derived from scene detection
 	filmstrip?: FilmstripEntry[]
 	transcriptHealth?: TranscriptHealth  // set by the transcript step
@@ -392,6 +398,22 @@ export interface TimelineItem {  // an instance of a clip placed on a track
 	 * architecture, and what tells the AI which of two stacked clips is which.
 	 */
 	layerRole?: 'subject' | 'background' | 'overlay'
+	/** On a sound clip: the moment it follows. See SoundBinding. */
+	bind?: SoundBinding
+}
+
+/**
+ * A sound that follows a moment on another clip: its entrance, its exit, a cut.
+ * Move or retime that clip and the sound goes with it; drag the sound by hand
+ * and it stops following (the binding is dropped).
+ */
+export interface SoundBinding {
+	/** The clip whose moment this sound is for. */
+	itemId: string
+	/** Which moment: the clip's start (a cut, an entrance), a motion layer's exit, or its end. */
+	at: 'start' | 'out' | 'end'
+	/** How early the sound starts so its hit lands on the moment, in seconds. */
+	leadSec?: number
 }
 
 export interface TimelineItemTransform { x?: number; y?: number; scale?: number; rotation?: number }

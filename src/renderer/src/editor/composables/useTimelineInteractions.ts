@@ -424,6 +424,13 @@ export function useTimelineInteractions(viewport: TimelineViewport) {
 		}
 		if (mode.value === 'movingItem' || mode.value === 'trimmingEdge') {
 			if (gestureBefore) {
+				// A sound that follows a moment, dragged somewhere by hand, is placed
+				// on purpose: it stops following rather than snapping back on commit.
+				const dragged = item()
+				const was = dragged && gestureBefore.timeline.find((i) => i.id === dragged.id)
+				if (dragged?.bind && was && Math.abs(was.timelineStart - dragged.timelineStart) > 1e-6) {
+					store.releaseSoundBinding(dragged.id)
+				}
 				const label = mode.value === 'movingItem' ? 'Move' : (trimRipple ? 'Ripple trim' : 'Trim')
 				store.commitStep({ before: gestureBefore, label })
 			}

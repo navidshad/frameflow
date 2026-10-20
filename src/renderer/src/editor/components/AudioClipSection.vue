@@ -3,7 +3,7 @@
 		<!-- The part of the source this clip plays, with its fades as the envelope -->
 		<div ref="boxRef" class="h-14 hair-t hair-b overflow-hidden bg-accent/[0.05]">
 			<AudioWaveform v-if="width > 0" :asset-id="item.sourceAssetId" :in-sec="item.in" :out-sec="item.out"
-				:width="width" :height="56" :gain="item.gain ?? 1" :muted="item.muted"
+				:width="width" :height="56" :gain="item.gain ?? 1" :muted="item.muted" auto-scale
 				:fade-in-px="fadePx(item.fadeInSec)" :fade-out-px="fadePx(item.fadeOutSec)" />
 		</div>
 		<div v-if="item.fadeInSec || item.fadeOutSec" class="flex justify-between text-[10px] text-zinc-500 -mt-1.5 tabular-nums">
@@ -37,6 +37,11 @@
 			</span>
 		</div>
 		<p v-if="roleHint" class="text-[10px] leading-snug text-zinc-500">{{ roleHint }}</p>
+
+		<!-- A synthesised sound is a recipe: its numbers, and the moment it follows -->
+		<div v-if="recipe" class="hair-t pt-3">
+			<SoundRecipeSection :item="item" :recipe="recipe" />
+		</div>
 	</div>
 </template>
 
@@ -46,6 +51,7 @@ import type { TimelineItem } from '@shared/types'
 import { formatLufs, gainToDb, roleSpec, TRACK_ROLES } from '@shared/audio'
 import { useEditorStore } from '../../stores/editorStore'
 import AudioWaveform from './AudioWaveform.vue'
+import SoundRecipeSection from './SoundRecipeSection.vue'
 
 /**
  * What the Inspect tab shows for a clip on an audio track, above the shared
@@ -57,6 +63,7 @@ const store = useEditorStore()
 
 const track = computed(() => store.doc?.tracks.find((t) => t.id === props.item.trackId))
 const analysis = computed(() => store.audioAnalysis[props.item.sourceAssetId])
+const recipe = computed(() => store.soundRecipeOf(props.item.id))
 
 onMounted(() => store.ensureAudioAnalysis(props.item.sourceAssetId))
 

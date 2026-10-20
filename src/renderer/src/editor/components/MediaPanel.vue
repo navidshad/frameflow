@@ -65,9 +65,17 @@
 					</p>
 				</div>
 
-				<AssetRow v-for="asset in editorStore.assets" :key="asset.id" :asset="asset"
+				<AssetRow v-for="asset in importedAssets" :key="asset.id" :asset="asset"
 					:active="asset.id === editorStore.selectedAssetId"
 					@select="editorStore.selectAsset(asset.id)" />
+
+				<!-- Sounds the app made itself (the synth): kept apart from your footage -->
+				<template v-if="generatedAssets.length">
+					<div class="lbl px-1 pt-3 pb-1">Generated</div>
+					<AssetRow v-for="asset in generatedAssets" :key="asset.id" :asset="asset"
+						:active="asset.id === editorStore.selectedAssetId"
+						@select="editorStore.selectAsset(asset.id)" />
+				</template>
 			</template>
 		</div>
 
@@ -91,6 +99,14 @@ defineEmits<{ (e: 'update:collapsed', value: boolean): void }>()
 
 const editorStore = useEditorStore()
 const showImportModal = ref(false)
+
+/** Footage and audio you brought; and what the synth made. */
+const importedAssets = computed(() => editorStore.assets.filter((a) => !a.synth))
+/** Only sounds something still uses: a re-rolled sound's old take stays for undo, out of sight. */
+const generatedAssets = computed(() => {
+	const used = new Set((editorStore.doc?.timeline ?? []).map((i) => i.sourceAssetId))
+	return editorStore.assets.filter((a) => !!a.synth && used.has(a.id))
+})
 
 const hasActiveImports = computed(() => Object.keys(editorStore.urlImports).length > 0)
 

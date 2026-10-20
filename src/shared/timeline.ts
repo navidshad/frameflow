@@ -258,6 +258,13 @@ const sameEffects = (a: TimelineItem['effects'], b: TimelineItem['effects']): bo
  * fields are all primitives, so comparing whatever is actually present is both
  * correct and immune to the next field.
  */
+/** A following sound's binding: three primitives, compared by value (same replace-never-mutate rule). */
+const sameBind = (a: TimelineItem['bind'], b: TimelineItem['bind']): boolean => {
+	if (a === b) return true
+	if (!a || !b) return false
+	return a.itemId === b.itemId && a.at === b.at && (a.leadSec ?? 0) === (b.leadSec ?? 0)
+}
+
 const sameText = (a: TimelineItem['text'], b: TimelineItem['text']): boolean => {
 	if (a === b) return true
 	if (!a || !b) return false
@@ -321,7 +328,8 @@ export function diffTimelines(
 				!sameKeyframes(beforeItem.keyframes, afterItem.keyframes) ||
 				!sameKey(beforeItem.key, afterItem.key) ||
 				!sameGenerator(beforeItem.generator, afterItem.generator) ||
-				!sameMotion(beforeItem.motion, afterItem.motion)
+				!sameMotion(beforeItem.motion, afterItem.motion) ||
+				!sameBind(beforeItem.bind, afterItem.bind)
 			const fwd = changedFields(beforeItem, afterItem, ITEM_FIELDS)
 				?? (objectChanged ? {} : null)
 			if (fwd) {
@@ -351,6 +359,9 @@ export function diffTimelines(
 				}
 				if (!sameMotion(beforeItem.motion, afterItem.motion)) {
 					fwd.motion = afterItem.motion
+				}
+				if (!sameBind(beforeItem.bind, afterItem.bind)) {
+					fwd.bind = afterItem.bind
 				}
 				const keys = Object.keys(fwd) as (keyof TimelineItem)[]
 				;(forward.updateItems ||= []).push({ id, ...fwd })

@@ -66,6 +66,10 @@ const api = {
 		ipcRenderer.invoke('find-silence', data),
 	getAudioAnalysis: (data: { threadId: string, assetId: string }) =>
 		ipcRenderer.invoke('editor-audio-analysis', data),
+	previewSound: (data: { threadId: string, recipe: unknown }) =>
+		ipcRenderer.invoke('editor-sound-preview', data),
+	ensureSoundAsset: (data: { threadId: string, recipe: unknown }) =>
+		ipcRenderer.invoke('editor-sound-asset', data),
 	clearAssetData: (data: { threadId: string, assetId: string, kind: 'transcript' | 'descriptions' }) =>
 		ipcRenderer.invoke('clear-asset-data', data),
 	mergeClips: (data: { threadId: string, assetId: string, clipIds: string[] }) =>

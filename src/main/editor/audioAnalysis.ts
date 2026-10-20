@@ -132,3 +132,27 @@ export async function getAudioAnalysis(
 	}
 	return analysis
 }
+
+// ===== A short sound as a handful of bars =====
+
+/**
+ * The shape of a short file as `buckets` peaks (0..100), evenly spread over its
+ * whole length. For sounds of a tenth of a second, where the 50-a-second
+ * analysis would give five bars: this is for the palette's little waveforms.
+ */
+export function previewPeaks(file: string, buckets = 48): Promise<number[]> {
+	return new Promise((resolve, reject) => {
+		const child = spawn(getFFmpegBinaryPath(), [
+			'-v', 'error', '-nostdin', '-i', file, '-vn', '-ac', '1', '-ar', '16000', '-f', 's16le', '-'
+		], { stdio: ['ignore', 'pipe', 'pipe'] })
+		const chunks: Buffer[] = []
+		child.stdout.on('data', (d: Buffer) => chunks.push(d))
+		child.on('error', reject)
+		child.on('close', () => {
+			const buf = Buffer.concat(chunks)
+			const samples = new Int16Array(buf.buffer, buf.byteOffset, Math.floor(buf.length / 2))
+			if (!samples.length) return resolve(new Array(buckets).fill(0))
+			resolve(bucketPeaks(samples, Math.ceil(samples.length / buckets)).slice(0, buckets))
+		})
+	})
+}

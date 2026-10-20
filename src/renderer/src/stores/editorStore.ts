@@ -3,7 +3,7 @@ import { ref, computed, watch } from 'vue'
 import type {
 	BackgroundTask, Clip, EditorDocument, EditorHistoryStep, EditorMarker,
 	EditorPersona, EditorRevision, MediaAsset, PromptTurn, Thread, TimelineDiff,
-	DeliveryFormat, TimelineItem, TimelineItemTransform, TimelineSnapshot, Track
+	DeliveryFormat, SoundBinding, TimelineItem, TimelineItemTransform, TimelineSnapshot, Track
 } from '@shared/types'
 import {
 	applyTimelineDiff, clampSpeed, clipToItem, computeContentEnd,
@@ -38,6 +38,8 @@ import { DEFAULT_PERSONA_ID } from '@shared/personas'
 import { agentChangeBadges, type AgentApplyOutcome } from '@shared/agentFeed'
 import { toMediaUrl } from '@shared/media-url'
 import { roleSpec, type AudioAnalysis, type TrackRole } from '@shared/audio'
+import { applySoundBindings, boundStart, freeSoundTrack, suggestCues, type SoundCue } from '@shared/sound'
+import { recipeKey, soundLead, soundLength, type SoundRecipe } from '@shared/synth'
 import {
 	canHostItem, findTitleTrack, hasLayerContent, isCompositedItem, nextTrackName, nextTrackOrder,
 	orderedTracks, trackFamily, TITLE_TRACK_NAME
@@ -340,6 +342,160 @@ export const useEditorStore = defineStore('editor', () => {
 			audioAnalysisPending.delete(assetId)
 		}
 	}
+
+	// ===== Sounds =====
+
+	/** What a preview call returns: the rendered file and a few bars of its shape. */
+	type SoundPreview = { path: string; lengthSec: number; ms: number; peaks: number[] }
+	const soundPreviews = ref<Record<string, SoundPreview>>({})
+	const soundPreviewPending = new Map<string, Promise<SoundPreview | null>>()
+
+	/** Render (or fetch from the cache) a recipe for auditioning. */
+	const previewSound = (recipe: SoundRecipe): Promise<SoundPreview | null> => {
+		const key = recipeKey(recipe)
+		if (soundPreviews.value[key]) return Promise.resolve(soundPreviews.value[key])
+		if (!threadId.value) return Promise.resolve(null)
+		const pending = soundPreviewPending.get(key)
+		if (pending) return pending
+		const request = api.previewSound({ threadId: threadId.value, recipe })
+			.then((out: SoundPreview) => { soundPreviews.value[key] = out; return out })
+			.catch((error: unknown) => { console.warn('[sound] preview failed:', error); return null })
+			.finally(() => soundPreviewPending.delete(key))
+		soundPreviewPending.set(key, request)
+		return request
+	}
+
+	let auditionEl: HTMLAudioElement | null = null
+	/** Play a recipe once, cutting off whatever was auditioning. */
+	const auditionSound = async (recipe: SoundRecipe) => {
+		const out = await previewSound(recipe)
+		if (!out) return
+		auditionEl?.pause()
+		auditionEl = new Audio(toMediaUrl(out.path))
+		void auditionEl.play().catch(() => { /* a blocked autoplay is not worth a message */ })
+	}
+	const stopAudition = () => { auditionEl?.pause(); auditionEl = null }
+
+	/** The audio track a sound should go on: a free effects lane, else a new one. */
+	const soundTrackFor = (start: number, length: number, ignoreItemId?: string): string | null => {
+		if (!doc.value) return null
+		const free = freeSoundTrack(currentState(), start, length, ignoreItemId)
+		if (free) return free
+		const track: Track = {
+			id: newId('tr'), kind: 'audio', name: nextTrackName(doc.value.tracks, 'audio'),
+			order: nextTrackOrder(doc.value.tracks, 'audio'), muted: false, locked: false, hidden: false, height: 48,
+			role: 'sfx'
+		}
+		doc.value.tracks.push(track)
+		return track.id
+	}
+
+	interface SoundRequest { recipe: SoundRecipe; bind?: SoundBinding; atSec?: number }
+
+	/**
+	 * Add sounds to the timeline in ONE undo step. Each is rendered to a file by
+	 * ffmpeg first (cached by recipe, so a repeat is instant), then placed on a
+	 * free effects lane at its moment — or at the playhead — with its lead, and
+	 * set to follow the moment when it has one.
+	 */
+	const addSounds = async (requests: SoundRequest[], label?: string): Promise<TimelineItem[]> => {
+		if (!doc.value || !threadId.value || !requests.length) return []
+		const assets: MediaAsset[] = await Promise.all(
+			requests.map((r) => api.ensureSoundAsset({ threadId: threadId.value, recipe: r.recipe }))
+		)
+		if (!doc.value) return []
+		assets.forEach(upsertAsset)
+
+		const before = snapshotState()
+		const added: TimelineItem[] = []
+		requests.forEach((req, i) => {
+			const asset = assets[i]
+			const length = asset.metadata?.duration || soundLength(req.recipe)
+			const target = req.bind ? doc.value!.timeline.find((t) => t.id === req.bind!.itemId) : undefined
+			const bind: SoundBinding | undefined = target && req.bind
+				? { ...req.bind, leadSec: req.bind.leadSec ?? soundLead(req.recipe) }
+				: undefined
+			const wanted = target && bind ? boundStart(target, bind) : Math.max(0, req.atSec ?? playheadSec.value)
+			const trackId = soundTrackFor(wanted, length)
+			if (!trackId) return
+			const start = bind ? wanted : resolveFreePosition(trackId, wanted, length)
+			const item = itemFromAsset(asset, trackId, start, length)
+			if (bind) item.bind = bind
+			doc.value!.timeline.push(item)
+			added.push(item)
+		})
+		if (!added.length) return []
+		commitStep({ before, label: label ?? (added.length === 1 ? `Add ${assets[0].name.toLowerCase()} sound` : `Add ${added.length} sounds`) })
+		selectItems(added.map((i) => i.id))
+		return added
+	}
+
+	const addSound = async (recipe: SoundRecipe, opts: { atSec?: number; bind?: SoundBinding } = {}) =>
+		(await addSounds([{ recipe, ...opts }]))[0] ?? null
+
+	/** A synthesised sound's recipe, if that is what the clip is. */
+	const soundRecipeOf = (itemId: string): Required<SoundRecipe> | null => {
+		const item = doc.value?.timeline.find((i) => i.id === itemId)
+		return doc.value?.media.find((a) => a.id === item?.sourceAssetId)?.synth ?? null
+	}
+
+	/**
+	 * Change what a sound is — its take, pitch, level, air or seed. A recipe is a
+	 * file's identity, so this renders the new one and points the clip at it.
+	 */
+	const setSoundRecipe = async (itemId: string, patch: Partial<SoundRecipe>) => {
+		if (!doc.value || !threadId.value) return
+		const current = soundRecipeOf(itemId)
+		if (!current) return
+		const next: SoundRecipe = { ...current, ...patch }
+		if (recipeKey(next) === recipeKey(current)) return
+		const asset: MediaAsset = await api.ensureSoundAsset({ threadId: threadId.value, recipe: next })
+		if (!doc.value) return
+		const item = doc.value.timeline.find((i) => i.id === itemId)
+		if (!item) return
+		upsertAsset(asset)
+		const before = snapshotState()
+		const length = asset.metadata?.duration || soundLength(next)
+		item.sourceAssetId = asset.id
+		item.in = 0
+		item.out = length
+		item.duration = length / (item.speed || 1)
+		item.label = asset.name
+		// A different kind of sound has its own lead: keep the hit on the moment.
+		if (item.bind && patch.kind && patch.kind !== current.kind) item.bind = { ...item.bind, leadSec: soundLead(next) }
+		commitStep({ before, label: `Change ${asset.name.toLowerCase()}` })
+		// The old file's asset stays in the project: undo has to be able to point the
+		// clip back at it. The Media panel only lists sounds something still uses.
+	}
+
+	/** Roll the noise again: the same sound with a different seed. */
+	const rerollSound = (itemId: string) => {
+		const current = soundRecipeOf(itemId)
+		if (current) void setSoundRecipe(itemId, { seed: current.seed + 1 })
+	}
+
+	/** Make a sound follow a moment (or, with no binding, stop following). */
+	const bindSound = (itemId: string, bind: SoundBinding | undefined) => {
+		if (!doc.value) return
+		const item = doc.value.timeline.find((i) => i.id === itemId)
+		if (!item || item.bind === bind) return
+		const before = snapshotState()
+		if (!bind) delete item.bind
+		else {
+			const recipe = soundRecipeOf(itemId)
+			item.bind = { ...bind, leadSec: bind.leadSec ?? (recipe ? soundLead(recipe) : 0) }
+		}
+		commitStep({ before, label: bind ? 'Make the sound follow' : 'Stop following' })
+	}
+
+	/** Dragging a following sound by hand is a choice to place it: it stops following. */
+	const releaseSoundBinding = (itemId: string) => {
+		const item = doc.value?.timeline.find((i) => i.id === itemId)
+		if (item?.bind) delete item.bind
+	}
+
+	/** The moments worth a sound on this timeline (see shared/sound.ts). */
+	const soundCues = computed<SoundCue[]>(() => (doc.value ? suggestCues(currentState()) : []))
 
 	// ===== Titles =====
 
@@ -1525,6 +1681,11 @@ export const useEditorStore = defineStore('editor', () => {
 				console.warn(`[editorStore] ${options.label || 'edit'} left ${bad.length} overlapping pair(s):`, bad)
 			}
 		}
+
+		// A sound that follows a moment goes with it, in the SAME step as whatever
+		// moved the moment — so one undo puts both back. (A prebuilt diff — an
+		// agent's — brings its own bindings along.)
+		if (!options.prebuilt) applySoundBindings(currentState())
 
 		let forward: TimelineDiff, inverse: TimelineDiff
 		if (options.prebuilt) {
@@ -3720,6 +3881,18 @@ export const useEditorStore = defineStore('editor', () => {
 		startExportBatch,
 		toggleTrackMusic,
 		setTrackRole,
+		soundPreviews,
+		previewSound,
+		auditionSound,
+		stopAudition,
+		addSound,
+		addSounds,
+		soundRecipeOf,
+		setSoundRecipe,
+		rerollSound,
+		bindSound,
+		releaseSoundBinding,
+		soundCues,
 		audioAnalysis,
 		ensureAudioAnalysis,
 		addVideoTrack,
