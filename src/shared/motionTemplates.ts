@@ -185,3 +185,37 @@ export function motionSections(): { section: MotionTemplate['section']; template
 	}
 	return out
 }
+
+// ===== Templates people save =====
+
+/**
+ * A custom layer promoted to the library ("Save as template"). Stored by main
+ * under userData, so it is there in every project; the page is copied INTO a
+ * layer that uses it, which keeps a project self-contained — it still opens on
+ * a machine that never had the template.
+ *
+ * The registry is process-local state on purpose: main fills it from disk for
+ * the AI and MCP context, the renderer fills its own copy for the Motion tab,
+ * and neither needs to ask the other what a template id means.
+ */
+export interface MotionUserTemplate {
+	id: string
+	label: string
+	description: string
+	html: string
+	definition: MotionDefinition
+	savedAt: number
+	/** Who wrote the page ("Claude Code", "you"). */
+	author?: string
+}
+
+let userTemplates: MotionUserTemplate[] = []
+
+export const setUserMotionTemplates = (list: MotionUserTemplate[]): void => {
+	userTemplates = [...list].sort((a, b) => a.savedAt - b.savedAt)
+}
+
+export const userMotionTemplates = (): MotionUserTemplate[] => userTemplates
+
+export const userMotionTemplate = (id: string | undefined): MotionUserTemplate | undefined =>
+	id ? userTemplates.find((t) => t.id === id) : undefined

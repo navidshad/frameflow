@@ -39,7 +39,7 @@
  */
 import type { TimelineItem, Track } from './types'
 import { heldValueAt, normalise, valueAt } from './keyframes'
-import { MOTION_TEMPLATES, motionTemplate } from './motionTemplates'
+import { MOTION_TEMPLATES, motionTemplate, userMotionTemplate } from './motionTemplates'
 import { MOTION_FONT_CSS } from './motion-templates/fonts'
 
 // ===== Model =====
@@ -86,6 +86,24 @@ export interface MotionDefinition {
 	moments: MotionMomentDef[]
 }
 
+/** A custom page as it was when it last passed its checks. */
+export interface MotionSnapshot {
+	html: string
+	definition?: MotionDefinition
+}
+
+/**
+ * Who wrote the page. `turnId` is the AI turn (or agent edit) that did, which
+ * is how the inspector finds its V number — a revision records the turn that
+ * made it, and the op that writes the page cannot know the revision's number.
+ */
+export interface MotionAuthor {
+	by: string
+	turnId?: string
+	/** A person changed the page after `by` wrote it. */
+	editedByYou?: boolean
+}
+
 /**
  * What a timeline item stores. `template` names a bundled page; `html` is a
  * custom page's own source (stage 5 builds the editor for it). Exactly one of
@@ -93,13 +111,25 @@ export interface MotionDefinition {
  */
 export interface MotionSpec {
 	template?: string
+	/** A custom page's WORKING text — what the code view shows, passing or not. */
 	html?: string
 	/**
-	 * A custom page's definition, as last reported by the page itself. Templates
-	 * never carry one: theirs lives in the catalogue, so a fixed template is
-	 * fixed everywhere it is used.
+	 * A custom page's definition, as last reported by the page itself or read out
+	 * of its `frameflow.define` call. Templates never carry one: theirs lives in
+	 * the catalogue, so a fixed template is fixed everywhere it is used.
 	 */
 	definition?: MotionDefinition
+	/**
+	 * Custom pages only: the last version of the page that passed every check.
+	 * THIS is what the monitor and the export draw (`renderVersion`), never the
+	 * working text — so a page that fails keeps showing the one before it, and
+	 * nothing broken is ever rendered. `null` means no version has passed yet;
+	 * absent means the layer predates the checks, and its text is trusted only
+	 * if it lints clean.
+	 */
+	passed?: MotionSnapshot | null
+	/** Who last wrote the page, for the inspector's "Written by …" line. */
+	author?: MotionAuthor
 	/** Values the user changed. Anything absent takes the setting's default. */
 	settings?: Record<string, MotionSettingValue>
 	/** Retimed windows, in CLIP seconds, by moment name. Never the flex one. */
@@ -227,18 +257,79 @@ export const BLANK_MOTION_HTML = [
 	'</script>'
 ].join('\n')
 
-/** The definition that governs this spec — the catalogue's, for a template. */
-export function resolveDefinition(spec: MotionSpec | undefined): MotionDefinition {
-	const template = motionTemplate(spec?.template)
-	if (template) return template.definition
-	return spec?.definition ? normaliseDefinition(spec.definition) : BLANK_MOTION_DEFINITION
+/** Draws nothing: what a layer renders while no version of its page has passed. */
+export const EMPTY_MOTION_HTML =
+	'<script>frameflow.define({ duration: 3, settings: [], moments: [{ name: "all", duration: 3, flex: true }], seek: function () {} })</script>'
+
+const EMPTY_MOTION_DEFINITION: MotionDefinition = normaliseDefinition({
+	duration: 3, settings: [], moments: [{ name: 'all', duration: 3, flex: true }]
+})
+
+export interface MotionRenderVersion {
+	html: string
+	definition: MotionDefinition
+	/**
+	 * `page`: the working text itself. `last-passing`: an older version, because
+	 * the text fails its checks. `nothing`: no version has ever passed.
+	 */
+	source: 'template' | 'page' | 'last-passing' | 'nothing'
 }
 
-/** The page's own source, before composition. */
-export function motionSource(spec: MotionSpec | undefined): string {
+const lintCache = new Map<string, boolean>()
+/** Lint is pure, and `resolveDefinition` runs per frame: remember the verdict. */
+function lintsClean(html: string): boolean {
+	let ok = lintCache.get(html)
+	if (ok === undefined) {
+		ok = lintMotionHtml(html).ok
+		if (lintCache.size > 64) lintCache.clear()
+		lintCache.set(html, ok)
+	}
+	return ok
+}
+
+/**
+ * The page that is DRAWN for this spec — by the monitor, by the export, and by
+ * the cache key — which is not always the page that is being EDITED.
+ *
+ * A template draws its own. A custom layer draws its last passing version
+ * (`passed`), so a half-typed or broken edit never reaches a frame. Every
+ * consumer reads the page through here (`motionSource`, `resolveDefinition`),
+ * which is what keeps the preview and the export from disagreeing about it.
+ */
+export function renderVersion(spec: MotionSpec | undefined): MotionRenderVersion {
 	const template = motionTemplate(spec?.template)
-	if (template) return template.html
-	return typeof spec?.html === 'string' && spec.html.trim() ? spec.html : BLANK_MOTION_HTML
+	if (template) return { html: template.html, definition: template.definition, source: 'template' }
+	const own = typeof spec?.html === 'string' && spec.html.trim() ? spec.html : null
+	if (spec?.passed) {
+		const same = own === null || own === spec.passed.html
+		return {
+			html: spec.passed.html,
+			definition: normaliseDefinition(spec.passed.definition ?? spec.definition),
+			source: same ? 'page' : 'last-passing'
+		}
+	}
+	if (spec?.passed === null) return { html: EMPTY_MOTION_HTML, definition: EMPTY_MOTION_DEFINITION, source: 'nothing' }
+	// No verdict recorded (a layer from before the checks, or a fresh blank one).
+	if (own === null) return { html: BLANK_MOTION_HTML, definition: spec?.definition ? normaliseDefinition(spec.definition) : BLANK_MOTION_DEFINITION, source: 'page' }
+	if (lintsClean(own)) {
+		return { html: own, definition: spec?.definition ? normaliseDefinition(spec.definition) : BLANK_MOTION_DEFINITION, source: 'page' }
+	}
+	return { html: EMPTY_MOTION_HTML, definition: EMPTY_MOTION_DEFINITION, source: 'nothing' }
+}
+
+/** The definition that governs what is drawn — the catalogue's, for a template. */
+export function resolveDefinition(spec: MotionSpec | undefined): MotionDefinition {
+	return renderVersion(spec).definition
+}
+
+/** The page's own source, before composition: the version that is drawn. */
+export function motionSource(spec: MotionSpec | undefined): string {
+	return renderVersion(spec).html
+}
+
+/** The working text of a custom layer — what the code view shows. */
+export function motionWorkingHtml(spec: MotionSpec | undefined): string {
+	return typeof spec?.html === 'string' && spec.html.trim() ? spec.html : renderVersion(spec).html
 }
 
 /** "Lower third", or "Custom HTML". */
@@ -249,7 +340,20 @@ export function motionName(spec: MotionSpec | undefined): string {
 /** A fresh spec for a template, or a blank custom layer. */
 export function newMotionSpec(templateId?: string): MotionSpec {
 	if (templateId && motionTemplate(templateId)) return { template: templateId }
-	return { html: BLANK_MOTION_HTML, definition: BLANK_MOTION_DEFINITION }
+	// A saved template is copied in as a custom page: the project owns it.
+	const saved = userMotionTemplate(templateId)
+	if (saved) {
+		return {
+			html: saved.html, definition: saved.definition,
+			passed: { html: saved.html, definition: saved.definition },
+			author: { by: saved.author ?? 'you' }
+		}
+	}
+	return {
+		html: BLANK_MOTION_HTML, definition: BLANK_MOTION_DEFINITION,
+		passed: { html: BLANK_MOTION_HTML, definition: BLANK_MOTION_DEFINITION },
+		author: { by: 'you' }
+	}
 }
 
 // ===== Settings =====
@@ -776,7 +880,7 @@ export function lintMotionHtml(html: string): MotionLintResult {
 }
 
 /** Replace HTML, block and line comments with spaces, keeping newlines. */
-function blankComments(html: string): string {
+export function blankComments(html: string): string {
 	const blank = (s: string) => s.replace(/[^\n]/g, ' ')
 	return html
 		.replace(/<!--[\s\S]*?-->/g, blank)
