@@ -12,7 +12,12 @@
 		"trusting the source. Do not 'simplify' this to one builder without re-verifying.",
 		"",
 		"To bump: change the URLs, run `node scripts/fetch-ffmpeg.mjs --print-hashes` for",
-		"each target, paste the hashes back here, and update THIRD-PARTY-NOTICES.md section 2."
+		"each target, paste the hashes back here, and update THIRD-PARTY-NOTICES.md section 2.",
+		"",
+		"A 404 from a BtbN URL means the release was PRUNED, not that the script broke: BtbN",
+		"keeps daily autobuilds for only ~2 weeks, but keeps each month's LAST autobuild",
+		"(autobuild-YYYY-MM-<last day>-*) long-term. Pin a month-end tag; list them with",
+		"`gh release list --repo BtbN/FFmpeg-Builds`."
 	],
 
 	"ffmpegVersion": "9.0.1",
@@ -63,11 +68,11 @@
 			"builderUrl": "https://github.com/BtbN/FFmpeg-Builds",
 			"archives": [
 				{
-					"url": "https://github.com/BtbN/FFmpeg-Builds/releases/download/autobuild-2026-08-26-13-06/ffmpeg-n9.0.1-8-g16dfae5c88-win64-gpl-9.0.zip",
-					"sha256": "32fa73f4695ca11bd422e288292970157e2cd3694dec00d51315667297c873f1",
+					"url": "https://github.com/BtbN/FFmpeg-Builds/releases/download/autobuild-2026-08-31-13-27/ffmpeg-n9.0.1-11-ge47273f4d9-win64-gpl-9.0.zip",
+					"sha256": "ec9db2cda1f5894ab95446076ad8bf49379db4b53c02e778ad3b49adf91fec83",
 					"members": {
-						"ffmpeg.exe": "ffmpeg-n9.0.1-8-g16dfae5c88-win64-gpl-9.0/bin/ffmpeg.exe",
-						"ffprobe.exe": "ffmpeg-n9.0.1-8-g16dfae5c88-win64-gpl-9.0/bin/ffprobe.exe"
+						"ffmpeg.exe": "ffmpeg-n9.0.1-11-ge47273f4d9-win64-gpl-9.0/bin/ffmpeg.exe",
+						"ffprobe.exe": "ffmpeg-n9.0.1-11-ge47273f4d9-win64-gpl-9.0/bin/ffprobe.exe"
 					}
 				}
 			]
@@ -78,11 +83,11 @@
 			"builderUrl": "https://github.com/BtbN/FFmpeg-Builds",
 			"archives": [
 				{
-					"url": "https://github.com/BtbN/FFmpeg-Builds/releases/download/autobuild-2026-08-26-13-06/ffmpeg-n9.0.1-8-g16dfae5c88-linux64-gpl-9.0.tar.xz",
-					"sha256": "7648eac8acab5c1be8d064c1055cc0429663a7462b4ddcd591134ae4a3a6110e",
+					"url": "https://github.com/BtbN/FFmpeg-Builds/releases/download/autobuild-2026-08-31-13-27/ffmpeg-n9.0.1-11-ge47273f4d9-linux64-gpl-9.0.tar.xz",
+					"sha256": "182c1b509720e939bb47bfb47dc29cc0c298640401128e3dce8627d10707eb5a",
 					"members": {
-						"ffmpeg": "ffmpeg-n9.0.1-8-g16dfae5c88-linux64-gpl-9.0/bin/ffmpeg",
-						"ffprobe": "ffmpeg-n9.0.1-8-g16dfae5c88-linux64-gpl-9.0/bin/ffprobe"
+						"ffmpeg": "ffmpeg-n9.0.1-11-ge47273f4d9-linux64-gpl-9.0/bin/ffmpeg",
+						"ffprobe": "ffmpeg-n9.0.1-11-ge47273f4d9-linux64-gpl-9.0/bin/ffprobe"
 					}
 				}
 			]
