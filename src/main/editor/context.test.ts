@@ -1,5 +1,8 @@
 import { describe, expect, it } from 'vitest'
 import type { Clip, EditorDocument, MediaAsset, Track } from '@shared/types'
+import { resolveDefinition, type MotionSpec } from '@shared/motion'
+import { writtenSpec } from '@shared/motionCode'
+import { setUserMotionTemplates } from '@shared/motionTemplates'
 import {
 	buildPromptContext, CONTEXT_CHAR_BUDGET, DETAIL_MAX_PIECES, EXPAND_MAX_REGIONS,
 	REGION_PAD_PIECES, SILENCE_TEXT
@@ -397,5 +400,57 @@ describe('motion in the context', () => {
 		expect(row).toContain('name="Sara Ahmadi"')
 		expect(row).toContain('windows in 0.40/hold 3.20/out 0.80')
 		expect(row).toContain('keyed: opacity')
+	})
+})
+
+describe('custom motion pages in the context', () => {
+	const PAGE = [
+		'<div id="n"></div>',
+		'<script>frameflow.define({ duration: 4, settings: [{ key: "value", type: "number", default: 3 }], seek(t, s) { n.textContent = String(Date.now()) } })</script>'
+	].join('\n')
+	const FIXED = PAGE.replace('String(Date.now())', 'String(s.value)')
+	const build = (spec: MotionSpec, selected: string[]) => {
+		const doc = makeDoc([transcriptAsset('a', 10)])
+		doc.tracks.push({ id: 'm', kind: 'video', name: 'M1', order: 1, muted: false, locked: false, hidden: false, height: 64 })
+		doc.timeline.push({
+			id: 'cl', trackId: 'm', sourceAssetId: '', timelineStart: 3, in: 0, out: 4,
+			speed: 1, preservePitch: true, duration: 4, label: 'Triage stat', motion: spec
+		})
+		return buildPromptContext(doc, 'fix the page', { selectedItemIds: selected, playheadSec: 3 }).contextText
+	}
+
+	it('shows the selected custom layer’s whole page, and that its checks fail', () => {
+		const good = writtenSpec(undefined, FIXED, { by: 'Claude Code' })
+		const failing = { ...good, html: PAGE }
+		const text = build(failing, ['cl'])
+		expect(text).toContain('CHECKS FAIL: line 2')
+		expect(text).toContain('The last version that passed is drawn instead.')
+		expect(text).toContain('    | <div id="n"></div>')
+		expect(text).toContain('Date.now()')
+	})
+
+	it('says nothing is drawn when no version has ever passed', () => {
+		const text = build(writtenSpec(undefined, PAGE, { by: 'Claude Code' }), ['cl'])
+		expect(text).toContain('No version has passed, so nothing is drawn.')
+	})
+
+	it('lists a clean page without a failure line', () => {
+		const text = build(writtenSpec(undefined, FIXED, { by: 'Claude Code' }), ['cl'])
+		expect(text).not.toContain('CHECKS FAIL')
+		expect(text).toContain('    page (html):')
+	})
+
+	it('lists the user’s saved templates beside the built-in ones, and the custom option', () => {
+		setUserMotionTemplates([{
+			id: 'my-triage-stat', label: 'Triage stat', description: 'A big number that counts up.',
+			html: FIXED, definition: resolveDefinition(writtenSpec(undefined, FIXED, { by: 'you' })), savedAt: 1
+		}])
+		try {
+			const text = build({ template: 'lower-third' }, [])
+			expect(text).toMatch(/- my-triage-stat \(4s; all 4\*\): value .* — A big number that counts up\. \[saved by the user\]/)
+			expect(text).toContain('- custom: no template; write the page yourself')
+		} finally {
+			setUserMotionTemplates([])
+		}
 	})
 })

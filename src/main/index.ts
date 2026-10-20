@@ -36,6 +36,7 @@ import { GEMINI_MODEL_2_5_FLASH, MODEL_METADATA } from './constants/gemini'
 import { electronApp, optimizer, is } from '@electron-toolkit/utils'
 import { registerMediaProtocol } from './media-protocol'
 import { initAgentAccess } from './mcp'
+import { initMotionIpc } from './motion/ipc'
 
 const activePipelines = new Map<string, Pipeline>()
 
@@ -119,6 +120,7 @@ app.whenReady().then(() => {
 
 	// MCP agent access: off unless the user turned it on in Settings.
 	initAgentAccess()
+	initMotionIpc()
 
 	createWindow()
 

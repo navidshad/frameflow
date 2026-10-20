@@ -286,6 +286,73 @@ describe('AgentServer over Streamable HTTP', () => {
 		expect(refused).toHaveLength(2)
 	})
 
+	describe('custom HTML motion layers', () => {
+		const PAGE = [
+			'<div id="n"></div>',
+			'<script>frameflow.define({ duration: 3, settings: [{ key: "value", type: "number", default: 3 }],',
+			'  moments: [{ name: "in", duration: 0.5 }, { name: "hold", duration: 2, flex: true }, { name: "out", duration: 0.5 }],',
+			'  seek(t, s) { n.textContent = String(s.value) } })</script>'
+		].join('\n')
+		const custom = { addMotion: [{ template: 'custom', atSec: 4, html: PAGE, label: 'Triage stat' }] }
+
+		it('refuses a page without the “Write custom HTML motion layers” permission, and changes nothing', async () => {
+			permissions = { ...permissions, html: false }
+			const client = await connect()
+			const refused: any = await client.callTool({ name: 'apply_ops', arguments: custom })
+			expect(refused.isError).toBe(true)
+			expect(refused.content[0].text).toMatch(/not allowed agents to write custom HTML motion layers/)
+			expect(refused.content[0].text).toMatch(/Use a built-in template/)
+			expect(editor.commits).toHaveLength(0)
+			const row = events.filter((e) => e.type === 'activity' && e.activity.status === 'refused').pop() as any
+			expect(row.activity.detail).toBe('refused · HTML motion is off')
+
+			// A rewrite of an existing layer is the same permission.
+			const update: any = await client.callTool({ name: 'apply_ops', arguments: { updateMotion: [{ id: 'x', html: PAGE }] } })
+			expect(update.isError).toBe(true)
+			expect(update.content[0].text).toMatch(/custom HTML motion layers/)
+			expect(editor.commits).toHaveLength(0)
+		})
+
+		it('still lets the same agent place a built-in template with HTML off', async () => {
+			permissions = { ...permissions, html: false }
+			const client = await connect()
+			const ok: any = await client.callTool({
+				name: 'apply_ops',
+				arguments: { addMotion: [{ template: 'lower-third', atSec: 2, settings: [{ key: 'name', value: 'Sara' }] }] }
+			})
+			expect(ok.isError).toBeFalsy()
+			expect(editor.doc.timeline.some((i) => i.motion?.template === 'lower-third')).toBe(true)
+		})
+
+		it('writes the page with the permission, labelled with the client and its turn', async () => {
+			const client = await connect()
+			const ok: any = await client.callTool({ name: 'apply_ops', arguments: custom })
+			expect(ok.isError).toBeFalsy()
+			const layer = editor.doc.timeline.find((i) => i.motion)!
+			expect(layer.motion!.html).toBe(PAGE)
+			expect(layer.motion!.passed!.html).toBe(PAGE)
+			expect(layer.motion!.author).toEqual({ by: 'Claude Code', turnId: editor.commits[0].turn.id })
+		})
+
+		it('tells the agent what is wrong with a page that fails, and draws nothing of it', async () => {
+			const client = await connect()
+			const result: any = await client.callTool({
+				name: 'apply_ops',
+				arguments: { addMotion: [{ template: 'custom', atSec: 4, html: PAGE.replace('String(s.value)', 'String(Date.now())') }] }
+			})
+			expect(result.isError).toBeFalsy()
+			expect(text(result).notes.join(' ')).toMatch(/line 4 fails its checks/)
+			expect(editor.doc.timeline.find((i) => i.motion)!.motion!.passed).toBeNull()
+		})
+
+		it('lists the motion templates in get_project, with saved ones marked', async () => {
+			const client = await connect()
+			const project = text(await client.callTool({ name: 'get_project', arguments: {} }))
+			expect(project.catalog.motionTemplates.map((t: any) => t.id)).toContain('lower-third')
+			expect(project.catalog.motionTemplates.find((t: any) => t.id === 'lower-third').settings).toContain('name')
+		})
+	})
+
 	it('returns an image from render_frame and reverts by V number', async () => {
 		const client = await connect()
 		const frame: any = await client.callTool({ name: 'render_frame', arguments: { timeSec: 5, note: 'Is the chart legible?' } })

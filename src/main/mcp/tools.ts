@@ -8,7 +8,8 @@ import {
 import { allEffects } from '@shared/effects'
 import { TRANSITION_PRESETS } from '@shared/transitionPresets'
 import { computeContentEnd } from '@shared/timeline'
-import { EDITOR_OPS_SCHEMA, opsToDiff } from '../editor/ops'
+import { EDITOR_OPS_SCHEMA, opsToDiff, opsWriteHtml } from '../editor/ops'
+import { MOTION_TEMPLATES, userMotionTemplates } from '@shared/motionTemplates'
 import type { EditorBridge, LiveProject } from './bridge'
 
 /**
@@ -50,6 +51,11 @@ export interface ToolDef {
 	description: string
 	inputSchema: JsonSchema
 	permission: AgentPermission
+	/**
+	 * A second permission this particular call needs, decided from its arguments:
+	 * `apply_ops` is "edit", but one that writes a custom HTML page is also "html".
+	 */
+	alsoNeeds?: (args: Record<string, any>) => AgentPermission | null
 	/** Writes are serialised, so each one sees the result of the last. */
 	writes?: boolean
 	/** The feed title before the call finishes ("render_frame 0:27.5"). */
@@ -163,6 +169,18 @@ const getProject: ToolDef = {
 				read: true, editTimeline: perms.edit, writeHtmlMotion: perms.html, exportVideos: perms.export
 			},
 			catalog: {
+				// For apply_ops addMotion.template. Saved templates are the user's own
+				// custom layers; they appear here the moment they are saved.
+				motionTemplates: [
+					...MOTION_TEMPLATES.map((t) => ({
+						id: t.id, label: t.label, description: t.description, durationSec: t.definition.duration,
+						settings: t.definition.settings.map((s) => s.key)
+					})),
+					...userMotionTemplates().map((t) => ({
+						id: t.id, label: t.label, description: t.description, durationSec: t.definition.duration,
+						settings: t.definition.settings.map((s) => s.key), saved: true
+					}))
+				],
 				transitions: TRANSITION_PRESETS.map((p) => p.kind),
 				effects: allEffects().map((e) => ({
 					kind: e.kind, stream: e.stream, label: e.label,
@@ -393,6 +411,7 @@ const applyOps: ToolDef = {
 		'is its own revision — and check the result with render_frame. Always include a short rationale: ' +
 		'the user reads it.',
 	inputSchema: OPS_INPUT_SCHEMA,
+	alsoNeeds: (args) => (opsWriteHtml(args as EditorOps) ? 'html' : null),
 	async run(args, ctx) {
 		const errors = validateArgs(OPS_INPUT_SCHEMA, args)
 		if (errors.length) throw new ToolError(`Invalid operations — nothing was changed:\n- ${errors.join('\n- ')}`)
@@ -400,9 +419,11 @@ const applyOps: ToolDef = {
 
 		const project = await requireProject(ctx)
 		const ops = args as EditorOps
-		const { diff, addMarkers, docSettings, droppedOps, notes } = opsToDiff(ops, project.doc)
+		const turnId = randomUUID()
+		const { diff, addMarkers, docSettings, droppedOps, notes } =
+			opsToDiff(ops, project.doc, { by: ctx.clientName, turnId })
 		const turn: PromptTurn = {
-			id: randomUUID(),
+			id: turnId,
 			personaId: project.doc.activePersonaId,
 			prompt: `${ctx.clientName} edited over MCP`,
 			baseStepId: project.doc.historyRef?.currentStepId || '',

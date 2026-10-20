@@ -319,10 +319,18 @@ export class AgentServer {
 			this.emit({ type: 'activity', activity })
 		}
 
-		const refusal = permissionRefusal(def.permission, this.options.permissions())
-		if (refusal) {
-			finish({ status: 'refused', detail: REFUSED_SHORT[def.permission] })
-			return { content: [{ type: 'text' as const, text: refusal }], isError: true }
+		// The tool's own permission, then any this call's arguments add (apply_ops
+		// is "edit"; writing a custom HTML page in it is also "html").
+		const needed: AgentPermission[] = [def.permission]
+		const extra = def.alsoNeeds?.(args)
+		if (extra) needed.push(extra)
+		const denied = needed.find((p) => permissionRefusal(p, this.options.permissions()))
+		if (denied) {
+			finish({ status: 'refused', detail: REFUSED_SHORT[denied] })
+			return {
+				content: [{ type: 'text' as const, text: permissionRefusal(denied, this.options.permissions())! }],
+				isError: true
+			}
 		}
 
 		const ctx: ToolContext = {

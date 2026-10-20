@@ -265,7 +265,7 @@ export function runEditorPrompt(options: {
 			// Map ops against a FRESH read (doc may have advanced during the call);
 			// the renderer re-validates against ITS live doc anyway.
 			const freshDoc = threadManager.getThread(threadId)?.editor || doc
-			const { diff, addMarkers, docSettings, droppedOps, notes } = opsToDiff(ops || {}, freshDoc)
+			const { diff, addMarkers, docSettings, droppedOps, notes } = opsToDiff(ops || {}, freshDoc, { by: 'FrameFlow AI', turnId })
 			const targetLengthSec = parseTargetLength(ops?.targetLength)
 			const build = measureBuild(diff, freshDoc, stats, targetLengthSec)
 
