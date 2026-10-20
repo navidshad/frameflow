@@ -37,6 +37,7 @@ import { electronApp, optimizer, is } from '@electron-toolkit/utils'
 import { registerMediaProtocol } from './media-protocol'
 import { initAgentAccess } from './mcp'
 import { initMotionIpc } from './motion/ipc'
+import { abortEngineTurn, cliEngineSelected, initEngines, runCliEditorPrompt } from './engine'
 
 const activePipelines = new Map<string, Pipeline>()
 
@@ -121,6 +122,7 @@ app.whenReady().then(() => {
 	// MCP agent access: off unless the user turned it on in Settings.
 	initAgentAccess()
 	initMotionIpc()
+	initEngines()
 
 	createWindow()
 
@@ -612,11 +614,13 @@ app.whenReady().then(() => {
 		threadId: string, personaId: string, prompt: string, baseStepId: string,
 		selectedItemIds: string[], playheadSec: number, widen?: 'chapter' | 'full'
 	}) => {
-		return editorPrompt.runEditorPrompt(options)
+		// The engine picked in Settings or the chat's engine chip: a CLI runs
+		// agentically through FrameFlow's MCP tools, Gemini API as before.
+		return cliEngineSelected() ? runCliEditorPrompt(options) : editorPrompt.runEditorPrompt(options)
 	})
 
 	ipcMain.handle('abort-editor-prompt', (_event, { turnId }: { threadId: string, turnId: string }) => {
-		editorPrompt.abortEditorPrompt(turnId)
+		if (!abortEngineTurn(turnId)) editorPrompt.abortEditorPrompt(turnId)
 		return true
 	})
 

@@ -6,7 +6,9 @@ import type { EditorDocument } from '@shared/types'
 import { threadManager } from '../threads'
 import { THREAD_DIRS } from '../constants/paths'
 import { computeRegions, intermediateOpts, runCommand } from './render'
-import { transcriptsForDoc } from './captions'
+import { cuesForDoc, transcriptsForDoc } from './captions'
+import { burnFrameText } from './frameText'
+import { cuesAtInstant } from '@shared/captions'
 import { motionCacheDir } from '../motion/cache'
 import { ensureMotionJobs } from '../motion'
 import {
@@ -228,8 +230,16 @@ export async function renderExactFrame(options: {
 	threadId: string
 	doc: EditorDocument
 	timeSec: number
+	/**
+	 * Burn the titles and captions on screen at this instant into the picture,
+	 * as the export does. OFF by default: the monitor shows this PNG in an <img>
+	 * and draws titles and captions itself above it, so burning them in would
+	 * show every one twice. An agent looking through `render_frame` has no such
+	 * overlay and needs them in the picture.
+	 */
+	burnText?: boolean
 }): Promise<{ path: string }> {
-	const { threadId, doc, timeSec } = options
+	const { threadId, doc, timeSec, burnText = false } = options
 	const thread = threadManager.getThread(threadId)
 	if (!thread || thread.type !== 'editor') throw new Error('Not an editor project')
 
@@ -288,6 +298,22 @@ export async function renderExactFrame(options: {
 	const outputPath = path.join(dir, `exact-${Date.now()}.png`)
 	const partial = outputPath.replace(/\.png$/, '.part.png')
 	await runCommand(command, partial, new AbortController().signal)
+
+	if (burnText) {
+		const frame = { width: plan.width, height: plan.height }
+		const text = cuesAtInstant(cuesForDoc(doc, frame), timeSec)
+		if (text.cues.length) {
+			// Titles and captions burn over the finished file in the export
+			// (render.ts), not in the region graph.
+			const burned = await burnFrameText({ framePath: partial, cues: text.cues, at: text.at, frame, fps: plan.fps, dir })
+			if (burned) {
+				fs.renameSync(burned, outputPath)
+				fs.unlinkSync(partial)
+				return { path: outputPath }
+			}
+		}
+	}
+
 	fs.renameSync(partial, outputPath)
 	return { path: outputPath }
 }

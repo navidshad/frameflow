@@ -4,7 +4,7 @@
 		<!-- Header -->
 		<div class="flex items-center justify-between gap-3 mb-2">
 			<div class="flex items-center gap-2 min-w-0">
-				<span class="text-base leading-none">{{ persona?.icon || '✨' }}</span>
+				<span v-if="!turn?.engine" class="text-base leading-none">{{ persona?.icon || '✨' }}</span>
 				<span class="text-xs font-bold text-zinc-800 dark:text-zinc-200 font-heading">Applied</span>
 				<span class="text-[10px] font-bold text-primary font-mono">V{{ result.revisionSeq }}</span>
 				<span v-if="result.scopeLabel"
@@ -26,6 +26,9 @@
 		<p v-if="result.rationale" class="text-xs text-zinc-600 dark:text-zinc-300 leading-relaxed">
 			{{ result.rationale }}
 		</p>
+
+		<!-- A CLI engine's tool calls -->
+		<EngineSteps v-if="turn?.engine?.steps.length" class="mt-2" :steps="turn.engine.steps" />
 
 		<!-- Notices -->
 		<div v-if="result.droppedOps.length"
@@ -80,7 +83,9 @@
 
 		<!-- Footer -->
 		<div class="mt-3 flex items-center justify-between gap-3">
-			<span v-if="turn?.usage" class="text-[9px] font-mono text-zinc-400">
+			<!-- A CLI runs on the user's own plan: no token cost to show. -->
+			<span v-if="turn?.engine" class="text-[9px] font-mono text-zinc-400">{{ ENGINES[turn.engine.id]?.footer || turn.engine.label }}</span>
+			<span v-else-if="turn?.usage" class="text-[9px] font-mono text-zinc-400">
 				~{{ turn.usage.totalTokens.toLocaleString() }} tok · ${{ (turn.cost || 0).toFixed(4) }}
 			</span>
 			<button v-if="parentRevision"
@@ -97,6 +102,8 @@
 <script setup lang="ts">
 import { computed } from 'vue'
 import { useEditorStore } from '../../stores/editorStore'
+import { ENGINES } from '@shared/engines'
+import EngineSteps from './EngineSteps.vue'
 
 const store = useEditorStore()
 

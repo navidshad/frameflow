@@ -21,9 +21,19 @@
 			<span v-if="mode === 'timeline' && motionPathShown" class="text-[9px] font-mono text-zinc-400 truncate max-w-[50%]">
 				motion path shown while a position key is selected
 			</span>
-			<span v-else-if="mode === 'timeline' && edl.currentSegmentId.value" class="text-[9px] font-mono text-zinc-400 truncate max-w-[50%]">
+			<span v-else-if="mode === 'timeline' && edl.currentSegmentId.value && !agentStore.agentActive" class="text-[9px] font-mono text-zinc-400 truncate max-w-[50%]">
 				{{ activeSegmentLabel }}
 			</span>
+			<!-- Board 3: while an agent edits, the playhead can follow it. -->
+			<button v-else-if="agentStore.agentActive"
+				class="flex items-center gap-1.5 text-[9px] font-bold uppercase tracking-widest transition"
+				:class="agentStore.followAgent ? 'text-zinc-400 hover:text-zinc-300' : 'text-zinc-500 hover:text-zinc-400'"
+				:title="agentStore.followAgent ? 'The playhead moves to where the agent looks and edits — click to stop' : 'Move the playhead to where the agent looks and edits'"
+				:aria-pressed="agentStore.followAgent"
+				@click="agentStore.setFollowAgent(!agentStore.followAgent)">
+				<span class="w-1.5 h-1.5 rounded-full" :class="agentStore.followAgent ? 'bg-violet-400' : 'bg-zinc-600'"></span>
+				Follow agent
+			</button>
 		</div>
 
 		<!-- ============ SOURCE MODE ============ -->
@@ -214,6 +224,16 @@
 							</template>
 							<span v-else class="text-[10px] font-mono text-white/30 uppercase tracking-widest">gap</span>
 						</div>
+
+						<!-- Board 3: the frame an agent just looked at with render_frame —
+						     a violet frame and its time, while the monitor is on it. -->
+						<template v-if="agentLookedHere">
+							<div class="absolute inset-0 pointer-events-none z-40 shadow-[inset_0_0_0_2px_rgba(167,139,250,0.7)]"></div>
+							<div class="absolute left-2 top-2 z-40 pointer-events-none flex items-center gap-1 px-1.5 py-0.5 rounded-md bg-violet-500/85 text-white font-mono text-[8px] font-bold uppercase tracking-[.05em]">
+								<span class="iconify tabler--eye w-2.5 h-2.5"></span>
+								Agent looked at {{ clock(agentStore.lookedAt ?? 0) }}
+							</div>
+						</template>
 						</div>
 
 						<!-- Outside the clip, so a corner or the rotation stalk dragged
@@ -412,9 +432,18 @@ import MotionLayer from './MotionLayer.vue'
 import KeyframeMotionPath from './KeyframeMotionPath.vue'
 import { motionBadge } from '@shared/motionCode'
 import { useKeyframeLanesStore } from '../../stores/keyframeLanesStore'
+import { useAgentStore } from '../../stores/agentStore'
+import { clock } from '@shared/agentFeed'
 import SlimTooltip from '../../components/SlimTooltip.vue'
 
 const store = useEditorStore()
+const agentStore = useAgentStore()
+/** The monitor shows the frame the agent last looked at (within a frame). */
+const agentLookedHere = computed(() => {
+	const t = agentStore.lookedAt
+	const fps = store.doc?.timelineMeta.fps || 30
+	return t !== null && Math.abs(store.playheadSec - t) <= 1 / fps
+})
 const keyframeLanes = useKeyframeLanesStore()
 /** The header says why a dashed path is on the picture (board 2). */
 /** A motion layer under the playhead whose page fails its checks, if any. */

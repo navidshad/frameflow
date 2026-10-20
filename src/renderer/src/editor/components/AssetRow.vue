@@ -1,8 +1,10 @@
 <template>
 	<div class="mb-1.5 p-3 rounded-xl transition cursor-pointer group"
-		:class="active
-			? 'bg-primary/5 dark:bg-primary/10 ring-1 ring-primary/30'
-			: 'hover:bg-zinc-100/70 dark:hover:bg-zinc-900/50'"
+		:class="reading
+			? 'bg-violet-500/10 ring-1 ring-violet-500/35'
+			: active
+				? 'bg-primary/5 dark:bg-primary/10 ring-1 ring-primary/30'
+				: 'hover:bg-zinc-100/70 dark:hover:bg-zinc-900/50'"
 		:draggable="canPlace"
 		:title="canPlace ? 'Drag onto the timeline to place the whole file' : undefined"
 		@click="$emit('select')"
@@ -24,8 +26,13 @@
 					</span>
 					<span v-if="asset.metadata?.hasAudio"
 						class="iconify tabler--volume w-3 h-3 text-zinc-400" title="Has audio"></span>
+					<!-- Board 3: the media an agent is reading right now -->
+					<span v-if="reading"
+						class="text-[9px] font-bold uppercase px-1.5 py-0.5 rounded bg-violet-500/15 text-violet-400">
+						Agent reading
+					</span>
 					<!-- State chip -->
-					<span class="text-[9px] font-bold uppercase tracking-widest px-1.5 py-0.5 rounded"
+					<span v-else class="text-[9px] font-bold uppercase tracking-widest px-1.5 py-0.5 rounded"
 						:class="stateChipClass">
 						{{ stateLabel }}
 					</span>
@@ -91,6 +98,7 @@ import { toMediaUrl } from '@shared/media-url'
 import { computed } from 'vue'
 import type { BackgroundTask, MediaAsset } from '@shared/types'
 import { useEditorStore } from '../../stores/editorStore'
+import { useAgentStore } from '../../stores/agentStore'
 
 const props = defineProps<{
 	asset: MediaAsset
@@ -100,6 +108,8 @@ const props = defineProps<{
 defineEmits<{ (e: 'select'): void }>()
 
 const editorStore = useEditorStore()
+const agentStore = useAgentStore()
+const reading = computed(() => agentStore.isReading(props.asset))
 
 const interrupted = computed(() => editorStore.interruptedAssets.has(props.asset.id))
 

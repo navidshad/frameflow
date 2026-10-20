@@ -181,6 +181,21 @@ const api = {
 		ipcRenderer.on('agent-activity', listener)
 		return () => ipcRenderer.removeListener('agent-activity', listener)
 	},
+	// AI engine: Gemini API or the user's own CLI.
+	getEngines: () => ipcRenderer.invoke('get-engines'),
+	detectEngines: () => ipcRenderer.invoke('detect-engines'),
+	setEngineSettings: (patch: any) => ipcRenderer.invoke('set-engine-settings', patch),
+	onEngineState: (callback: (state: any) => void) => {
+		const listener = (_event: any, state: any) => callback(state)
+		ipcRenderer.on('engine-state', listener)
+		return () => ipcRenderer.removeListener('engine-state', listener)
+	},
+	/** What FrameFlow's own engine is doing, for the monitor and media list. */
+	onEngineActivity: (callback: (activity: any) => void) => {
+		const listener = (_event: any, activity: any) => callback(activity)
+		ipcRenderer.on('engine-activity', listener)
+		return () => ipcRenderer.removeListener('engine-activity', listener)
+	},
 	// The live-document bridge: main asks, the editor store answers.
 	onMcpRequest: (callback: (request: { id: string; kind: string; payload: any }) => void) => {
 		const listener = (_event: any, request: any) => callback(request)
