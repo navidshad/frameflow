@@ -1,6 +1,6 @@
 # 📦 Releasing & Code Signing
 
-How a FrameFlow Pro installer gets built, signed, and published.
+How a FrameFlow installer gets built, signed, and published.
 
 ---
 
@@ -110,11 +110,9 @@ natively — the block to fill in is commented in place under `win:` in
 - [ ] **`build/icon.png`** — a square 1024×1024 master. There is no app icon in
       the repo, so every build currently ships the default Electron logo.
       electron-builder derives the `.icns` and `.ico` from this one file.
-- [ ] **A public releases repo.** `navidshad/frameflow-pro` is private, so
-      releases published there are not downloadable without a token. A separate
-      public releases-only repo (holding no source) is also what `electron-updater`
-      will need — a private repo cannot feed the updater without embedding a
-      token in the app.
+- [x] **A public releases repo.** Releases publish to `navidshad/frameflow`,
+      which is public, so installers are downloadable and `electron-updater`
+      can read them without a token.
 - [ ] **Windows code signing**, per the section above.
 
 Auto-update itself is a separate roadmap item. The `zip` target alongside `dmg`

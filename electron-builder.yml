@@ -99,11 +99,7 @@ linux:
   # release if a personal one should not ship in package metadata.
   maintainer: Navid Shad <navidshad72@gmail.com>
 
-# NOTE: this repo is private, so releases published here are not downloadable
-# without a token — and electron-updater cannot read it at all without embedding
-# one in the app. A separate public releases-only repo is needed before the
-# first installer is actually distributable.
 publish:
   - provider: github
     owner: navidshad
-    repo: frameflow-pro
+    repo: frameflow

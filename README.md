@@ -8,7 +8,7 @@
 
 <div>
   
-  [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
+  [![License: PolyForm Noncommercial](https://img.shields.io/badge/License-PolyForm%20Noncommercial-orange.svg)](LICENSE)
   [![Platform: Electron](https://img.shields.io/badge/Platform-Electron-lightgrey.svg)](https://www.electronjs.org/)
   [![Framework: Vue 3](https://img.shields.io/badge/Framework-Vue%203-4fc08d.svg)](https://vuejs.org/)
   [![AI: Google Gemini](https://img.shields.io/badge/AI-Google%20Gemini-4285F4.svg)](https://deepmind.google/technologies/gemini/)
@@ -87,7 +87,6 @@ FrameFlow isn't just a tool; it's an iterative workspace:
 
 | Section | Link | Purpose |
 | :--- | :--- | :--- |
-| 🗺 **Roadmap** | [**Plan & Pricing**](./ROADMAP.md) | The five build phases, the three plans, and what ships in each. |
 | 🏗 **Architecture** | [**Deep-Dive**](./docs/architecture.md) | The two workflows, media pre-processing, and the editor's AI contract. |
 | 🚀 **Installation** | [**Setup Guide**](./docs/setup.md) | Node.js, Gemini API, FFmpeg, and yt-dlp setup. |
 | 🎨 **UI/UX** | [**Design Overview**](./docs/ui_ux.md) | Frontend components and interaction flow. |
@@ -114,12 +113,14 @@ images it was built from, so you can compare variants and continue from the one 
 
 ## 📜 License
 
-**FrameFlow Pro is proprietary software.** Copyright (c) 2026 Navid Shad. All rights reserved.
-This repository is private and is not open source — see [LICENSE](./LICENSE).
+FrameFlow is **source-available, not open source.** You can read, run, modify and share
+the code for **noncommercial** purposes under the
+[PolyForm Noncommercial License 1.0.0](./LICENSE). Commercial use needs a separate license:
+contact navidshad72@gmail.com. Contributions are welcome — see
+[CONTRIBUTING.md](./CONTRIBUTING.md).
 
-It derives from the original [FrameFlow](https://github.com/navidshad/frameflow) project,
-which was released under the MIT License and remains available under those terms. The MIT
-notice and all other third-party attributions are reproduced in
+Releases up to and including v1.1.23 were published under the MIT License and remain
+available under those terms. The MIT notice and all other third-party attributions are in
 [THIRD-PARTY-NOTICES.md](./THIRD-PARTY-NOTICES.md), which must ship with every binary.
 
 Original project created by [navidshad](https://github.com/navidshad), Somayeh Roohani and

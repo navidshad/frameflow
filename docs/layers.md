@@ -6,7 +6,7 @@ never opened. This document argues that decomposing a shot into layers, and
 letting the AI direct all of them, is FrameFlow's strongest available
 differentiator, and sets out what it would cost.
 
-Status: **direction, not a commitment.** Lands as [Phase 5](../ROADMAP.md) and is
+Status: **direction, not a commitment.** Lands as Phase 5 of the build plan and is
 gated on the compositor built in Phase 3.
 
 ---

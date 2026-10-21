@@ -1,6 +1,6 @@
 # 🛠 Installation & Setup Guide
 
-How to set up the environment and run **FrameFlow Pro** locally.
+How to set up the environment and run **FrameFlow** locally.
 
 ---
 
@@ -15,7 +15,7 @@ That is the whole list.
 
 ### 📦 No external tools required
 
-FrameFlow Pro ships every media binary it needs inside the app bundle. There is
+FrameFlow ships every media binary it needs inside the app bundle. There is
 nothing to install with Homebrew, Chocolatey, or pip:
 
 | Tool | How it ships |
@@ -36,7 +36,7 @@ nothing to install with Homebrew, Chocolatey, or pip:
 1. **Clone the repository**
 
    ```bash
-   git clone https://github.com/navidshad/frameflow-pro.git
+   git clone https://github.com/navidshad/frameflow.git
    ```
 
 2. **Install dependencies**

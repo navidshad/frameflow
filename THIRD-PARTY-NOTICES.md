@@ -1,14 +1,15 @@
 # Third-Party Notices
 
-FrameFlow Pro incorporates third-party software. This file reproduces the
+FrameFlow incorporates third-party software. This file reproduces the
 notices those licenses require. It must ship with every distributed binary.
 
 ---
 
 ## 1. FrameFlow (original project)
 
-FrameFlow Pro derives from the FrameFlow project, released under the MIT
-License. MIT permits proprietary derivative works, subject to reproducing the
+Earlier releases of FrameFlow (through v1.1.23) were published under the MIT
+License; later work is under the PolyForm Noncommercial License 1.0.0 (see
+LICENSE). MIT permits relicensing derivative works, subject to reproducing the
 notice below. Contributors to the original project retain copyright in their
 own contributions, licensed to this work under the same terms.
 
@@ -43,7 +44,7 @@ SOFTWARE.
 
 ## 2. FFmpeg
 
-FrameFlow Pro bundles the FFmpeg and FFprobe executables and invokes them as
+FrameFlow bundles the FFmpeg and FFprobe executables and invokes them as
 separate processes. FFmpeg is not linked into this application; the two are
 distributed as an aggregate.
 
