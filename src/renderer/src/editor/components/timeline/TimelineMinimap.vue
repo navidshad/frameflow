@@ -3,7 +3,7 @@
 	     with a draggable viewport rectangle. Navigation only — it scrolls the
 	     main timeline and never moves the playhead. -->
 	<div ref="rootRef"
-		class="relative h-5 shrink-0 border-b border-zinc-200 dark:border-zinc-800 bg-zinc-100/60 dark:bg-zinc-900/60 cursor-pointer select-none touch-none"
+		class="relative h-[18px] shrink-0 hair-b ml-32 cursor-pointer select-none touch-none"
 		title="Timeline overview — click or drag to navigate"
 		@pointerdown="onPointerDown">
 		<!-- Item blocks, one thin row per track -->

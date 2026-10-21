@@ -7,6 +7,7 @@ import { EditorPersona, ModelSettings } from '../shared/types'
 import { normalizePermissions, TOKEN_PREFIX, type AgentPermissions } from '../shared/agent'
 import type { AgentRecentSession } from '../shared/agentFeed'
 import { normalizeEngineSettings, type EngineSettings } from '../shared/engines'
+import { normalizeAudioSettings, type AudioProviderSettings } from '../shared/audioProviders'
 import { DEFAULT_MODEL_SETTINGS } from './constants/gemini'
 import { BUILTIN_PERSONAS } from './constants/personas'
 
@@ -23,6 +24,10 @@ interface Settings {
 	agentToken?: string
 	/** Which AI edits when the user chats (Gemini API unless they pick a CLI). */
 	engine?: EngineSettings
+	/** Audio providers: whether Gemini voices are on, and what an agent may spend per turn. */
+	audio?: AudioProviderSettings
+	/** In memory only. On disk it is `elevenLabsKeyEnc`, encrypted like the Gemini key. */
+	elevenLabsKey?: string
 }
 
 export interface AgentAccessSettings {
@@ -137,7 +142,9 @@ class SettingsManager {
 					personas: Array.isArray(parsed.personas) ? parsed.personas : [],
 					agentAccess: normalizeAgentAccess(parsed.agentAccess),
 					agentToken: decryptKey({ geminiApiKeyEnc: parsed.agentTokenEnc, geminiApiKey: parsed.agentToken }),
-					engine: normalizeEngineSettings(parsed.engine)
+					engine: normalizeEngineSettings(parsed.engine),
+					audio: normalizeAudioSettings(parsed.audio),
+					elevenLabsKey: decryptKey({ geminiApiKeyEnc: parsed.elevenLabsKeyEnc, geminiApiKey: parsed.elevenLabsKey })
 				}
 			}
 		} catch (error) {
@@ -159,16 +166,19 @@ class SettingsManager {
 			// The key is written encrypted under its own name and NEVER under the
 			// plaintext one — otherwise an upgrade would leave the old copy behind
 			// beside the new one.
-			const { geminiApiKey, agentToken, ...rest } = this.settings
+			const { geminiApiKey, agentToken, elevenLabsKey, ...rest } = this.settings
 			const { enc, plain } = encryptKey(geminiApiKey ?? '')
 			// The agent token follows the same rule: encrypted where the OS can.
 			const token = encryptKey(agentToken ?? '')
+			const eleven = encryptKey(elevenLabsKey ?? '')
 			writeFileSync(this.settingsPath, JSON.stringify({
 				...rest,
 				...(enc ? { geminiApiKeyEnc: enc } : {}),
 				...(plain ? { geminiApiKey: plain } : {}),
 				...(token.enc ? { agentTokenEnc: token.enc } : {}),
-				...(token.plain ? { agentToken: token.plain } : {})
+				...(token.plain ? { agentToken: token.plain } : {}),
+				...(eleven.enc ? { elevenLabsKeyEnc: eleven.enc } : {}),
+				...(eleven.plain ? { elevenLabsKey: eleven.plain } : {})
 			}, null, 2))
 			return true
 		} catch (error) {
@@ -322,6 +332,28 @@ class SettingsManager {
 		this.settings.agentToken = `${TOKEN_PREFIX}${randomBytes(24).toString('hex')}`
 		this.saveSettings()
 		return this.settings.agentToken
+	}
+
+	// ===== Audio providers =====
+
+	getAudioSettings(): AudioProviderSettings {
+		return normalizeAudioSettings(this.settings.audio)
+	}
+
+	updateAudioSettings(patch: Partial<AudioProviderSettings>): AudioProviderSettings {
+		this.settings.audio = normalizeAudioSettings({ ...this.getAudioSettings(), ...patch })
+		this.saveSettings()
+		return this.settings.audio
+	}
+
+	getElevenLabsKey(): string | undefined {
+		return this.settings.elevenLabsKey || undefined
+	}
+
+	/** An empty key removes it. */
+	setElevenLabsKey(key: string): void {
+		this.settings.elevenLabsKey = key.trim() || undefined
+		this.saveSettings()
 	}
 
 	// ===== AI engine =====

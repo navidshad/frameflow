@@ -1,65 +1,59 @@
 <template>
-  <div class="glass-card glass-card-hover p-4 rounded-2xl min-w-[250px] cursor-move">
-    <Handle type="target" :position="Position.Top" class="w-3 h-3 bg-zinc-300 dark:bg-zinc-600 border-2 border-white dark:border-zinc-800" />
-    
-    <div class="flex items-center justify-between mb-3 cursor-move">
-      <div class="flex items-center space-x-2 cursor-move">
-        <div v-if="data.status === 'running'" class="w-4 h-4 rounded-full border-2 border-orange-500 border-t-transparent animate-spin"></div>
-        <div v-else-if="data.status === 'completed'" class="text-green-500">✓</div>
-        <div v-else-if="data.status === 'failed'" class="text-red-500">✗</div>
-        <div v-else class="text-zinc-400">⋯</div>
-        
-        <div class="text-sm font-semibold text-zinc-800 dark:text-zinc-200 capitalize">
-          {{ data.type || 'Task' }}
+  <div class="node-panel min-w-[250px] cursor-move">
+    <Handle type="target" :position="Position.Top" class="node-handle" />
+
+    <!-- Header: amber while it works -->
+    <div class="node-head cursor-move">
+      <span class="node-dot" :class="{
+        'bg-amber-400 animate-pulse': data.status === 'running',
+        'bg-accent-light': data.status === 'completed',
+        'bg-red-500': data.status === 'failed',
+        'bg-zinc-400': !['running', 'completed', 'failed'].includes(data.status)
+      }"></span>
+      <span class="lbl !text-zinc-800 dark:!text-zinc-200">Task · {{ data.type || 'Task' }}</span>
+      <div class="flex-1"></div>
+      <SlimTooltip v-if="data.onDelete" text="Delete task node" placement="top">
+        <button @click="data.onDelete" aria-label="Delete task node" class="node-icon-btn hover:!text-red-500 nodrag">
+          <span class="iconify tabler--trash w-3.5 h-3.5"></span>
+        </button>
+      </SlimTooltip>
+    </div>
+
+    <div class="p-3 space-y-2">
+      <!-- Status + stop -->
+      <div class="flex items-center gap-2 text-xs">
+        <span v-if="data.status === 'running'" class="iconify tabler--loader-2 w-3.5 h-3.5 animate-spin text-primary"></span>
+        <span v-else-if="data.status === 'completed'" class="iconify tabler--check w-3.5 h-3.5 text-accent"></span>
+        <span v-else-if="data.status === 'failed'" class="iconify tabler--x w-3.5 h-3.5 text-red-500"></span>
+        <span class="flex-1 capitalize">{{ data.status || 'pending' }}</span>
+        <SlimTooltip v-if="data.onStop && data.status === 'running'" :text="isConfirmingStop ? 'Click again to confirm' : 'Stop process'" placement="top">
+          <button @click="handleStop"
+            class="text-[11px] font-semibold nodrag transition-colors"
+            :class="isConfirmingStop ? 'text-amber-500 animate-pulse' : 'text-red-500 hover:text-red-600'">
+            {{ isConfirmingStop ? 'Confirm?' : 'Stop' }}
+          </button>
+        </SlimTooltip>
+      </div>
+
+      <!-- Progress steps -->
+      <div class="space-y-1 nodrag cursor-text font-mono text-[11px]">
+        <div v-for="(step, index) in data.steps" :key="index" class="flex items-center gap-2">
+          <span v-if="step.status === 'done'" class="text-accent">✓</span>
+          <span v-else-if="step.status === 'active'" class="text-primary">●</span>
+          <span v-else class="text-zinc-400">○</span>
+          <span :class="step.status === 'active' ? 'text-zinc-900 dark:text-zinc-100 font-semibold' : 'text-zinc-500 dark:text-zinc-400'">
+            {{ step.name }}
+          </span>
         </div>
       </div>
-      <div class="flex items-center space-x-2">
-        <SlimTooltip v-if="data.onStop && data.status === 'running'" :text="isConfirmingStop ? 'Click again to confirm' : 'Stop process'" placement="top">
-          <button 
-            @click="handleStop" 
-            class="flex items-center space-x-1.5 px-2 py-1 rounded-lg transition-all border group/stop nodrag"
-            :class="isConfirmingStop ? 'bg-orange-500/20 text-orange-500 border-orange-500' : 'bg-red-500/10 hover:bg-red-500/20 text-red-500 border-red-500/20 hover:border-red-500/40'"
-          >
-            <div class="w-2 h-2 rounded-sm" :class="isConfirmingStop ? 'bg-orange-500 animate-pulse' : 'bg-red-500'"></div>
-            <span class="text-[10px] font-bold tracking-wider uppercase leading-none">
-              {{ isConfirmingStop ? 'Confirm?' : 'Stop' }}
-            </span>
-          </button>
-        </SlimTooltip>
 
-        <SlimTooltip v-if="data.onDelete" text="Delete task node" placement="top">
-          <button @click="data.onDelete" class="p-1 hover:bg-red-500/10 rounded-md text-zinc-400 hover:text-red-500 transition-colors nodrag">
-            <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16"></path></svg>
-          </button>
-        </SlimTooltip>
+      <!-- Overall progress -->
+      <div v-if="data.progress !== undefined && data.progress !== null" class="h-0.5 w-full bg-zinc-200 dark:bg-white/10">
+        <div class="h-full bg-primary transition-all duration-500" :style="{ width: `${data.progress}%` }"></div>
       </div>
     </div>
 
-    <!-- Progress Steps -->
-    <div class="space-y-2 nodrag cursor-text">
-      <div v-for="(step, index) in data.steps" :key="index" class="flex items-center space-x-2 text-xs">
-        <div 
-          class="w-2 h-2 rounded-full"
-          :class="{
-            'bg-accent': step.status === 'done',
-            'bg-primary animate-pulse': step.status === 'active',
-            'bg-zinc-300 dark:bg-zinc-600': step.status === 'pending'
-          }"
-        ></div>
-        <span 
-          :class="step.status === 'active' ? 'text-zinc-900 dark:text-zinc-100 font-bold' : 'text-zinc-500'"
-        >
-          {{ step.name }}
-        </span>
-      </div>
-    </div>
-
-    <!-- Overall Progress bar -->
-    <div v-if="data.progress !== undefined" class="mt-4 h-1.5 w-full bg-zinc-100 dark:bg-zinc-700/50 rounded-full overflow-hidden shadow-inner">
-      <div class="h-full bg-gradient-to-r from-primary to-primary-light transition-all duration-500 shadow-[0_0_8px_rgba(var(--primary),0.3)]" :style="{ width: `${data.progress}%` }"></div>
-    </div>
-    
-    <Handle type="source" :position="Position.Bottom" class="w-3 h-3 bg-blue-500 border-2 border-white dark:border-zinc-800" />
+    <Handle type="source" :position="Position.Bottom" class="node-handle node-handle-out" />
   </div>
 </template>
 

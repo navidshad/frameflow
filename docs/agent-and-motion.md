@@ -88,3 +88,31 @@ against its design board; one PR per stage into `main`.
   into the layer, so a project never depends on the library.
 - The contract accepts the board's authoring shapes too: `settings` as a map, `moments` as
   `name: [start, end]` ranges (the gaps become the flexible hold).
+
+## Sound: the synth and its tools (built)
+
+Sound is made, not fetched. Every effect and the ambient bed is an ffmpeg filter graph (`src/shared/synth.ts`, ported from the Lumi studio's palette), rendered by `src/main/editor/synth.ts`, seeded and offline, normalised to the recipe's **peak** level and cached by a hash of the recipe. A sound is an audio asset that remembers its `synth` recipe; editing a recipe renders a new file and points the clip at it (the old asset stays so undo works).
+
+A sound clip can **follow** a moment on another clip (`TimelineItem.bind`: its start, a motion layer's exit, or its end, less a per-sound lead). Followers move in the same undo step as what they follow: in `commitStep` for the UI, and in `opsToDiff` (`applyFollowers`) for an agent's edit. Dragging a follower by hand drops the binding.
+
+Over MCP an agent has, all read-only except `apply_ops`:
+
+| Tool | What it gives |
+|---|---|
+| `get_sound_guide` | The palette, roles, levels, the key rule, how to choose, the loop. Built from the palette, so it cannot drift. |
+| `list_sounds` | The palette, the sounds already placed (with what they follow), and the audio tracks' roles. |
+| `suggest_cues` | The moments that want a sound, each with a suggested sound, the `follow` to pass back, and whether it is taken. |
+| `render_sound` | A recipe (or a placed sound) measured: length, peak, loudness, and a spectrogram image. Changes nothing. |
+| `analyze_audio` | Per-role loudness and peaks, per-clip estimates, and warnings in words. Estimated from measured sources and gains; it says what it leaves out. |
+| `apply_ops` | Gains `addSounds`, `setSounds` and `setTrackRoles`. Making or changing a sound needs the **Make sounds with the built-in synth** permission (on by default; free and offline). |
+
+## Providers: generated voice, effects and music (built)
+
+A provider makes audio from a prompt: ElevenLabs (voice, sound effects, music; its own key) and Gemini voices (voice-over; the Gemini key the app already has, switched on in Settings). Settings → **Audio providers** holds the keys (encrypted, never sent to the renderer), the Gemini toggle and the agent spend limits.
+
+- **A generated sound is made once, then it is a file.** `generate.ts` writes it into the project as an ordinary audio asset with a receipt (`MediaAsset.generated`: provider, prompt, voice, model, cost). It plays, undoes and exports with no network, and the provider can change or vanish later. Export never calls a provider.
+- **You press Generate, you see the price first.** The Sound tab's Generate (effects, music) and Voice pages show an estimate before the button; the result is listed under "Made in this project" with play and add. A person is not bound by the agent cap.
+- **An agent needs its own permission** ("Generate voices, sounds and music", off by default) and is capped per turn by count and dollars (default 3 and $1). `generate_audio` makes the asset and returns its id and cost; `apply_ops placeAudio` puts it on a lane of the right role. Placing is free. ElevenLabs bills in credits, so only the count guards it; Gemini and the ElevenLabs estimates are list-price guesses.
+- A usage record (`source: audio:<provider>`) is added for each generation, so it shows with the other costs.
+
+Pure policy (limits, spend rule, provenance) is `src/shared/audioProviders.ts`; the network lives in `src/main/audio/` behind an injected `fetch` and is tested against fakes, never a real key.

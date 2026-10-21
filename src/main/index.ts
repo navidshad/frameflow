@@ -21,6 +21,11 @@ import { checkYtDlpAvailability, downloadVideo, getVideoFormats } from './ytdlp'
 import { dependencyManager } from './dependencies/manager'
 import { checkYtDlpFreshness } from './dependencies/ytdlp-updater'
 import * as editorAssets from './editor/assets'
+import { getAudioAnalysis } from './editor/audioAnalysis'
+import { ensureSoundAsset, previewSound } from './editor/synth'
+import { isSoundKind } from '../shared/synth'
+import { estimateUsd, generateForProject, providerStatuses, voicesFor } from './audio/runtime'
+import { normalizeAudioSettings, isProviderId, type GenerateRequest } from '../shared/audioProviders'
 import * as editorPreprocess from './editor/preprocess'
 import * as editorHistory from './editor/history'
 import * as editorPrompt from './editor/prompt'
@@ -607,6 +612,57 @@ app.whenReady().then(() => {
 				event.sender.send('editor-silence-progress', { assetId, percent })
 			}
 		})
+	})
+
+	// A source's waveform and loudness, measured once and cached beside the
+	// asset. Read-only: it never touches the media or the document.
+	ipcMain.handle('editor-audio-analysis', async (_event, { threadId, assetId }: { threadId: string, assetId: string }) => {
+		const thread = threadManager.getThread(threadId)
+		const asset = thread?.editor?.media.find((a) => a.id === assetId)
+		if (!thread || !asset) throw new Error('Asset not found')
+		const source = fs.existsSync(asset.originalPath) ? asset.originalPath : (asset.proxyPath || asset.originalPath)
+		return await getAudioAnalysis(editorAssets.getAssetDir(thread, assetId), source, { hasAudio: asset.metadata?.hasAudio })
+	})
+
+	// Synthesised sound: a recipe rendered to a file by ffmpeg, no network. Preview
+	// renders (and caches) a recipe so the palette can audition it; the asset call
+	// makes it part of the project. Both are keyed by the recipe, so a repeat is free.
+	ipcMain.handle('editor-sound-preview', async (_event, { threadId, recipe }: { threadId: string, recipe: { kind: string } }) => {
+		if (!isSoundKind(recipe?.kind)) throw new Error(`Unknown sound: ${String(recipe?.kind)}`)
+		return await previewSound(threadId, recipe as never)
+	})
+	ipcMain.handle('editor-sound-asset', async (_event, { threadId, recipe }: { threadId: string, recipe: { kind: string } }) => {
+		if (!isSoundKind(recipe?.kind)) throw new Error(`Unknown sound: ${String(recipe?.kind)}`)
+		return await ensureSoundAsset(threadId, recipe as never)
+	})
+
+	// Audio providers (voices, sound from a prompt, music). Keys never leave the
+	// main process: the renderer sees only whether one is saved. A generation here
+	// is the person pressing Generate, so it is not held to an agent's spend cap.
+	ipcMain.handle('audio-providers-status', () => ({ providers: providerStatuses(), settings: settingsManager.getAudioSettings() }))
+	ipcMain.handle('audio-set-elevenlabs-key', (_event, key: string) => {
+		settingsManager.setElevenLabsKey(typeof key === 'string' ? key : '')
+		return { providers: providerStatuses(), settings: settingsManager.getAudioSettings() }
+	})
+	ipcMain.handle('audio-update-settings', (_event, patch: unknown) => {
+		const current = settingsManager.getAudioSettings()
+		const next = normalizeAudioSettings({ ...current, ...(patch as object), spend: { ...current.spend, ...((patch as any)?.spend ?? {}) } })
+		settingsManager.updateAudioSettings(next)
+		return { providers: providerStatuses(), settings: settingsManager.getAudioSettings() }
+	})
+	ipcMain.handle('audio-estimate', (_event, request: GenerateRequest) => estimateUsd(request))
+	ipcMain.handle('audio-voices', async (_event, provider: string) => {
+		if (!isProviderId(provider)) return []
+		try { return await voicesFor(provider) } catch (error) { console.warn('[audio] listing voices failed:', (error as Error).message); return [] }
+	})
+	// A provider's own words (bad key, out of credits) come back as text the UI can show, not as a thrown IPC error.
+	ipcMain.handle('audio-generate', async (_event, { threadId, request }: { threadId: string, request: GenerateRequest }) => {
+		try {
+			const { asset } = await generateForProject(threadId, request)
+			return { ok: true as const, asset }
+		} catch (error: any) {
+			return { ok: false as const, error: error?.message || 'The sound could not be made.' }
+		}
 	})
 
 	// AI prompt turns (M3): one structured call per turn, streamed via

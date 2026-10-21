@@ -1,245 +1,106 @@
 <template>
-  <div class="h-screen flex flex-col bg-transparent transition-colors duration-300 overflow-hidden relative">
-    <div class="container mx-auto px-6 py-12 max-w-7xl flex flex-col h-full z-10 relative">
-      <!-- Header -->
-      <PageHeader
-        title="Settings"
-        subtitle="Configure application preferences and manage your data."
-        :show-back="true"
-      >
-        <template #back>
-          <IconButton @click="router.back()" icon="IconArrowLeft" size="sm" class="bg-white/50 dark:bg-zinc-800/50 backdrop-blur-md" />
-        </template>
-      </PageHeader>
+  <div class="h-full flex flex-col bg-ground overflow-hidden">
+    <AppTopBar title="Settings" subtitle="Configure application preferences and manage your data." show-back
+      :show-settings="false" @back="router.back()" />
 
-      <div class="flex-1 overflow-y-auto -mx-6 px-6 pb-8 custom-scrollbar">
-        <div class="max-w-4xl mx-auto space-y-8 pb-12">
-          <!-- Temp Directory section -->
-          <Card
-            class="!bg-white/90 dark:!bg-zinc-900/90 backdrop-blur-xl !rounded-lg border !border-zinc-200 dark:!border-zinc-700 !p-8">
-            <div class="flex items-center space-x-5 mb-8">
-              <div
-                class="w-14 h-14 rounded-lg bg-blue-50 dark:bg-blue-500/10 flex items-center justify-center text-blue-600 dark:text-blue-400 border border-blue-100 dark:border-blue-500/20">
-                <svg xmlns="http://www.w3.org/2000/svg" class="w-7 h-7" viewBox="0 0 24 24" fill="none"
-                  stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-                  <path d="M20 10V4a2 2 0 0 0-2-2H4a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h16a2 2 0 0 0 2-2v-6" />
-                  <path d="M12 2v10l3-3 3 3V2" />
-                </svg>
-              </div>
-              <div>
-                <h3 class="font-heading font-bold text-xl text-zinc-900 dark:text-white">Temporary Directory</h3>
-                <p class="text-sm text-zinc-500 dark:text-zinc-400 font-medium">Location where intermediate files are stored</p>
-              </div>
-            </div>
+    <div class="flex-1 overflow-y-auto custom-scrollbar">
+      <div class="mx-auto w-full max-w-[880px] px-10 pb-16 flat-fields">
+        <!-- Storage -->
+        <SettingsSection title="Storage" description="Where intermediate files are kept.">
+          <div class="font-mono text-xs break-all py-2" :style="{ borderBottom: '1px solid var(--ff-hairline-strong)' }">
+            {{ tempDir || 'Loading...' }}
+          </div>
+          <div v-if="isTempDirUnsafe" class="strip strip-warn mt-2.5 text-[11px] text-amber-600 dark:text-amber-400">
+            <span>
+              <b class="font-semibold">Unstable Storage Location.</b>
+              This folder may be cleared by the OS. Use a persistent directory to keep your project artifacts safe.
+            </span>
+          </div>
+          <div class="flex gap-5 mt-3">
+            <button @click="handleChange" class="btn-text btn-text-primary !px-0">Change location</button>
+            <button @click="handleOpen" class="btn-text btn-text-primary !px-0">Open folder</button>
+            <button @click="handleReset" class="btn-text !px-0">Reset to default</button>
+          </div>
+        </SettingsSection>
 
-            <div class="space-y-6">
-              <div
-                class="p-5 bg-zinc-50 dark:bg-zinc-950/50 rounded-lg border border-zinc-200 dark:border-zinc-800 font-mono text-sm text-zinc-600 dark:text-zinc-400 break-all relative group">
-                {{ tempDir || 'Loading...' }}
-                
-                <div v-if="isTempDirUnsafe" class="mt-4 flex items-start gap-3 p-3 rounded-md bg-amber-500/10 border border-amber-500/20 text-amber-700 dark:text-amber-400 font-sans animate-in fade-in slide-in-from-top-2 duration-300">
-                  <svg xmlns="http://www.w3.org/2000/svg" class="w-5 h-5 shrink-0" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M10.29 3.86L1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z"/><line x1="12" y1="9" x2="12" y2="13"/><line x1="12" y1="17" x2="12.01" y2="17"/></svg>
-                  <div class="text-xs">
-                    <p class="font-bold mb-0.5">Unstable Storage Location</p>
-                    <p class="opacity-80 leading-relaxed">This folder may be cleared by the OS. Use a persistent directory to keep your project artifacts safe.</p>
-                  </div>
+        <!-- AI engine -->
+        <AiEngineCard />
+
+        <!-- Agent access (MCP) -->
+        <AgentAccessCard />
+        <!-- Audio providers -->
+        <AudioProvidersCard />
+
+        <!-- Gemini API key -->
+        <SettingsSection title="Gemini API key"
+          description="Used for transcripts, scene descriptions, and the Gemini API engine.">
+          <label for="gemini-key" class="sr-only">Gemini API key</label>
+          <input id="gemini-key" v-model="apiKey" type="password" placeholder="Enter API Key..." autocomplete="off"
+            class="field font-mono !py-2" />
+          <button @click="handleSaveApiKey" :disabled="!apiKey || apiKey === initialApiKey"
+            class="btn-text btn-text-primary !px-0 mt-3">Save API key</button>
+        </SettingsSection>
+
+        <!-- Model selection -->
+        <SettingsSection title="Model selection" description="Assign models to specific operations. Changes save by themselves.">
+          <div class="flex justify-end -mt-1 mb-1">
+            <button @click="handleResetModels" class="btn-text !text-[11px]">Reset models</button>
+          </div>
+          <div v-for="op in orderedOperations" :key="op" class="flex items-center justify-between gap-4 py-2 hair-b">
+            <span class="text-zinc-700 dark:text-zinc-300 capitalize">{{ getOpLabel(op) }}</span>
+            <select v-model="modelSettings.selection[op]" @change="handleSaveModelSettings"
+              class="field !w-60 !py-1 cursor-pointer">
+              <option v-for="mName in getModelsForOp(op)" :key="mName" :value="mName">{{ getModelLabel(mName) }}</option>
+            </select>
+          </div>
+        </SettingsSection>
+
+        <!-- Model pricing -->
+        <SettingsSection title="Model pricing" description="Cost per 1M tokens in USD.">
+          <div class="flex justify-end -mt-1 mb-2">
+            <button @click="handleResetPricing" class="btn-text !text-[11px]">Reset pricing</button>
+          </div>
+          <div class="overflow-x-auto">
+            <div class="min-w-[520px]">
+              <div :class="PRICING_COLS" class="gap-3 pb-1.5 text-[10px] font-bold uppercase tracking-wide text-zinc-500 dark:text-zinc-400">
+                <span>Model</span><span>Input std</span><span>Output std</span><span>Output image</span><span>Input audio</span>
+              </div>
+              <div v-for="(pricing, mName) in modelSettings.pricing" :key="mName" :class="PRICING_COLS"
+                class="gap-3 py-2 hair-t items-center">
+                <div class="min-w-0">
+                  <div class="font-semibold truncate" :title="String(mName)">{{ getModelLabel(mName) }}</div>
+                  <div class="text-[10px] text-zinc-400 truncate" :title="String(mName)">{{ mName }}</div>
                 </div>
-              </div>
-
-              <div class="flex gap-4 justify-between">
-                <Button @click="handleChange" outline color="secondary" size="sm" label="Change Location" class="w-full"/>
-                <Button @click="handleOpen" color="primary" size="sm" label="Open Folder" class="w-full"/>
-                <Button @click="handleReset" size="sm" label="Reset to Default" class="w-full"/>
-              </div>
-            </div>
-          </Card>
-
-          <!-- AI engine — board 4's upper card -->
-          <AiEngineCard />
-
-          <!-- Agent access (MCP) — board 4's lower card -->
-          <AgentAccessCard />
-
-          <!-- Gemini API Key section -->
-          <Card
-            class="!bg-white/90 dark:!bg-zinc-900/90 backdrop-blur-xl !rounded-lg border !border-zinc-200 dark:!border-zinc-700 !p-8">
-            <div class="flex items-center space-x-5 mb-8">
-              <div
-                class="w-14 h-14 rounded-lg bg-amber-50 dark:bg-amber-500/10 flex items-center justify-center text-amber-600 dark:text-amber-400 border border-amber-100 dark:border-amber-500/20">
-                <svg xmlns="http://www.w3.org/2000/svg" class="w-7 h-7" viewBox="0 0 24 24" fill="none"
-                  stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-                  <path d="M21 2l-2 2" />
-                  <circle cx="7" cy="13" r="5" />
-                  <path d="M11 9l9-9 3 3-3 3-4 4-4-4" />
-                  <path d="M13 13l4 4" />
-                </svg>
-              </div>
-              <div>
-                <h3 class="font-heading font-bold text-xl text-zinc-900 dark:text-white">Gemini API Key</h3>
-                <p class="text-sm text-zinc-500 dark:text-zinc-400 font-medium">Your secret API key for Gemini services</p>
+                <label class="flex items-center gap-1 font-mono"><span class="text-zinc-400">$</span>
+                  <input type="number" step="0.01" v-model.number="pricing.input.standard" @change="handleSaveModelSettings"
+                    class="field !w-full font-mono !py-1" />
+                </label>
+                <label class="flex items-center gap-1 font-mono"><span class="text-zinc-400">$</span>
+                  <input type="number" step="0.01" v-model.number="pricing.output.standard" @change="handleSaveModelSettings"
+                    class="field !w-full font-mono !py-1" />
+                </label>
+                <label v-if="pricing.output.image !== undefined" class="flex items-center gap-1 font-mono"><span class="text-zinc-400">$</span>
+                  <input type="number" step="0.0001" v-model.number="pricing.output.image" @change="handleSaveModelSettings"
+                    class="field !w-full font-mono !py-1" />
+                </label>
+                <span v-else class="text-zinc-400 font-mono opacity-40">—</span>
+                <label v-if="pricing.input.audio !== undefined" class="flex items-center gap-1 font-mono"><span class="text-zinc-400">$</span>
+                  <input type="number" step="0.01" v-model.number="pricing.input.audio" @change="handleSaveModelSettings"
+                    class="field !w-full font-mono !py-1" />
+                </label>
+                <span v-else class="text-zinc-400 font-mono opacity-40">—</span>
               </div>
             </div>
+          </div>
+        </SettingsSection>
 
-            <div class="space-y-4">
-              <Input v-model="apiKey" type="password" placeholder="Enter API Key..."/>
-              <Button @click="handleSaveApiKey" :disabled="!apiKey || apiKey === initialApiKey" size="sm" class="w-full disabled:!bg-zinc-100 dark:disabled:!bg-zinc-800 disabled:!text-zinc-400 dark:disabled:!text-zinc-600 transition-all font-bold" label="Save API Key" />
-            </div>
-          </Card>
-          
-          <!-- Model Selection section -->
-          <Card
-            class="!bg-white/90 dark:!bg-zinc-900/90 backdrop-blur-xl !rounded-lg border !border-zinc-200 dark:!border-zinc-700 !p-8">
-            <div class="flex items-center justify-between mb-8">
-              <div class="flex items-center space-x-5">
-                <div
-                  class="w-14 h-14 rounded-lg bg-purple-50 dark:bg-purple-500/10 flex items-center justify-center text-purple-600 dark:text-purple-400 border border-purple-100 dark:border-purple-500/20">
-                  <svg xmlns="http://www.w3.org/2000/svg" class="w-7 h-7" viewBox="0 0 24 24" fill="none"
-                    stroke="currentColor" stroke-width="2" stroke-linecap="round"
-                    stroke-linejoin="round">
-                    <path d="M12 2L2 7l10 5 10-5-10-5z" />
-                    <path d="m2 17 10 5 10-5" />
-                    <path d="m2 12 10 5 10-5" />
-                  </svg>
-                </div>
-                <div>
-                  <h3 class="font-heading font-bold text-xl text-zinc-900 dark:text-white">Model Selection</h3>
-                  <p class="text-sm text-zinc-500 dark:text-zinc-400 font-medium">Assign models to specific operations</p>
-                </div>
-              </div>
-              <Button @click="handleResetModels" outline size="xs" label="Reset Models" />
-            </div>
-
-            <div class="space-y-4">
-              <div v-for="op in orderedOperations" :key="op"
-                class="flex items-center justify-between p-4 bg-zinc-50 dark:bg-zinc-950/50 rounded-lg border border-zinc-200 dark:border-zinc-800 hover:border-purple-500/30 transition-colors">
-                <span class="text-sm font-bold text-zinc-700 dark:text-zinc-300 capitalize">{{
-                  getOpLabel(op) }}</span>
-                <select v-model="modelSettings.selection[op]" @change="handleSaveModelSettings"
-                  class="bg-white dark:bg-zinc-900 border border-zinc-200 dark:border-zinc-700 rounded-lg px-4 py-2 text-sm text-zinc-900 dark:text-white focus:ring-2 focus:ring-purple-500 outline-none transition-all cursor-pointer font-medium hover:border-purple-500/50">
-                  <option v-for="mName in getModelsForOp(op)" :key="mName" :value="mName">{{ getModelLabel(mName) }}
-                  </option>
-                </select>
-              </div>
-            </div>
-          </Card>
-
-          <!-- Model Pricing section -->
-          <Card
-            class="!bg-white/90 dark:!bg-zinc-900/90 backdrop-blur-xl !rounded-lg border !border-zinc-200 dark:!border-zinc-700 !p-8">
-            <div class="flex items-center justify-between mb-8">
-              <div class="flex items-center space-x-5">
-                <div
-                  class="w-14 h-14 rounded-lg bg-emerald-50 dark:bg-emerald-500/10 flex items-center justify-center text-emerald-600 dark:text-emerald-400 border border-emerald-100 dark:border-emerald-500/20">
-                  <svg xmlns="http://www.w3.org/2000/svg" class="w-7 h-7" viewBox="0 0 24 24" fill="none"
-                    stroke="currentColor" stroke-width="2" stroke-linecap="round"
-                    stroke-linejoin="round">
-                    <line x1="12" y1="1" x2="12" y2="23" />
-                    <path d="M17 5H9.5a3.5 3.5 0 0 0 0 7h5a3.5 3.5 0 0 1 0 7H6" />
-                  </svg>
-                </div>
-                <div>
-                  <h3 class="font-heading font-bold text-xl text-zinc-900 dark:text-white">Model Pricing</h3>
-                  <p class="text-sm text-zinc-500 dark:text-zinc-400 font-medium">Configure cost per 1M tokens (USD)</p>
-                </div>
-              </div>
-              <Button @click="handleResetPricing" outline size="xs" label="Reset Pricing" />
-            </div>
-
-            <div class="overflow-x-auto">
-              <table class="w-full text-left text-sm">
-                <thead>
-                  <tr
-                    class="text-zinc-500 dark:text-zinc-400 border-b border-zinc-200 dark:border-zinc-800">
-                    <th class="pb-4 pr-4 font-bold uppercase tracking-wider text-xs">Model</th>
-                    <th class="pb-4 px-4 font-bold uppercase tracking-wider text-xs text-center">Input (Std)</th>
-                    <th class="pb-4 px-4 font-bold uppercase tracking-wider text-xs text-center">Output (Std)</th>
-                    <th class="pb-4 px-4 font-bold uppercase tracking-wider text-xs text-center">Output (Image)</th>
-                    <th class="pb-4 pl-4 font-bold uppercase tracking-wider text-xs text-center">Input (Audio)</th>
-                  </tr>
-                </thead>
-                <tbody class="divide-y divide-zinc-100 dark:divide-zinc-800/50">
-                  <tr v-for="(pricing, mName) in modelSettings.pricing" :key="mName" class="group hover:bg-zinc-50/50 dark:hover:bg-zinc-800/20 transition-colors">
-                    <td class="py-5 pr-4">
-                      <div class="font-bold text-zinc-900 dark:text-white truncate max-w-[150px]"
-                        :title="String(mName)">{{ getModelLabel(mName) }}</div>
-                      <div class="text-[10px] text-zinc-400 font-medium truncate max-w-[150px] mt-0.5 opacity-60" :title="String(mName)">{{ mName }}</div>
-                    </td>
-                    <td class="py-5 px-2">
-                      <div class="flex items-center justify-center">
-                        <span class="text-zinc-400 mr-1.5 font-mono">$</span>
-                        <input type="number" step="0.01" v-model.number="pricing.input.standard"
-                          @change="handleSaveModelSettings"
-                          class="w-20 bg-zinc-50 dark:bg-zinc-950/50 border border-zinc-200 dark:border-zinc-800 rounded-lg px-2 py-1.5 text-center outline-none focus:border-emerald-500 focus:ring-1 focus:ring-emerald-500 transition-all font-mono text-xs" />
-                      </div>
-                    </td>
-                    <td class="py-5 px-2">
-                      <div class="flex items-center justify-center">
-                        <span class="text-zinc-400 mr-1.5 font-mono">$</span>
-                        <input type="number" step="0.01" v-model.number="pricing.output.standard"
-                          @change="handleSaveModelSettings"
-                          class="w-20 bg-zinc-50 dark:bg-zinc-950/50 border border-zinc-200 dark:border-zinc-800 rounded-lg px-2 py-1.5 text-center outline-none focus:border-emerald-500 focus:ring-1 focus:ring-emerald-500 transition-all font-mono text-xs" />
-                      </div>
-                    </td>
-                    <td class="py-5 px-2">
-                      <div class="flex items-center justify-center">
-                        <template v-if="pricing.output.image !== undefined">
-                          <span class="text-zinc-400 mr-1.5 font-mono">$</span>
-                          <input type="number" step="0.0001" v-model.number="pricing.output.image"
-                            @change="handleSaveModelSettings"
-                            class="w-24 bg-zinc-50 dark:bg-zinc-950/50 border border-zinc-200 dark:border-zinc-800 rounded-lg px-2 py-1.5 text-center outline-none focus:border-emerald-500 focus:ring-1 focus:ring-emerald-500 transition-all font-mono text-xs" />
-                        </template>
-                        <template v-else>
-                          <span class="text-zinc-400 font-mono opacity-30">—</span>
-                        </template>
-                      </div>
-                    </td>
-                    <td class="py-5 pl-2">
-                      <div class="flex items-center justify-center">
-                        <template v-if="pricing.input.audio !== undefined">
-                          <span class="text-zinc-400 mr-1.5 font-mono">$</span>
-                          <input type="number" step="0.01" v-model.number="pricing.input.audio"
-                            @change="handleSaveModelSettings"
-                            class="w-20 bg-zinc-50 dark:bg-zinc-950/50 border border-zinc-200 dark:border-zinc-800 rounded-lg px-2 py-1.5 text-center outline-none focus:border-emerald-500 focus:ring-1 focus:ring-emerald-500 transition-all font-mono text-xs" />
-                        </template>
-                        <template v-else>
-                          <span class="text-zinc-400 font-mono opacity-30">—</span>
-                        </template>
-                      </div>
-                    </td>
-                  </tr>
-                </tbody>
-              </table>
-            </div>
-          </Card>
-
-          <!-- Danger Zone -->
-          <Card
-            class="!bg-red-50/50 dark:!bg-red-900/10 backdrop-blur-xl !rounded-lg border !border-red-200 dark:!border-red-500/20 !p-8 hover:border-red-300 dark:hover:border-red-500/30 transition-colors">
-            <div class="flex items-center space-x-5 mb-6">
-              <div
-                class="w-14 h-14 rounded-lg bg-red-100 dark:bg-red-500/20 flex items-center justify-center text-red-600 dark:text-red-400">
-                <svg xmlns="http://www.w3.org/2000/svg" class="w-7 h-7" viewBox="0 0 24 24" fill="none"
-                  stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-                  <path d="M3 6h18" />
-                  <path d="M19 6v14c0 1-1 2-2 2H7c-1 0-2-1-2-2V6" />
-                  <path d="M8 6V4c0-1 1-2 2-2h4c1 0 2 1 2 2v2" />
-                </svg>
-              </div>
-              <div>
-                <h3 class="font-heading font-bold text-xl text-red-600 dark:text-red-400">Danger Zone</h3>
-                <p class="text-sm text-red-500/70 dark:text-red-400/70 font-medium">Irreversible actions</p>
-              </div>
-            </div>
-
-            <div class="space-y-6">
-              <p class="text-sm text-zinc-600 dark:text-red-200/80 font-medium">
-                Permanently delete all chats, video summaries, and cached files. This action cannot be
-                undone.
-              </p>
-              <Button @click="handleDeleteAll" label="Delete All Data" outline color="danger" class="w-full" />
-            </div>
-          </Card>
-        </div>
+        <!-- Danger zone -->
+        <SettingsSection title="Danger zone" description="Irreversible actions.">
+          <p class="text-zinc-600 dark:text-zinc-300 leading-relaxed">
+            Permanently delete all chats, video summaries, and cached files. This action cannot be undone.
+          </p>
+          <button @click="handleDeleteAll" class="btn-text btn-text-danger !px-0 mt-3">Delete all data</button>
+        </SettingsSection>
       </div>
     </div>
   </div>
@@ -248,16 +109,18 @@
 <script setup lang="ts">
 import { ref, onMounted, computed, toRaw } from 'vue'
 import { useRouter } from 'vue-router'
-import { Button, IconButton, Card } from 'pilotui/elements'
-import { Input } from 'pilotui/form'
 import { useVideoStore } from '../stores/videoStore'
-import PageHeader from '../components/PageHeader.vue'
+import AppTopBar from '../components/AppTopBar.vue'
+import SettingsSection from '../components/settings/SettingsSection.vue'
+import { dialog } from '../composables/useDialog'
 import AgentAccessCard from '../components/settings/AgentAccessCard.vue'
 import AiEngineCard from '../components/settings/AiEngineCard.vue'
+import AudioProvidersCard from '../components/settings/AudioProvidersCard.vue'
 import { ModelSettings } from '../../../shared/types'
 // In a real scenario we'd import constants, but we can also use the IPC-returned defaults if we added a method.
 // For now, we'll manually ensure the new model and selection are present if missing.
 const router = useRouter()
+const PRICING_COLS = 'grid grid-cols-[minmax(0,1.6fr)_repeat(4,minmax(0,1fr))]'
 const videoStore = useVideoStore()
 const tempDir = ref('')
 const isTempDirUnsafe = ref(false)
@@ -385,23 +248,39 @@ const handleSaveModelSettings = async () => {
 }
 
 const handleResetModels = async () => {
-  if (confirm('Reset model selection to defaults?')) {
+  const ok = await dialog.confirm({
+    title: 'Reset models',
+    message: 'Reset model selection to defaults?',
+    confirmLabel: 'Reset'
+  })
+  if (ok) {
     const mSettings = await (window as any).api.resetModelSettings()
     modelSettings.value.selection = mSettings.selection
   }
 }
 
 const handleResetPricing = async () => {
-  if (confirm('Reset model pricing to defaults?')) {
+  const ok = await dialog.confirm({
+    title: 'Reset pricing',
+    message: 'Reset model pricing to defaults?',
+    confirmLabel: 'Reset'
+  })
+  if (ok) {
     const mSettings = await (window as any).api.resetModelSettings()
     modelSettings.value.pricing = mSettings.pricing
   }
 }
 
 const handleDeleteAll = async () => {
-  if (confirm('Are you sure you want to delete all data? This cannot be undone.')) {
+  const ok = await dialog.confirm({
+    title: 'Delete all data',
+    message: 'Are you sure you want to delete all data? This cannot be undone.',
+    confirmLabel: 'Delete all data',
+    danger: true
+  })
+  if (ok) {
     await videoStore.deleteAllThreads()
-    alert('All data deleted successfully.')
+    await dialog.notify({ title: 'Data deleted', message: 'All data deleted successfully.', tone: 'success' })
   }
 }
 

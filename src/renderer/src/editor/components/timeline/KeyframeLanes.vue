@@ -46,7 +46,7 @@
 
 		<!-- The key popover: the selected key's value, ease and nudges. -->
 		<div v-if="popover"
-			class="absolute z-40 w-[236px] rounded-xl bg-white/95 dark:bg-zinc-900/95 backdrop-blur-xl border border-zinc-200 dark:border-zinc-800
+			class="absolute z-40 w-[236px] pop
 			       shadow-[0_10px_30px_rgba(0,0,0,0.5)] p-2.5 flex flex-col gap-2"
 			:style="{ left: `${popover.left}px`, top: `${popover.top}px` }"
 			role="dialog" :aria-label="`${popover.lane.label} key`"

@@ -1,5 +1,5 @@
 <template>
-	<div class="glass-card rounded-2xl flex flex-col min-h-0 overflow-hidden">
+	<div class="flex flex-col min-h-0 overflow-hidden">
 		<!-- Turn history -->
 		<div ref="scrollRef" class="flex-1 min-h-0 overflow-y-auto custom-scrollbar px-3 py-3 space-y-3">
 			<!-- Empty state — reflects whether media is ready to talk about -->

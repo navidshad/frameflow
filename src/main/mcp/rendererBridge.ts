@@ -5,6 +5,14 @@ import { renderExactFrame } from '../editor/preview'
 import { transcriptsForAssets } from '../editor/captions'
 import type { ApplyOutcome, EditorBridge, LiveProject } from './bridge'
 import { ToolError } from './tools'
+import { threadManager } from '../threads'
+import { analyzeAudioFile, getAudioAnalysis, spectrogramBase64 } from '../editor/audioAnalysis'
+import { ensureSoundAsset, ensureSoundFile, soundDirFor } from '../editor/synth'
+import { getAssetDir } from '../editor/assets'
+import { normaliseRecipe } from '../../shared/synth'
+import { connectedProviders, estimateUsd, generateForProject } from '../audio/runtime'
+import { settingsManager } from '../settings'
+import { ProviderError } from '../audio/provider'
 
 /**
  * The bridge to the renderer, whose Pinia store owns the live timeline.
@@ -118,5 +126,70 @@ export const rendererBridge: EditorBridge = {
 
 	startExport() {
 		return request('export', {}, 20_000)
+	},
+
+	async prepareSounds(project, recipes) {
+		// Rendered one after another: each is a few tenths of a second, and the
+		// asset records are written into the project one at a time.
+		const assets = []
+		for (const recipe of recipes) assets.push(await ensureSoundAsset(project.threadId, recipe))
+		return assets
+	},
+
+	async inspectSound(project, target) {
+		const thread = threadManager.getThread(project.threadId)
+		if (!thread) throw new ToolError('That project is not open any more.')
+		let file: string
+		let renderMs: number | undefined
+		if ('recipe' in target) {
+			const made = await ensureSoundFile(soundDirFor(thread.tempDir), normaliseRecipe(target.recipe))
+			file = made.path
+			renderMs = made.cached ? undefined : made.ms
+		} else {
+			const asset = thread.editor?.media.find((a) => a.id === target.assetId)
+			if (!asset) throw new ToolError(`No sound ${target.assetId} in this project.`)
+			file = asset.originalPath
+		}
+		const analysis = await analyzeAudioFile(file)
+		return {
+			lengthSec: analysis.durationSec, truePeakDb: analysis.truePeakDb, lufs: analysis.lufs, renderMs,
+			spectrogram: await spectrogramBase64(file).catch(() => undefined)
+		}
+	},
+
+	async audioAnalyses(project, assetIds) {
+		const thread = threadManager.getThread(project.threadId)
+		const out: Record<string, import('../../shared/audio').AudioAnalysis> = {}
+		for (const id of assetIds) {
+			const asset = thread?.editor?.media.find((a) => a.id === id)
+			if (!thread || !asset) continue
+			try {
+				const source = asset.originalPath
+				out[id] = await getAudioAnalysis(getAssetDir(thread, id), source, { hasAudio: asset.metadata?.hasAudio })
+			} catch { /* an unreadable source simply has no analysis */ }
+		}
+		return out
+	}
+	,
+
+	audioStatus() {
+		return { connected: connectedProviders(), spend: settingsManager.getAudioSettings().spend }
+	},
+
+	estimateAudio: estimateUsd,
+
+	async generateAudio(project, req) {
+		let made
+		try {
+			made = await generateForProject(project.threadId, req)
+		} catch (error: any) {
+			// A provider's own words (bad key, out of credits) are the ones to show.
+			if (error instanceof ProviderError) throw new ToolError(error.message)
+			throw error
+		}
+		// The renderer owns the live document and its autosave would drop an asset
+		// it never heard of, so it is told before anything can place it.
+		await request('upsert-assets', { assets: [made.asset] }, 10_000)
+		return made
 	}
 }

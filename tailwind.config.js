@@ -25,6 +25,11 @@ export default {
           dark: '#059669',
           light: '#34d399',
         },
+        // v2 surfaces. Values live in main.css so the light and dark themes
+        // swap them in one place (the `.dark` class on <html>).
+        ground: 'rgb(var(--ff-ground) / <alpha-value>)',
+        stage: 'rgb(var(--ff-stage) / <alpha-value>)',
+        hair: 'var(--ff-hairline)',
       },
       boxShadow: {
         'premium': '0 4px 20px rgba(0, 0, 0, 0.03)',

@@ -117,7 +117,7 @@ describe('a CLI engine turn that writes custom HTML', () => {
 	}, 90_000)
 
 	it('says no by default: an engine run that is not told about the setting cannot write pages', () => {
-		expect(enginePermissions(false)).toEqual({ edit: true, html: false, export: false })
-		expect(enginePermissions(true)).toEqual({ edit: true, html: true, export: false })
+		expect(enginePermissions(false)).toEqual({ edit: true, html: false, export: false, sound: true, generate: false })
+		expect(enginePermissions(true)).toEqual({ edit: true, html: true, export: false, sound: true, generate: false })
 	})
 })

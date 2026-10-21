@@ -1,6 +1,7 @@
 import { v4 as uuidv4 } from 'uuid'
+import { applyFollowers, applySoundOps } from './soundOps'
 import type {
-	Clip, EditorDocument, EditorOps, EditorPersona, PromptTurn, TimelineDiff, TimelineItem, Usage
+	Clip, EditorDocument, EditorOps, EditorPersona, MediaAsset, PromptTurn, TimelineDiff, TimelineItem, Usage
 } from '@shared/types'
 import {
 	applyTimelineDiff, clampSpeed, closeTimelineGaps, computeContentEnd, itemDuration, itemEnd,
@@ -924,7 +925,9 @@ export function opsToDiff(
 	ops: EditorOps,
 	doc: EditorDocument,
 	/** Who is writing, for the "Written by …" line on a custom page. */
-	writer: { by: string; turnId?: string } = { by: 'FrameFlow AI' }
+	writer: { by: string; turnId?: string } = { by: 'FrameFlow AI' },
+	/** Sounds the caller already rendered, by recipe key (see soundOps.soundRecipesOf). */
+	soundAssets: Map<string, MediaAsset> = new Map()
 ): OpsToDiffResult {
 	const droppedOps: string[] = []
 	const notes: string[] = []
@@ -1597,6 +1600,12 @@ export function opsToDiff(
 	if (ops.addMotion?.length || ops.updateMotion?.length) {
 		applyMotionOps(ops, doc, diff, droppedOps, notes, writer)
 	}
+
+	if (ops.addSounds?.length || ops.setSounds?.length || ops.setTrackRoles?.length || ops.placeAudio?.length) {
+		applySoundOps(ops, doc, diff, droppedOps, notes, soundAssets)
+	}
+	// Sounds that follow a moment go with it, in this same diff.
+	applyFollowers(doc, diff, [...soundAssets.values()])
 
 	const docSettings: OpsToDiffResult['docSettings'] = {}
 	if (typeof ops.captions === 'boolean') docSettings.captionsEnabled = ops.captions

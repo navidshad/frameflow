@@ -1,17 +1,7 @@
 <template>
-	<div class="glass-card rounded-2xl flex flex-col min-h-0 overflow-hidden">
-		<div class="px-4 pt-4 pb-2 flex items-center justify-between shrink-0">
-			<span class="text-[10px] font-bold uppercase tracking-widest text-zinc-500">
-				Transcript
-				<span class="text-zinc-400 normal-case tracking-normal font-mono ml-1">{{ cues.length }}</span>
-			</span>
-			<SlimTooltip text="Collapse panel" placement="bottom">
-				<button
-					class="w-7 h-7 flex items-center justify-center rounded-lg text-zinc-400 hover:text-primary hover:bg-primary/10 transition active:scale-95"
-					@click="$emit('update:collapsed', true)">
-					<span class="iconify tabler--layout-sidebar-left-collapse w-4 h-4"></span>
-				</button>
-			</SlimTooltip>
+	<div class="flex flex-col min-h-0 overflow-hidden">
+		<div class="px-3 pt-3 pb-1 flex items-center shrink-0">
+			<span class="lbl">Transcript <span class="font-mono normal-case tracking-normal font-normal text-zinc-400 ml-1">{{ cues.length }}</span></span>
 		</div>
 
 		<div v-if="!store.transcriptCues.length" class="px-4 pb-3 shrink-0">

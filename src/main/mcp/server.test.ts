@@ -105,6 +105,7 @@ describe('AgentServer over Streamable HTTP', () => {
 		const { tools } = await client.listTools()
 		expect(tools.map((t) => t.name)).toEqual([
 			'get_project', 'get_timeline', 'get_media', 'search_moments', 'render_frame', 'get_motion_guide',
+			'get_sound_guide', 'list_sounds', 'suggest_cues', 'render_sound', 'analyze_audio', 'generate_audio',
 			'apply_ops', 'revert_to_version', 'export'
 		])
 		const apply = tools.find((t) => t.name === 'apply_ops')!
@@ -125,7 +126,7 @@ describe('AgentServer over Streamable HTTP', () => {
 		const project = text(await client.callTool({ name: 'get_project', arguments: {} }))
 		expect(project.project.title).toBe('BytePets pre-pitch')
 		expect(project.media[0]).toMatchObject({ id: 'team', scenes: 3, hasTranscript: true })
-		expect(project.permissions).toEqual({ read: true, editTimeline: true, writeHtmlMotion: true, exportVideos: false })
+		expect(project.permissions).toEqual({ read: true, editTimeline: true, writeHtmlMotion: true, exportVideos: false, makeSounds: true })
 		expect(project.catalog.transitions).toContain('fade')
 
 		const timeline = text(await client.callTool({ name: 'get_timeline', arguments: {} }))
@@ -328,6 +329,221 @@ describe('AgentServer over Streamable HTTP', () => {
 			const project = text(await client.callTool({ name: 'get_project', arguments: {} }))
 			expect(project.catalog.motionTemplates.map((t: any) => t.id)).toContain('lower-third')
 			expect(project.catalog.motionTemplates.find((t: any) => t.id === 'lower-third').settings).toContain('name')
+		})
+	})
+
+
+	// ===== Sound =====
+
+	/** A lower third on a motion track, so there is a moment for a sound to follow. */
+	const withLowerThird = () => {
+		editor.doc.tracks.unshift({ id: 'm1', kind: 'video', name: 'M1', order: 2, muted: false, locked: false, hidden: false, height: 64 })
+		editor.doc.timeline.push({
+			id: 'lt', trackId: 'm1', sourceAssetId: '', timelineStart: 3, in: 0, out: 4, speed: 1, preservePitch: true,
+			duration: 4, label: 'Lower third', motion: { template: 'lower-third' }
+		})
+	}
+
+	it('teaches sound by the numbers, and lists the palette and what is placed', async () => {
+		const client = await connect()
+		const guide = (await client.callTool({ name: 'get_sound_guide', arguments: {} }) as any).content[0].text as string
+		expect(guide).toMatch(/SOUND GUIDE/)
+		expect(guide).toMatch(/whoosh: .* 0\.50 s/)
+		expect(guide).toMatch(/SAME pitch/)
+
+		const palette = text(await client.callTool({ name: 'list_sounds', arguments: {} }))
+		expect(palette.palette.map((p: any) => p.kind)).toContain('whoosh')
+		expect(palette.palette.find((p: any) => p.kind === 'flight').lengthSec).toMatch(/durationSec/)
+		expect(palette.placed).toEqual([])
+		expect(palette.providers).toEqual({
+			connected: [{ provider: 'elevenlabs', makes: ['speech', 'sfx', 'music'] }], allowed: false, limit: { generations: 2, usd: 1 }
+		})
+	})
+
+	it('suggests the moments that want a sound, with the follow to pass back', async () => {
+		withLowerThird()
+		const client = await connect()
+		const { cues, open } = text(await client.callTool({ name: 'suggest_cues', arguments: {} }))
+		expect(open).toBe(2)
+		expect(cues[0]).toMatchObject({ cue: 'lt:start', atSec: 3, sound: 'whoosh', taken: false, follow: { item: 'lt', at: 'start' }, leadMs: 84 })
+		expect(cues[1]).toMatchObject({ sound: 'pop', follow: { item: 'lt', at: 'out' } })
+	})
+
+	it('adds a sound that follows a moment: rendered first, placed early, one revision, and it goes with the moment', async () => {
+		withLowerThird()
+		const client = await connect()
+		const result = await client.callTool({
+			name: 'apply_ops',
+			arguments: { rationale: 'A whoosh as the name slides in.', addSounds: [{ kind: 'whoosh', follow: { item: 'lt', at: 'start' } }] }
+		}) as any
+		const out = text(result)
+		expect(out.revision).toBe('V1')
+		expect(out.applied.added).toBe(1)
+		expect(editor.renderedSounds).toEqual([{ kind: 'whoosh' }])
+
+		const sound = editor.doc.timeline.find((i) => i.bind)!
+		expect(sound.timelineStart).toBeCloseTo(3 - 0.084)
+		expect(editor.doc.tracks.find((t) => t.id === sound.trackId)).toMatchObject({ kind: 'audio', role: 'sfx' })
+		// The renderer was handed the asset with the turn.
+		expect(editor.doc.media.some((a) => a.synth?.kind === 'whoosh')).toBe(true)
+
+		// Move the lower third, and the whoosh follows in the same edit.
+		await client.callTool({ name: 'apply_ops', arguments: { rationale: 'Later.', updateItems: [{ id: 'lt', timelineStart: 9 }] } })
+		expect(editor.doc.timeline.find((i) => i.bind)!.timelineStart).toBeCloseTo(9 - 0.084)
+
+		// get_timeline says what the sound is and what it follows.
+		const items = text(await client.callTool({ name: 'get_timeline', arguments: {} })).items
+		const reported = items.find((i: any) => i.sound)
+		expect(reported.sound).toMatchObject({ kind: 'whoosh', levelDb: -17 })
+		expect(reported.follows).toMatchObject({ item: 'lt', at: 'start' })
+	})
+
+	it('changes a sound and a role, and refuses a sound that does not exist', async () => {
+		withLowerThird()
+		const client = await connect()
+		await client.callTool({ name: 'apply_ops', arguments: { rationale: 'Whoosh.', addSounds: [{ kind: 'whoosh', follow: { item: 'lt' } }] } })
+		const id = editor.doc.timeline.find((i) => i.bind)!.id
+
+		await client.callTool({ name: 'apply_ops', arguments: { rationale: 'Higher.', setSounds: [{ id, pitch: 2 }] } })
+		expect(editor.doc.media.some((a) => a.synth?.kind === 'whoosh' && a.synth.pitch === 2)).toBe(true)
+
+		const audio = editor.doc.tracks.find((t) => t.kind === 'audio')!
+		await client.callTool({ name: 'apply_ops', arguments: { rationale: 'Voice.', setTrackRoles: [{ trackId: audio.id, role: 'voice' }] } })
+		expect(editor.doc.tracks.find((t) => t.id === audio.id)!.role).toBe('voice')
+
+		const bad = await client.callTool({ name: 'apply_ops', arguments: { rationale: 'x', addSounds: [{ kind: 'kazoo', atSec: 1 }] } }) as any
+		expect(bad.isError).toBe(true)
+		expect(bad.content[0].text).toMatch(/unknown sound "kazoo"|not in|must be one of/)
+	})
+
+	it('measures a recipe: numbers and a spectrogram picture, without changing the project', async () => {
+		const client = await connect()
+		const before = editor.doc.timeline.length
+		const result = await client.callTool({ name: 'render_sound', arguments: { kind: 'chime', pitch: 2 } }) as any
+		const body = text(result)
+		expect(body.recipe).toMatchObject({ kind: 'chime', pitch: 2, levelDb: -4 })
+		expect(body.lengthSec).toBeCloseTo(2)
+		expect(body.peakDb).toBe(-4)
+		expect(result.content.some((c: any) => c.type === 'image')).toBe(true)
+		expect(editor.doc.timeline).toHaveLength(before)
+
+		const none = await client.callTool({ name: 'render_sound', arguments: {} }) as any
+		expect(none.isError).toBe(true)
+	})
+
+	it('reads how the mix sits, in words', async () => {
+		const client = await connect()
+		// A music bed only 2 LU under a voice of −16.
+		editor.doc.tracks.push({ id: 'a2', kind: 'audio', name: 'A2', order: 1, muted: false, locked: false, hidden: false, height: 48, role: 'music' })
+		editor.doc.media.push({
+			id: 'bed', kind: 'audio', name: 'bed', originalPath: '', preprocessing: {}, clips: [], createdAt: 0,
+			metadata: { duration: 30 } as any, synth: { kind: 'bed', variant: 0, pitch: 0, levelDb: -4, air: 0.4, seed: 0, durationSec: 30 }
+		})
+		editor.doc.timeline.push({ id: 'bd', trackId: 'a2', sourceAssetId: 'bed', timelineStart: 0, in: 0, out: 30, speed: 1, preservePitch: true, duration: 30, label: 'bed' })
+		const report = text(await client.callTool({ name: 'analyze_audio', arguments: {} }))
+		expect(report.roles.map((r: any) => r.role).sort()).toEqual(['music', 'voice'])
+		expect(report.warnings.join(' ')).toMatch(/Music sits only/)
+		expect(report.caveats.length).toBeGreaterThan(0)
+	})
+
+	it('gates making sounds on its own permission, and says where to turn it on', async () => {
+		withLowerThird()
+		permissions.sound = false
+		const client = await connect()
+		const refused = await client.callTool({ name: 'apply_ops', arguments: { rationale: 'x', addSounds: [{ kind: 'pop', atSec: 1 }] } }) as any
+		expect(refused.isError).toBe(true)
+		expect(refused.content[0].text).toMatch(/built-in synth/)
+		expect(editor.commits).toHaveLength(0)
+		expect(editor.renderedSounds).toEqual([])
+		// Roles and reading are not making a sound.
+		const roles = await client.callTool({ name: 'apply_ops', arguments: { rationale: 'x', setTrackRoles: [{ trackId: 'v1', role: 'voice' }] } }) as any
+		expect(roles.content[0].text).not.toMatch(/built-in synth/)
+		expect((await client.callTool({ name: 'list_sounds', arguments: {} }) as any).isError).toBeFalsy()
+	})
+
+	describe('generating audio with a provider', () => {
+		const gen = (client: any, args: Record<string, unknown>) =>
+			client.callTool({ name: 'generate_audio', arguments: args }) as Promise<any>
+
+		it('is off until the user allows it, and nothing is made or spent', async () => {
+			const client = await connect()
+			const refused = await gen(client, { capability: 'speech', prompt: 'Welcome to the show.' })
+			expect(refused.isError).toBe(true)
+			expect(refused.content[0].text).toMatch(/Settings/)
+			expect(editor.generated).toEqual([])
+		})
+
+		it('makes an asset, says what it cost, and puts nothing on the timeline', async () => {
+			permissions.generate = true
+			const client = await connect()
+			const before = editor.doc.timeline.length
+			const made = text(await gen(client, { capability: 'speech', prompt: 'Welcome to the show.', voice: 'Rachel' }))
+			expect(made).toMatchObject({ asset: 'gen-1', provider: 'elevenlabs', generationsLeftThisTurn: 1 })
+			expect(made.cost).toBe('$0.05')
+			expect(editor.generated[0]).toMatchObject({ provider: 'elevenlabs', capability: 'speech', voice: 'Rachel' })
+			expect(editor.doc.timeline).toHaveLength(before)
+		})
+
+		it('stops at the count for the turn, and tells the agent what to do instead', async () => {
+			permissions.generate = true
+			const client = await connect()
+			await gen(client, { capability: 'sfx', prompt: 'a door slamming', durationSec: 1 })
+			await gen(client, { capability: 'sfx', prompt: 'a door creaking', durationSec: 1 })
+			const third = await gen(client, { capability: 'sfx', prompt: 'a door knocking', durationSec: 1 })
+			expect(third.isError).toBe(true)
+			expect(third.content[0].text).toMatch(/2 generations per turn/)
+			expect(editor.generated).toHaveLength(2)
+		})
+
+		it('stops at the dollars before it spends them', async () => {
+			permissions.generate = true
+			const client = await connect()
+			await gen(client, { capability: 'music', prompt: 'calm piano', durationSec: 30 })
+			const over = await gen(client, { capability: 'music', prompt: 'calm piano again', durationSec: 30 })
+			expect(over.isError).toBe(true)
+			expect(over.content[0].text).toMatch(/limit/)
+			expect(editor.generated).toHaveLength(1)
+		})
+
+		it('says so when no provider is connected, and when the request cannot be made', async () => {
+			permissions.generate = true
+			const client = await connect()
+			editor.connected = []
+			const none = await gen(client, { capability: 'speech', prompt: 'Hello there.' })
+			expect(none.content[0].text).toMatch(/No audio provider is connected.*Settings → Audio providers/)
+			editor.connected = ['elevenlabs']
+			const short = await gen(client, { capability: 'sfx', prompt: 'a door slamming', durationSec: 99 })
+			expect(short.isError).toBe(true)
+			expect(short.content[0].text).toMatch(/0\.5 to 30 seconds/)
+			const unknown = await gen(client, { capability: 'speech', prompt: 'Hello there.', provider: 'suno' })
+			expect(unknown.content[0].text).toMatch(/Unknown provider/)
+			expect(editor.generated).toEqual([])
+		})
+
+		it('places what it made on a lane of the right role, and a missing asset is dropped, not guessed', async () => {
+			permissions.generate = true
+			const client = await connect()
+			await gen(client, { capability: 'speech', prompt: 'Welcome to the show.' })
+			const raw = await client.callTool({
+				name: 'apply_ops', arguments: { rationale: 'Voice-over', placeAudio: [{ asset: 'gen-1', atSec: 2 }, { asset: 'nope', atSec: 1 }, { asset: 'gen-1' }] }
+			}) as any
+			const placed = text(raw)
+			expect(placed.droppedOps.join(' ')).toMatch(/no audio nope/)
+			expect(placed.droppedOps.join(' ')).toMatch(/say when/)
+			const clip = editor.doc.timeline.find((i) => i.sourceAssetId === 'gen-1')!
+			expect(clip.timelineStart).toBe(2)
+			expect(editor.doc.tracks.find((t) => t.id === clip.trackId)).toMatchObject({ kind: 'audio', role: 'voice' })
+		})
+
+		it('placing costs nothing and needs no generate permission', async () => {
+			const client = await connect()
+			editor.doc.media.push({
+				id: 'vo', kind: 'audio', name: 'vo', originalPath: '', preprocessing: {}, clips: [], createdAt: 0,
+				metadata: { duration: 3 } as any, generated: { provider: 'elevenlabs', capability: 'speech', prompt: 'x', costUsd: 0.01, madeAt: 0 }
+			})
+			const placed = text(await client.callTool({ name: 'apply_ops', arguments: { rationale: 'Voice-over', placeAudio: [{ asset: 'vo', atSec: 0 }] } }))
+			expect(placed.applied).toBeTruthy()
+			expect(editor.generated).toEqual([])
 		})
 	})
 

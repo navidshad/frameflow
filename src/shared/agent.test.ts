@@ -46,14 +46,16 @@ describe('checkRequest', () => {
 })
 
 describe('permissions', () => {
-	it('defaults to edit + html on, export off', () => {
-		expect(DEFAULT_AGENT_PERMISSIONS).toEqual({ edit: true, html: true, export: false })
+	it('defaults to edit, html and the synth on, export off', () => {
+		expect(DEFAULT_AGENT_PERMISSIONS).toEqual({ edit: true, html: true, export: false, sound: true, generate: false })
 		expect(normalizePermissions(undefined)).toEqual(DEFAULT_AGENT_PERMISSIONS)
-		expect(normalizePermissions({ export: true, edit: 'yes' })).toEqual({ edit: true, html: true, export: true })
+		expect(normalizePermissions({ export: true, edit: 'yes' })).toEqual({ edit: true, html: true, export: true, sound: true, generate: false })
+		// A settings file from before sound existed gets the default.
+		expect(normalizePermissions({ edit: false, html: false, export: true })).toMatchObject({ sound: true })
 	})
 
 	it('always allows reading', () => {
-		expect(permissionRefusal('read', { edit: false, html: false, export: false })).toBeNull()
+		expect(permissionRefusal('read', { edit: false, html: false, export: false, sound: false, generate: false })).toBeNull()
 	})
 
 	it('refuses export by default, telling the agent to ask the user', () => {
@@ -64,8 +66,24 @@ describe('permissions', () => {
 	})
 
 	it('refuses edits and HTML when they are switched off', () => {
-		expect(permissionRefusal('edit', { edit: false, html: true, export: false })).toMatch(/Edit the timeline/)
-		expect(permissionRefusal('html', { edit: true, html: false, export: false })).toMatch(/HTML motion/)
+		expect(permissionRefusal('edit', { edit: false, html: true, export: false, sound: true, generate: false })).toMatch(/Edit the timeline/)
+		expect(permissionRefusal('html', { edit: true, html: false, export: false, sound: true, generate: false })).toMatch(/HTML motion/)
+	})
+
+	it('keeps anything that costs money off until the user turns it on, and says so', () => {
+		expect(DEFAULT_AGENT_PERMISSIONS.generate).toBe(false)
+		const refusal = permissionRefusal('generate', DEFAULT_AGENT_PERMISSIONS)!
+		expect(refusal).toMatch(/costs money/)
+		expect(refusal).toMatch(/Generate audio with a provider/)
+		expect(refusal).toMatch(/built-in synth/)
+		expect(permissionRefusal('generate', { ...DEFAULT_AGENT_PERMISSIONS, generate: true })).toBeNull()
+	})
+
+	it('refuses the synth when it is switched off, and says where to turn it on', () => {
+		const refusal = permissionRefusal('sound', { ...DEFAULT_AGENT_PERMISSIONS, sound: false })
+		expect(refusal).toMatch(/built-in synth/)
+		expect(refusal).toMatch(/Agent access/)
+		expect(permissionRefusal('sound', DEFAULT_AGENT_PERMISSIONS)).toBeNull()
 	})
 })
 

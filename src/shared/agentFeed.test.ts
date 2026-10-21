@@ -45,6 +45,15 @@ describe('summaries', () => {
 	})
 })
 
+describe('opChips for sound', () => {
+	it('counts sounds and roles in the right number', () => {
+		const texts = (ops: Record<string, unknown>) => opChips(ops).map((c) => c.text)
+		expect(texts({ addSounds: [{}, {}] })).toEqual(['+2 sounds'])
+		expect(texts({ addSounds: [{}] })).toEqual(['+1 sound'])
+		expect(texts({ setTrackRoles: [{}] })).toEqual(['+1 role'])
+	})
+})
+
 describe('opChips', () => {
 	it('shows the version, then what was asked for', () => {
 		expect(opChips({ rationale: 'x', removeRanges: [{ fromSec: 1, toSec: 2 }] }, 8)).toEqual([

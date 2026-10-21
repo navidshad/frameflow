@@ -64,7 +64,7 @@ function ensureDir(dir: string) {
  */
 export async function createMediaAsset(
 	threadId: string,
-	options: { sourcePath: string; name?: string; move?: boolean; assetId?: string; referenceInPlace?: boolean }
+	options: { sourcePath: string; name?: string; move?: boolean; assetId?: string; referenceInPlace?: boolean; /** False for media the app made itself (a synthesised sound): it must not rename the project. */ deriveTitle?: boolean }
 ): Promise<MediaAsset | null> {
 	const thread = threadManager.getThread(threadId)
 	if (!thread || thread.type !== 'editor' || !thread.editor) return null
@@ -130,7 +130,7 @@ export async function createMediaAsset(
 		const patch: Partial<Thread> = { editor: { ...t.editor, media: [...t.editor.media, asset] } }
 		// Auto-name the project after the first imported media while the title
 		// is still the default — mirrors how chat threads name from the video.
-		if (!t.title || t.title === 'Untitled Project') {
+		if (options.deriveTitle !== false && (!t.title || t.title === 'Untitled Project')) {
 			const derived = deriveProjectTitle(rawName)
 			if (derived) patch.title = derived
 		}

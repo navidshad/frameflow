@@ -1,46 +1,33 @@
 <template>
-	<Card
-		class="!bg-white/90 dark:!bg-zinc-900/90 backdrop-blur-xl !rounded-lg border !border-zinc-200 dark:!border-zinc-700 !p-8">
-		<!-- Header + Off/On -->
-		<div class="flex items-center gap-5 mb-8">
-			<div
-				class="w-14 h-14 rounded-lg bg-blue-50 dark:bg-blue-500/10 flex items-center justify-center text-blue-600 dark:text-blue-400 border border-blue-100 dark:border-blue-500/20 shrink-0">
-				<span class="iconify tabler--plug-connected w-7 h-7"></span>
-			</div>
-			<div>
-				<h3 class="font-heading font-bold text-xl text-zinc-900 dark:text-white">Agent access</h3>
-				<p class="text-sm text-zinc-500 dark:text-zinc-400 font-medium">Let an agent in your terminal read and edit the project you have open, over MCP.</p>
-			</div>
-			<div class="ml-auto flex p-0.5 rounded-lg bg-zinc-100 dark:bg-zinc-800/60 shrink-0" role="radiogroup" aria-label="Agent access">
-				<button v-for="opt in ([false, true] as const)" :key="String(opt)" role="radio" :aria-checked="enabled === opt"
-					class="px-3.5 py-1.5 text-xs transition"
-					:class="enabled === opt ? 'rounded-md bg-primary text-white font-bold' : 'font-semibold text-zinc-500 dark:text-zinc-400 hover:text-zinc-700 dark:hover:text-zinc-200'"
-					:disabled="busy" @click="setEnabled(opt)">{{ opt ? 'On' : 'Off' }}</button>
-			</div>
+	<SettingsSection title="Agent access"
+		description="Let an agent in your terminal read and edit the project you have open, over MCP.">
+		<!-- Off / On -->
+		<div class="flex gap-3.5" role="radiogroup" aria-label="Agent access">
+			<button v-for="opt in ([false, true] as const)" :key="String(opt)" role="radio" :aria-checked="enabled === opt"
+				class="tab-u !h-7" :class="{ 'tab-u-active': enabled === opt }"
+				:disabled="busy" @click="setEnabled(opt)">{{ opt ? 'On' : 'Off' }}</button>
 		</div>
 
-		<p v-if="state?.error" class="mb-4 text-xs text-red-500">{{ state.error }}</p>
+		<p v-if="state?.error" class="mt-3 text-xs text-red-500">{{ state.error }}</p>
 
 		<!-- Address + token -->
-		<div class="grid grid-cols-2 gap-3">
-			<div class="p-4 rounded-lg bg-zinc-50 dark:bg-zinc-950/50 border border-zinc-200 dark:border-zinc-800">
-				<span class="block text-[10px] font-bold uppercase tracking-[.1em] text-zinc-500 mb-1.5">Address</span>
+		<div class="grid grid-cols-2 gap-10 mt-4 max-sm:grid-cols-1">
+			<div>
+				<span class="lbl block mb-1.5">Address</span>
 				<div class="flex items-center gap-2">
-					<span class="font-mono text-[13px] text-zinc-800 dark:text-zinc-200 truncate">{{ address }}</span>
-					<span class="w-1.5 h-1.5 rounded-full shrink-0" :class="state?.running ? 'bg-emerald-500' : 'bg-zinc-500'"></span>
+					<span class="font-mono text-xs truncate">{{ address }}</span>
+					<span class="w-1.5 h-1.5 rounded-full shrink-0" :class="state?.running ? 'bg-accent-light' : 'bg-zinc-500'"></span>
 				</div>
 				<span class="block text-[11px] text-zinc-500 mt-1.5">
 					{{ state?.running ? 'Only this computer can connect.' : 'Off: nothing is listening.' }}
 				</span>
 			</div>
-			<div class="p-4 rounded-lg bg-zinc-50 dark:bg-zinc-950/50 border border-zinc-200 dark:border-zinc-800">
-				<span class="block text-[10px] font-bold uppercase tracking-[.1em] text-zinc-500 mb-1.5">Access token</span>
-				<div class="flex items-center gap-2">
-					<span class="font-mono text-[13px] text-zinc-800 dark:text-zinc-200 truncate">{{ state?.tokenMasked }}</span>
-					<button class="ml-auto px-2 py-1 rounded-lg border border-zinc-300 dark:border-zinc-700 text-[11px] font-semibold text-zinc-600 dark:text-zinc-300 transition hover:border-primary/40 hover:text-primary"
-						@click="copy('token')">{{ copied === 'token' ? 'Copied' : 'Copy' }}</button>
-					<button class="px-2 py-1 rounded-lg border border-zinc-300 dark:border-zinc-700 text-[11px] font-semibold text-zinc-600 dark:text-zinc-300 transition hover:border-primary/40 hover:text-primary"
-						@click="newToken">New token</button>
+			<div>
+				<span class="lbl block mb-1.5">Access token</span>
+				<div class="flex items-center gap-3">
+					<span class="font-mono text-xs truncate">{{ state?.tokenMasked }}</span>
+					<button class="btn-text btn-text-primary !h-auto !px-0 !text-[11px]" @click="copy('token')">{{ copied === 'token' ? 'Copied' : 'Copy' }}</button>
+					<button class="btn-text btn-text-primary !h-auto !px-0 !text-[11px]" @click="newToken">New token</button>
 				</div>
 				<span class="block text-[11px] text-zinc-500 mt-1.5">A new token disconnects every agent.</span>
 			</div>
@@ -48,91 +35,72 @@
 
 		<!-- Connect snippets -->
 		<div class="mt-6">
-			<span class="block text-sm font-bold text-zinc-700 dark:text-zinc-300 mb-2.5">Connect your agent</span>
-			<div class="flex gap-1 mb-2">
-				<button v-for="c in CLIENTS" :key="c.kind"
-					class="px-3 py-1.5 rounded-lg text-xs transition"
-					:class="client === c.kind ? 'bg-primary/10 text-primary font-bold' : 'text-zinc-500 dark:text-zinc-400 font-semibold hover:text-zinc-700 dark:hover:text-zinc-200'"
+			<span class="lbl block">Connect your agent</span>
+			<div class="flex gap-3.5 mt-1">
+				<button v-for="c in CLIENTS" :key="c.kind" class="tab-u !h-7" :class="{ 'tab-u-active': client === c.kind }"
 					@click="client = c.kind">{{ c.label }}</button>
 			</div>
-			<div class="pl-5 pr-4 py-4 rounded-lg bg-zinc-50 dark:bg-zinc-950/50 border border-zinc-200 dark:border-zinc-800 flex gap-3 items-start">
-				<code class="flex-1 font-mono text-xs leading-[1.7] text-zinc-700 dark:text-zinc-300 whitespace-pre-wrap break-all">{{ snippet }}</code>
-				<button class="px-2.5 py-1.5 rounded-lg border border-zinc-300 dark:border-zinc-700 text-xs font-semibold text-zinc-600 dark:text-zinc-300 flex items-center gap-1.5 transition hover:border-primary/40 hover:text-primary shrink-0"
-					@click="copy('snippet')">
-					<span class="iconify tabler--copy w-3.5 h-3.5"></span>{{ copied === 'snippet' ? 'Copied' : 'Copy' }}
-				</button>
+			<div class="mt-2 py-2.5 hair-t hair-b flex gap-3 items-start">
+				<code class="flex-1 font-mono text-[11px] leading-[1.7] text-zinc-700 dark:text-zinc-300 whitespace-pre-wrap break-all">{{ snippet }}</code>
 			</div>
-			<p class="mt-2 text-xs text-zinc-500">{{ CONNECT_HINTS[client] }}</p>
+			<p class="mt-1.5 text-[11px] text-zinc-500">
+				{{ CONNECT_HINTS[client] }}
+				<button class="btn-text btn-text-primary !h-auto !px-1 !text-[11px] align-baseline" @click="copy('snippet')">{{ copied === 'snippet' ? 'Copied' : 'Copy' }}</button>
+			</p>
 		</div>
 
 		<!-- Permissions -->
 		<div class="mt-6">
-			<span class="block text-sm font-bold text-zinc-700 dark:text-zinc-300 mb-2.5">What agents can do</span>
-			<div class="rounded-lg bg-zinc-50 dark:bg-zinc-950/50 border border-zinc-200 dark:border-zinc-800">
-				<div class="grid grid-cols-[20px_minmax(0,1fr)] gap-3 items-start px-4 py-3.5 border-b border-zinc-200 dark:border-zinc-800">
-					<span class="w-[18px] h-[18px] mt-px rounded-[5px] flex items-center justify-center bg-zinc-200 dark:bg-zinc-800 text-zinc-500 dark:text-zinc-400">
-						<span class="iconify tabler--lock w-3 h-3"></span>
-					</span>
-					<span>
-						<span class="block text-[13px] font-semibold text-zinc-800 dark:text-zinc-200">Read the open project, media, transcripts and frames</span>
-						<span class="block text-xs text-zinc-500 mt-0.5">Always on while agent access is on.</span>
-					</span>
-				</div>
-				<button v-for="(p, i) in PERMISSIONS" :key="p.key" role="checkbox" :aria-checked="!!state?.permissions[p.key]"
-					class="w-full text-left grid grid-cols-[20px_minmax(0,1fr)] gap-3 items-start px-4 py-3.5"
-					:class="i < PERMISSIONS.length - 1 ? 'border-b border-zinc-200 dark:border-zinc-800' : ''"
-					@click="togglePermission(p.key)">
-					<span v-if="state?.permissions[p.key]"
-						class="w-[18px] h-[18px] mt-px rounded-[5px] flex items-center justify-center bg-primary text-white">
-						<span class="iconify tabler--check w-3 h-3"></span>
-					</span>
-					<span v-else class="w-[18px] h-[18px] mt-px rounded-[5px] border border-zinc-400 dark:border-zinc-600"></span>
-					<span>
-						<span class="block text-[13px] font-semibold text-zinc-800 dark:text-zinc-200">{{ p.title }}</span>
-						<span class="block text-xs text-zinc-500 mt-0.5">{{ state?.permissions[p.key] ? p.on : p.off }}</span>
-					</span>
-				</button>
+			<span class="lbl block mb-1">What agents can do</span>
+			<div class="flex gap-2.5 py-[7px]">
+				<span class="w-4 h-4 mt-px rounded bg-primary/50 text-white flex items-center justify-center shrink-0" title="Always on while agent access is on">
+					<span class="iconify tabler--lock w-2.5 h-2.5"></span>
+				</span>
+				<span>
+					<span class="block font-semibold text-xs">Read the open project, media, transcripts and frames</span>
+					<span class="block text-[11px] text-zinc-500 dark:text-zinc-400">Always on while agent access is on.</span>
+				</span>
 			</div>
+			<button v-for="p in PERMISSIONS" :key="p.key" role="checkbox" :aria-checked="!!state?.permissions[p.key]"
+				class="w-full text-left flex gap-2.5 py-[7px]" @click="togglePermission(p.key)">
+				<span v-if="state?.permissions[p.key]" class="w-4 h-4 mt-px rounded bg-primary text-white flex items-center justify-center shrink-0">
+					<span class="iconify tabler--check w-3 h-3"></span>
+				</span>
+				<span v-else class="w-4 h-4 mt-px rounded border border-zinc-400 dark:border-zinc-600 shrink-0"></span>
+				<span>
+					<span class="block font-semibold text-xs">{{ p.title }}</span>
+					<span class="block text-[11px] text-zinc-500 dark:text-zinc-400">{{ state?.permissions[p.key] ? p.on : p.off }}</span>
+				</span>
+			</button>
 		</div>
 
 		<!-- Recent sessions -->
 		<div class="mt-6">
-			<span class="block text-sm font-bold text-zinc-700 dark:text-zinc-300 mb-2.5">Recent agent sessions</span>
-			<table class="w-full border-collapse text-[13px]">
-				<!-- `!` beats pilotui's global table fill and padding, which the design does not have -->
-				<thead>
-					<tr class="!bg-transparent">
-						<th class="text-left text-xs font-bold uppercase text-zinc-500 dark:text-zinc-400 !px-0 !pt-0 !pb-2.5">Agent</th>
-						<th class="text-left text-xs font-bold uppercase text-zinc-500 dark:text-zinc-400 !px-0 !pt-0 !pb-2.5">Project</th>
-						<th class="text-left text-xs font-bold uppercase text-zinc-500 dark:text-zinc-400 !px-0 !pt-0 !pb-2.5">When</th>
-						<th class="!text-right text-xs font-bold uppercase text-zinc-500 dark:text-zinc-400 !px-0 !pt-0 !pb-2.5">Steps</th>
-					</tr>
-				</thead>
-				<tbody>
-					<tr v-for="row in rows" :key="row.key" class="border-t border-zinc-200 dark:border-zinc-800/50">
-						<td class="!px-0 !py-3.5 font-bold text-zinc-900 dark:text-white">
-							{{ row.clientName }}
-							<span v-if="row.live"
-								class="ml-1.5 px-1.5 py-0.5 rounded bg-emerald-500/10 text-emerald-500 text-[9px] font-bold uppercase">Live</span>
-						</td>
-						<td class="!px-0 !py-3.5 text-zinc-600 dark:text-zinc-300">{{ row.project }}</td>
-						<td class="!px-0 !py-3.5 font-mono text-xs text-zinc-500 dark:text-zinc-400">{{ when(row.startedAt) }}</td>
-						<td class="!px-0 !py-3.5 !text-right font-mono text-zinc-600 dark:text-zinc-300">{{ row.steps }}</td>
-					</tr>
-					<tr v-if="!rows.length" class="border-t border-zinc-200 dark:border-zinc-800/50">
-						<td colspan="4" class="!px-0 !py-3.5 text-xs text-zinc-500">No agent has connected yet.</td>
-					</tr>
-				</tbody>
-			</table>
+			<span class="lbl block mb-2">Recent agent sessions</span>
+			<div class="grid grid-cols-[minmax(0,1.2fr)_minmax(0,1.4fr)_minmax(0,1fr)_48px] gap-x-3 text-[10px] font-bold uppercase tracking-wide text-zinc-500 dark:text-zinc-400 pb-1.5">
+				<span>Agent</span><span>Project</span><span>When</span><span class="text-right">Steps</span>
+			</div>
+			<div v-for="row in rows" :key="row.key"
+				class="grid grid-cols-[minmax(0,1.2fr)_minmax(0,1.4fr)_minmax(0,1fr)_48px] gap-x-3 items-baseline py-2 hair-t text-xs">
+				<span class="font-semibold truncate">
+					{{ row.clientName }}
+					<span v-if="row.live" class="ml-1.5 text-[9px] font-bold uppercase text-accent">Live</span>
+				</span>
+				<span class="truncate text-zinc-600 dark:text-zinc-300">{{ row.project }}</span>
+				<span class="font-mono text-[11px] text-zinc-500 dark:text-zinc-400">{{ when(row.startedAt) }}</span>
+				<span class="font-mono text-right text-zinc-600 dark:text-zinc-300">{{ row.steps }}</span>
+			</div>
+			<div v-if="!rows.length" class="py-2 hair-t text-xs text-zinc-500">No agent has connected yet.</div>
 		</div>
-	</Card>
+	</SettingsSection>
 </template>
 
 <script setup lang="ts">
 import { computed, onMounted, ref } from 'vue'
-import { Card } from 'pilotui/elements'
 import { CONNECT_HINTS, connectSnippet, type AgentClientKind, type AgentPermissions } from '@shared/agent'
 import { useAgentStore } from '../../stores/agentStore'
+import { dialog } from '../../composables/useDialog'
+import SettingsSection from './SettingsSection.vue'
 
 /**
  * Settings → Agent access (board 4, lower card): the switch, where to connect,
@@ -166,6 +134,16 @@ const PERMISSIONS: { key: keyof AgentPermissions; title: string; on: string; off
 		off: 'Off: agents can only use the built-in motion templates.'
 	},
 	{
+		key: 'sound', title: 'Make sounds with the built-in synth',
+		on: 'Recipes only: free, offline, nothing is spent. Each sound is part of the revision you can undo.',
+		off: 'Off: an agent can describe the sounds it would add, and you add them from the Sound tab.'
+	},
+	{
+		key: 'generate', title: 'Generate audio with a provider',
+		on: 'An agent can make a voice, a sound or music with a provider. This costs money; each turn is capped in Audio providers.',
+		off: 'Off: nothing is spent. An agent can still use the free built-in synth.'
+	},
+	{
 		key: 'export', title: 'Export videos to disk',
 		on: 'An agent can start an export; it lands in the project’s exports folder.',
 		off: 'Off: an agent can ask, and you press Export.'
@@ -197,7 +175,15 @@ const setEnabled = async (on: boolean) => {
 
 const newToken = async () => {
 	const live = agent.sessions.length
-	if (live && !confirm(`A new token disconnects ${live === 1 ? 'the connected agent' : `all ${live} connected agents`}. Continue?`)) return
+	if (live) {
+		const ok = await dialog.confirm({
+			title: 'New access token',
+			message: `A new token disconnects ${live === 1 ? 'the connected agent' : `all ${live} connected agents`}. Continue?`,
+			confirmLabel: 'New token',
+			danger: true
+		})
+		if (!ok) return
+	}
 	agent.access = await api.newAgentToken()
 }
 

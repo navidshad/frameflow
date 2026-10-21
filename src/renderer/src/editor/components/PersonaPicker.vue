@@ -6,7 +6,7 @@
 			title="Switch persona"
 			@click="open = !open">
 			<span class="text-[11px] leading-none">{{ store.activePersona?.icon || '🎬' }}</span>
-			<span class="text-[9px] font-bold uppercase tracking-widest max-w-[100px] truncate">
+			<span class="text-[11px] font-medium max-w-[110px] truncate">
 				{{ store.activePersona?.name || 'Persona' }}
 			</span>
 			<span class="iconify tabler--chevron-up w-2.5 h-2.5 opacity-50 group-hover/persona:opacity-100 transition-transform" :class="{ 'rotate-180': open }"></span>
@@ -14,7 +14,7 @@
 
 		<!-- Popover -->
 		<div v-if="open"
-			class="absolute bottom-full left-0 mb-2 w-72 max-h-96 overflow-y-auto custom-scrollbar rounded-2xl border border-zinc-200 dark:border-zinc-800 bg-white/95 dark:bg-zinc-900/95 backdrop-blur-xl shadow-premium z-50 py-2 origin-bottom animate-menu">
+			class="absolute bottom-full left-0 mb-2 w-72 max-h-96 overflow-y-auto custom-scrollbar pop z-50 py-2 origin-bottom animate-menu">
 			<template v-for="group in groups" :key="group.key">
 				<div v-if="group.items.length" class="px-3 pt-2 pb-1">
 					<span class="text-[9px] font-bold uppercase tracking-widest text-zinc-400">{{ group.label }}</span>

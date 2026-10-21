@@ -1,8 +1,7 @@
 <template>
-	<div class="glass-card rounded-2xl flex flex-col min-h-0 overflow-hidden">
-		<!-- Panel header -->
-		<div class="px-4 pt-4 pb-2 flex items-center justify-between shrink-0">
-			<span class="text-[10px] font-bold uppercase tracking-widest text-zinc-500">Media</span>
+	<div class="flex flex-col min-h-0 overflow-hidden">
+		<div class="px-3 pt-3 pb-1 flex items-center justify-between shrink-0">
+			<span class="lbl whitespace-nowrap truncate">Footage &amp; audio</span>
 			<div class="flex items-center gap-1">
 				<SlimTooltip text="Add local media" placement="bottom">
 					<button
@@ -16,13 +15,6 @@
 						class="w-7 h-7 flex items-center justify-center rounded-lg text-zinc-500 hover:text-primary hover:bg-primary/10 transition active:scale-95"
 						@click="showImportModal = true">
 						<span class="iconify tabler--link w-4 h-4"></span>
-					</button>
-				</SlimTooltip>
-				<SlimTooltip text="Collapse panel" placement="bottom">
-					<button
-						class="w-7 h-7 flex items-center justify-center rounded-lg text-zinc-400 hover:text-primary hover:bg-primary/10 transition active:scale-95"
-						@click="$emit('update:collapsed', true)">
-						<span class="iconify tabler--layout-sidebar-left-collapse w-4 h-4"></span>
 					</button>
 				</SlimTooltip>
 			</div>
@@ -73,9 +65,17 @@
 					</p>
 				</div>
 
-				<AssetRow v-for="asset in editorStore.assets" :key="asset.id" :asset="asset"
+				<AssetRow v-for="asset in importedAssets" :key="asset.id" :asset="asset"
 					:active="asset.id === editorStore.selectedAssetId"
 					@select="editorStore.selectAsset(asset.id)" />
+
+				<!-- Sounds the app made itself (the synth): kept apart from your footage -->
+				<template v-if="generatedAssets.length">
+					<div class="lbl px-1 pt-3 pb-1">Generated</div>
+					<AssetRow v-for="asset in generatedAssets" :key="asset.id" :asset="asset"
+						:active="asset.id === editorStore.selectedAssetId"
+						@select="editorStore.selectAsset(asset.id)" />
+				</template>
 			</template>
 		</div>
 
@@ -99,6 +99,14 @@ defineEmits<{ (e: 'update:collapsed', value: boolean): void }>()
 
 const editorStore = useEditorStore()
 const showImportModal = ref(false)
+
+/** Footage and audio you brought; and what the synth made. */
+const importedAssets = computed(() => editorStore.assets.filter((a) => !a.synth))
+/** Only sounds something still uses: a re-rolled sound's old take stays for undo, out of sight. */
+const generatedAssets = computed(() => {
+	const used = new Set((editorStore.doc?.timeline ?? []).map((i) => i.sourceAssetId))
+	return editorStore.assets.filter((a) => !!a.synth && used.has(a.id))
+})
 
 const hasActiveImports = computed(() => Object.keys(editorStore.urlImports).length > 0)
 

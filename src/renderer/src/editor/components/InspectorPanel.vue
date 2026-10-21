@@ -1,8 +1,7 @@
 <template>
-	<div class="glass-card rounded-2xl flex flex-col min-h-0 overflow-hidden">
+	<div class="flat-fields flex flex-col min-h-0 overflow-hidden">
 		<!-- A custom motion layer draws its own header (name, chip, Settings | HTML). -->
-		<div v-if="!ownHeader" class="px-4 pt-4 pb-2 shrink-0 flex items-center justify-between">
-			<span class="text-[10px] font-bold uppercase tracking-widest text-zinc-500">Inspector</span>
+		<div v-if="!ownHeader && (keyframeMode || timelineItem?.motion)" class="px-4 pt-3 pb-1 shrink-0 flex items-center justify-end">
 			<span v-if="!seam && keyframeMode"
 				class="px-1.5 py-0.5 rounded bg-primary/[0.12] text-blue-400 text-[9px] font-bold uppercase tracking-widest">
 				Keyframe
@@ -92,6 +91,9 @@
 					</template>
 				</dl>
 
+				<!-- A clip on an audio track: its waveform, role and loudness -->
+				<AudioClipSection v-if="isAudioItem" :item="timelineItem" />
+
 				<!-- Retime: speed OR exact duration (PRD §5.6 numeric path) -->
 				<div class="mt-4 space-y-3">
 					<!-- A title has no media behind it, so retiming, framing, gain and
@@ -179,8 +181,8 @@
 
 					<!-- Transform: where the picture sits once it is the right shape.
 					     Separate from Framing, which is only about reconciling two
-					     different shapes. -->
-					<div>
+					     different shapes. Sound has no picture, so audio never shows it. -->
+					<div v-if="!isAudioItem">
 						<div class="flex items-baseline justify-between mb-1">
 							<label class="text-[10px] font-bold uppercase tracking-widest text-zinc-500">
 								Transform
@@ -221,7 +223,7 @@
 					</div>
 
 					<!-- Framing: only meaningful when the clip and the sequence disagree -->
-					<div v-if="framingMatters">
+					<div v-if="framingMatters && !isAudioItem">
 						<label class="text-[10px] font-bold uppercase tracking-widest text-zinc-500 block mb-1">
 							Framing
 						</label>
@@ -714,6 +716,7 @@ import { useEditorStore } from '../../stores/editorStore'
 import SilenceFinder from './SilenceFinder.vue'
 import MotionInspector from './MotionInspector.vue'
 import KeyframeInspector from './KeyframeInspector.vue'
+import AudioClipSection from './AudioClipSection.vue'
 import { useKeyframeLanesStore } from '../../stores/keyframeLanesStore'
 
 const editorStore = useEditorStore()
@@ -728,6 +731,11 @@ const timelineItem = computed(() =>
 	editorStore.selectedItemIds.length === 1
 		? editorStore.doc?.timeline.find((i) => i.id === editorStore.selectedItemIds[0]) || null
 		: null
+)
+
+/** The selected clip sits on an audio track: it gets the audio form. */
+const isAudioItem = computed(() =>
+	editorStore.doc?.tracks.find((t) => t.id === timelineItem.value?.trackId)?.kind === 'audio'
 )
 
 const trackName = computed(() =>

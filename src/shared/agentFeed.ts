@@ -162,7 +162,7 @@ const OP_NOUNS: Record<string, string> = {
 	removeRanges: 'range', removeItemIds: 'clip', updateItems: 'change',
 	addClips: 'clip', addSceneRanges: 'span', addTitles: 'title', addMarkers: 'marker',
 	setTransitions: 'transition', applyLook: 'look', clearLooks: 'look cleared',
-	addBackgrounds: 'background'
+	addBackgrounds: 'background', addSounds: 'sound', setSounds: 'sound', placeAudio: 'audio', setTrackRoles: 'role'
 }
 
 /**

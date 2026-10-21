@@ -1,5 +1,5 @@
 <template>
-	<section class="glass-card rounded-2xl flex flex-col min-h-0 overflow-hidden">
+	<section class="flex flex-col min-h-0 overflow-hidden">
 		<template v-if="session">
 			<!-- Connected client -->
 			<div class="flex items-center gap-2.5 px-4 pt-3.5 pb-3 border-b border-zinc-200 dark:border-zinc-800 shrink-0">

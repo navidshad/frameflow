@@ -1,3 +1,6 @@
+import type { TrackRole } from './audio'
+import type { SoundRecipe } from './synth'
+import type { AudioProvenance } from './audioProviders'
 
 export enum MessageRole {
 	User = 'user',
@@ -58,6 +61,8 @@ export interface UsageRecord {
 	cost: number;
 	timestamp?: number;
 	messageId?: string;
+	/** What spent it, when it was not a model turn: "audio:elevenlabs". */
+	source?: string;
 }
 
 /** What kind of result a message node renders as. */
@@ -258,6 +263,17 @@ export interface MediaAsset {
 	preprocessTasks?: Record<string, BackgroundTask>
 	preprocessState?: MediaPreprocessState
 	preprocessError?: string
+	/**
+	 * Set when this sound was synthesised rather than imported: the recipe that
+	 * makes it. The file is a cache of the recipe, so it can be re-rolled.
+	 */
+	synth?: Required<SoundRecipe>
+	/**
+	 * Set when a provider made this sound or voice (ElevenLabs, Gemini): what it
+	 * was asked, who made it and what it cost. The file is the sound; this is its
+	 * receipt, and the project plays without the provider.
+	 */
+	generated?: AudioProvenance
 	clips: Clip[]               // derived from scene detection
 	filmstrip?: FilmstripEntry[]
 	transcriptHealth?: TranscriptHealth  // set by the transcript step
@@ -331,10 +347,12 @@ export interface Track {
 	height: number              // px in the timeline UI
 	gain?: number               // track-level audio gain, composed with item gain at render (default 1.0)
 	/**
-	 * 'music' marks a bed: it ducks under speech on every other track. Absent
-	 * means the track IS speech as far as ducking is concerned.
+	 * What the track is for (see shared/audio.ts). 'music' marks a bed: it ducks
+	 * under speech on every other track. 'voice' and 'sfx' say what the content
+	 * is, so the mix can level it; neither ducks. Absent means nothing was said,
+	 * and the track IS speech as far as ducking is concerned — as it always was.
 	 */
-	role?: 'music'
+	role?: TrackRole
 }
 
 export interface TimelineItem {  // an instance of a clip placed on a track
@@ -389,6 +407,22 @@ export interface TimelineItem {  // an instance of a clip placed on a track
 	 * architecture, and what tells the AI which of two stacked clips is which.
 	 */
 	layerRole?: 'subject' | 'background' | 'overlay'
+	/** On a sound clip: the moment it follows. See SoundBinding. */
+	bind?: SoundBinding
+}
+
+/**
+ * A sound that follows a moment on another clip: its entrance, its exit, a cut.
+ * Move or retime that clip and the sound goes with it; drag the sound by hand
+ * and it stops following (the binding is dropped).
+ */
+export interface SoundBinding {
+	/** The clip whose moment this sound is for. */
+	itemId: string
+	/** Which moment: the clip's start (a cut, an entrance), a motion layer's exit, or its end. */
+	at: 'start' | 'out' | 'end'
+	/** How early the sound starts so its hit lands on the moment, in seconds. */
+	leadSec?: number
 }
 
 export interface TimelineItemTransform { x?: number; y?: number; scale?: number; rotation?: number }
@@ -683,6 +717,53 @@ export interface EditorOps {
 		/** What this clip is FOR in a composited shot. */
 		layerRole?: 'subject' | 'background' | 'overlay'
 	}>
+	/**
+	 * Sounds from the built-in synth (see shared/synth.ts). Each is a recipe;
+	 * FrameFlow renders it and puts it on a free effects lane. `follow` makes it
+	 * land on a moment of another clip and stay there when that clip moves.
+	 * Needs the "Make sounds with the built-in synth" permission over MCP.
+	 */
+	addSounds?: Array<{
+		kind: string
+		variant?: number
+		pitch?: number
+		levelDb?: number
+		air?: number
+		seed?: number
+		durationSec?: number
+		/** Timeline seconds. Ignored when `follow` is given. */
+		atSec?: number
+		/** A moment on another clip: its entrance (start), its exit (out), or its end. */
+		follow?: { item: string; at?: 'start' | 'out' | 'end'; leadSec?: number }
+	}>
+	/** Change a sound already on the timeline: a different recipe, or a different moment to follow. */
+	setSounds?: Array<{
+		id: string
+		kind?: string
+		variant?: number
+		pitch?: number
+		levelDb?: number
+		air?: number
+		seed?: number
+		durationSec?: number
+		follow?: { item: string; at?: 'start' | 'out' | 'end'; leadSec?: number }
+		/** True stops it following whatever it follows. */
+		unfollow?: boolean
+	}>
+	/**
+	 * Put a sound or voice a provider made (generate_audio gave you its asset id)
+	 * on the timeline: a voice-over on a voice lane, an effect on an effects lane,
+	 * music on a music lane. `follow` lands it on a moment, like addSounds.
+	 */
+	placeAudio?: Array<{
+		asset: string
+		atSec?: number
+		follow?: { item: string; at?: 'start' | 'out' | 'end'; leadSec?: number }
+		/** Mix level for this clip, 0 to 2 (1 is unchanged). */
+		gain?: number
+	}>
+	/** What an audio track is for: the mix levels each by it, and a music bed ducks under speech. */
+	setTrackRoles?: Array<{ trackId: string; role: 'voice' | 'music' | 'sfx' | 'none' }>
 	/**
 	 * Synthesised backgrounds — a gradient or a colour with no footage behind
 	 * them. They go on their own track below everything, which is what a keyed

@@ -66,9 +66,15 @@
 						class="flex-1 min-w-0 h-full object-cover" loading="lazy" draggable="false" />
 				</div>
 				<img v-else-if="thumbSrc" :src="thumbSrc" class="w-full h-full object-cover" loading="lazy" draggable="false" />
-				<div v-else class="w-full h-full flex items-center justify-center"
-					:class="isAudio ? 'bg-accent/10' : ''">
-					<span class="iconify w-4 h-4" :class="[isAudio ? 'tabler--music text-accent' : 'tabler--movie text-zinc-400']"></span>
+				<!-- Sound is drawn as what it sounds like: the part of the source this
+				     clip plays, scaled by its own gain, with its fades as an envelope. -->
+				<div v-else-if="isAudio" class="w-full h-full bg-accent/[0.08] overflow-hidden">
+					<AudioWaveform :asset-id="item.sourceAssetId" :in-sec="item.in" :out-sec="item.out"
+						:width="clipWidth" :height="clipHeight" :gain="item.gain ?? 1" :muted="item.muted"
+						:fade-in-px="viewport.secToPx(item.fadeInSec ?? 0)" :fade-out-px="viewport.secToPx(item.fadeOutSec ?? 0)" />
+				</div>
+				<div v-else class="w-full h-full flex items-center justify-center">
+					<span class="iconify tabler--movie w-4 h-4 text-zinc-400"></span>
 				</div>
 				<div class="absolute bottom-0 inset-x-0 px-1.5 py-0.5 bg-gradient-to-t from-black/60 to-transparent">
 					<p class="text-[9px] text-white/90 truncate font-medium">{{ item.label }}</p>
@@ -121,6 +127,7 @@ import { motionClipLabel, resolveMoments } from '@shared/motion'
 import { motionBadge } from '@shared/motionCode'
 import { useEditorStore } from '../../../stores/editorStore'
 import { TimelineViewportKey, TimelineInteractionsKey } from '../../composables/useTimelineViewport'
+import AudioWaveform from '../AudioWaveform.vue'
 
 const props = defineProps<{ item: TimelineItem }>()
 
@@ -205,6 +212,9 @@ const contextText = computed(() => sourceClip.value?.visual || props.item.label 
 // ===== Motion =====
 
 const motionWidth = computed(() => Math.max(viewport.secToPx(props.item.duration), 6))
+/** The clip's drawn box, for the waveform: the lane's height less the clip's own inset. */
+const clipWidth = computed(() => Math.max(viewport.secToPx(props.item.duration), 6))
+const clipHeight = computed(() => Math.max(12, (track.value?.height ?? 64) - 10))
 const motionLabel = computed(() => motionClipLabel(props.item))
 const motionWarning = computed(() => motionBadge(props.item.motion))
 

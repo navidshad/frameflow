@@ -106,7 +106,7 @@ export function initAgentAccess(): void {
 	})
 
 	ipcMain.handle('set-agent-permission', (_event, { key, value }: { key: keyof AgentPermissions; value: boolean }) => {
-		if (!['edit', 'html', 'export'].includes(key)) return state()
+		if (!['edit', 'html', 'export', 'sound', 'generate'].includes(key)) return state()
 		const permissions = { ...settingsManager.getAgentAccess().permissions, [key]: !!value }
 		settingsManager.updateAgentAccess({ permissions })
 		broadcastState()

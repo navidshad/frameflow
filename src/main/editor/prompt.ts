@@ -60,6 +60,8 @@ export function emitTurnUpdate(payload: {
 	turn: PromptTurn
 	addMarkers?: { time: number; label: string }[]
 	docSettings?: { captionsEnabled?: boolean; loudnessEnabled?: boolean }
+	/** Assets the turn refers to that the renderer may not have yet (rendered sounds). */
+	addAssets?: import('../../shared/types').MediaAsset[]
 	thinContext?: boolean
 	truncated?: boolean
 	replyId?: string
