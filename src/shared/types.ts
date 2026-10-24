@@ -963,7 +963,7 @@ export interface ModelPricing {
 	}
 }
 
-export type OperationType = 'raw-transcript' | 'corrected-transcript' | 'intent' | 'timeline-new' | 'timeline-edit' | 'thumbnail' | 'scene-description' | 'image-extraction' | 'image-intent' | 'image-generation' | 'image-upscale' | 'editor-edit'
+export type OperationType = 'raw-transcript' | 'corrected-transcript' | 'intent' | 'thumbnail' | 'scene-description' | 'image-extraction' | 'image-intent' | 'image-generation' | 'image-upscale' | 'editor-edit'
 
 export type UpscaleFactor = 'x2' | 'x4'
 

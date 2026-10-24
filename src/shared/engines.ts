@@ -97,6 +97,42 @@ export const CLI_MODELS: Record<CliEngineId, ModelOption[]> = {
 /** The default option, which passes no model flag: the CLI uses its own setting. */
 export const asSetIn = (id: CliEngineId) => `As set in ${ENGINES[id].label}`
 
+export interface GeminiTextModel { value: string; label: string; inputPerM: number }
+
+/**
+ * The Gemini models that can answer an editor chat turn: every priced model
+ * except the image generators, newest first by their order in `order`, then
+ * the rest by price. `inputPerM` is the text input price per 1M tokens.
+ */
+export function geminiTextModels(
+	pricing: Record<string, { input?: { standard?: number; text?: number }; output?: { image?: number } }> | undefined,
+	metadata: Record<string, { label: string }> | undefined,
+	order: string[] = []
+): GeminiTextModel[] {
+	const models = Object.entries(pricing || {})
+		.filter(([, p]) => p?.output?.image === undefined)
+		.map(([value, p]) => ({
+			value,
+			label: metadata?.[value]?.label || value,
+			inputPerM: p?.input?.standard ?? p?.input?.text ?? 0
+		}))
+	const rank = (id: string) => { const i = order.indexOf(id); return i < 0 ? order.length : i }
+	return models.sort((a, b) => rank(a.value) - rank(b.value) || a.inputPerM - b.inputPerM)
+}
+
+/** The chip's text: "Claude Code · Opus", "Gemini API · 3 Flash Preview", or just the engine. */
+export function engineChipLabel(settings: EngineSettings, geminiModelLabel?: string): string {
+	const label = ENGINES[settings.engine].label
+	let model: string | undefined
+	if (isCliEngine(settings.engine)) {
+		const value = settings.models[settings.engine]
+		model = value ? (CLI_MODELS[settings.engine].find((m) => m.value === value)?.label ?? value) : undefined
+	} else {
+		model = geminiModelLabel?.replace(/^Gemini\s+/i, '')
+	}
+	return model ? `${label} · ${model}` : label
+}
+
 /**
  * CLIs often print an API error as raw JSON. The turn card wants its message:
  * `{"error":{"message":"The 'x' model is not supported…"}}` → that sentence.

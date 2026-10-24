@@ -3,7 +3,7 @@ import { readFileSync } from 'node:fs'
 import { resolve } from 'node:path'
 import {
 	agentFocus, buildCommand, buildEngineSystemPrompt, buildEngineUserPrompt, displayPath, editTime,
-	engineFailureNote, engineRetry, isFrameflowTool, lineSplitter, normalizeEngineSettings, normalizeToolName, parseClaudeAuth,
+	engineChipLabel, engineFailureNote, geminiTextModels, engineRetry, isFrameflowTool, lineSplitter, normalizeEngineSettings, normalizeToolName, parseClaudeAuth,
 	parseStreamLine, parseVersion, readableError, StepTracker, stepTitle, TOKEN_ENV, unexpectedTools, type CliEngineId
 } from './engines'
 import type { PromptTurn } from './types'
@@ -219,5 +219,36 @@ describe('Retry on a failed engine run', () => {
 		expect(engineRetry(failed, [failed, edit])).not.toBeNull()
 		const later = turn({ id: 't2', createdAt: 200, engine: undefined, status: 'completed' })
 		expect(engineRetry(failed, [failed, later])).toBeNull()
+	})
+})
+
+describe('engine chip', () => {
+	const base = { engine: 'claude-code' as const, models: {}, maxSteps: 20 }
+
+	it('names the CLI model, or just the CLI when it uses its own', () => {
+		expect(engineChipLabel({ ...base, models: { 'claude-code': 'opus' } })).toBe('Claude Code · Opus')
+		expect(engineChipLabel(base)).toBe('Claude Code')
+		expect(engineChipLabel({ ...base, models: { 'claude-code': 'claude-x-9' } })).toBe('Claude Code · claude-x-9')
+	})
+
+	it('names the Gemini model without the repeated brand', () => {
+		expect(engineChipLabel({ ...base, engine: 'gemini-api' }, 'Gemini 3 Flash Preview')).toBe('Gemini API · 3 Flash Preview')
+		expect(engineChipLabel({ ...base, engine: 'gemini-api' })).toBe('Gemini API')
+	})
+})
+
+describe('geminiTextModels', () => {
+	const pricing = {
+		'a-pro': { input: { standard: 1.25 } },
+		'b-flash': { input: { text: 0.3, standard: 0.3 } },
+		'c-image': { input: { standard: 0.5 }, output: { image: 0.07 } }
+	}
+	it('drops image models, orders as asked, falls back to price', () => {
+		const meta = { 'a-pro': { label: 'A Pro' } }
+		expect(geminiTextModels(pricing, meta, ['b-flash']).map((m) => m.value)).toEqual(['b-flash', 'a-pro'])
+		expect(geminiTextModels(pricing, meta)).toEqual([
+			{ value: 'b-flash', label: 'b-flash', inputPerM: 0.3 },
+			{ value: 'a-pro', label: 'A Pro', inputPerM: 1.25 }
+		])
 	})
 })
