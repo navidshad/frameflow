@@ -8,7 +8,9 @@ import { normalizePermissions, TOKEN_PREFIX, type AgentPermissions } from '../sh
 import type { AgentRecentSession } from '../shared/agentFeed'
 import { normalizeEngineSettings, type EngineSettings } from '../shared/engines'
 import { normalizeAudioSettings, type AudioProviderSettings } from '../shared/audioProviders'
+import { isSetupComplete } from '../shared/setup'
 import { DEFAULT_MODEL_SETTINGS } from './constants/gemini'
+import { mergeModelSettings } from './modelSettings'
 import { BUILTIN_PERSONAS } from './constants/personas'
 
 interface Settings {
@@ -28,6 +30,8 @@ interface Settings {
 	audio?: AudioProviderSettings
 	/** In memory only. On disk it is `elevenLabsKeyEnc`, encrypted like the Gemini key. */
 	elevenLabsKey?: string
+	/** Set by the first-launch wizard. Absent for installs that predate it. */
+	setupComplete?: boolean
 }
 
 export interface AgentAccessSettings {
@@ -124,10 +128,7 @@ class SettingsManager {
 	}
 
 	private mergeModelSettings(existing: ModelSettings): ModelSettings {
-		return {
-			pricing: { ...DEFAULT_MODEL_SETTINGS.pricing, ...existing.pricing },
-			selection: { ...DEFAULT_MODEL_SETTINGS.selection, ...existing.selection }
-		}
+		return mergeModelSettings(existing)
 	}
 
 	private loadSettings(): Settings {
@@ -144,7 +145,8 @@ class SettingsManager {
 					agentToken: decryptKey({ geminiApiKeyEnc: parsed.agentTokenEnc, geminiApiKey: parsed.agentToken }),
 					engine: normalizeEngineSettings(parsed.engine),
 					audio: normalizeAudioSettings(parsed.audio),
-					elevenLabsKey: decryptKey({ geminiApiKeyEnc: parsed.elevenLabsKeyEnc, geminiApiKey: parsed.elevenLabsKey })
+					elevenLabsKey: decryptKey({ geminiApiKeyEnc: parsed.elevenLabsKeyEnc, geminiApiKey: parsed.elevenLabsKey }),
+					setupComplete: typeof parsed.setupComplete === 'boolean' ? parsed.setupComplete : undefined
 				}
 			}
 		} catch (error) {
@@ -353,6 +355,26 @@ class SettingsManager {
 	/** An empty key removes it. */
 	setElevenLabsKey(key: string): void {
 		this.settings.elevenLabsKey = key.trim() || undefined
+		this.saveSettings()
+	}
+
+	// ===== First-launch setup =====
+
+	/**
+	 * A fresh install has no settings file and so no flag; it is the missing key
+	 * that sends it through the wizard. Someone with a key and a safe folder from
+	 * before the wizard existed has no flag either, and is left alone.
+	 */
+	isSetupComplete(): boolean {
+		return isSetupComplete({
+			hasKey: !!this.settings.geminiApiKey,
+			tempUnsafe: this.isTempDirUnsafe(),
+			flag: this.settings.setupComplete
+		})
+	}
+
+	markSetupComplete(): void {
+		this.settings.setupComplete = true
 		this.saveSettings()
 	}
 

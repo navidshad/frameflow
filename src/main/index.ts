@@ -42,6 +42,12 @@ import { electronApp, optimizer, is } from '@electron-toolkit/utils'
 import { registerMediaProtocol } from './media-protocol'
 import { initAgentAccess } from './mcp'
 import { isCliEngine, type CliEngineId } from '@shared/engines'
+import { checkProjectsFolder, nestProjectsFolder, suggestProjectsFolder } from './setup/folder'
+import { testGeminiKey } from './setup/geminiKey'
+import { buildChecks } from '../shared/setup'
+import { normalizeEngineSettings } from '@shared/engines'
+import { execFile } from 'child_process'
+import { getFFmpegBinaryPath } from './ffmpeg'
 import { initMotionIpc } from './motion/ipc'
 import { abortEngineTurn, cliEngineSelected, initEngines, runCliEditorPrompt } from './engine'
 
@@ -293,6 +299,60 @@ app.whenReady().then(() => {
 		}
 		return false
 	})
+
+	// ===== First-launch setup =====
+	// Nothing below saves anything except setup-complete: the wizard collects
+	// and checks, and Start commits it all at once.
+
+	const ffmpegVersion = () => new Promise<string | undefined>((resolve) => {
+		execFile(getFFmpegBinaryPath(), ['-version'], { timeout: 5000 }, (err, out) =>
+			resolve(err ? undefined : /version\s+(\d[\d.]*)/.exec(String(out))?.[1]))
+	})
+
+	ipcMain.handle('setup-state', async () => ({
+		complete: settingsManager.isSetupComplete(),
+		suggestedFolder: suggestProjectsFolder(),
+		home: app.getPath('home'),
+		hasGeminiKey: !!settingsManager.getGeminiApiKey(),
+		ffmpeg: { available: await checkFFmpegAvailability(), version: await ffmpegVersion() }
+	}))
+
+	ipcMain.handle('setup-check-folder', (_event, path: string) => checkProjectsFolder(String(path || '')))
+
+	ipcMain.handle('setup-pick-folder', async () => {
+		const result = await dialog.showOpenDialog({
+			defaultPath: app.getPath('home'),
+			properties: ['openDirectory', 'createDirectory']
+		})
+		if (result.canceled || !result.filePaths.length) return null
+		const path = nestProjectsFolder(result.filePaths[0])
+		return { path, check: checkProjectsFolder(path) }
+	})
+
+	ipcMain.handle('setup-test-gemini-key', (_event, key: string) => testGeminiKey(String(key || '')))
+
+	ipcMain.handle('setup-complete', async (_event, payload: { folder: string; geminiKey: string; elevenLabsKey?: string; engine: unknown }) => {
+		const folder = String(payload?.folder || '')
+		const check = checkProjectsFolder(folder)
+		if (!check.ok) return { ok: false, error: check.reason }
+		const key = String(payload?.geminiKey || '').trim()
+		if (!key) return { ok: false, error: 'A Gemini key is required.' }
+		try {
+			if (!fs.existsSync(folder)) fs.mkdirSync(folder, { recursive: true })
+		} catch (e: any) {
+			return { ok: false, error: `Could not create the folder: ${e?.message || e}` }
+		}
+		if (!settingsManager.setTempDir(folder)) return { ok: false, error: 'Could not save the folder to settings.' }
+		threadManager.syncWithArtifactDir()
+		settingsManager.setGeminiApiKey(key)
+		const eleven = String(payload?.elevenLabsKey || '').trim()
+		if (eleven) settingsManager.setElevenLabsKey(eleven)
+		settingsManager.updateEngineSettings(normalizeEngineSettings(payload?.engine as any))
+		settingsManager.markSetupComplete()
+		return { ok: true }
+	})
+
+	ipcMain.handle('is-setup-complete', () => settingsManager.isSetupComplete())
 
 	ipcMain.handle('get-temp-dir', () => {
 		return settingsManager.getTempDir()

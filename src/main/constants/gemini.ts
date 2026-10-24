@@ -89,8 +89,6 @@ export const DEFAULT_MODEL_SETTINGS: ModelSettings = {
 		'raw-transcript': GEMINI_MODEL_2_5_FLASH_LITE,
 		'corrected-transcript': GEMINI_MODEL_2_5_PRO,
 		'intent': GEMINI_MODEL_2_5_FLASH,
-		'timeline-new': GEMINI_MODEL_3_FLASH_PREVIEW,
-		'timeline-edit': GEMINI_MODEL_2_5_FLASH,
 		'thumbnail': GEMINI_MODEL_3_1_FLASH_IMAGE_PREVIEW,
 		'scene-description': GEMINI_MODEL_2_5_FLASH_LITE,
 		'image-extraction': GEMINI_MODEL_2_5_FLASH_LITE,

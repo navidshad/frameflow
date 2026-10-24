@@ -1,7 +1,8 @@
 import { defineStore } from 'pinia'
 import { computed, ref } from 'vue'
 import {
-	asSetIn, CLI_MODELS, DEFAULT_ENGINE_SETTINGS, ENGINES, isCliEngine,
+	asSetIn, CLI_MODELS, DEFAULT_ENGINE_SETTINGS, ENGINES, engineChipLabel, geminiTextModels, isCliEngine,
+	type GeminiTextModel,
 	type EngineDetection, type EngineId, type EngineSettings, type ModelOption
 } from '@shared/engines'
 
@@ -11,6 +12,11 @@ import {
  */
 
 const api = (window as any).api
+
+/** Chip menu order for Gemini models; anything else follows by price. */
+const GEMINI_MENU_ORDER = ['gemini-3-flash-preview', 'gemini-2.5-flash', 'gemini-2.5-pro']
+const EDITOR_OP = 'editor-edit'
+const EDITOR_FALLBACK = 'gemini-2.5-flash'
 
 export const useEngineStore = defineStore('engine', () => {
 	const settings = ref<EngineSettings>({ ...DEFAULT_ENGINE_SETTINGS })
@@ -49,7 +55,36 @@ export const useEngineStore = defineStore('engine', () => {
 		return options
 	})
 
-	const load = async () => apply(await api.getEngines())
+	// ---- Gemini API: the model the editor chat uses (the 'editor-edit' selection) ----
+	const modelSettings = ref<{ pricing: Record<string, any>; selection: Record<string, string> } | null>(null)
+	const modelMetadata = ref<Record<string, { label: string }>>({})
+
+	const geminiModels = computed<GeminiTextModel[]>(() =>
+		geminiTextModels(modelSettings.value?.pricing, modelMetadata.value, GEMINI_MENU_ORDER))
+	const editorModel = computed(() => modelSettings.value?.selection?.[EDITOR_OP] || EDITOR_FALLBACK)
+	const editorModelLabel = computed(() => modelMetadata.value[editorModel.value]?.label || editorModel.value)
+	const chipLabel = computed(() => engineChipLabel(settings.value, editorModelLabel.value))
+
+	const loadModels = async () => {
+		try {
+			const [ms, md] = await Promise.all([api.getModelSettings(), api.getModelMetadata()])
+			modelSettings.value = ms
+			modelMetadata.value = md || {}
+		} catch (error) {
+			console.error('[engineStore] Failed to load model settings:', error)
+		}
+	}
+	const setEditorModel = async (model: string) => {
+		if (!modelSettings.value) await loadModels()
+		const next = JSON.parse(JSON.stringify(modelSettings.value))
+		next.selection = { ...next.selection, [EDITOR_OP]: model }
+		await api.setModelSettings(next)
+		modelSettings.value = next
+	}
+
+	const load = async () => {
+		await Promise.all([api.getEngines().then(apply), loadModels()])
+	}
 	const detect = async () => {
 		detecting.value = true
 		apply(await api.detectEngines())
@@ -59,5 +94,5 @@ export const useEngineStore = defineStore('engine', () => {
 
 	if (api?.onEngineState) api.onEngineState(apply)
 
-	return { settings, detections, detecting, loaded, current, isCli, available, modelOptions, detectionFor, load, detect, update, select }
+	return { settings, detections, geminiModels, editorModel, editorModelLabel, chipLabel, setEditorModel, detecting, loaded, current, isCli, available, modelOptions, detectionFor, load, detect, update, select }
 })
