@@ -9,6 +9,7 @@ import type { AgentRecentSession } from '../shared/agentFeed'
 import { normalizeEngineSettings, type EngineSettings } from '../shared/engines'
 import { normalizeAudioSettings, type AudioProviderSettings } from '../shared/audioProviders'
 import { DEFAULT_MODEL_SETTINGS } from './constants/gemini'
+import { mergeModelSettings } from './modelSettings'
 import { BUILTIN_PERSONAS } from './constants/personas'
 
 interface Settings {
@@ -124,10 +125,7 @@ class SettingsManager {
 	}
 
 	private mergeModelSettings(existing: ModelSettings): ModelSettings {
-		return {
-			pricing: { ...DEFAULT_MODEL_SETTINGS.pricing, ...existing.pricing },
-			selection: { ...DEFAULT_MODEL_SETTINGS.selection, ...existing.selection }
-		}
+		return mergeModelSettings(existing)
 	}
 
 	private loadSettings(): Settings {
