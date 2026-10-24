@@ -1,7 +1,9 @@
-import { contextBridge, ipcRenderer } from 'electron'
+import { contextBridge, ipcRenderer, webUtils } from 'electron'
 import type { ThreadType } from '@shared/types'
 
 const api = {
+	/** The real path of a file dropped on the window. */
+	pathForFile: (file: File): string => webUtils.getPathForFile(file),
 	selectVideo: () => ipcRenderer.invoke('select-video'),
 	fetchVideoFormats: (url: string) => ipcRenderer.invoke('fetch-video-formats', url),
 	downloadVideo: (url: string, resolution?: string) => ipcRenderer.invoke('download-video', url, resolution),
@@ -42,6 +44,12 @@ const api = {
 	setTempDir: () => ipcRenderer.invoke('set-temp-dir'),
 	resetTempDir: () => ipcRenderer.invoke('reset-temp-dir'),
 	openTempDir: () => ipcRenderer.invoke('open-temp-dir'),
+	isSetupComplete: () => ipcRenderer.invoke('is-setup-complete'),
+	setupState: () => ipcRenderer.invoke('setup-state'),
+	setupCheckFolder: (path: string) => ipcRenderer.invoke('setup-check-folder', path),
+	setupPickFolder: () => ipcRenderer.invoke('setup-pick-folder'),
+	setupTestGeminiKey: (key: string) => ipcRenderer.invoke('setup-test-gemini-key', key),
+	setupComplete: (payload: unknown) => ipcRenderer.invoke('setup-complete', payload),
 	getGeminiApiKey: () => ipcRenderer.invoke('get-gemini-api-key'),
 	isTempDirUnsafe: () => ipcRenderer.invoke('is-temp-dir-unsafe'),
 	setGeminiApiKey: (key: string) => ipcRenderer.invoke('set-gemini-api-key', key),
