@@ -83,6 +83,8 @@ export type AgentApplyOutcome =
 		counts: { added: number; removed: number; updated: number; markers: number }
 		/** Ops the live doc rejected when the diff was dry-run against it. */
 		pruned: string[]
+		/** Items the ops did not move but the apply did (an overlap pushed later), one line each. */
+		shifted?: string[]
 	}
 	| { ok: false; error: string }
 

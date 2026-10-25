@@ -8,6 +8,7 @@ import {
 	resolveMoments, sameMotion, settingValues, type MotionSpec
 } from './motion'
 import { motionSections } from './motionTemplates'
+import { extractMotionDefinition, writtenSpec } from './motionCode'
 import { applyTimelineDiff, diffTimelines, findOrphanItems } from './timeline'
 import { canHostItem, isCompositedItem, itemFamily } from './tracks'
 import { hasKeyframes, isAnimatableOn } from './keyframes'
@@ -463,5 +464,34 @@ describe('lengthAfterPageChange', () => {
 	it('does not move while the new page is failing: the drawn page is still the old one', () => {
 		const failing: MotionSpec = { ...spec(3), html: spec(8).html }
 		expect(lengthAfterPageChange(spec(3), failing, 3)).toBe(3)
+	})
+})
+
+describe('reading a page’s definition when define() uses expressions (gap 4)', () => {
+	const page = (duration: string) =>
+		`<div id="n"></div><script>var SPEC = { duration: 9 };\nframeflow.define({ duration: ${duration}, moments: [{ name: "in", duration: 1 }, { name: "hold", duration: 7, flex: true }, { name: "out", duration: 1 }], seek(t) { n.textContent = String(t) } })</script>`
+	const runtime = normaliseDefinition({ duration: 9, settings: [], moments: [{ name: 'in', duration: 1 }, { name: 'hold', duration: 7, flex: true }, { name: 'out', duration: 1 }] })
+	const writer = { by: 'Claude Code' }
+
+	it('knows an expression is not read: the text alone says 3 s and "incomplete"', () => {
+		const read = extractMotionDefinition(page('SPEC.duration'))
+		expect(read.complete).toBe(false)
+		expect(read.definition!.duration).toBe(3)
+		expect(read.problems.join(' ')).toMatch(/duration is not a literal/)
+		expect(extractMotionDefinition(page('9')).complete).toBe(true)
+	})
+
+	it('lets what the page reported at run time win over the text', () => {
+		expect(resolveDefinition(writtenSpec(newMotionSpec(), page('SPEC.duration'), writer, runtime)).duration).toBe(9)
+		expect(resolveDefinition(writtenSpec(newMotionSpec(), page('SPEC.duration'), writer)).duration).toBe(3)
+	})
+
+	it('follows the run-time length, and only that, when a 9 s layer gets the page again', () => {
+		const before = writtenSpec(newMotionSpec(), page('9'), writer)
+		const after = writtenSpec(before, page('SPEC.duration'), writer, runtime)
+		expect(lengthAfterPageChange(before, after, 9)).toBe(9)
+		// The misread one would have cut it to 3 — which is why the ops path does
+		// not follow a definition it could not read (see ops.test.ts).
+		expect(lengthAfterPageChange(before, writtenSpec(before, page('SPEC.duration'), writer), 9)).toBe(3)
 	})
 })

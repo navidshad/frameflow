@@ -1,5 +1,5 @@
 import type { Clip, EditorDocument, MediaAsset, TimelineItem } from '@shared/types'
-import { applyTimelineDiff } from '@shared/timeline'
+import { applyTimelineDiff, repairOverlapsReporting } from '@shared/timeline'
 import type { TranscriptEntry } from '@shared/captions'
 import type { AudioAnalysis } from '@shared/audio'
 import { normaliseRecipe, presetOf, recipeKey, soundLength, type SoundRecipe } from '@shared/synth'
@@ -73,6 +73,8 @@ export class FakeEditor implements EditorBridge {
 		}
 		const state = { tracks: this.doc.tracks, timeline: this.doc.timeline }
 		const result = applyTimelineDiff(state, commit.turn.diff!, this.doc.media)
+		// As the store's dry run does: overlaps are pushed right, and said.
+		const shifted = repairOverlapsReporting(state)
 		// It replaces arrays rather than mutating them, as the store expects
 		this.doc.tracks = state.tracks
 		this.doc.timeline = state.timeline
@@ -89,7 +91,8 @@ export class FakeEditor implements EditorBridge {
 				updated: commit.turn.diff!.updateItems?.length || 0,
 				markers: commit.addMarkers?.length || 0
 			},
-			pruned: result.errors
+			pruned: result.errors,
+			shifted: shifted.length ? shifted : undefined
 		}
 	}
 

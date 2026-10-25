@@ -445,6 +445,21 @@ export function repairOverlaps(state: TimelineState, eps = MIN_ITEM_DURATION): b
 	return changed
 }
 
+/**
+ * repairOverlaps, saying what it moved: "Title" 4 s → 4.7 s on its track. An
+ * edit that moved something it did not ask to move must say so, or the person
+ * (or agent) finds out only when a card lands late.
+ */
+export function repairOverlapsReporting(state: TimelineState, eps = MIN_ITEM_DURATION): string[] {
+	const starts = new Map(state.timeline.map((i) => [i.id, i.timelineStart]))
+	if (!repairOverlaps(state, eps)) return []
+	const name = (id: string) => state.tracks.find((t) => t.id === id)?.name ?? 'its track'
+	const s = (n: number) => `${Math.round(n * 1000) / 1000} s`
+	return state.timeline
+		.filter((i) => Math.abs(i.timelineStart - (starts.get(i.id) ?? i.timelineStart)) > eps)
+		.map((i) => `"${i.label || i.id}" (${i.id}) was pushed later to clear an overlap on ${name(i.trackId)}: ${s(starts.get(i.id)!)} → ${s(i.timelineStart)}.`)
+}
+
 export interface TrimOptions {
 	/** Alt-drag: downstream items absorb the length change (magnetic). */
 	ripple?: boolean

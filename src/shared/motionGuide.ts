@@ -25,7 +25,16 @@ export const MOTION_CONTRACT_LINES: string[] = [
 	'- Helpers: frameflow.progress("in", t) is 0..1 across a moment; frameflow.ease.out/in/inOut/back,',
 	'  frameflow.lerp and frameflow.clamp exist, and plain ease(x) and clamp(x, lo, hi) are globals.',
 	'- A page that fails its checks is kept as the working text but not drawn; the last version that passed',
-	'  stays on screen.'
+	'  stays on screen.',
+	'- Write duration and moment lengths in define() as literal numbers (duration: 9.5, not duration: SPEC.duration).',
+	'  FrameFlow reads them from the text before the page runs; an expression is only known once the page is run.',
+	'- Every page is drawn twice at the same instants, in a different order, and both must match to the pixel.',
+	'  A rejection gives the box, how many pixels and how much they differ, and an image of both renders. The two',
+	'  usual causes: (a) sub-pixel positions near rest: an eased translate or scale that ends at 0.3 px anti-aliases',
+	'  differently each time, so round positions to whole pixels (Math.round) and snap to the rest value once',
+	'  within a pixel of it; (b) layout measured before it is updated: reading getBoundingClientRect or offsetWidth',
+	'  before setting this t\'s text or size reads the PREVIOUS seek\'s layout. Set everything for t first, then',
+	'  measure. Nothing may carry over from one seek(t) call to the next.'
 ]
 
 /** What makes a page good rather than merely valid. */
