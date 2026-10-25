@@ -1464,6 +1464,11 @@ export function opsToDiff(
 			})
 		// `adds` and a range's split halves are the real objects, so the helpers reposition them in place.
 		const working = [...survivors, ...adds, ...rangeAdded]
+		// Where each survivor sat BEFORE the ripple, this edit's own updates applied. A clip a range
+		// trimmed from its start already has a new start in the diff; comparing the rippled start
+		// with its original one would drop the ripple when the two happen to match (a cut that
+		// begins exactly where the clip begins) and leave the trimmed start in place.
+		const preRipple = new Map(survivors.map((i) => [i.id, i.timelineStart]))
 
 		const moved = wantsCloseGaps
 			? closeTimelineGaps({ tracks: doc.tracks, timeline: working })
@@ -1472,10 +1477,9 @@ export function opsToDiff(
 		if (moved) {
 			const updates = diff.updateItems ? [...diff.updateItems] : []
 			const byId = new Map(updates.map((u, index) => [u.id, index]))
-			const originalStart = new Map(doc.timeline.map((i) => [i.id, i.timelineStart]))
 			let shifted = 0
 			for (const item of survivors) {
-				if (Math.abs(item.timelineStart - (originalStart.get(item.id) ?? 0)) < 1e-6) continue
+				if (Math.abs(item.timelineStart - (preRipple.get(item.id) ?? 0)) < 1e-6) continue
 				shifted++
 				const index = byId.get(item.id)
 				if (index != null) updates[index] = { ...updates[index], timelineStart: item.timelineStart }
