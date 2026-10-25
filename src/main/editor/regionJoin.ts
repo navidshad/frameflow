@@ -76,28 +76,30 @@ export function regionSpans(durations: number[], fps: number): RegionSpan[] {
  *
  * Video: renumber the frames 0, 1, 2… (a source that seeked onto a late frame
  * otherwise opens on a gap), hold the last frame for two more in case the
- * graph came up one short, and lay that over a black base of exactly the
- * frame count. The base is what guarantees the count: a region past the end of
- * its source's PICTURE (a recording whose sound runs a few frames longer than
- * its video) yields no frames at all, and a region file with no video stream
- * shifts its audio to stream 0, where the join drops it — the 9:26 vlog lost
- * its last 66 ms that way. Audio: pad with silence and cut at the sample count.
- * Returns the new output labels.
+ * graph came up one short, then pad with black for as long as the region
+ * lasts and cut at the frame count. The black pad is what guarantees the
+ * count: a region past the end of its source's PICTURE (a recording whose
+ * sound runs a few frames longer than its video) yields no frames at all, and
+ * a region file with no video stream shifts its audio to stream 0, where the
+ * join drops it — the 9:26 vlog lost its last 66 ms that way. (`tpad` pads an
+ * empty stream too. A black `color` source overlaid underneath does the same
+ * job but hung h264_videotoolbox in 3 of 5 runs.) Audio: pad with silence and
+ * cut at the sample count. Returns the new output labels.
  */
 export function exactTailFilters(
 	graph: { video: string; audio: string },
 	span: Pick<RegionSpan, 'frames' | 'samples'>,
-	frame: { width: number; height: number; fps: number }
+	fps: number
 ): { filters: string[]; video: string; audio: string } {
 	// A sub-half-frame sliver adds no picture to the join, but ffmpeg still
 	// needs a frame to write; the video list leaves the file out.
 	const frames = Math.max(1, span.frames)
 	const samples = Math.max(1, span.samples)
+	const padSec = ((frames + 1) / fps).toFixed(3)
 	return {
 		filters: [
-			`color=c=black:s=${frame.width}x${frame.height}:r=${frame.fps},format=yuv420p,setsar=1,trim=end_frame=${frames}[vbase]`,
-			`${graph.video}setpts=N/FRAME_RATE/TB,tpad=stop_mode=clone:stop=2[vheld]`,
-			`[vbase][vheld]overlay=eof_action=pass:repeatlast=0[vexact]`,
+			`${graph.video}setpts=N/FRAME_RATE/TB,tpad=stop_mode=clone:stop=2,` +
+				`tpad=stop_mode=add:stop_duration=${padSec}:color=black,trim=end_frame=${frames}[vexact]`,
 			`${graph.audio}apad=whole_len=${samples},atrim=end_sample=${samples}[aexact]`
 		],
 		video: '[vexact]',

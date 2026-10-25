@@ -56,12 +56,10 @@ describe('regionSpans — the length math', () => {
 		expect(lists.audio).toContain("file 'b.mov'\nduration 0.010000")
 	})
 
-	it('pins the region to its counts over a black base of exactly that many frames', () => {
-		const tail = exactTailFilters({ video: '[v]', audio: '[a]' }, { frames: 32, samples: 50500 }, { width: 320, height: 180, fps: 30 })
+	it('pins the region to its counts, padding black when the source has no picture left', () => {
+		const tail = exactTailFilters({ video: '[v]', audio: '[a]' }, { frames: 32, samples: 50500 }, 30)
 		expect(tail.filters).toEqual([
-			'color=c=black:s=320x180:r=30,format=yuv420p,setsar=1,trim=end_frame=32[vbase]',
-			'[v]setpts=N/FRAME_RATE/TB,tpad=stop_mode=clone:stop=2[vheld]',
-			'[vbase][vheld]overlay=eof_action=pass:repeatlast=0[vexact]',
+			'[v]setpts=N/FRAME_RATE/TB,tpad=stop_mode=clone:stop=2,tpad=stop_mode=add:stop_duration=1.100:color=black,trim=end_frame=32[vexact]',
 			'[a]apad=whole_len=50500,atrim=end_sample=50500[aexact]'
 		])
 	})
