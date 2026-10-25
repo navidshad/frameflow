@@ -479,7 +479,13 @@ const renderFrame: ToolDef = {
 		return {
 			content: [
 				{ type: 'image', data: frame.data, mimeType: frame.mimeType },
-				{ type: 'text', text: `Frame at ${clock(timeSec)} of ${clock(end)} (${project.doc.timelineMeta.width}×${project.doc.timelineMeta.height}).` }
+				{
+					type: 'text',
+					text: [
+						`Frame at ${clock(timeSec)} of ${clock(end)} (${project.doc.timelineMeta.width}×${project.doc.timelineMeta.height}).`,
+						frame.motionNote
+					].filter(Boolean).join('\n')
+				}
 			],
 			feed: {
 				title: `render_frame ${clock(timeSec)}`,
