@@ -1,6 +1,6 @@
 import { app, safeStorage } from 'electron'
 import { join } from 'path'
-import { existsSync, mkdirSync, readFileSync, writeFileSync, realpathSync } from 'fs'
+import { existsSync, mkdirSync, readFileSync, renameSync, writeFileSync, realpathSync } from 'fs'
 import os from 'os'
 import { randomBytes } from 'crypto'
 import { EditorPersona, ModelSettings } from '../shared/types'
@@ -173,7 +173,11 @@ class SettingsManager {
 			// The agent token follows the same rule: encrypted where the OS can.
 			const token = encryptKey(agentToken ?? '')
 			const eleven = encryptKey(elevenLabsKey ?? '')
-			writeFileSync(this.settingsPath, JSON.stringify({
+			// Written beside and renamed over: a quit or kill mid-write must never
+			// leave an empty settings.json (which loses the key, the projects folder
+			// and agent access on the next launch).
+			const temp = `${this.settingsPath}.tmp`
+			writeFileSync(temp, JSON.stringify({
 				...rest,
 				...(enc ? { geminiApiKeyEnc: enc } : {}),
 				...(plain ? { geminiApiKey: plain } : {}),
@@ -182,6 +186,7 @@ class SettingsManager {
 				...(eleven.enc ? { elevenLabsKeyEnc: eleven.enc } : {}),
 				...(eleven.plain ? { elevenLabsKey: eleven.plain } : {})
 			}, null, 2))
+			renameSync(temp, this.settingsPath)
 			return true
 		} catch (error) {
 			console.error('Failed to save settings:', error)
