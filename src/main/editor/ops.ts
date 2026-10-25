@@ -16,10 +16,10 @@ import { hasTransform, OFFSET_RANGE, SCALE_RANGE } from '@shared/transform'
 import { defaultParams, effectDef } from '@shared/effects'
 import { findTitleTrack, nextTrackOrder, TITLE_TRACK_NAME } from '@shared/tracks'
 import {
-	freeMotionTrack, lengthAfterPageChange, lintMotionHtml, motionTemplate, newMotionSpec, nextMotionTrackName, resolveDefinition,
-	sanitiseSetting, type MotionSpec
+	freeMotionTrack, isMotionTrack, lengthAfterPageChange, lintMotionHtml, motionTemplate, newMotionSpec, nextMotionTrackName, resolveDefinition,
+	sanitiseSetting, type MotionDefinition, type MotionSpec
 } from '@shared/motion'
-import { keyframingNote, writtenSpec } from '@shared/motionCode'
+import { extractMotionDefinition, keyframingNote, writtenSpec } from '@shared/motionCode'
 import { MOTION_CRAFT_LINES } from '@shared/motionGuide'
 import { userMotionTemplate } from '@shared/motionTemplates'
 import type { MotionOpSettings } from '@shared/types'
@@ -927,7 +927,13 @@ export function opsToDiff(
 	/** Who is writing, for the "Written by …" line on a custom page. */
 	writer: { by: string; turnId?: string } = { by: 'FrameFlow AI' },
 	/** Sounds the caller already rendered, by recipe key (see soundOps.soundRecipesOf). */
-	soundAssets: Map<string, MediaAsset> = new Map()
+	soundAssets: Map<string, MediaAsset> = new Map(),
+	/**
+	 * What each page reported to `define` when the probe ran it, by its html
+	 * (vetHtmlOps' `definitions`). Ahead of the text read, which cannot see
+	 * `duration: SPEC.duration`.
+	 */
+	pageDefinitions: Map<string, MotionDefinition> = new Map()
 ): OpsToDiffResult {
 	const droppedOps: string[] = []
 	const notes: string[] = []
@@ -1598,7 +1604,7 @@ export function opsToDiff(
 	}
 
 	if (ops.addMotion?.length || ops.updateMotion?.length) {
-		applyMotionOps(ops, doc, diff, droppedOps, notes, writer)
+		applyMotionOps(ops, doc, diff, droppedOps, notes, writer, pageDefinitions)
 	}
 
 	if (ops.addSounds?.length || ops.setSounds?.length || ops.setTrackRoles?.length || ops.placeAudio?.length) {
@@ -1730,7 +1736,8 @@ function applyMotionOps(
 	diff: TimelineDiff,
 	droppedOps: string[],
 	notes: string[],
-	writer: { by: string; turnId?: string }
+	writer: { by: string; turnId?: string },
+	pageDefinitions: Map<string, MotionDefinition>
 ): void {
 	const removed = new Set(diff.removeItemIds ?? [])
 	const tracks = [...doc.tracks, ...(diff.addTracks ?? [])]
@@ -1739,8 +1746,8 @@ function applyMotionOps(
 		...(diff.addItems ?? [])
 	]
 
-	const motionTrackAt = (start: number, duration: number) => {
-		const free = freeMotionTrack(tracks, placed, start, duration)
+	const motionTrackAt = (start: number, duration: number, ignoreId?: string) => {
+		const free = freeMotionTrack(tracks, placed, start, duration, ignoreId)
 		if (free) return free
 		const track = {
 			id: uuidv4(), kind: 'video' as const,
@@ -1763,10 +1770,11 @@ function applyMotionOps(
 		let base: MotionSpec
 		let label: string
 		if (html) {
-			base = writtenSpec(saved ? newMotionSpec(saved.id) : undefined, html, writer)
+			base = writtenSpec(saved ? newMotionSpec(saved.id) : undefined, html, writer, pageDefinitions.get(html))
 			label = saved?.label ?? template?.label ?? 'Custom HTML'
 			// By the name the writer gave it, which is the one it will recognise.
 			reportPageProblems(request.label?.trim() || label, html, base, notes)
+			reportUnreadDefinition(request.label?.trim() || label, html, pageDefinitions.get(html), notes, finiteNumber(request.durationSec))
 		} else if (template) {
 			base = { template: template.id }
 			label = template.label
@@ -1813,28 +1821,96 @@ function applyMotionOps(
 		// A new page replaces the old one first, so the settings and windows in the
 		// same request are read against the page they were written for.
 		const html = typeof request.html === 'string' && request.html.trim() ? request.html : null
-		const current: MotionSpec = html ? writtenSpec(item.motion, html, writer) : item.motion
-		if (html) reportPageProblems(item.label || item.id, html, current, notes)
+		const name = item.label || item.id
+		const runtime = html ? pageDefinitions.get(html) : undefined
+		const current: MotionSpec = html ? writtenSpec(item.motion, html, writer, runtime) : item.motion
+		if (html) {
+			reportPageProblems(name, html, current, notes)
+			reportUnreadDefinition(name, html, runtime, notes, finiteNumber(request.durationSec))
+		}
 		const { values, unknown } = motionSettingsFrom(request.settings, current)
 		if (unknown.length) {
-			notes.push(`"${item.label || item.id}" has no setting ${unknown.map((k) => `"${k}"`).join(', ')} — ignored.`)
+			notes.push(`"${name}" has no setting ${unknown.map((k) => `"${k}"`).join(', ')} — ignored.`)
 		}
-		// A layer at its page's own length follows a page that runs longer or shorter.
-		const timing = motionTiming(current, request.moments, request.durationSec, lengthAfterPageChange(item.motion, current, item.duration))
+		// A layer at its page's own length follows a page that runs longer or
+		// shorter — but only a length FrameFlow actually knows. A definition it
+		// could not read (`duration: SPEC.duration`, never run) is not a reason
+		// to cut a 9 s card to the 3 s default.
+		const readable = !html || !!runtime || extractMotionDefinition(html).complete
+		const follows = readable ? lengthAfterPageChange(item.motion, current, item.duration) : item.duration
+		const timing = motionTiming(current, request.moments, request.durationSec, follows)
 		const spec = tidyMotion({
 			...current,
 			settings: { ...(current.settings ?? {}), ...values },
 			moments: timing.moments
 		})
 		const fields: Partial<TimelineItem> = { motion: spec }
-		if (Math.abs(timing.duration - item.duration) > 1e-6 || item.in !== 0) {
+		const resized = Math.abs(timing.duration - item.duration) > 1e-6
+		if (resized || item.in !== 0) {
 			Object.assign(fields, { in: 0, out: timing.duration, duration: timing.duration })
 		}
-		if (finiteNumber(request.atSec)) fields.timelineStart = Math.max(0, request.atSec)
+		// Say so whenever the page, not the request, changed the length.
+		if (html && resized && Math.abs(follows - item.duration) > 1e-6 && Math.abs(timing.duration - follows) < 1e-6) {
+			notes.push(`"${name}" was at its page's length, so it follows the new page: ${secs(item.duration)} → ${secs(timing.duration)}. Send durationSec to keep a different length.`)
+		}
+		const start = finiteNumber(request.atSec) ? Math.max(0, request.atSec) : item.timelineStart
+		if (finiteNumber(request.atSec)) fields.timelineStart = start
+
+		// A retime that runs into another layer on its track moves THIS layer to a
+		// free motion track, as addMotion does. Nothing else on the track moves.
+		const moved = finiteNumber(request.atSec) || resized
+		// A copy: `placed` holds the document's own items, which must not change here.
+		const at = placed.findIndex((p) => p.id === item.id)
+		const here = at >= 0 ? { ...placed[at], timelineStart: start, in: 0, out: timing.duration, duration: timing.duration, speed: 1 } : undefined
+		if (here) placed[at] = here
+		if (moved) {
+			const track = tracks.find((t) => t.id === item.trackId)
+			const stays = track && isMotionTrack(track) && !track.locked
+				? freeMotionTrack([track], placed, start, timing.duration, item.id)
+				: null
+			if (track && !stays) {
+				const clash = placed.find((p) =>
+					p.id !== item.id && p.trackId === item.trackId &&
+					p.timelineStart < start + timing.duration - 1e-6 && itemEnd(p) > start + 1e-6)
+				const to = motionTrackAt(start, timing.duration, item.id)
+				fields.trackId = to.id
+				if (here) here.trackId = to.id
+				const why = clash ? ` it would overlap "${clash.label || clash.id}" on ${track.name}` : ` ${track.name} is not free then`
+				notes.push(`"${name}" moved to ${to.name}:${why} at ${secs(start)}–${secs(start + timing.duration)}. Nothing else moved.`)
+			}
+		}
 		const updates = (diff.updateItems ||= [])
 		const existing = updates.find((u) => u.id === item.id)
 		if (existing) Object.assign(existing, fields)
 		else updates.push({ id: item.id, ...fields })
+	}
+}
+
+/** "9.5 s" — three significant decimals at most. */
+const secs = (n: number) => `${Math.round(n * 1000) / 1000} s`
+
+/**
+ * A page whose `define` uses expressions (`duration: SPEC.duration`) cannot be
+ * read from its text. Say what that means for this layer: read by running it,
+ * or not known at all (and so the length is left alone).
+ */
+function reportUnreadDefinition(
+	label: string,
+	html: string,
+	runtime: MotionDefinition | undefined,
+	notes: string[],
+	explicitLength: boolean
+): void {
+	const read = extractMotionDefinition(html)
+	if (!read.found || read.complete) return
+	const parts = read.problems.filter((p) => /not a literal/.test(p)).map((p) => p.split(' ')[0])
+	const what = parts.length ? parts.join(', ') : 'part of it'
+	const head = `"${label}": frameflow.define() uses expressions FrameFlow cannot read from the text (${what}).`
+	if (runtime) {
+		notes.push(`${head} It read them by running the page: ${secs(runtime.duration)}, ${runtime.moments.length} moments. Literal numbers in define() keep this exact without a run.`)
+	} else {
+		const length = explicitLength ? '' : ' so the layer keeps the length it had (or 3 s, for a new one) — send durationSec, or'
+		notes.push(`${head} The page has not been run here,${length} write literal numbers in define().`)
 	}
 }
 

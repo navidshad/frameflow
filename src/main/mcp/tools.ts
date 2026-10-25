@@ -784,8 +784,16 @@ const applyOps: ToolDef = {
 		// window — BEFORE it replaces anything. One that fails is not applied; the
 		// earlier page stays, and the agent is told what to fix.
 		const vetted = await vetHtmlOps(args as EditorOps, project.doc, ctx.probeMotion)
+		// The two renders of a frame that drew two ways, so the agent can SEE why.
+		const evidence = vetted.images.map((i) => ({ type: 'image' as const, data: i.data, mimeType: i.mimeType }))
 		if (!opKeys(vetted.ops as Record<string, unknown>).length) {
-			throw new ToolError(`Nothing was changed. Every operation was rejected:\n- ${vetted.dropped.join('\n- ')}`)
+			const message = `Nothing was changed. Every operation was rejected:\n- ${vetted.dropped.join('\n- ')}`
+			if (!evidence.length) throw new ToolError(message)
+			return {
+				content: [{ type: 'text', text: message }, ...evidence],
+				isError: true,
+				feed: { detail: 'page rejected: it drew a frame two ways' }
+			}
 		}
 		const ops = vetted.ops
 		const turnId = randomUUID()
@@ -794,7 +802,7 @@ const applyOps: ToolDef = {
 		const wanted = soundRecipesOf(ops, project.doc)
 		const rendered = wanted.length ? await ctx.bridge.prepareSounds(project, wanted) : []
 		const soundAssets = new Map(wanted.map((r, i) => [recipeKey(r), rendered[i]]))
-		const mapped = opsToDiff(ops, project.doc, { by: ctx.clientName, turnId }, soundAssets)
+		const mapped = opsToDiff(ops, project.doc, { by: ctx.clientName, turnId }, soundAssets, vetted.definitions)
 		const { diff, addMarkers, docSettings, notes } = mapped
 		const droppedOps = [...vetted.dropped, ...mapped.droppedOps]
 		const turn: PromptTurn = {
@@ -829,8 +837,9 @@ const applyOps: ToolDef = {
 				undo: parent ? `revert_to_version ${parent.slice(1)} goes back to the state before this edit` : undefined,
 				applied: outcome.counts,
 				droppedOps: [...droppedOps, ...outcome.pruned],
-				notes
-			})],
+				// Anything the live doc moved that the ops did not ask to (an overlap pushed right).
+				notes: [...notes, ...(outcome.shifted ?? [])]
+			}), ...evidence],
 			feed: {
 				detail: ops.rationale || undefined,
 				chips: opChips(ops as Record<string, unknown>, outcome.revisionSeq)

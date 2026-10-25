@@ -272,7 +272,7 @@ export function runEditorPrompt(options: {
 			const freshDoc = threadManager.getThread(threadId)?.editor || doc
 			// Same rule as an agent's: a custom page is checked before it replaces anything.
 			const vetted = await vetHtmlOps(ops || {}, freshDoc, probeMotionPage)
-			const mapped = opsToDiff(vetted.ops, freshDoc, { by: 'FrameFlow AI', turnId })
+			const mapped = opsToDiff(vetted.ops, freshDoc, { by: 'FrameFlow AI', turnId }, undefined, vetted.definitions)
 			const { diff, addMarkers, docSettings, notes } = mapped
 			const droppedOps = [...vetted.dropped, ...mapped.droppedOps]
 			const targetLengthSec = parseTargetLength(ops?.targetLength)

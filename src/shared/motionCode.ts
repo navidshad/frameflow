@@ -663,11 +663,13 @@ export function editedSpec(
 export function writtenSpec(
 	spec: MotionSpec | undefined,
 	text: string,
-	author: { by: string; turnId?: string }
+	author: { by: string; turnId?: string },
+	/** What the page reported to `define` when it ran — wins over the text. */
+	runtime?: MotionDefinition
 ): MotionSpec {
 	const base: MotionSpec = spec ?? {}
 	const { found, definition: parsed } = extractMotionDefinition(text)
-	const definition = parsed ?? base.definition ?? BLANK_MOTION_DEFINITION
+	const definition = runtime ?? parsed ?? base.definition ?? BLANK_MOTION_DEFINITION
 	const ok = found && lintMotionHtml(text).ok
 	return {
 		...base,

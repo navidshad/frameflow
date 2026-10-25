@@ -8,7 +8,7 @@ import type {
 import {
 	applyTimelineDiff, clampSpeed, clipToItem, computeContentEnd,
 	closeTimelineGaps, diffTimelines, findOverlaps, itemDuration, itemEnd, itemFromAsset,
-	pruneOrphanItems, repairOverlaps,
+	pruneOrphanItems, repairOverlaps, repairOverlapsReporting,
 	type TimelineState
 } from '@shared/timeline'
 import { computeScope } from '@shared/ai-scope'
@@ -3369,7 +3369,7 @@ export const useEditorStore = defineStore('editor', () => {
 	 * Validates a proposal diff against the CURRENT doc by dry-running it on a
 	 * copy; returns the applied copy + human-readable pruned-op notes.
 	 */
-	const dryRunProposal = (diff: TimelineDiff): { applied: TimelineState; pruned: string[] } => {
+	const dryRunProposal = (diff: TimelineDiff): { applied: TimelineState; pruned: string[]; shifted: string[] } => {
 		const applied: TimelineState = {
 			tracks: JSON.parse(JSON.stringify(doc.value!.tracks)),
 			timeline: JSON.parse(JSON.stringify(doc.value!.timeline))
@@ -3377,8 +3377,8 @@ export const useEditorStore = defineStore('editor', () => {
 		const result = applyTimelineDiff(applied, diff, doc.value!.media)
 		// AI placements aren't gesture-clamped — push any same-track overlaps
 		// right so the applied state always satisfies the M2 no-overlap invariant.
-		repairOverlaps(applied)
-		return { applied, pruned: result.errors }
+		const shifted = repairOverlapsReporting(applied)
+		return { applied, pruned: result.errors, shifted }
 	}
 
 	const dismissAnswer = () => {
@@ -3542,7 +3542,7 @@ export const useEditorStore = defineStore('editor', () => {
 			}
 
 			// Validate against the live doc (prune stale ops + repair overlaps)
-			const { applied, pruned } = dryRunProposal(turn.diff!)
+			const { applied, pruned, shifted } = dryRunProposal(turn.diff!)
 			const before = currentState()
 			const diffed = diffTimelines(before, applied)
 			if (!diffed && !markers.length && !settings) {
@@ -3617,7 +3617,7 @@ export const useEditorStore = defineStore('editor', () => {
 			}
 			return {
 				ok: true, revisionId: rev.id, revisionSeq: rev.seq, parentRevisionId: rev.parentId,
-				counts, pruned
+				counts, pruned, shifted: shifted.length ? shifted : undefined
 			}
 		} else if (turn.status === 'error') {
 			activeTurnId.value = null
