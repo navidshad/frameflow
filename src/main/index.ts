@@ -818,14 +818,21 @@ app.whenReady().then(() => {
 		return editorHistory.setPointer(threadId, currentStepId)
 	})
 
-	ipcMain.handle('clear-editor-history', (_event, { threadId }: { threadId: string }) => {
-		editorHistory.clearHistory(threadId)
+	ipcMain.handle('clear-editor-history', async (_event, { threadId }: { threadId: string }) => {
+		await editorHistory.clearHistory(threadId)
 		return true
 	})
 
 	// Revision tree sidecar (renderer owns tree logic; main persists)
+	// Summaries only: snapshots are fetched one at a time below.
 	ipcMain.handle('get-editor-revisions', (_event, threadId: string) => {
 		return editorRevisions.loadRevisions(threadId)
+	})
+
+	ipcMain.handle('get-editor-revision-snapshot', (_event, { threadId, revisionId }: {
+		threadId: string, revisionId: string
+	}) => {
+		return editorRevisions.getRevisionSnapshot(threadId, revisionId)
 	})
 
 	ipcMain.handle('push-editor-revision', (_event, { threadId, revision }: {
@@ -857,8 +864,8 @@ app.whenReady().then(() => {
 				editorPreprocess.abortAssetPreprocessing(id, asset.id)
 			}
 			editorRender.abortRendersForThread(id)
-			editorHistory.deleteHistory(id)
-			editorRevisions.deleteRevisionsFile(id)
+			void editorHistory.deleteHistory(id)
+			void editorRevisions.deleteRevisionsFile(id)
 		}
 		return threadManager.deleteThread(id)
 	})

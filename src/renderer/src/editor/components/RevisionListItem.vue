@@ -44,11 +44,11 @@
 
 <script setup lang="ts">
 import { toRef } from 'vue'
-import type { EditorRevision } from '@shared/types'
+import type { EditorRevisionSummary } from '@shared/types'
 import { useRevisionCard } from '../composables/useRevisionCard'
 
 const props = defineProps<{
-	revision: EditorRevision
+	revision: EditorRevisionSummary
 	depth: number
 }>()
 

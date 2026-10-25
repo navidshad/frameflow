@@ -1,17 +1,16 @@
-import type { EditorDocument, EditorRevision, RevisionOrigin } from '@shared/types'
+import type { EditorDocument, EditorRevisionSummary, RevisionOrigin } from '@shared/types'
 import { toMediaUrl } from '@shared/media-url'
 
 /**
  * Resolves up to `count` thumbnail URLs for a revision card by mapping the
- * snapshot's first timeline items back to their source clips' already-on-disk
+ * revision's first timeline items back to their source clips' already-on-disk
  * scene JPGs (media://). Returns [] when nothing resolves — callers render a
  * placeholder block.
  */
-export function revisionThumbs(revision: EditorRevision, doc: EditorDocument | null, count = 1): string[] {
+export function revisionThumbs(revision: EditorRevisionSummary, doc: EditorDocument | null, count = 1): string[] {
 	if (!doc) return []
-	const items = [...revision.snapshot.timeline].sort((a, b) => a.timelineStart - b.timelineStart)
 	const thumbs: string[] = []
-	for (const item of items) {
+	for (const item of revision.firstClips || []) {
 		if (thumbs.length >= count) break
 		const asset = doc.media.find((a) => a.id === item.sourceAssetId)
 		const clip = asset?.clips.find((c) => c.id === item.sourceClipId)

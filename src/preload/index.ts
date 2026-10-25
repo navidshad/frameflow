@@ -141,6 +141,8 @@ const api = {
 	clearEditorHistory: (data: { threadId: string }) =>
 		ipcRenderer.invoke('clear-editor-history', data),
 	getEditorRevisions: (threadId: string) => ipcRenderer.invoke('get-editor-revisions', threadId),
+	getEditorRevisionSnapshot: (data: { threadId: string, revisionId: string }) =>
+		ipcRenderer.invoke('get-editor-revision-snapshot', data),
 	pushEditorRevision: (data: { threadId: string, revision: any }) =>
 		ipcRenderer.invoke('push-editor-revision', data),
 	deleteEditorRevisions: (data: { threadId: string, ids: string[] }) =>
