@@ -787,6 +787,24 @@ describe('AgentServer over Streamable HTTP', () => {
 			expect(waited.media.find((m: any) => m.name === 'Episode 1.mp4').processing).toBe('pending')
 		})
 
+		it('reports preparation the app quit in the middle of as interrupted, not running forever', async () => {
+			// Found editing a podcast: the iPhone file read "running" for two hours after restarts.
+			const claude = await connectTo('claude-code')
+			const media = editor.doc.media[0]
+			media.preprocessState = 'running'
+			const stopped = text(await claude.callTool({ name: 'wait', arguments: { for: 'media', timeoutSec: 0 } }))
+			expect(stopped.media.find((m: any) => m.id === media.id).processing).toBe('interrupted')
+			expect(stopped.done).toBe(true)
+			expect(stopped.next).toMatch(/interrupted.*Retry/)
+			const project = text(await claude.callTool({ name: 'get_project', arguments: {} }))
+			expect(project.media.find((m: any) => m.id === media.id).processing).toBe('interrupted')
+			// While a chain really runs, it is running.
+			editor.preparing.add(media.id)
+			const live = text(await claude.callTool({ name: 'wait', arguments: { for: 'media', timeoutSec: 0 } }))
+			expect(live.media.find((m: any) => m.id === media.id).processing).toBe('running')
+			expect(live.done).toBe(false)
+		})
+
 		it('sets the sequence frame through ops, and measures silences', async () => {
 			const claude = await connectTo('claude-code')
 			const result: any = await claude.callTool({ name: 'apply_ops', arguments: { rationale: 'Edit at 1080p', sequenceFrame: { width: 1921, height: 1080 } } })

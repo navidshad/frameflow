@@ -139,6 +139,8 @@ export interface EditorBridge {
 		assetIds: string[],
 		options: { name?: string; existing?: import('@shared/types').MulticamGroup; onProgress?: (fraction: number, label: string) => void }
 	): Promise<{ group: import('@shared/types').MulticamGroup; ranking: string[] }>
+	/** Whether a preparation chain is running for this media file right now (a stored "running" with none is interrupted). */
+	isPreparing(project: LiveProject, assetId: string): boolean
 	/** Quiet stretches in a media file's sound, in source seconds. */
 	findSilences(project: LiveProject, assetId: string, options: { noiseDb: number; minDurationSec: number }): Promise<{ start: number; end: number }[]>
 	/** Every editor project in the user's FrameFlow. */

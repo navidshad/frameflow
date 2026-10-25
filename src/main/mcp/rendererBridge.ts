@@ -23,6 +23,7 @@ import fs from 'node:fs'
 import { join } from 'node:path'
 import { tmpdir } from 'node:os'
 import { detectSilence } from '../ffmpeg'
+import { isAssetPreprocessing } from '../editor/preprocess'
 import { importMediaFromFile, importMediaFromUrl } from '../editor/importMedia'
 import { computeContentEnd } from '../../shared/timeline'
 
@@ -238,6 +239,10 @@ export const rendererBridge: EditorBridge = {
 	async buildCameraGroup(project, assetIds, options) {
 		const { group, ranking } = await buildCameraGroup(project.doc.media, assetIds, options)
 		return { group, ranking }
+	},
+
+	isPreparing(project, assetId) {
+		return isAssetPreprocessing(project.threadId, assetId)
 	},
 
 	async findSilences(project, assetId, options) {

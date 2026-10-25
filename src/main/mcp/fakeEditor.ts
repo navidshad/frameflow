@@ -181,6 +181,12 @@ export class FakeEditor implements EditorBridge {
 		return { group, ranking }
 	}
 
+	/** Media ids whose preparation chain is "live"; a stored 'running' outside it reads as interrupted. */
+	preparing = new Set<string>()
+	isPreparing(_project: LiveProject, assetId: string) {
+		return this.preparing.has(assetId)
+	}
+
 	async findSilences() {
 		return [{ start: 9.5, end: 10.4 }, { start: 19.2, end: 20.1 }]
 	}

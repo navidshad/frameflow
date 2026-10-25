@@ -36,6 +36,7 @@ import {
 import type { EditorBridge, LiveProject } from './bridge'
 import { ROUND_IDLE_MS, type RoundBook } from '@shared/agentRounds'
 import { sheetClock } from '../editor/exportInspect'
+import { prepStatus } from '@shared/mediaPrep'
 
 /**
  * FrameFlow's MCP tools. Each one says what it is FOR in its description,
@@ -249,7 +250,7 @@ const getProject: ToolDef = {
 				id: a.id, name: a.name, kind: a.kind,
 				durationSec: r3(a.metadata?.duration),
 				width: a.metadata?.width, height: a.metadata?.height,
-				processing: a.preprocessState || 'pending',
+				processing: prepStatus(a.preprocessState, ctx.bridge.isPreparing(project, a.id)),
 				hasTranscript: !!a.preprocessing?.transcriptPath,
 				transcriptHealth: a.preprocessing?.transcriptPath ? transcriptHealthLabel(a.transcriptHealth) : undefined,
 				scenes: a.clips.length,
@@ -407,7 +408,7 @@ const getMedia: ToolDef = {
 			id: asset.id, name: asset.name, kind: asset.kind,
 			durationSec: r3(asset.metadata?.duration),
 			width: asset.metadata?.width, height: asset.metadata?.height,
-			processing: asset.preprocessState || 'pending',
+			processing: prepStatus(asset.preprocessState, ctx.bridge.isPreparing(project, asset.id)),
 			transcriptHealth: transcript ? asset.transcriptHealth || null : undefined,
 			// Why there is no transcript, when the last run failed.
 			transcriptError: !transcript ? asset.transcriptError || undefined : undefined,
@@ -1311,7 +1312,7 @@ const importMedia: ToolDef = {
 			content: [json({
 				id: asset.id, name: asset.name, kind: asset.kind,
 				durationSec: r3(asset.metadata?.duration), width: asset.metadata?.width, height: asset.metadata?.height,
-				processing: asset.preprocessState || 'pending',
+				processing: prepStatus(asset.preprocessState, ctx.bridge.isPreparing(project, asset.id)),
 				next: 'wait {for: "media"} until processing is completed, then get_media for its transcript and scenes.'
 			})],
 			feed: { detail: `${asset.name} · ${clock(asset.metadata?.duration ?? 0)}`, chips: [{ text: 'imported', tone: 'green' }] }
@@ -1370,7 +1371,7 @@ const waitTool: ToolDef = {
 			} else {
 				const media = project.doc.media.filter((a) => !a.synth && !a.generated)
 				const rows = media.map((a) => ({
-					id: a.id, name: a.name, processing: a.preprocessState || 'pending',
+					id: a.id, name: a.name, processing: prepStatus(a.preprocessState, ctx.bridge.isPreparing(project, a.id)),
 					error: a.preprocessError || undefined,
 					hasTranscript: !!a.preprocessing?.transcriptPath,
 					transcriptHealth: a.preprocessing?.transcriptPath ? transcriptHealthLabel(a.transcriptHealth) : undefined,
@@ -1379,9 +1380,14 @@ const waitTool: ToolDef = {
 				}))
 				const busy = rows.filter((r) => r.processing === 'pending' || r.processing === 'running')
 				if (!busy.length || waited >= timeoutMs) {
+					// Interrupted work never finishes by itself: say so instead of "wait again" forever.
+					const stopped = rows.filter((r) => r.processing === 'interrupted').map((r) => r.name)
+					const next = busy.length ? 'Still preparing: wait again.'
+						: stopped.length ? `Preparation of ${stopped.join(', ')} was interrupted (the app quit while it ran) and will not finish by itself. Its proxy and filmstrip may be there; scenes or a transcript may be missing. The user can press Retry on it in the Media panel.`
+						: undefined
 					return {
-						content: [json({ done: !busy.length, media: rows, next: busy.length ? 'Still preparing: wait again.' : undefined })],
-						feed: { detail: busy.length ? `${busy.length} still preparing` : `${rows.length} media ready` }
+						content: [json({ done: !busy.length, media: rows, next })],
+						feed: { detail: busy.length ? `${busy.length} still preparing` : stopped.length ? `${stopped.length} interrupted` : `${rows.length} media ready` }
 					}
 				}
 				ctx.progress?.(`${busy.length} media still preparing`, waited)
