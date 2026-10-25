@@ -2000,7 +2000,7 @@ const getAngles: ToolDef = {
 			moments,
 			said: words || undefined,
 			micNote: group.speakers
-				? '`speaking` is who the voice analysis hears at each moment (trust it above ~0.8 confidence). micLevel / loudestMic are NOT a speaker detector: in a shared room every microphone hears everyone.'
+				? '`speaking` is who the voice analysis hears at each moment (between two people on one camera trust it from ~0.95 confidence; women vs men is surer). micLevel / loudestMic are NOT a speaker detector: in a shared room every microphone hears everyone.'
 				: 'micLevel is each microphone against its own usual level, and is a weak hint only (in a shared room every microphone hears everyone). find_speakers gives a real answer to "who is speaking".',
 			next: 'apply_ops switchAngles {switches: [{atSec, angle}]} to cut; the sound is untouched.'
 		}))

@@ -1,6 +1,6 @@
 import {
-	DEFAULT_WEIGHTS, biquad, emissions, gmmFromLabels, smoothEmissions, windowFeatures, FRAME_SEC, RATE, buildFrameTable, buildTurns, cepstrumAt, fitGmm, levelDb, median, newMicTrack,
-	percentile, pitchAt, separation, N_CEP,
+	DEFAULT_WEIGHTS, biquad, emissions, gmmFromLabels, rawSeparation, smoothEmissions, windowFeatures, FRAME_SEC, RATE, buildFrameTable, buildTurns, cepstrumAt, fitGmm, levelDb, median, newMicTrack,
+	percentile, pitchAt, N_CEP,
 	type DimWeights, type FrameTable, type Gmm, type MicTrack, type RawTurn
 } from './diarizeMath'
 
@@ -68,7 +68,7 @@ export interface VoiceClusters {
 	k: number
 	turns: RawTurn[]
 	voices: VoiceSummary[]
-	/** Bhattacharyya separation of every pair of voices (see separation()). */
+	/** How different every pair of voices is on raw per-frame features (see rawSeparation()). */
 	separation: number[][]
 	table: FrameTable
 	gmm: Gmm
@@ -146,7 +146,7 @@ export function clusterVoices(tracks: MicTrack[], gridStartSec: number, opts: Cl
 		rel.forEach((r, c) => { if (r > bestRel) { best = c; bestRel = r } })
 		v.closest = bestRel >= 2 ? best : -1
 	})
-	const sep = Array.from({ length: k }, (_, a) => Array.from({ length: k }, (_, b) => (a === b ? 0 : separation(gmm, table, a, b, weights))))
+	const sep = rawSeparation(frameTable, sm, k, weights).map((row) => row.map((v) => Math.round(v * 100) / 100))
 	return { k, turns, voices, separation: sep, table, gmm }
 }
 
@@ -170,9 +170,6 @@ export function estimateSpeakers(table: FrameTable, weights: DimWeights, seed?: 
 	}
 	return Math.max(2, chosen)
 }
-
-/** Pairs closer than this (Bhattacharyya) are not told apart reliably. */
-export const SEPARABLE = 6
 
 /** The fast cues only: they change where the speaker does. */
 export const FINE_WEIGHTS: DimWeights = { close: 2, pitch: 1, timbre: 0 }

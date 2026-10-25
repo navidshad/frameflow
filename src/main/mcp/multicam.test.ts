@@ -140,4 +140,57 @@ describe('multicam over MCP', () => {
 		const { body } = await call('apply_ops', { rationale: 'x', switchAngles: { switches: [{ atSec: 1, angle: 3 }] }, placeMulticam: {} })
 		expect(body.droppedOps.join(' ')).toMatch(/no angle "3"/)
 	})
+
+	it('finds who speaks when, names them, and puts the names on the transcript and the angles', async () => {
+		await call('make_multicam', { assets: ['cam1', 'cam2'] })
+		// Two voices: one answers the question, the other starts the next line.
+		editor.diarization = {
+			people: [
+				{ id: 'spk-1', name: 'Speaker 1', color: '#f97316', pitchHz: 125, talkSec: 600 },
+				{ id: 'spk-2', name: 'Speaker 2', color: '#38bdf8', pitchHz: 215, talkSec: 300 }
+			],
+			turns: [
+				{ start: 9, end: 13, speaker: 'spk-1', confidence: 0.95 },
+				{ start: 13, end: 17, speaker: 'spk-2', confidence: 0.6 }
+			],
+			analysis: { analyzedAt: 1, cameras: ['Cam01', 'Cam02'], unsureShare: 0, warnings: [] }
+		}
+		await expect(call('get_speakers')).rejects.toThrow(/no speakers yet/)
+		expect((await call('get_multicam')).body.speakersMissing).toMatch(/find_speakers/)
+
+		const found = (await call('find_speakers', { speakers: 2 })).body
+		expect(found.speakers.map((s: any) => s.name)).toEqual(['Speaker 1', 'Speaker 2'])
+		expect(editor.doc.multicams![0].speakers?.people).toHaveLength(2)
+
+		// Look at who is who, then name them (and say which camera each is on).
+		const seen = await call('get_speakers', { samples: 1 })
+		expect(seen.body.samples.map((s: any) => s.speaker)).toEqual(['Speaker 1', 'Speaker 2'])
+		expect(seen.result.content.filter((c: any) => c.type === 'image').length).toBeGreaterThanOrEqual(2)
+		const named = (await call('apply_ops', {
+			rationale: 'name the voices',
+			setSpeaker: { speaker: 2, name: 'Somi', camera: 'Cam02', framing: 'alone on her camera' }
+		})).body
+		expect(named.droppedOps ?? []).toEqual([])
+		expect(editor.doc.multicams![0].speakers!.people[1]).toMatchObject({ name: 'Somi', camera: 'Cam02' })
+
+		// Every transcript line says who speaks it; "unsure" where the analysis would not say.
+		const info = (await call('get_multicam', { turns: true })).body
+		expect(info.transcript[0]).toMatchObject({ text: 'So what is gap time?', speaker: 'Speaker 1' })
+		expect(info.transcript[1]).toMatchObject({ text: 'Time between two things.', speaker: 'Somi' })
+		expect(info.speakers[1]).toMatchObject({ name: 'Somi', camera: 'Cam02', named: true })
+		expect(info.speakerTurns.map((t: any) => t.speaker)).toEqual(['Speaker 1', 'Somi'])
+
+		// get_angles says who is speaking at each moment, and the words carry the names.
+		const angles = (await call('get_angles', { fromSec: 40, toSec: 46, frames: 2 })).body
+		expect(angles.moments[0].speaking).toMatchObject({ name: 'Speaker 1' })
+		expect(angles.said).toContain('Speaker 1: So what is gap time?')
+		expect(angles.micNote).toMatch(/NOT a speaker detector/)
+
+		// Fix a stretch by hand; merge the two (a different test of the same group op).
+		await call('apply_ops', { rationale: 'fix', setSpeakerTurns: { turns: [{ fromSec: 13, toSec: 17, speaker: 'Speaker 1' }] } })
+		const fixed = (await call('get_multicam', { turns: true })).body
+		expect(fixed.transcript[1].speaker).toBe('Speaker 1')
+		await call('apply_ops', { rationale: 'one person', mergeSpeakers: { from: 'Somi', into: 1 } })
+		expect(editor.doc.multicams![0].speakers!.people).toHaveLength(1)
+	})
 })

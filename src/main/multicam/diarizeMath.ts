@@ -628,7 +628,11 @@ export interface TurnOptions {
 	mergeGapSec?: number
 	/** A turn below this much speech is an interjection, folded in unless it is clear. */
 	minTurnSec?: number
-	/** Below this the turn is "unsure". */
+	/**
+	 * Below this the turn is "unsure". Measured on the real shoot, between the two men: turns under 0.9
+	 * were right 24% of the time, under 0.97 54%, from 0.97 up 88%. So the model's confidence is honest
+	 * in order, if not in scale, and an unsure turn beats a coin flip dressed as an answer.
+	 */
 	minConfidence?: number
 }
 
@@ -636,7 +640,7 @@ export interface TurnOptions {
 export function buildTurns(table: FrameTable, sm: Smoothed, k: number, opts: TurnOptions = {}): RawTurn[] {
 	const mergeGap = opts.mergeGapSec ?? 1.0
 	const minTurn = opts.minTurnSec ?? 0.6
-	const minConf = opts.minConfidence ?? 0.6
+	const minConf = opts.minConfidence ?? 0.9
 	const n = table.active.length
 	const frameStart = (i: number) => table.startSec + table.active[i] * FRAME_SEC
 	type Run = { a: number; b: number; speaker: number; conf: number; speech: number }
@@ -674,6 +678,53 @@ export function buildTurns(table: FrameTable, sm: Smoothed, k: number, opts: Tur
 		end: frameStart(r.b) + FRAME_SEC,
 		speaker: r.conf >= minConf ? r.speaker : -1,
 		confidence: Math.round(r.conf * 100) / 100
+	}))
+}
+
+// ===== How different are two voices, honestly =====
+
+/**
+ * Distance between the voices on the RAW per-frame features of the frames each
+ * was given (a diagonal Mahalanobis distance, weighted like the model). The
+ * windowed features the model works on are averages over seconds with
+ * overlapping windows: they drift slowly, and a mixture fitted to them will
+ * happily split ONE voice at a slow drift and report it as two with near-total
+ * confidence. The raw distance does not fall for that: two clusters that are
+ * one voice sit on top of each other (≈ 0), real voices do not. Rough scale on
+ * the first real shoot: a woman and a man ≈ 4, two men on one microphone ≈ 0.5-1.
+ */
+export function rawSeparation(raw: FrameTable, sm: Smoothed, k: number, w: DimWeights = DEFAULT_WEIGHTS): number[][] {
+	const n = raw.active.length, D = raw.dims.length
+	const dw = dimWeights(raw, w)
+	const mean = Array.from({ length: k }, () => new Float64Array(D))
+	const m2 = Array.from({ length: k }, () => new Float64Array(D))
+	const cnt = Array.from({ length: k }, () => new Float64Array(D))
+	for (let r = 0; r < n; r++) {
+		const j = sm.label[r]
+		for (let d = 0; d < D; d++) {
+			const v = raw.x[r * D + d]
+			if (v !== v) continue
+			cnt[j][d]++
+			mean[j][d] += v
+			m2[j][d] += v * v
+		}
+	}
+	for (let j = 0; j < k; j++) {
+		for (let d = 0; d < D; d++) {
+			if (cnt[j][d]) { mean[j][d] /= cnt[j][d]; m2[j][d] = m2[j][d] / cnt[j][d] - mean[j][d] ** 2 }
+		}
+	}
+	return Array.from({ length: k }, (_, a) => Array.from({ length: k }, (_, b) => {
+		if (a === b) return 0
+		let s = 0, wsum = 0
+		for (let d = 0; d < D; d++) {
+			if (!cnt[a][d] || !cnt[b][d]) continue
+			const pooled = (m2[a][d] + m2[b][d]) / 2
+			if (pooled <= 1e-9) continue
+			s += dw[d] * (mean[a][d] - mean[b][d]) ** 2 / pooled
+			wsum += dw[d]
+		}
+		return wsum ? Math.sqrt(s / wsum) : 0
 	}))
 }
 

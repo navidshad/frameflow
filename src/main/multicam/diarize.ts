@@ -3,7 +3,7 @@ import { camerasOf, memberSpan, soundCameraOf } from '@shared/multicam'
 import { carryOver, colorFor, defaultName } from '@shared/speakers'
 import { decodeMono } from './sync'
 import { FRAME_SEC, newMicTrack, type MicTrack } from './diarizeMath'
-import { SEPARABLE, clusterVoices, fillMicTrack, type VoiceClusters } from './diarizeTracks'
+import { clusterVoices, fillMicTrack, type VoiceClusters } from './diarizeTracks'
 
 /**
  * Who speaks when, for a camera group, found once by sound.
@@ -23,6 +23,9 @@ export interface DiarizeOptions {
 	/** A speaker analysis already on the group: names, cameras and hand-fixed turns carry over. */
 	keepFrom?: MulticamSpeakers
 }
+
+/** Raw-feature distance below which two voices in one pitch range are called alike (see rawSeparation). */
+const ALIKE = 0.8
 
 /** Group seconds of speech below which the analysis refuses: not enough to tell voices apart. */
 const MIN_SPEECH_SEC = 30
@@ -100,11 +103,29 @@ export function speakersFrom(clusters: VoiceClusters, cameraKeys: string[], requ
 
 	const warnings: string[] = []
 	if (!requested) warnings.push(`The number of speakers (${clusters.k}) was estimated, and the estimate is a guess. Count the people in a frame (get_angles) and run find_speakers again with speakers set; if one person was split in two, mergeSpeakers fixes it.`)
+	// Pairs the sound cannot be trusted to separate. Two cheap, honest tests (see rawSeparation()):
+	// a pair in the same pitch range whose raw features overlap, and a pair that never alternates
+	// (a conversation has the two taking turns; a "pair" that is two blocks of time is one voice
+	// that drifted, split in two).
+	const nameOf = (i: number) => people[order.findIndex((o) => o.i === i)]
+	const alternations = (a: number, b: number) => {
+		let n = 0
+		const real = clusters.turns.filter((t) => t.speaker >= 0)
+		for (let i = 1; i < real.length; i++) {
+			const [p, q] = [real[i - 1].speaker, real[i].speaker]
+			if ((p === a && q === b) || (p === b && q === a)) n++
+		}
+		return n
+	}
 	for (let a = 0; a < clusters.k; a++) {
 		for (let b = a + 1; b < clusters.k; b++) {
-			if (clusters.separation[a][b] < SEPARABLE / 2) {
-				const [x, y] = [people[order.findIndex((o) => o.i === a)], people[order.findIndex((o) => o.i === b)]]
-				warnings.push(`${x.name} and ${y.name} sound alike (pitch ${x.pitchHz ?? '?'} and ${y.pitchHz ?? '?'} Hz) and may share a microphone: expect mix-ups between them, especially in short turns. Check their turns against a frame.`)
+			const [x, y] = [nameOf(a), nameOf(b)]
+			const samePitch = !!x.pitchHz && !!y.pitchHz && Math.abs(Math.log2(x.pitchHz / y.pitchHz)) < 0.2
+			if (samePitch && clusters.separation[a][b] < ALIKE) {
+				warnings.push(`${x.name} and ${y.name} sound alike (pitch ${x.pitchHz} and ${y.pitchHz} Hz) and may share a microphone: expect mix-ups between them, especially in short turns. Check their turns against a frame (get_speakers).`)
+			}
+			if (alternations(a, b) < 2 && Math.min(x.talkSec ?? 0, y.talkSec ?? 0) > 60) {
+				warnings.push(`${x.name} and ${y.name} hardly ever take turns, which is odd for two people in a conversation: they may be ONE voice that changed (distance, loudness) over the recording. If so, mergeSpeakers.`)
 			}
 		}
 	}
