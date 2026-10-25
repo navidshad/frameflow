@@ -1607,8 +1607,8 @@ export const useEditorStore = defineStore('editor', () => {
 		if (!threadId.value || !doc.value || timelineView.value !== 'filmstrip') return
 		const usedAssetIds = new Set(doc.value.timeline.map((i) => i.sourceAssetId))
 		for (const asset of doc.value.media) {
-			if (!usedAssetIds.has(asset.id)) continue
-			// Sound has no picture. Main clears an asset an earlier filmstrip wrongly failed.
+			// Sound has no picture. Main clears an asset an earlier filmstrip wrongly
+			// failed, in use or not (an older take kept for undo too).
 			if (asset.kind !== 'video') {
 				if (asset.preprocessState === 'error' && /strip/.test(asset.preprocessError || '') && !filmstripRequested.has(asset.id)) {
 					filmstripRequested.add(asset.id)
@@ -1616,6 +1616,7 @@ export const useEditorStore = defineStore('editor', () => {
 				}
 				continue
 			}
+			if (!usedAssetIds.has(asset.id)) continue
 			if (asset.preprocessState !== 'completed') continue
 			if (asset.filmstrip?.length || filmstripRequested.has(asset.id)) continue
 			filmstripRequested.add(asset.id)
