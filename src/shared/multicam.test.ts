@@ -122,6 +122,24 @@ describe('planAngleSwitches', () => {
 		expect(plan.dropped[0]).toMatch(/Cam 2 was not recording/)
 	})
 
+	it('keeps a punch-in: pieces of one file merge back only when they look the same', () => {
+		// Cam 1 split at 30 s, the second piece punched in 1.8x. A switch elsewhere (100 s) must
+		// not fold the punch-in back into the wide piece before it. (Found cutting a podcast:
+		// one small switch erased 63 punch-ins.)
+		const items = placed(1)
+		const shot = items.find((i) => i.multicam?.role === 'shot')!
+		const wide = { ...shot, out: shot.in + 30, duration: 30 }
+		const punch = { ...shot, id: 'punch', timelineStart: 30, in: shot.in + 30, duration: shot.duration - 30, transform: { x: -0.4, y: 0.18, scale: 1.8, rotation: 0 } }
+		const before = items.filter((i) => i.id !== shot.id).concat([wide, punch])
+		const plan = planAngleSwitches(before, group, [{ atSec: 100, angle: 2 }, { atSec: 110, angle: 1 }], media, newId)
+		expect(plan.removeIds).not.toContain('punch')
+		const timeline = before.map((i) => ({ ...i, ...plan.updates.find((u) => u.id === i.id) })).concat(plan.adds)
+		const shots = timeline.filter((i) => i.multicam?.role === 'shot').sort((a, b) => a.timelineStart - b.timelineStart)
+		expect(shots[0]).toMatchObject({ id: wide.id, timelineStart: 0 })
+		expect(itemDuration(shots[0])).toBeCloseTo(30, 6)
+		expect(shots[1]).toMatchObject({ id: 'punch', transform: { scale: 1.8 } })
+	})
+
 	it('names the angles when one is unknown', () => {
 		const plan = planAngleSwitches(placed(1), group, [{ atSec: 5, angle: 'wide' }], media, newId)
 		expect(plan.dropped[0]).toContain('angles: 1 Cam 1, 2 Cam 2')

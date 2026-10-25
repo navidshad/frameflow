@@ -351,6 +351,12 @@ export interface AngleSwitchPlan {
  * This is the one function behind number-key cutting, the Inspector's angle
  * row and MCP's switchAngles, so all three cut the same way.
  */
+/** Whether two clips draw their source the same way: framing, transform, looks, key, text. */
+function sameLook(a: TimelineItem, b: TimelineItem): boolean {
+	const look = (i: TimelineItem) => JSON.stringify([i.transform ?? null, i.framing ?? null, i.effects?.length ? i.effects : null, i.key ?? null, i.text ?? null])
+	return look(a) === look(b)
+}
+
 export function planAngleSwitches(
 	timeline: readonly TimelineItem[],
 	group: MulticamGroup,
@@ -454,7 +460,9 @@ export function planAngleSwitches(
 			const touching = Math.abs(b.timelineStart - (a.timelineStart + itemDuration(a))) < 1e-6
 			const continuous = a.sourceAssetId === b.sourceAssetId && Math.abs(b.in - a.out) < 1e-6 &&
 				Math.abs((a.speed || 1) - (b.speed || 1)) < 1e-12 && !a.transition?.out && !b.keyframes
-			if (!touching || !continuous) continue
+			// Only pieces that LOOK the same are one clip: a punch-in (transform), a reframe or a look
+			// on one side is a cut the editor made on purpose, even within one file.
+			if (!touching || !continuous || !sameLook(a, b)) continue
 			Object.assign(a, { out: b.out, duration: (b.out - a.in) / (a.speed || 1) })
 			if (shots.has(a.id)) updated.add(a.id)
 			if (shots.has(b.id)) { removeIds.push(b.id); updated.delete(b.id); shots.delete(b.id) }
