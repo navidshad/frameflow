@@ -929,6 +929,18 @@ export interface OpsToDiffResult {
 const labelFrom = (clip: Clip): string =>
 	(clip.visual || clip.text)?.replace(/\s+/g, ' ').trim().slice(0, 40) || `Piece #${clip.index}`
 
+/** Sorted, with overlapping or touching spans joined, so no time is ripple-counted twice. */
+function mergeSpans(spans: { start: number; end: number }[]): { start: number; end: number }[] {
+	const sorted = spans.filter((r) => r.end > r.start).sort((a, b) => a.start - b.start)
+	const out: { start: number; end: number }[] = []
+	for (const span of sorted) {
+		const last = out[out.length - 1]
+		if (last && span.start <= last.end) last.end = Math.max(last.end, span.end)
+		else out.push({ ...span })
+	}
+	return out
+}
+
 export function opsToDiff(
 	ops: EditorOps,
 	doc: EditorDocument,
@@ -1020,6 +1032,13 @@ export function opsToDiff(
 	// Sub-clip removals. Folded into the same removeItemIds/updateItems the rest
 	// of this function speaks, so everything downstream — ripple, revisions,
 	// undo — treats a cut sentence exactly like a deleted clip.
+	// What the range cuts free, for the ripple below: a range takes its time out
+	// of EVERY track (it cut every track's items in the span), so every track
+	// closes up by the same amount and layers stay in sync with the picture.
+	const rangeChanges: RippleChange[] = []
+	const rangeShapedIds = new Set<string>()
+	const rangeRemovedIds = new Set<string>()
+	let rangeAdded: TimelineItem[] = []
 	if (ops.removeRanges?.length) {
 		const survivors = doc.timeline.filter((i) => !diff.removeItemIds?.includes(i.id))
 		const plan = planRangeRemoval(
@@ -1045,6 +1064,12 @@ export function opsToDiff(
 				else updates.push({ id: shaped.id, ...fields })
 			}
 			if (plan.added.length) diff.addItems = [...(diff.addItems || []), ...plan.added]
+			for (const id of plan.removeIds) rangeRemovedIds.add(id)
+			for (const shaped of plan.updated) rangeShapedIds.add(shaped.id)
+			rangeAdded = plan.added
+			for (const span of mergeSpans(ops.removeRanges.map((r) => ({ start: r.fromSec, end: r.toSec })))) {
+				for (const track of doc.tracks) rangeChanges.push({ trackId: track.id, at: span.start, delta: -(span.end - span.start) })
+			}
 			notes.push(`Cut ${plan.removedSec.toFixed(1)}s from inside ${
 				plan.updated.length + plan.removeIds.length} clip(s).`)
 		}
@@ -1300,7 +1325,8 @@ export function opsToDiff(
 		}
 	}
 
-	if (adds.length) diff.addItems = adds
+	// Appended: a range removal in the same edit already put its split halves here.
+	if (adds.length) diff.addItems = [...(diff.addItems || []), ...adds]
 	if (adds.length > EXPANSION_ADVISORY) {
 		notes.push(`This edit expands to ${adds.length} clips — fewer, larger ranges would keep the timeline easier to work with.`)
 	}
@@ -1314,13 +1340,17 @@ export function opsToDiff(
 	const removedItems = doc.timeline.filter((i) => removedIds.has(i.id))
 	const updateById = new Map((diff.updateItems || []).map((u) => [u.id, u]))
 
-	const changes: RippleChange[] = removedItems.map((r) => ({
-		trackId: r.trackId,
-		at: r.timelineStart,
-		delta: -itemDuration(r)
-	}))
+	// A range's own removals and trims are counted once, by the range itself.
+	const changes: RippleChange[] = [
+		...removedItems.filter((r) => !rangeRemovedIds.has(r.id)).map((r) => ({
+			trackId: r.trackId,
+			at: r.timelineStart,
+			delta: -itemDuration(r)
+		})),
+		...rangeChanges
+	]
 	for (const original of doc.timeline) {
-		if (removedIds.has(original.id)) continue
+		if (removedIds.has(original.id) || rangeShapedIds.has(original.id)) continue
 		const update = updateById.get(original.id)
 		if (!update) continue
 		if (update.in == null && update.out == null && update.speed == null) continue
@@ -1336,7 +1366,7 @@ export function opsToDiff(
 	// that retimes 200 clips ends up with 200 holes.
 	const pinnedIds = new Set(
 		(diff.updateItems || [])
-			.filter((u) => typeof u.timelineStart === 'number')
+			.filter((u) => typeof u.timelineStart === 'number' && !rangeShapedIds.has(u.id))
 			.map((u) => u.id)
 	)
 	const wantsCloseGaps = ops.closeGaps === true
@@ -1349,8 +1379,8 @@ export function opsToDiff(
 				merged.duration = itemDuration(merged)
 				return merged
 			})
-		// `adds` are the real objects, so the helpers reposition them in place.
-		const working = [...survivors, ...adds]
+		// `adds` and a range's split halves are the real objects, so the helpers reposition them in place.
+		const working = [...survivors, ...adds, ...rangeAdded]
 
 		const moved = wantsCloseGaps
 			? closeTimelineGaps({ tracks: doc.tracks, timeline: working })
