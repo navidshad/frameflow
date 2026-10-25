@@ -701,6 +701,17 @@ describe('AgentServer over Streamable HTTP', () => {
 			expect(rounds.lock()?.seq).toBe(2)
 		})
 
+		it('lets an agent that reconnected take its own round back', async () => {
+			const first = await connectTo('claude-code')
+			const begun = text(await first.callTool({ name: 'begin_round', arguments: { goal: 'Titles' } }))
+			expect(begun.roundId).toBeTruthy()
+			const second = await connectTo('claude-code')
+			expect((await second.callTool({ name: 'apply_ops', arguments: { rationale: 'x', closeGaps: true } }) as any).isError).toBe(true)
+			const back = text(await second.callTool({ name: 'begin_round', arguments: { resume: begun.roundId } }))
+			expect(back).toMatchObject({ round: 1, already: true })
+			expect((await second.callTool({ name: 'apply_ops', arguments: { rationale: 'x', closeGaps: true } }) as any).isError).toBeFalsy()
+		})
+
 		it('opens a round for an agent that edits without one, and says so', async () => {
 			const claude = await connectTo('claude-code')
 			const result: any = await claude.callTool({ name: 'apply_ops', arguments: { rationale: 'Close the gaps', closeGaps: true } })

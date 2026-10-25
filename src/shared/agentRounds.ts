@@ -256,6 +256,32 @@ export class RoundBook {
 		return { ok: true, round, already: false }
 	}
 
+	/**
+	 * Take an open round over from the session that began it: the same agent,
+	 * reconnected (a client that lost its connection gets a new session, and
+	 * would otherwise be locked out by its own round until it timed out). The
+	 * round id is the proof: only the agent that began the round was told it.
+	 */
+	resume(session: SessionRef, roundId: string): BeginResult {
+		const round = this.open.get(roundId)
+		if (!round || round.kind !== 'round') {
+			return { ok: false, reason: `There is no open round ${roundId}. It ended; begin_round with a goal starts a new one.` }
+		}
+		const mine = this.roundFor(session.id)
+		if (mine && mine.id !== roundId) return { ok: false, reason: `You already have round ${mine.seq} open. end_round it first.` }
+		if (this.roundOf.get(round.sessionId) === round.id) this.roundOf.delete(round.sessionId)
+		this.closeLoose(session.id)
+		round.sessionId = session.id
+		round.clientName = session.clientName
+		this.roundOf.set(session.id, round.id)
+		if (this.holder?.roundId === round.id) {
+			this.holder = { ...this.holder, sessionId: session.id, clientName: session.clientName, lastCallAt: this.now() }
+			this.emitLock()
+		}
+		this.emitRound(round)
+		return { ok: true, round, already: true }
+	}
+
 	/** End this session's round. Returns it, or null when it had none open. */
 	end(sessionId: string, summary?: string, status: Exclude<RoundStatus, 'working'> = 'done'): AgentRound | null {
 		const round = this.roundFor(sessionId)

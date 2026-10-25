@@ -1100,28 +1100,32 @@ const beginRound: ToolDef = {
 	inputSchema: {
 		type: 'object',
 		properties: {
-			goal: { type: 'string', description: 'What this round will do, in one sentence the user reads (e.g. "Tighten the intro and add chapter titles")' }
+			goal: { type: 'string', description: 'What this round will do, in one sentence the user reads (e.g. "Tighten the intro and add chapter titles")' },
+			resume: { type: 'string', description: 'A roundId begin_round gave you: take your own open round back after your connection dropped (a new connection is a new session, which the round would otherwise lock out)' }
 		},
-		required: ['goal'],
 		additionalProperties: false
 	},
-	title: (args) => `begin_round ${String(args.goal || '').slice(0, 60)}`,
+	title: (args) => (args.resume ? 'begin_round (resume)' : `begin_round ${String(args.goal || '').slice(0, 60)}`),
 	async run(args, ctx) {
 		if (!ctx.rounds) throw new ToolError('Rounds are for outside agents. FrameFlow\'s own chat turn is already a round.')
 		const project = await requireProject(ctx)
 		if (project.chatBusy && !ctx.rounds.roundFor(ctx.sessionId)) {
 			throw new ToolError('FrameFlow\'s own chat is running a prompt on this project. One agent at a time: wait for it to finish, then begin your round.')
 		}
-		const result = ctx.rounds.begin({ id: ctx.sessionId, clientName: ctx.clientName }, project.threadId, String(args.goal || ''))
+		if (!args.resume && !String(args.goal || '').trim()) throw new ToolError('Give the goal of this round (or resume with a roundId).')
+		const session = { id: ctx.sessionId, clientName: ctx.clientName }
+		const result = args.resume
+			? ctx.rounds.resume(session, String(args.resume))
+			: ctx.rounds.begin(session, project.threadId, String(args.goal || ''))
 		if (!result.ok) throw new ToolError(result.reason)
 		const { round } = result
 		return {
 			content: [json({
-				round: round.seq, goal: round.goal, project: project.title,
+				round: round.seq, roundId: round.id, goal: round.goal, project: project.title,
 				already: result.already || undefined,
 				note: result.already
 					? 'This round was already open; carry on.'
-					: 'You hold the project. The user sees you working and the chat is locked. Call end_round with a summary when this piece of work is done.'
+					: 'You hold the project. The user sees you working and the chat is locked. Call end_round with a summary when this piece of work is done. Keep roundId: if your connection drops, begin_round {resume: roundId} takes the round back.'
 			})],
 			feed: { title: `round ${round.seq} began`, detail: round.goal, chips: [{ text: `round ${round.seq}`, tone: 'violet' }] }
 		}

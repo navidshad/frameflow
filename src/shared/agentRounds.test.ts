@@ -104,6 +104,21 @@ describe('RoundBook', () => {
 		expect(last).toMatchObject({ type: 'call', roundId: begun.ok ? begun.round.id : '', call: { id: 'c1', status: 'done', answer: 'V3' } })
 	})
 
+	it('lets the same agent take its round back after reconnecting, with the round id', () => {
+		const { rounds } = book()
+		const begun = rounds.begin(A, 'p1', 'Cut')
+		const again = { id: 's-a2', clientName: 'Claude Code' }
+		expect(rounds.blockedFor(again.id, 'p1')).toMatch(/One agent at a time/)
+		expect(rounds.resume(again, 'nope').ok).toBe(false)
+		const resumed = rounds.resume(again, begun.ok ? begun.round.id : '')
+		expect(resumed.ok).toBe(true)
+		expect(rounds.lock()?.sessionId).toBe('s-a2')
+		expect(rounds.blockedFor(again.id, 'p1')).toBeNull()
+		// The old session's connection closing later does not end the round any more.
+		rounds.sessionClosed('s-a')
+		expect(rounds.lock()?.sessionId).toBe('s-a2')
+	})
+
 	it('numbers rounds after what is already on disk', () => {
 		const rounds = new RoundBook({ nextSeq: () => 7 })
 		const begun = rounds.begin(A, 'p1', 'x')
