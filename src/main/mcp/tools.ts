@@ -1496,7 +1496,12 @@ const renderFrames: ToolDef = {
 				{ type: 'image', data: sheet.data, mimeType: sheet.mimeType },
 				json({
 					of: clock(end), columns: sheet.columns, rows: sheet.rows,
-					frames: times.map((t, i) => ({ at: sheetClock(t), motion: notes[i] ?? undefined }))
+					// The export-clips line is the same for every frame: said once.
+					exportClips: notes.flatMap((n) => (n ?? '').split('\n')).find((l) => l.startsWith('Motion clips for export')),
+					frames: times.map((t, i) => {
+						const own = (notes[i] ?? '').split('\n').filter((l) => l && !l.startsWith('Motion clips for export')).join(' ')
+						return { at: sheetClock(t), motion: own || undefined }
+					})
 				})
 			],
 			feed: {

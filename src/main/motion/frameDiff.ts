@@ -189,3 +189,17 @@ export function encodePng(rgba: Buffer, width: number, height: number): Buffer {
 		chunk('IEND', Buffer.alloc(0))
 	])
 }
+
+/**
+ * Two draws that differ by at most 2/255 in a few dozen pixels are the GPU
+ * re-rasterising an anti-aliased edge (a rounded corner or a soft shadow
+ * beside something that repainted), not a page whose picture depends on an
+ * earlier seek: that moves or changes things by far more. Invisible, so it
+ * passes, where a sub-pixel position near rest (deltas of tens) still fails.
+ */
+export const NOISE_MAX_DELTA = 2
+export const NOISE_MAX_PIXELS = 64
+
+export function isRasterNoise(diff: Pick<FrameDifference, 'maxDelta' | 'pixels'>): boolean {
+	return diff.pixels > 0 && diff.maxDelta <= NOISE_MAX_DELTA && diff.pixels <= NOISE_MAX_PIXELS
+}
