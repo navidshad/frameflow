@@ -118,6 +118,9 @@ export async function runEngineTurn(options: EngineRunOptions): Promise<EngineRu
 		// Spelled out: a class instance's methods do not survive the spread above.
 		exportStatus: (q) => options.bridge.exportStatus(q),
 		inspectExport: (f, o) => options.bridge.inspectExport(f, o),
+		mediaSheet: (p, id, o) => options.bridge.mediaSheet(p, id, o),
+		findSilences: (p, id, o) => options.bridge.findSilences(p, id, o),
+		timelineSheet: (p, t, o) => options.bridge.timelineSheet(p, t, o),
 		listProjects: () => options.bridge.listProjects(),
 		createProject: (t) => options.bridge.createProject(t),
 		openProject: (id) => options.bridge.openProject(id),

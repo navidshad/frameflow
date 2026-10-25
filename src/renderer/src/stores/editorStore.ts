@@ -3564,7 +3564,7 @@ export const useEditorStore = defineStore('editor', () => {
 		threadId: string
 		turn: PromptTurn
 		addMarkers?: { time: number; label: string }[]
-		docSettings?: { captionsEnabled?: boolean; loudnessEnabled?: boolean }
+		docSettings?: { captionsEnabled?: boolean; loudnessEnabled?: boolean; frame?: { width: number; height: number } }
 		/** Rendered sounds the diff places: they must exist here before it is applied. */
 		addAssets?: MediaAsset[]
 		thinContext?: boolean
@@ -3665,6 +3665,7 @@ export const useEditorStore = defineStore('editor', () => {
 			// directly rather than through the diff — the same route markers take.
 			if (settings?.captionsEnabled !== undefined) setCaptionsEnabled(settings.captionsEnabled)
 			if (settings?.loudnessEnabled !== undefined) setLoudnessEnabled(settings.loudnessEnabled)
+			if (settings?.frame) setSequenceFrame(settings.frame.width, settings.frame.height)
 
 			const rev = await createRevision({
 				origin: 'ai',

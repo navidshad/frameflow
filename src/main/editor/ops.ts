@@ -921,7 +921,7 @@ export interface OpsToDiffResult {
 	 * Project settings the model asked for. They live outside TimelineState —
 	 * like markers — so they ride beside the diff rather than inside it.
 	 */
-	docSettings: { captionsEnabled?: boolean; loudnessEnabled?: boolean }
+	docSettings: { captionsEnabled?: boolean; loudnessEnabled?: boolean; frame?: { width: number; height: number } }
 	droppedOps: string[]
 	notes: string[]
 }

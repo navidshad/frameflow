@@ -151,6 +151,21 @@ export class FakeEditor implements EditorBridge {
 		}
 	}
 
+	async mediaSheet(_project: LiveProject, _assetId: string, options: InspectOptions) {
+		const times = options.times ?? [0, 10, 20]
+		return { sheet: { data: PIXEL, mimeType: 'image/png', times, columns: times.length, rows: 1 }, durationSec: 30 }
+	}
+
+	async findSilences() {
+		return [{ start: 9.5, end: 10.4 }, { start: 19.2, end: 20.1 }]
+	}
+
+	sheetTimes: number[][] = []
+	async timelineSheet(_project: LiveProject, times: number[]) {
+		this.sheetTimes.push(times)
+		return { sheet: { data: PIXEL, mimeType: 'image/png', times, columns: times.length, rows: 1 }, notes: times.map(() => null) }
+	}
+
 	async listProjects(): Promise<ProjectSummary[]> {
 		return this.projects.map((p) => ({ ...p, open: this.open && p.id === 't1' }))
 	}

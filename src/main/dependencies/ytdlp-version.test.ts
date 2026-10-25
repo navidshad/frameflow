@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { isNewerYtDlpVersion, isStaleYtDlpError } from './ytdlp-version'
+import { isMissingYtDlpError, isNewerYtDlpVersion, isStaleYtDlpError } from './ytdlp-version'
 
 describe('isStaleYtDlpError', () => {
 	const stale = [
@@ -86,5 +86,14 @@ describe('isNewerYtDlpVersion', () => {
 		expect(isNewerYtDlpVersion('2025.08.11', null)).toBe(false)
 		expect(isNewerYtDlpVersion('', '')).toBe(false)
 		expect(isNewerYtDlpVersion('2025..08', '2025.06.09')).toBe(false)
+	})
+})
+
+describe('isMissingYtDlpError', () => {
+	it('spots a binary that is not there', () => {
+		expect(isMissingYtDlpError('yt-dlp download failed: spawn /x/node_modules/ytdlp-nodejs/bin/yt-dlp_macos ENOENT')).toBe(true)
+		expect(isMissingYtDlpError('yt-dlp is not installed')).toBe(true)
+		expect(isMissingYtDlpError('ERROR: HTTP Error 403: Forbidden')).toBe(false)
+		expect(isMissingYtDlpError(undefined)).toBe(false)
 	})
 })

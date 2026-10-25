@@ -856,10 +856,23 @@ const analyzeAudio: ToolDef = {
 	}
 }
 
+/** Project settings outside the timeline that only agents set through ops. */
+const PROJECT_OPS_SCHEMA = {
+	sequenceFrame: {
+		type: 'object',
+		description: 'The sequence\'s frame size, which the export renders at (e.g. 1920×1080 for a 4K source, to render faster). Footage of another shape follows each clip\'s framing.',
+		properties: {
+			width: { type: 'integer', minimum: 128, maximum: 7680 },
+			height: { type: 'integer', minimum: 128, maximum: 4320 }
+		},
+		required: ['width', 'height']
+	}
+}
+
 const OPS_BASE_SCHEMA = opsInputSchema(EDITOR_OPS_SCHEMA)
 const OPS_INPUT_SCHEMA = {
 	...OPS_BASE_SCHEMA,
-	properties: { ...OPS_BASE_SCHEMA.properties, ...SOUND_OPS_SCHEMA, ...MOTION_KIT_OPS_SCHEMA }
+	properties: { ...OPS_BASE_SCHEMA.properties, ...SOUND_OPS_SCHEMA, ...MOTION_KIT_OPS_SCHEMA, ...PROJECT_OPS_SCHEMA }
 } as typeof OPS_BASE_SCHEMA
 
 const applyOps: ToolDef = {
@@ -907,6 +920,11 @@ const applyOps: ToolDef = {
 		const soundAssets = new Map(wanted.map((r, i) => [recipeKey(r), rendered[i]]))
 		const mapped = opsToDiff(ops, project.doc, { by: ctx.clientName, turnId }, soundAssets, vetted.definitions)
 		const { diff, addMarkers, docSettings, notes } = mapped
+		const frame = (args as { sequenceFrame?: { width: number; height: number } }).sequenceFrame
+		if (frame) {
+			// Even sizes: H.264 needs them.
+			docSettings.frame = { width: Math.round(frame.width / 2) * 2, height: Math.round(frame.height / 2) * 2 }
+		}
 		const droppedOps = [...vetted.dropped, ...mapped.droppedOps]
 		const turn: PromptTurn = {
 			id: turnId,
@@ -1347,6 +1365,140 @@ const waitTool: ToolDef = {
 	}
 }
 
+const findSilences: ToolDef = {
+	name: 'find_silences',
+	permission: 'read',
+	description:
+		'Measure the quiet stretches in a media file\'s sound (dead air, long pauses), in SOURCE seconds, as the ' +
+		'Silence finder does. Use it to tighten talking-head footage by measurement rather than by transcript ' +
+		'gaps: a span is cut with apply_ops removeRanges once mapped to TIMELINE seconds. noiseDb (default -32) ' +
+		'is how quiet counts as silent; minSec (default 0.6) the shortest pause reported.',
+	inputSchema: {
+		type: 'object',
+		properties: {
+			asset: { type: 'string', description: 'Media id or file name' },
+			noiseDb: { type: 'number', minimum: -70, maximum: -10 },
+			minSec: { type: 'number', minimum: 0.1, maximum: 10 }
+		},
+		required: ['asset'],
+		additionalProperties: false
+	},
+	title: (args) => `find_silences ${String(args.asset || '').slice(0, 24)}`,
+	async run(args, ctx) {
+		const project = await requireProject(ctx)
+		const asset = resolveAsset(project.doc.media, args.asset)
+		const silences = await ctx.bridge.findSilences(project, asset.id, { noiseDb: args.noiseDb ?? -32, minDurationSec: args.minSec ?? 0.6 })
+		const total = silences.reduce((n, s) => n + (s.end - s.start), 0)
+		return {
+			content: [json({
+				asset: asset.name, count: silences.length, totalSec: r3(total),
+				silences: silences.map((s) => ({ start: r3(s.start), end: r3(s.end), sec: r3(s.end - s.start) }))
+			})],
+			feed: { detail: `${silences.length} pauses · ${clock(total)} of quiet` }
+		}
+	}
+}
+
+// ===== Looking at footage and at many frames =====
+
+const SHEET_PROPS = {
+	times: { type: 'array', items: { type: 'number' }, description: 'Exact seconds to show' },
+	fromSec: { type: 'number', minimum: 0 },
+	toSec: { type: 'number', minimum: 0 },
+	everySec: { type: 'number', minimum: 0.04 },
+	columns: { type: 'integer', minimum: 1, maximum: 8, description: 'Tiles per row (default 6)' },
+	tileWidth: { type: 'integer', minimum: 160, maximum: 640, description: 'Pixels per tile (default 320)' }
+}
+
+const inspectMedia: ToolDef = {
+	name: 'inspect_media',
+	permission: 'read',
+	description:
+		'Look at a media file\'s own footage, before or without putting it on the timeline: a contact sheet of ' +
+		'its frames at SOURCE seconds, each labelled with its time. Pick frames with `times` or ' +
+		'fromSec/toSec/everySec (up to 48 per sheet; page through long media). Use it with the transcript to ' +
+		'see what is on screen when: where the talking head is, where the b-roll and screen recordings are, ' +
+		'where the frame is empty enough for a graphic.',
+	inputSchema: {
+		type: 'object',
+		properties: { asset: { type: 'string', description: 'Media id or file name' }, ...SHEET_PROPS },
+		required: ['asset'],
+		additionalProperties: false
+	},
+	title: (args) => `inspect_media ${args.fromSec !== undefined ? clock(args.fromSec) : ''}`.trim(),
+	async run(args, ctx) {
+		const project = await requireProject(ctx)
+		const asset = resolveAsset(project.doc.media, args.asset)
+		if (asset.kind !== 'video') throw new ToolError(`${asset.name} has no picture.`)
+		const { sheet, durationSec } = await ctx.bridge.mediaSheet(project, asset.id, {
+			times: args.times, fromSec: args.fromSec, toSec: args.toSec, everySec: args.everySec, columns: args.columns, tileWidth: args.tileWidth
+		})
+		const last = sheet.times.at(-1) ?? 0
+		return {
+			content: [
+				{ type: 'image', data: sheet.data, mimeType: sheet.mimeType },
+				json({
+					asset: asset.name, durationSec: r3(durationSec), columns: sheet.columns, rows: sheet.rows,
+					times: sheet.times.map(sheetClock),
+					next: last < durationSec - 1 ? `fromSec ${r3(last + (args.everySec ?? 1))} shows what comes next` : undefined
+				})
+			],
+			feed: {
+				detail: `${sheet.times.length} frames · ${clock(sheet.times[0] ?? 0)}–${clock(last)}`,
+				thumbnail: `data:${sheet.mimeType};base64,${sheet.data}`
+			}
+		}
+	}
+}
+
+const MAX_RENDERED_FRAMES = 24
+
+const renderFrames: ToolDef = {
+	name: 'render_frames',
+	permission: 'read',
+	description:
+		'render_frame for many instants at once: exact frames of the edit through the export pipeline (every ' +
+		'track, motion layer, title and caption), tiled into one labelled contact sheet, with a note per frame ' +
+		'on the motion layers it shows. Up to 24 frames; each takes a second or two. Use it to check a run of ' +
+		'motion beats, a sequence of cuts or a layer\'s in / hold / out in one look.',
+	inputSchema: {
+		type: 'object',
+		properties: {
+			times: { type: 'array', items: { type: 'number' }, description: 'TIMELINE seconds' },
+			fromSec: { type: 'number', minimum: 0 },
+			toSec: { type: 'number', minimum: 0 },
+			everySec: { type: 'number', minimum: 0.04 },
+			columns: SHEET_PROPS.columns,
+			tileWidth: SHEET_PROPS.tileWidth,
+			note: { type: 'string', description: 'What you are checking, in one short sentence' }
+		},
+		additionalProperties: false
+	},
+	title: (args) => `render_frames ${Array.isArray(args.times) ? `${args.times.length} frames` : args.fromSec !== undefined ? clock(args.fromSec) : ''}`.trim(),
+	async run(args, ctx) {
+		const project = await requireProject(ctx)
+		const end = computeContentEnd(project.doc.timeline)
+		if (!project.doc.timeline.length || end <= 0) throw new ToolError('The timeline is empty — there is no frame to render.')
+		const { sheetTimes: pick } = await import('../editor/exportInspect')
+		const times = pick(end, { times: args.times, fromSec: args.fromSec, toSec: args.toSec, everySec: args.everySec, max: MAX_RENDERED_FRAMES })
+		const { sheet, notes } = await ctx.bridge.timelineSheet(project, times, { columns: args.columns, tileWidth: args.tileWidth })
+		return {
+			content: [
+				{ type: 'image', data: sheet.data, mimeType: sheet.mimeType },
+				json({
+					of: clock(end), columns: sheet.columns, rows: sheet.rows,
+					frames: times.map((t, i) => ({ at: sheetClock(t), motion: notes[i] ?? undefined }))
+				})
+			],
+			feed: {
+				detail: `${times.length} frames · ${clock(times[0] ?? 0)}–${clock(times.at(-1) ?? 0)}`,
+				thumbnail: `data:${sheet.mimeType};base64,${sheet.data}`,
+				quote: typeof args.note === 'string' && args.note.trim() ? args.note.trim() : undefined
+			}
+		}
+	}
+}
+
 // ===== Looking at an export =====
 
 const inspectExport: ToolDef = {
@@ -1422,7 +1574,7 @@ const inspectExport: ToolDef = {
 
 export const TOOLS: ToolDef[] = [
 	beginRound, endRound, listProjects, createProject, openProject, importMedia, waitTool,
-	getProject, getTimeline, getMedia, searchMomentsTool, renderFrame, getMotionGuide, getMotionKit,
+	getProject, getTimeline, getMedia, inspectMedia, findSilences, searchMomentsTool, renderFrame, renderFrames, getMotionGuide, getMotionKit,
 	getSoundGuide, listSounds, suggestCuesTool, renderSoundTool, analyzeAudio, generateAudioTool,
 	applyOps, revertToVersion, exportTool, inspectExport
 ]

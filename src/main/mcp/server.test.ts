@@ -106,7 +106,8 @@ describe('AgentServer over Streamable HTTP', () => {
 		const { tools } = await client.listTools()
 		expect(tools.map((t) => t.name)).toEqual([
 			'begin_round', 'end_round', 'list_projects', 'create_project', 'open_project', 'import_media', 'wait',
-			'get_project', 'get_timeline', 'get_media', 'search_moments', 'render_frame', 'get_motion_guide', 'get_motion_kit',
+			'get_project', 'get_timeline', 'get_media', 'inspect_media', 'find_silences', 'search_moments', 'render_frame', 'render_frames',
+			'get_motion_guide', 'get_motion_kit',
 			'get_sound_guide', 'list_sounds', 'suggest_cues', 'render_sound', 'analyze_audio', 'generate_audio',
 			'apply_ops', 'revert_to_version', 'export', 'inspect_export'
 		])
@@ -771,6 +772,25 @@ describe('AgentServer over Streamable HTTP', () => {
 			const waited = text(await claude.callTool({ name: 'wait', arguments: { for: 'media', timeoutSec: 0 } }))
 			expect(waited.done).toBe(false)
 			expect(waited.media.find((m: any) => m.name === 'Episode 1.mp4').processing).toBe('pending')
+		})
+
+		it('sets the sequence frame through ops, and measures silences', async () => {
+			const claude = await connectTo('claude-code')
+			const result: any = await claude.callTool({ name: 'apply_ops', arguments: { rationale: 'Edit at 1080p', sequenceFrame: { width: 1921, height: 1080 } } })
+			expect(result.isError).toBeFalsy()
+			expect(editor.commits.at(-1)!.docSettings).toEqual({ frame: { width: 1922, height: 1080 } })
+			const quiet = text(await claude.callTool({ name: 'find_silences', arguments: { asset: 'team' } }))
+			expect(quiet).toMatchObject({ count: 2, totalSec: 1.8 })
+		})
+
+		it('looks at footage and at many timeline frames in one sheet', async () => {
+			const claude = await connectTo('claude-code')
+			const media: any = await claude.callTool({ name: 'inspect_media', arguments: { asset: 'greeting_team', times: [1, 2] } })
+			expect(media.content[0].type).toBe('image')
+			expect(JSON.parse(media.content[1].text).times).toEqual(['0:01.0', '0:02.0'])
+			const frames: any = await claude.callTool({ name: 'render_frames', arguments: { fromSec: 0, toSec: 30, everySec: 10 } })
+			expect(frames.content[0].type).toBe('image')
+			expect(editor.sheetTimes.at(-1)).toEqual([0, 10, 20])
 		})
 
 		it('exports, follows the export and looks at the file', async () => {

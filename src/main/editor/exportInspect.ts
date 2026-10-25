@@ -116,6 +116,42 @@ export interface SheetOptions {
 	workDir?: string
 }
 
+const drawLabel = (label: string, tileWidth: number): string => {
+	const font = labelFont()
+	if (!font) return ''
+	const text = label.replace(/\\/g, '\\\\').replace(/:/g, '\\:').replace(/'/g, '')
+	return `,drawtext=fontfile='${font.replace(/'/g, "\\'")}':text='${text}':x=6:y=6:fontsize=${Math.round(tileWidth / 14)}:fontcolor=white:box=1:boxcolor=black@0.65:boxborderw=4`
+}
+
+/**
+ * Pictures (any size, any format ffmpeg reads) tiled into one JPEG, each
+ * scaled to `tileWidth` and labelled in its corner.
+ */
+export async function tileImages(files: string[], labels: string[], options: SheetOptions = {}): Promise<{ jpeg: Buffer; columns: number; rows: number }> {
+	if (!files.length) throw new Error('Nothing to tile')
+	const tileWidth = Math.max(160, Math.min(640, Math.round(options.tileWidth ?? 320)))
+	const columns = Math.max(1, Math.min(files.length, Math.round(options.columns ?? (files.length <= 4 ? files.length : 6))))
+	const rows = Math.ceil(files.length / columns)
+	const work = fs.mkdtempSync(path.join(options.workDir ?? os.tmpdir(), 'ff-tile-'))
+	try {
+		for (let i = 0; i < files.length; i++) {
+			await run(getFFmpegBinaryPath(), [
+				'-v', 'error', '-i', files[i], '-frames:v', '1',
+				'-vf', `scale=${tileWidth}:-2${labels[i] ? drawLabel(labels[i], tileWidth) : ''}`, '-q:v', '3', '-y',
+				path.join(work, `t${String(i).padStart(3, '0')}.jpg`)
+			])
+		}
+		const sheet = path.join(work, 'sheet.jpg')
+		await run(getFFmpegBinaryPath(), [
+			'-v', 'error', '-framerate', '1', '-i', path.join(work, 't%03d.jpg'),
+			'-vf', `tile=${columns}x${rows}:padding=4:margin=4:color=0x18181b`, '-frames:v', '1', '-q:v', '3', '-y', sheet
+		])
+		return { jpeg: fs.readFileSync(sheet), columns, rows }
+	} finally {
+		fs.rmSync(work, { recursive: true, force: true })
+	}
+}
+
 /**
  * Frames of a file at the given instants, tiled into one JPEG with each
  * tile's time in its corner. Frames are cut with an input seek, which decodes
@@ -123,29 +159,18 @@ export interface SheetOptions {
  */
 export async function contactSheet(file: string, times: number[], options: SheetOptions = {}): Promise<{ jpeg: Buffer; columns: number; rows: number }> {
 	if (!times.length) throw new Error('No times to show')
-	const tileWidth = Math.max(160, Math.min(640, Math.round(options.tileWidth ?? 320)))
-	const columns = Math.max(1, Math.min(times.length, Math.round(options.columns ?? (times.length <= 4 ? times.length : 6))))
-	const rows = Math.ceil(times.length / columns)
 	const work = fs.mkdtempSync(path.join(options.workDir ?? os.tmpdir(), 'ff-sheet-'))
 	try {
-		const font = labelFont()
-		const fontSize = Math.round(tileWidth / 14)
+		const frames: string[] = []
 		for (let i = 0; i < times.length; i++) {
-			const label = sheetClock(times[i]).replace(/:/g, '\\:')
-			const draw = font
-				? `,drawtext=fontfile='${font.replace(/'/g, "\\'")}':text='${label}':x=6:y=6:fontsize=${fontSize}:fontcolor=white:box=1:boxcolor=black@0.65:boxborderw=4`
-				: ''
+			const out = path.join(work, `f${String(i).padStart(3, '0')}.png`)
 			await run(getFFmpegBinaryPath(), [
 				'-v', 'error', '-ss', times[i].toFixed(3), '-i', file, '-frames:v', '1',
-				'-vf', `scale=${tileWidth}:-2${draw}`, '-q:v', '3', '-y', path.join(work, `f${String(i).padStart(3, '0')}.jpg`)
+				'-vf', 'scale=640:-2', '-y', out
 			])
+			frames.push(out)
 		}
-		const sheet = path.join(work, 'sheet.jpg')
-		await run(getFFmpegBinaryPath(), [
-			'-v', 'error', '-framerate', '1', '-i', path.join(work, 'f%03d.jpg'),
-			'-vf', `tile=${columns}x${rows}:padding=4:margin=4:color=0x18181b`, '-frames:v', '1', '-q:v', '3', '-y', sheet
-		])
-		return { jpeg: fs.readFileSync(sheet), columns, rows }
+		return await tileImages(frames, times.map(sheetClock), options)
 	} finally {
 		fs.rmSync(work, { recursive: true, force: true })
 	}

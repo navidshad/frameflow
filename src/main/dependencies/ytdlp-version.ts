@@ -34,6 +34,16 @@ export function isStaleYtDlpError(message: string | null | undefined): boolean {
 	return STALE_PATTERNS.some((re) => re.test(text))
 }
 
+/**
+ * True when the yt-dlp binary is not there at all (a fresh checkout or a
+ * profile that never fetched it): spawning it fails with ENOENT, or the
+ * library says it is not installed. Installing it is the cure, not a retry.
+ */
+export function isMissingYtDlpError(message: string | null | undefined): boolean {
+	if (!message) return false
+	return /spawn \S*yt-dlp\S* ENOENT|yt-?dlp[^.]*not (?:found|installed)|no such file[^.]*yt-?dlp/i.test(String(message))
+}
+
 /** Parses a "2025.08.11"-style yt-dlp version tag into numeric segments. */
 function parseVersionTag(tag: string | null | undefined): number[] | null {
 	if (!tag) return null

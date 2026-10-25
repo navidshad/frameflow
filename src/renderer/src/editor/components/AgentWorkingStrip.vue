@@ -9,14 +9,13 @@
 		<span class="relative text-xs font-bold text-violet-700 dark:text-violet-300 whitespace-nowrap">
 			{{ lock.clientName }} is working on this project
 		</span>
-		<span class="relative text-[11px] text-zinc-500 dark:text-zinc-400 truncate min-w-0">
+		<span class="relative flex-1 text-[11px] text-zinc-500 dark:text-zinc-400 truncate min-w-0" :title="lock.goal">
 			Round {{ lock.seq }}<template v-if="lock.goal"> · {{ lock.goal }}</template>
 		</span>
 		<span class="relative font-mono text-[10px] text-zinc-500 whitespace-nowrap shrink-0">
 			{{ lock.steps }} step{{ lock.steps === 1 ? '' : 's' }} · {{ elapsed }}
 		</span>
-		<span class="flex-1"></span>
-		<span class="relative hidden lg:inline text-[11px] text-zinc-500 dark:text-zinc-400 whitespace-nowrap">
+		<span class="relative hidden 2xl:inline text-[11px] text-zinc-500 dark:text-zinc-400 whitespace-nowrap">
 			Hands off until it ends its round. The chat is read-only meanwhile.
 		</span>
 		<button

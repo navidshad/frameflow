@@ -17,7 +17,9 @@ import { connectedProviders, estimateUsd, generateForProject } from '../audio/ru
 import { settingsManager } from '../settings'
 import { ProviderError } from '../audio/provider'
 import { renderProgress, startEditorRender } from '../editor/render'
-import { contactSheet, measureExportLoudness, probeExport, sheetTimes } from '../editor/exportInspect'
+import { contactSheet, measureExportLoudness, probeExport, sheetClock, sheetTimes, tileImages } from '../editor/exportInspect'
+import fs from 'node:fs'
+import { detectSilence } from '../ffmpeg'
 import { importMediaFromFile, importMediaFromUrl } from '../editor/importMedia'
 import { computeContentEnd } from '../../shared/timeline'
 
@@ -217,6 +219,37 @@ export const rendererBridge: EditorBridge = {
 		}
 		const loudness = options.loudness ? await measureExportLoudness(file) : undefined
 		return { facts, sheet, loudness }
+	},
+
+	async mediaSheet(project, assetId, options) {
+		const asset = project.doc.media.find((a) => a.id === assetId)
+		if (!asset) throw new ToolError(`No media ${assetId} in this project.`)
+		// The proxy is small and quick to seek; its frames are the source's frames.
+		const file = asset.proxyPath && fs.existsSync(asset.proxyPath) ? asset.proxyPath : asset.originalPath
+		const durationSec = asset.metadata?.duration ?? (await probeExport(file)).durationSec
+		const times = sheetTimes(durationSec, options)
+		const made = await contactSheet(file, times, { columns: options.columns, tileWidth: options.tileWidth })
+		return { sheet: { data: made.jpeg.toString('base64'), mimeType: 'image/jpeg', times, columns: made.columns, rows: made.rows }, durationSec }
+	},
+
+	async findSilences(project, assetId, options) {
+		const asset = project.doc.media.find((a) => a.id === assetId)
+		if (!asset) throw new ToolError(`No media ${assetId} in this project.`)
+		if (asset.metadata && asset.metadata.hasAudio === false) return []
+		const regions = await detectSilence(asset.proxyPath || asset.originalPath, options)
+		return regions.map((r) => ({ start: r.start, end: r.end }))
+	},
+
+	async timelineSheet(project, times, options) {
+		const files: string[] = []
+		const notes: (string | null)[] = []
+		for (const timeSec of times) {
+			const { path, motion } = await renderExactFrame({ threadId: project.threadId, doc: project.doc, timeSec, burnText: true })
+			files.push(path)
+			notes.push(describeMotionReport(motion) ?? null)
+		}
+		const made = await tileImages(files, times.map(sheetClock), options)
+		return { sheet: { data: made.jpeg.toString('base64'), mimeType: 'image/jpeg', times, columns: made.columns, rows: made.rows }, notes }
 	},
 
 	async listProjects() {

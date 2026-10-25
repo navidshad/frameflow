@@ -79,7 +79,7 @@ export interface TurnCommit {
 	threadId: string
 	turn: PromptTurn
 	addMarkers?: { time: number; label: string }[]
-	docSettings?: { captionsEnabled?: boolean; loudnessEnabled?: boolean }
+	docSettings?: { captionsEnabled?: boolean; loudnessEnabled?: boolean; frame?: { width: number; height: number } }
 	/** Assets the turn's diff refers to that the renderer does not have yet (rendered sounds). */
 	addAssets?: MediaAsset[]
 }
@@ -123,6 +123,12 @@ export interface EditorBridge {
 	exportStatus(query: { renderId?: string; threadId: string }): ExportStatus | null
 	/** What an exported file is, and contact sheets of its frames. */
 	inspectExport(file: string, options: InspectOptions): Promise<InspectReport>
+	/** Frames of a source file (its proxy when there is one) at SOURCE times, tiled and labelled. */
+	mediaSheet(project: LiveProject, assetId: string, options: InspectOptions): Promise<{ sheet: NonNullable<InspectReport['sheet']>; durationSec: number }>
+	/** Exact timeline frames (as render_frame draws them), tiled and labelled; with each frame's motion note. */
+	timelineSheet(project: LiveProject, times: number[], options: { columns?: number; tileWidth?: number }): Promise<{ sheet: NonNullable<InspectReport['sheet']>; notes: (string | null)[] }>
+	/** Quiet stretches in a media file's sound, in source seconds. */
+	findSilences(project: LiveProject, assetId: string, options: { noiseDb: number; minDurationSec: number }): Promise<{ start: number; end: number }[]>
 	/** Every editor project in the user's FrameFlow. */
 	listProjects(): Promise<ProjectSummary[]>
 	createProject(title: string): Promise<{ id: string; title: string }>
