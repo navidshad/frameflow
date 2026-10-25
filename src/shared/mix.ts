@@ -54,10 +54,19 @@ const median = (values: number[]): number | null => {
 
 const r1 = (n: number | null): number | null => (n === null ? null : Math.round(n * 10) / 10)
 
+/**
+ * The loudness meter's floor. A sound shorter than its 400 ms window (a pop, a
+ * swish) reads as this, which says nothing about how loud it is: such a clip
+ * is left out of its role's median rather than dragging it to "too quiet".
+ */
+export const UNMEASURED_LUFS = -69.5
+
 /** The clips that make sound: on an audio track, or carrying audio in a video clip. */
 export function estimateMix(doc: MixDoc, analyses: Record<string, AudioAnalysis | undefined>): MixReport {
 	const tracks = new Map(doc.tracks.map((t) => [t.id, t]))
 	const clips: MixClip[] = []
+	/** Clips too short for the meter: judged by their peak, not their loudness. */
+	const tooShort = new Set<string>()
 
 	for (const item of doc.timeline) {
 		if (item.muted || item.text || item.generator || item.motion) continue
@@ -71,6 +80,7 @@ export function estimateMix(doc: MixDoc, analyses: Record<string, AudioAnalysis 
 		if (track.kind === 'video' && (asset.kind !== 'video' || a?.hasAudio === false)) continue
 		if (track.kind === 'audio' && a?.hasAudio === false) continue
 
+		if (a?.lufs != null && a.lufs <= UNMEASURED_LUFS) tooShort.add(item.id)
 		const gainDb = gainToDb((item.gain ?? 1) * (track.gain ?? 1))
 		const finite = Number.isFinite(gainDb)
 		clips.push({
@@ -80,7 +90,7 @@ export function estimateMix(doc: MixDoc, analyses: Record<string, AudioAnalysis 
 			role: track.kind === 'audio' ? track.role ?? null : 'voice',
 			startSec: item.timelineStart,
 			endSec: item.timelineStart + item.duration,
-			estLufs: a?.lufs != null && finite ? r1(a.lufs + gainDb) : null,
+			estLufs: a?.lufs != null && a.lufs > UNMEASURED_LUFS && finite ? r1(a.lufs + gainDb) : null,
 			estPeakDb: a?.truePeakDb != null && finite ? r1(a.truePeakDb + gainDb) : null,
 			gainDb: finite ? r1(gainDb)! : -120
 		})
@@ -130,7 +140,7 @@ export function estimateMix(doc: MixDoc, analyses: Record<string, AudioAnalysis 
 	}
 	if (hot.length > 5) warnings.push(`${hot.length - 5} more clips peak above −1 dBTP.`)
 
-	const unmeasured = clips.filter((c) => c.estLufs === null).length
+	const unmeasured = clips.filter((c) => c.estLufs === null && !tooShort.has(c.id)).length
 	if (unmeasured) warnings.push(`${unmeasured} clip${unmeasured === 1 ? ' has' : 's have'} not been measured yet; read again in a moment.`)
 
 	return {
@@ -140,6 +150,7 @@ export function estimateMix(doc: MixDoc, analyses: Record<string, AudioAnalysis 
 		caveats: [
 			'Estimated from each source’s measured loudness and the gain applied; two clips playing together add, which this does not model.',
 			'A music bed ducks under speech at export, which this does not model.',
+			...(tooShort.size ? [`${tooShort.size} clip${tooShort.size === 1 ? ' is' : 's are'} shorter than the loudness meter's 400 ms window (pops, clicks, swishes): left out of the role levels; check them by their peak.`] : []),
 			doc.loudnessEnabled
 				? 'Loudness is on: the finished mix is normalised to −14 LUFS, so the gaps BETWEEN roles matter, not their absolute levels.'
 				: 'Loudness is off: the finished mix keeps the levels above.'

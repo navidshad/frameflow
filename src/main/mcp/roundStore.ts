@@ -1,4 +1,5 @@
 import fs from 'node:fs'
+import { randomUUID } from 'node:crypto'
 import path from 'node:path'
 import { BrowserWindow, ipcMain, nativeImage } from 'electron'
 import {
@@ -107,6 +108,8 @@ function onEvent(event: RoundEvent): void {
 
 /** The app's one book: every outside agent's server shares it. */
 export const roundBook = new RoundBook({
+	// Random: a round id is what lets a reconnected agent take its round back.
+	newId: () => randomUUID(),
 	onEvent: (event) => {
 		try {
 			onEvent(event)
