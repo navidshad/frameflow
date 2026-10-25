@@ -1,4 +1,4 @@
-import { describe, expect, it, beforeAll, afterAll } from 'vitest'
+import { describe, expect, it, beforeAll, afterAll, afterEach } from 'vitest'
 import { execFile } from 'child_process'
 import { promises as fs } from 'fs'
 import { tmpdir } from 'os'
@@ -136,6 +136,14 @@ describe('export length with many motion layers — against the real ffmpeg', ()
 		])
 	}, 60_000)
 
+	// A timed-out test leaves its render pending; aborting kills its ffmpeg so
+	// nothing outlives the run.
+	let controller = new AbortController()
+	afterEach(() => {
+		controller.abort()
+		controller = new AbortController()
+	})
+
 	afterAll(async () => {
 		await fs.rm(dir, { recursive: true, force: true })
 	})
@@ -190,7 +198,7 @@ describe('export length with many motion layers — against the real ffmpeg', ()
 		}
 
 		const spans = regionSpans(plan.regions.map((r) => r.duration), plan.fps)
-		const signal = new AbortController().signal
+		const signal = controller.signal
 		const files: string[] = []
 		for (let i = 0; i < plan.regions.length; i++) {
 			files.push(await renderRegion(plan.regions[i], i, plan, spans[i], dir, signal, () => {}))

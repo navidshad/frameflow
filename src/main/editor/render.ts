@@ -33,9 +33,11 @@ import {
 	allSlices, buildRegionGraph, motionJobsFor,
 	type Region, type RegionPlan, type SourceSlice
 } from './renderBuilders'
+import { regionTimeoutMs, runCommand } from './ffmpegRun'
 import { concatLists, exactTailFilters, regionAudioOpts, regionSpans, snapItemToFrames, type RegionSpan } from './regionJoin'
 
 export { atempoChain } from './renderBuilders'
+export { runCommand } from './ffmpegRun'
 
 /**
  * Export render engine (PRD §5.9 / §7 option C — segment-then-concat).
@@ -529,31 +531,6 @@ export const intermediateOpts = (): string[] => [
 	'-threads', '0'
 ]
 
-export function runCommand(
-	command: ffmpeg.FfmpegCommand,
-	outputPath: string,
-	signal: AbortSignal,
-	onProgress?: (percent: number) => void
-): Promise<void> {
-	return new Promise((resolve, reject) => {
-		if (signal.aborted) return reject(new Error('aborted'))
-		signal.addEventListener('abort', () => command.kill('SIGKILL'))
-		command
-			.output(outputPath)
-			.on('start', (cmd) => console.log('[render] ffmpeg:', cmd))
-			.on('progress', (progress) => {
-				if (onProgress && progress.percent) onProgress(Math.min(100, Math.round(progress.percent)))
-			})
-			.on('end', () => resolve())
-			.on('error', (err, _stdout, stderr) => {
-				if (signal.aborted) return reject(new Error('aborted'))
-				console.error('[render] ffmpeg failed:', err?.message, stderr?.slice(-800))
-				reject(new Error(`Render step failed: ${err?.message || 'ffmpeg error'}`))
-			})
-			.run()
-	})
-}
-
 /** The export's video encoder, without the audio half of `intermediateOpts`. */
 const videoEncodeOpts = (): string[] => intermediateOpts().slice(0, intermediateOpts().indexOf('-c:a'))
 
@@ -601,7 +578,10 @@ export async function renderRegion(
 			'-frames:v', String(Math.max(1, span.frames))
 		])
 
-	await runCommand(command, outputPath, signal, onProgress)
+	await runCommand(command, outputPath, signal, onProgress, {
+		timeoutMs: regionTimeoutMs(region.duration),
+		label: `region ${index + 1} of the export (${region.duration.toFixed(2)} s long)`
+	})
 	return outputPath
 }
 
@@ -632,7 +612,11 @@ export async function concatRegions(
 			...intermediateOpts().slice(intermediateOpts().indexOf('-c:a')),
 			'-movflags', '+faststart'
 		])
-	await runCommand(command, finalPath, signal)
+	const seconds = spans.reduce((sum, span) => sum + Number(span.audioSec), 0)
+	await runCommand(command, finalPath, signal, undefined, {
+		timeoutMs: regionTimeoutMs(seconds),
+		label: `the final join of ${regionFiles.length} regions`
+	})
 }
 
 // ===== Orchestrator =====
