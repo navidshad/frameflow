@@ -136,7 +136,7 @@ export function describeMotionReport(report: MotionFrameReport): string | null {
 	if (clips.total) {
 		lines.push(clips.ready === clips.total
 			? `Motion clips for export: all ${clips.total} rendered.`
-			: `Motion clips for export: ${clips.ready} of ${clips.total} rendered; the rest render when you export. This frame does not wait for them.`)
+			: `Motion clips for export: ${clips.ready} of ${clips.total} rendered; the export renders the rest. This frame does not wait for them.`)
 	}
 	return lines.length ? lines.join('\n') : null
 }
