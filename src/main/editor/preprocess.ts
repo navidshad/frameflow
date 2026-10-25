@@ -38,7 +38,11 @@ export type PreprocessStep =
 // Transcript runs UP FRONT (before scenes) so pieces derive from real speech
 // segments; scene detection stays as the fallback piece source for videos
 // with no usable transcript and for explicit sensitivity re-runs.
-const DEFAULT_STEPS: PreprocessStep[] = ['proxy', 'audio', 'transcript', 'scenes', 'thumbnails']
+//
+// The filmstrip comes right after the proxy: it needs only a picture, so the
+// timeline shows real frames while the long steps (a transcript of a 90-minute
+// file) are still running, or if they never finish.
+export const DEFAULT_STEPS: PreprocessStep[] = ['proxy', 'filmstrip', 'audio', 'transcript', 'scenes', 'thumbnails']
 
 // Audio-only assets have no picture: skip proxy/scenes/thumbnails/filmstrip.
 // Pieces come from a LOCAL, energy-based segmentation (silence split + interval
@@ -52,7 +56,8 @@ const AUDIO_STEPS: PreprocessStep[] = ['segment']
 // flipping preprocessState to 'error' hides the WHOLE Gemini block in the
 // Inspector (Describe and Transcribe), leaving only Retry — which re-runs the
 // default steps and would re-bill a full transcription.
-const SOFT_FAIL_STEPS: PreprocessStep[] = ['audio', 'transcript', 'descriptions']
+// A filmstrip is a picture aid: failing it must not fail the import either.
+const SOFT_FAIL_STEPS: PreprocessStep[] = ['audio', 'transcript', 'descriptions', 'filmstrip']
 
 // ===== Concurrency cap (K=3) for ffmpeg-heavy work =====
 const MAX_CONCURRENT_HEAVY = 3
@@ -85,7 +90,12 @@ export function abortAssetPreprocessing(threadId: string, assetId: string): void
 		controller.abort()
 		abortControllers.delete(key)
 	}
+	filmstripJobs.get(key)?.abort()
+	filmstripJobs.delete(key)
 }
+
+/** Filmstrip-only side jobs (the timeline asking for a strip), apart from the chain. */
+const filmstripJobs = new Map<string, AbortController>()
 
 export function isAssetPreprocessing(threadId: string, assetId: string): boolean {
 	return abortControllers.has(abortKey(threadId, assetId))
@@ -1001,6 +1011,29 @@ export async function preprocessMediaAsset(
 	if (asset.kind === 'audio' && options?.steps?.length && options.steps.every((s) => s === 'filmstrip')) {
 		if (asset.preprocessState === 'error' && /strip/.test(asset.preprocessError || '')) {
 			await patchAsset(threadId, assetId, { preprocessState: 'completed', preprocessError: undefined })
+		}
+		return
+	}
+
+	// A filmstrip on its own (the timeline asking for one) is a side job: it
+	// reads the proxy and never touches the file's preparation state, so an
+	// interrupted or failed file keeps saying so (and keeps its Retry). A live
+	// chain draws the strip itself.
+	if (options?.steps?.length === 1 && options.steps[0] === 'filmstrip') {
+		const key = abortKey(threadId, assetId)
+		if (asset.filmstrip?.length || filmstripJobs.has(key)) return
+		const controller = new AbortController()
+		setMaxListeners(0, controller.signal)
+		filmstripJobs.set(key, controller)
+		try {
+			await runFilmstripStep(threadId, assetId, controller.signal)
+		} catch (error: any) {
+			if (!controller.signal.aborted) {
+				console.warn(`[editor] filmstrip failed for asset ${assetId}:`, error?.message || error)
+				await setTask(threadId, assetId, 'filmstrip', { state: 'error', error: error?.message || 'filmstrip failed' })
+			}
+		} finally {
+			filmstripJobs.delete(key)
 		}
 		return
 	}

@@ -1,3 +1,4 @@
+import { wantsFilmstrip } from '@shared/mediaPrep'
 import { defineStore } from 'pinia'
 import { ref, shallowRef, computed, watch } from 'vue'
 import type {
@@ -1624,14 +1625,16 @@ export const useEditorStore = defineStore('editor', () => {
 				}
 				continue
 			}
-			if (!usedAssetIds.has(asset.id)) continue
-			if (asset.preprocessState !== 'completed') continue
-			if (asset.filmstrip?.length || filmstripRequested.has(asset.id)) continue
+			const live = asset.preprocessState === 'running' && !interruptedAssets.value.has(asset.id)
+			if (!wantsFilmstrip(asset, { usedOnTimeline: usedAssetIds.has(asset.id), live, alreadyRequested: filmstripRequested.has(asset.id) })) continue
 			filmstripRequested.add(asset.id)
 			api.preprocessMedia({ threadId: threadId.value, assetId: asset.id, steps: ['filmstrip'] })
 		}
 	}
-	watch([timelineView, () => doc.value?.timeline.length], () => ensureFilmstrips())
+	// Also when a proxy lands or a file stops being live (interrupted, finished).
+	watch([timelineView, () => doc.value?.timeline.length,
+		() => doc.value?.media.map((a) => `${a.id}:${a.preprocessState}:${!!a.proxyPath}:${interruptedAssets.value.has(a.id)}`).join('|')],
+	() => ensureFilmstrips())
 
 	/**
 	 * Repair assets whose pieces lost their thumbnails (a re-transcribe used to
@@ -4027,8 +4030,9 @@ export const useEditorStore = defineStore('editor', () => {
 		api.onBackgroundTaskUpdate((data: { threadId: string; taskId: string; task: BackgroundTask }) => {
 			if (data.threadId !== threadId.value) return
 			backgroundTasks.value = { ...backgroundTasks.value, [data.taskId]: data.task }
-			const assetId = data.taskId.split(':')[0]
-			if (assetId) interruptedAssets.value.delete(assetId)
+			const [assetId, step] = data.taskId.split(':')
+			// A filmstrip side job does not resume an interrupted file: it keeps its Retry.
+			if (assetId && step !== 'filmstrip') interruptedAssets.value.delete(assetId)
 		})
 
 		api.onThreadUpdated((updated: Thread) => {
