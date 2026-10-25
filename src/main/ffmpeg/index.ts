@@ -641,6 +641,14 @@ export async function generateFilmstrip(
  *
  * Requires an audio stream — guard with `metadata.hasAudio` before calling.
  */
+/**
+ * Output options for the silence finder. `-vn -sn -dn`: only the sound is read.
+ * Without them ffmpeg decodes the picture too and throws it away, which on a
+ * 4K HEVC camera file is most of the work (a 43-minute DJI file took over ten
+ * minutes instead of under one).
+ */
+export const SILENCE_OUTPUT_OPTIONS = ['-vn', '-sn', '-dn', '-f', 'null']
+
 export async function detectSilence(
 	videoPath: string,
 	opts?: { noiseDb?: number; minDurationSec?: number },
@@ -660,7 +668,7 @@ export async function detectSilence(
 
 		const command = ffmpeg(videoPath)
 			.audioFilters(`silencedetect=noise=${noiseDb}dB:d=${minDurationSec}`)
-			.outputOptions(['-f', 'null'])
+			.outputOptions(SILENCE_OUTPUT_OPTIONS)
 			.output(process.platform === 'win32' ? 'NUL' : '/dev/null')
 			.on('progress', (progress) => {
 				if (onProgress && progress.percent) {
