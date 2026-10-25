@@ -116,3 +116,34 @@ A provider makes audio from a prompt: ElevenLabs (voice, sound effects, music; i
 - A usage record (`source: audio:<provider>`) is added for each generation, so it shows with the other costs.
 
 Pure policy (limits, spend rule, provenance) is `src/shared/audioProviders.ts`; the network lives in `src/main/audio/` behind an injected `fetch` and is tested against fakes, never a real key.
+
+## Rounds: one agent per project (built)
+
+An outside agent works in **rounds**. `begin_round {goal}` gives it the project; `end_round {summary}` gives it back. While a round is open:
+
+- the editor shows it: a violet strip under the top bar ("Claude Code is working on this project · Round 3 · goal · steps · time · Stop agent"), a striped scrim over the editing surfaces (the picture stays visible and Space still plays it), and editing shortcuts are paused (`liveWhileAgentWorks` in `shortcuts.ts`);
+- the built-in chat is locked: the prompt bar, the folded composer and the engine chip say who is working, and main refuses `run-editor-prompt` (`agentHolding`);
+- the user's Export button and revision switches wait for the round to end (`editorStore.agentHolds`);
+- another agent's writes are refused, naming the holder. Reads are never refused.
+
+The other way round, an agent cannot begin (or write) while the chat is running a prompt (`LiveProject.chatBusy`). A write with no round open opens one for the agent and says so. A round ends on `end_round`, on Stop (which also disconnects the agent), when its session closes, after 10 minutes without a call, or when the agent opens another project. A reconnected agent takes its own round back with `begin_round {resume: roundId}`; the id it was given is the proof.
+
+The rules live in `src/shared/agentRounds.ts` (`RoundBook`, pure and tested); `src/main/mcp/roundStore.ts` keeps each project's history in `agent-rounds.json` beside its `thread.json` (pictures in `agent-log/`) and sends the events the editor draws from. FrameFlow's own CLI engine does not use rounds: its turn is the chat's.
+
+**The chat shows the MCP conversation**, read-only (`McpRoundCard.vue`): the round's goal on the asking side, every request the agent made (`→` its arguments, page sources shown by size) and FrameFlow's answer (`←` the reply, chips, a frame), and the agent's closing summary with how the round ended. Calls made outside a round are grouped as "outside a round".
+
+## Driving a whole edit over MCP (built)
+
+The tools an agent needs to go from a link to a checked export without the user's hands:
+
+| Tool | What it does |
+|---|---|
+| `list_projects`, `create_project`, `open_project` | Find, make and open projects; opening waits until the editor has loaded it. |
+| `import_media` | A link (yt-dlp, installed on first use) or a local file, as the Media panel imports it; returns the media id. |
+| `wait` | Follows background work: `media` until preparation (proxy, scenes, transcript) finishes, `export` until the file is done. Reports progress to the client. |
+| `inspect_media` | A labelled contact sheet of a source file's own frames, at source seconds. |
+| `find_silences` | Measured pauses in a source's sound, for tightening by measurement. |
+| `render_frames` | Up to 24 exact timeline frames in one sheet, with each frame's motion note. |
+| `export` | `quality: original | preview`; returns a render id. |
+| `inspect_export` | The exported file's facts (length vs timeline, size, streams), labelled contact sheets of its frames, and its loudness. |
+| `apply_ops` | Also `splitAt` (cut clips in two without removing anything) and `sequenceFrame` (the export's frame size). |
