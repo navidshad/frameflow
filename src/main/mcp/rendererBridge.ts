@@ -18,6 +18,7 @@ import { settingsManager } from '../settings'
 import { ProviderError } from '../audio/provider'
 import { renderProgress, startEditorRender } from '../editor/render'
 import { contactSheet, measureExportLoudness, probeExport, sheetClock, sheetTimes, tileImages } from '../editor/exportInspect'
+import { buildCameraGroup } from '../multicam/group'
 import fs from 'node:fs'
 import { join } from 'node:path'
 import { tmpdir } from 'node:os'
@@ -232,6 +233,11 @@ export const rendererBridge: EditorBridge = {
 		const times = sheetTimes(durationSec, options)
 		const made = await contactSheet(file, times, { columns: options.columns, tileWidth: options.tileWidth })
 		return { sheet: { data: made.jpeg.toString('base64'), mimeType: 'image/jpeg', times, columns: made.columns, rows: made.rows }, durationSec }
+	},
+
+	async buildCameraGroup(project, assetIds, options) {
+		const { group, ranking } = await buildCameraGroup(project.doc.media, assetIds, options)
+		return { group, ranking }
 	},
 
 	async findSilences(project, assetId, options) {

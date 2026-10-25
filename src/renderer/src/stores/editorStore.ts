@@ -3,12 +3,17 @@ import { ref, shallowRef, computed, watch } from 'vue'
 import type {
 	BackgroundTask, Clip, EditorDocument, EditorHistoryStep, EditorMarker,
 	EditorPersona, EditorRevision, EditorRevisionSummary, MediaAsset, RevisionSnapshot, PromptTurn, Thread, TimelineDiff,
-	DeliveryFormat, SoundBinding, TimelineItem, TimelineItemTransform, TimelineSnapshot, Track
+	DeliveryFormat, SoundBinding, TimelineItem, TimelineItemTransform, TimelineSnapshot, Track,
+	EditorOps, MulticamGroup
 } from '@shared/types'
+import {
+	groupOfItem, groupRippleCut, groupTimeAt, rederiveGroupItems, resolveAngle, shotRun, suggestCameraGroups, type CameraGroupSuggestion
+} from '@shared/multicam'
+import { applyMulticamOps } from '@shared/multicamEdits'
 import {
 	applyTimelineDiff, clampSpeed, clipToItem, computeContentEnd,
 	closeTimelineGaps, diffTimelines, findOverlaps, itemDuration, itemEnd, itemFromAsset,
-	pruneOrphanItems, repairOverlaps, repairOverlapsReporting,
+	pruneOrphanItems, repairOverlaps, repairOverlapsReporting, rippleTimeline, TIMELINE_DIFF_SCHEMA_VERSION,
 	type TimelineState
 } from '@shared/timeline'
 import { computeScope } from '@shared/ai-scope'
@@ -943,7 +948,9 @@ export const useEditorStore = defineStore('editor', () => {
 			.sort((a, b) => a.timelineStart - b.timelineStart)
 			.flatMap((item) => {
 				const asset = assetById.get(item.sourceAssetId)
-				const src = asset?.originalPath
+				// A camera group's main sound can be a camera file: its proxy carries
+				// the same sound at a fraction of the size of a 4K original.
+				const src = asset?.kind === 'video' ? (asset.proxyPath || asset.originalPath) : asset?.originalPath
 				if (!src) return []
 				return [{
 					itemId: item.id,
@@ -1064,8 +1071,8 @@ export const useEditorStore = defineStore('editor', () => {
 		if (!rev || !doc.value || !held || held.id !== rev.id || held.threadId !== threadId.value) return false
 		const snap = held.snapshot
 		if (diffTimelines(
-			{ tracks: snap.tracks, timeline: snap.timeline, motionKits: snap.motionKits ?? [] },
-			{ tracks: doc.value.tracks, timeline: doc.value.timeline, motionKits: doc.value.motionKits ?? [] }
+			{ tracks: snap.tracks, timeline: snap.timeline, motionKits: snap.motionKits ?? [], multicams: snap.multicams ?? [] },
+			{ tracks: doc.value.tracks, timeline: doc.value.timeline, motionKits: doc.value.motionKits ?? [], multicams: doc.value.multicams ?? [] }
 		) !== null) return true
 		// Markers live outside TimelineDiff, so the timeline comparison above is
 		// blind to them. Without this, marker-only work counts as "clean" and
@@ -1257,6 +1264,7 @@ export const useEditorStore = defineStore('editor', () => {
 				markers: doc.value.markers,
 				currentRevisionId: doc.value.currentRevisionId,
 				motionKits: doc.value.motionKits ?? [],
+				multicams: doc.value.multicams ?? [],
 				// `?? false` because JSON.stringify drops an undefined, and the main
 				// handler would then read the patch as "no opinion" and keep the old
 				// value — the same trap the cleared-transition bug fell into.
@@ -1757,7 +1765,8 @@ export const useEditorStore = defineStore('editor', () => {
 	const currentState = (): TimelineState => ({
 		tracks: doc.value!.tracks,
 		timeline: doc.value!.timeline,
-		motionKits: doc.value!.motionKits ?? []
+		motionKits: doc.value!.motionKits ?? [],
+		multicams: doc.value!.multicams ?? []
 	})
 
 	const snapshotState = (): TimelineState =>
@@ -1870,7 +1879,8 @@ export const useEditorStore = defineStore('editor', () => {
 		const state: TimelineState = {
 			tracks: [...doc.value.tracks],
 			timeline: [...doc.value.timeline],
-			motionKits: [...(doc.value.motionKits ?? [])]
+			motionKits: [...(doc.value.motionKits ?? [])],
+			multicams: [...(doc.value.multicams ?? [])]
 		}
 		const result = applyTimelineDiff(state, diff, doc.value.media)
 		if (result.errors.length) {
@@ -1879,6 +1889,7 @@ export const useEditorStore = defineStore('editor', () => {
 		doc.value.tracks = state.tracks
 		doc.value.timeline = state.timeline
 		doc.value.motionKits = state.motionKits
+		doc.value.multicams = state.multicams
 		return result.ok || result.errors.length < (diff.updateItems?.length || 0) + (diff.addItems?.length || 0) + 1
 	}
 
@@ -2060,12 +2071,217 @@ export const useEditorStore = defineStore('editor', () => {
 		selectItems(newIds)
 	}
 
+	// ===== Multicam (camera groups) =====
+	// Every edit below is an op run through shared/multicamEdits.ts — the same
+	// function MCP's apply_ops calls — then committed as one undo step.
+
+	const newUuid = () => (crypto as any).randomUUID ? crypto.randomUUID() : `mc-${Date.now()}-${Math.random().toString(36).slice(2)}`
+
+	/** A sync in progress: what it is doing, 0..1. */
+	const multicamBusy = ref<{ label: string; fraction: number } | null>(null)
+	const multicamError = ref<string | null>(null)
+	/** Suggestions the user waved away this session, by their files. */
+	const dismissedCameraGroups = ref<string[]>([])
+	const suggestionKey = (s: CameraGroupSuggestion) => [...s.assetIds].sort().join('|')
+
+	const cameraGroupSuggestions = computed<CameraGroupSuggestion[]>(() => {
+		if (!doc.value) return []
+		// Only files that are ready: a half-imported file has no length to compare.
+		const ready = doc.value.media.filter((a) => a.preprocessState !== 'pending' || a.metadata?.duration)
+		return suggestCameraGroups(ready, doc.value.multicams)
+			.filter((s) => !dismissedCameraGroups.value.includes(suggestionKey(s)))
+	})
+
+	const dismissCameraGroupSuggestion = (s: CameraGroupSuggestion) => {
+		dismissedCameraGroups.value = [...dismissedCameraGroups.value, suggestionKey(s)]
+	}
+
+	/** Run camera-group ops against the live doc and commit them as one step. */
+	const applyMulticamEdit = (
+		ops: EditorOps, label: string, adding: MulticamGroup[] = []
+	): { ok: boolean; dropped: string[]; notes: string[] } => {
+		if (!doc.value) return { ok: false, dropped: [], notes: [] }
+		const diff: TimelineDiff = { schemaVersion: TIMELINE_DIFF_SCHEMA_VERSION }
+		if (adding.length) diff.setMulticams = [...adding]
+		const dropped: string[] = []
+		const notes: string[] = []
+		const view = adding.length ? { ...doc.value, multicams: [...(doc.value.multicams ?? []), ...adding] } : doc.value
+		applyMulticamOps(ops, view, diff, dropped, notes, newUuid)
+		if (dropped.length) console.warn('[multicam]', label, dropped)
+		if (!hasOps(diff)) {
+			if (dropped.length) multicamError.value = dropped[0]
+			return { ok: false, dropped, notes }
+		}
+		const before = snapshotState()
+		applyDiffToDoc(diff)
+		commitStep({ before, label })
+		multicamError.value = dropped[0] ?? null
+		return { ok: true, dropped, notes }
+	}
+
+	/**
+	 * Sync files into a camera group (or re-sync one) and, for a new group,
+	 * lay it on the timeline. Resolves to the group, or null with the reason in
+	 * `multicamError`.
+	 */
+	const buildMulticam = async (
+		assetIds: string[],
+		options: { existing?: MulticamGroup; place?: boolean } = {}
+	): Promise<MulticamGroup | null> => {
+		if (!doc.value || !threadId.value || multicamBusy.value) return null
+		multicamError.value = null
+		multicamBusy.value = { label: 'Reading sound', fraction: 0 }
+		const thread = threadId.value
+		const off = api.onMulticamProgress?.((d: { threadId: string; fraction: number; label: string }) => {
+			if (d.threadId === thread) multicamBusy.value = { label: d.label, fraction: d.fraction }
+		})
+		let result: { ok: boolean; group?: MulticamGroup; error?: string }
+		try {
+			result = await api.buildMulticam({
+				threadId: thread, assetIds,
+				existing: options.existing ? JSON.parse(JSON.stringify(options.existing)) : undefined
+			})
+		} catch (e: any) {
+			result = { ok: false, error: e?.message || String(e) }
+		} finally {
+			off?.()
+			multicamBusy.value = null
+		}
+		if (!result.ok || !result.group || !doc.value || threadId.value !== thread) {
+			multicamError.value = result.error || 'The sync did not finish.'
+			return null
+		}
+		const group = result.group
+		if (options.existing) {
+			const before = snapshotState()
+			const { updates, adds } = rederiveGroupItems(doc.value.timeline, options.existing, group, doc.value.media, newUuid)
+			applyDiffToDoc({ schemaVersion: TIMELINE_DIFF_SCHEMA_VERSION, setMulticams: [group], updateItems: updates, addItems: adds })
+			commitStep({ before, label: 'Re-sync cameras' })
+		} else if (options.place === false) {
+			applyMulticamEdit({}, 'Make multicam', [group])
+		} else {
+			applyMulticamEdit({ placeMulticam: { group: group.id } }, 'Make multicam', [group])
+		}
+		return group
+	}
+
+	const resyncMulticam = (groupId: string) => {
+		const group = doc.value?.multicams?.find((g) => g.id === groupId)
+		if (!group) return Promise.resolve(null)
+		return buildMulticam(group.members.map((m) => m.assetId), { existing: group })
+	}
+
+	const placeMulticam = (groupId: string) =>
+		applyMulticamEdit({ placeMulticam: { group: groupId } }, 'Place multicam')
+
+	/** The group shot under the playhead (the selected one first), if any. */
+	const shotAtPlayhead = (t = playheadSec.value): TimelineItem | null => {
+		if (!doc.value) return null
+		const hidden = new Set(doc.value.tracks.filter((tr) => tr.hidden).map((tr) => tr.id))
+		const under = doc.value.timeline.filter((i) =>
+			i.multicam?.role === 'shot' && !hidden.has(i.trackId) && t >= i.timelineStart - 1e-6 && t < itemEnd(i) - 1e-6)
+		return under.find((i) => selectedItemIds.value.includes(i.id)) ?? under[0] ?? null
+	}
+
+	/** What the Angles view shows: the group under the playhead and the moment on its clock. */
+	const multicamAtPlayhead = computed(() => {
+		if (!doc.value?.multicams?.length) return null
+		const t = playheadSec.value
+		const shot = shotAtPlayhead(t)
+		const sound = doc.value.timeline.find((i) =>
+			i.multicam?.role === 'sound' && t >= i.timelineStart - 1e-6 && t < itemEnd(i) - 1e-6 &&
+			(!shot || i.multicam.groupId === shot.multicam!.groupId))
+		const anchor = shot ?? sound
+		const group = anchor ? groupOfItem(anchor, doc.value.multicams) : undefined
+		if (!group || !anchor) return null
+		return { group, shot, groupTime: groupTimeAt(sound ?? anchor, group, t) }
+	})
+
+	/**
+	 * Number keys: from the playhead, show angle `n` until the shot's next cut.
+	 * A press within a tenth of a second of the shot's start switches the
+	 * whole shot instead of leaving a sliver of the old angle.
+	 */
+	const switchAngleAtPlayhead = (angle: number | string): boolean => {
+		const shot = shotAtPlayhead()
+		if (!shot || !doc.value) return false
+		const group = groupOfItem(shot, doc.value.multicams)
+		if (!group) return false
+		const t = playheadSec.value
+		// The shot as the user sees it: a file join inside it is not a cut.
+		const run = shotRun(doc.value.timeline, shot, group, doc.value.media)
+		const at = t - run.start < 0.1 ? run.start : t
+		const member = resolveAngle(group, doc.value.media, angle)
+		return applyMulticamEdit(
+			{ switchAngles: { group: group.id, switches: [{ atSec: at, angle }], untilSec: run.end } },
+			`Cut to ${member?.name ?? `angle ${angle}`}`
+		).ok
+	}
+
+	/** Alt + number, or the Inspector's angle row: the whole shot shows another angle. */
+	const setShotAngle = (itemId: string, angle: number | string): boolean => {
+		const shot = doc.value?.timeline.find((i) => i.id === itemId)
+		const group = shot && doc.value ? groupOfItem(shot, doc.value.multicams) : undefined
+		if (!shot || !group || !doc.value) return false
+		const member = resolveAngle(group, doc.value.media, angle)
+		const run = shotRun(doc.value.timeline, shot, group, doc.value.media)
+		return applyMulticamEdit(
+			{ switchAngles: { group: group.id, switches: [{ atSec: run.start, angle }], untilSec: run.end } },
+			`Show ${member?.name ?? `angle ${angle}`}`
+		).ok
+	}
+
+	const setShotAngleAtPlayhead = (angle: number | string): boolean => {
+		const shot = shotAtPlayhead()
+		return shot ? setShotAngle(shot.id, angle) : false
+	}
+
+	const setMulticamSound = (groupId: string, assetId: string) =>
+		applyMulticamEdit({ setMainSound: { group: groupId, sound: assetId } }, 'Main sound')
+
+	/** Move one member on the group clock (a frame at a time from the Inspector). */
+	const nudgeMulticamMember = (groupId: string, assetId: string, bySec: number) =>
+		applyMulticamEdit({ nudgeAngle: { group: groupId, angle: assetId, bySec } }, 'Nudge sync')
+
+	const renameMulticam = (groupId: string, name: string) => {
+		const group = doc.value?.multicams?.find((g) => g.id === groupId)
+		const clean = name.trim()
+		if (!group || !clean || clean === group.name) return
+		const before = snapshotState()
+		applyDiffToDoc({ schemaVersion: TIMELINE_DIFF_SCHEMA_VERSION, setMulticams: [{ ...group, name: clean }] })
+		commitStep({ before, label: 'Rename camera group' })
+	}
+
+	/** Dissolve a group: its clips stay exactly where they are, as ordinary clips. */
+	const ungroupMulticam = (groupId: string) => {
+		if (!doc.value?.multicams?.some((g) => g.id === groupId)) return
+		const before = snapshotState()
+		doc.value.multicams = doc.value.multicams.filter((g) => g.id !== groupId)
+		doc.value.timeline = doc.value.timeline.map((i) => {
+			if (i.multicam?.groupId !== groupId) return i
+			const { multicam: _gone, ...rest } = i
+			return rest as TimelineItem
+		})
+		commitStep({ before, label: 'Ungroup cameras' })
+	}
+
 	const deleteItems = (ids: string[], options: { ripple?: boolean } = {}) => {
 		if (!doc.value || !ids.length) return
 		const ripple = options.ripple !== false // magnetic default
 		const before = snapshotState()
 		const removed = doc.value.timeline.filter((i) => ids.includes(i.id))
+		// A camera group's shot takes its stretch out of the group's sound too,
+		// so the shots after it stay in sync with what is being said.
+		const groupCut = ripple ? groupRippleCut(doc.value.timeline, removed, newUuid) : null
 		doc.value.timeline = doc.value.timeline.filter((i) => !ids.includes(i.id))
+		if (groupCut && (groupCut.removeIds.length || groupCut.updated.length || groupCut.added.length)) {
+			const updated = new Map(groupCut.updated.map((u) => [u.id, u]))
+			doc.value.timeline = [
+				...doc.value.timeline.filter((i) => !groupCut.removeIds.includes(i.id)).map((i) => updated.get(i.id) ?? i),
+				...groupCut.added
+			]
+			rippleTimeline(doc.value.timeline, groupCut.changes)
+		}
 
 		if (ripple) {
 			// Close each track's gaps: shift remaining items left by the total
@@ -3204,7 +3420,8 @@ export const useEditorStore = defineStore('editor', () => {
 		timeline: doc.value!.timeline,
 		timelineMeta: doc.value!.timelineMeta,
 		markers: doc.value!.markers || [],
-		motionKits: doc.value!.motionKits ?? []
+		motionKits: doc.value!.motionKits ?? [],
+		multicams: doc.value!.multicams ?? []
 	})
 
 	/** Push to the sidecar and mirror the assigned seq back (awaited — cards need real V numbers). */
@@ -3362,6 +3579,7 @@ export const useEditorStore = defineStore('editor', () => {
 		doc.value.timelineMeta = snap.timelineMeta
 		doc.value.markers = snap.markers || []
 		doc.value.motionKits = snap.motionKits ?? []
+		doc.value.multicams = snap.multicams ?? []
 		doc.value.currentRevisionId = id
 		holdAsCurrent(id, stored)
 
@@ -3477,7 +3695,8 @@ export const useEditorStore = defineStore('editor', () => {
 		const applied: TimelineState = {
 			tracks: JSON.parse(JSON.stringify(doc.value!.tracks)),
 			timeline: JSON.parse(JSON.stringify(doc.value!.timeline)),
-			motionKits: JSON.parse(JSON.stringify(doc.value!.motionKits ?? []))
+			motionKits: JSON.parse(JSON.stringify(doc.value!.motionKits ?? [])),
+			multicams: JSON.parse(JSON.stringify(doc.value!.multicams ?? []))
 		}
 		const result = applyTimelineDiff(applied, diff, doc.value!.media)
 		// AI placements aren't gesture-clamped — push any same-track overlaps
@@ -3673,6 +3892,7 @@ export const useEditorStore = defineStore('editor', () => {
 				doc.value.tracks = applied.tracks
 				doc.value.timeline = applied.timeline
 				doc.value.motionKits = applied.motionKits
+				doc.value.multicams = applied.multicams
 				// Ring step preserved: Cmd+Z undoes the AI diff in place
 				commitStep({ prebuilt: diffed, origin: 'ai', turnId: turn.id, label })
 			}
@@ -3737,7 +3957,8 @@ export const useEditorStore = defineStore('editor', () => {
 		!!diff && !!(
 			diff.addItems?.length || diff.removeItemIds?.length ||
 			diff.updateItems?.length || diff.addTracks?.length || diff.removeTrackIds?.length ||
-			diff.setMotionKits?.length || diff.removeMotionKitIds?.length
+			diff.setMotionKits?.length || diff.removeMotionKitIds?.length ||
+			diff.setMulticams?.length || diff.removeMulticamIds?.length
 		)
 
 	// ===== Ownership-split merge for thread-updated echoes =====
@@ -3975,6 +4196,21 @@ export const useEditorStore = defineStore('editor', () => {
 		addItemFromClip,
 		addItemFromAsset,
 		splitAtPlayhead,
+		multicamBusy,
+		multicamError,
+		cameraGroupSuggestions,
+		dismissCameraGroupSuggestion,
+		buildMulticam,
+		resyncMulticam,
+		placeMulticam,
+		multicamAtPlayhead,
+		switchAngleAtPlayhead,
+		setShotAngle,
+		setShotAngleAtPlayhead,
+		setMulticamSound,
+		nudgeMulticamMember,
+		renameMulticam,
+		ungroupMulticam,
 		removeRanges,
 		copyItems,
 		pasteItems,

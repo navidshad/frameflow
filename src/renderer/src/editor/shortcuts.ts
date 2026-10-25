@@ -104,6 +104,15 @@ export const SHORTCUTS: ShortcutDef[] = [
 		match: (e, mod) => (e.key === 'ArrowLeft' || e.key === 'ArrowRight') && !mod && e.shiftKey
 	},
 	{
+		// The physical key, not the character: Alt+1 types "¡" on a Mac.
+		id: 'angle-cut', group: 'Editing', keys: '1 – 9', label: 'Cut to that camera angle at the playhead',
+		match: (e, mod) => /^(Digit|Numpad)[1-9]$/.test(e.code) && plain(e, mod) && !e.shiftKey
+	},
+	{
+		id: 'angle-switch', group: 'Editing', keys: 'Alt + 1 – 9', label: 'Show that angle for the whole shot',
+		match: (e, mod) => /^(Digit|Numpad)[1-9]$/.test(e.code) && !mod && e.altKey && !e.shiftKey
+	},
+	{
 		id: 'marker', group: 'Editing', keys: 'M', label: 'Marker at the playhead',
 		match: (e, mod) => key(e) === 'm' && plain(e, mod)
 	},

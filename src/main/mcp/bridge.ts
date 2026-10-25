@@ -127,6 +127,16 @@ export interface EditorBridge {
 	mediaSheet(project: LiveProject, assetId: string, options: InspectOptions): Promise<{ sheet: NonNullable<InspectReport['sheet']>; durationSec: number }>
 	/** Exact timeline frames (as render_frame draws them), tiled and labelled; with each frame's motion note. */
 	timelineSheet(project: LiveProject, times: number[], options: { columns?: number; tileWidth?: number }): Promise<{ sheet: NonNullable<InspectReport['sheet']>; notes: (string | null)[] }>
+	/**
+	 * Sync recordings of one moment by their sound and return the camera group
+	 * (not yet saved: the caller commits it as an edit). `existing` rebuilds a
+	 * group, keeping its id, names and main sound.
+	 */
+	buildCameraGroup(
+		project: LiveProject,
+		assetIds: string[],
+		options: { name?: string; existing?: import('@shared/types').MulticamGroup; onProgress?: (fraction: number, label: string) => void }
+	): Promise<{ group: import('@shared/types').MulticamGroup; ranking: string[] }>
 	/** Quiet stretches in a media file's sound, in source seconds. */
 	findSilences(project: LiveProject, assetId: string, options: { noiseDb: number; minDurationSec: number }): Promise<{ start: number; end: number }[]>
 	/** Every editor project in the user's FrameFlow. */

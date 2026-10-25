@@ -61,18 +61,20 @@
 			<template v-if="store.timelineView === 'filmstrip'">
 				<!-- Dense strip (§5.5): frames from the batched per-asset filmstrip,
 				     one per ~64px slot; falls back to the scene thumbnail. -->
-				<div v-if="stripFrames.length" class="w-full h-full flex">
-					<img v-for="(src, i) in stripFrames" :key="i" :src="src"
-						class="flex-1 min-w-0 h-full object-cover" loading="lazy" draggable="false" />
-				</div>
-				<img v-else-if="thumbSrc" :src="thumbSrc" class="w-full h-full object-cover" loading="lazy" draggable="false" />
 				<!-- Sound is drawn as what it sounds like: the part of the source this
-				     clip plays, scaled by its own gain, with its fades as an envelope. -->
-				<div v-else-if="isAudio" class="w-full h-full bg-accent/[0.08] overflow-hidden">
+				     clip plays, scaled by its own gain, with its fades as an envelope.
+				     First, because a camera group's main sound is often a camera FILE:
+				     on a sound lane it is sound, not a strip of pictures. -->
+				<div v-if="isAudio" class="w-full h-full bg-accent/[0.08] overflow-hidden">
 					<AudioWaveform :asset-id="item.sourceAssetId" :in-sec="item.in" :out-sec="item.out"
 						:width="clipWidth" :height="clipHeight" :gain="item.gain ?? 1" :muted="item.muted"
 						:fade-in-px="viewport.secToPx(item.fadeInSec ?? 0)" :fade-out-px="viewport.secToPx(item.fadeOutSec ?? 0)" />
 				</div>
+				<div v-else-if="stripFrames.length" class="w-full h-full flex">
+					<img v-for="(src, i) in stripFrames" :key="i" :src="src"
+						class="flex-1 min-w-0 h-full object-cover" loading="lazy" draggable="false" />
+				</div>
+				<img v-else-if="thumbSrc" :src="thumbSrc" class="w-full h-full object-cover" loading="lazy" draggable="false" />
 				<div v-else class="w-full h-full flex items-center justify-center">
 					<span class="iconify tabler--movie w-4 h-4 text-zinc-400"></span>
 				</div>
@@ -172,6 +174,7 @@ const agentBadge = computed(() => store.agentMarks[props.item.id] || null)
 const end = computed(() => itemEnd(props.item))
 const track = computed(() => store.doc?.tracks.find((t) => t.id === props.item.trackId))
 const isAudio = computed(() =>
+	props.item.multicam?.role === 'sound' ||
 	store.doc?.media.find((a) => a.id === props.item.sourceAssetId)?.kind === 'audio')
 
 const sourceClip = computed(() => {

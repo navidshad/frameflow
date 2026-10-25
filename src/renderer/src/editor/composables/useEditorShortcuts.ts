@@ -123,6 +123,11 @@ export function useEditorShortcuts(options: {
 				store.nudgeItems(store.selectedItemIds, direction * frameStep())
 				return true
 			case 'marker': store.addMarker(store.playheadSec); return true
+			case 'angle-cut':
+			case 'angle-switch': {
+				const n = Number(event.code.slice(-1))
+				return id === 'angle-cut' ? store.switchAngleAtPlayhead(n) : store.setShotAngleAtPlayhead(n)
+			}
 			case 'undo': store.undo(); return true
 			case 'redo': store.redo(); return true
 

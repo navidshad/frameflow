@@ -23,6 +23,8 @@ import { extractMotionDefinition, keyframingNote, writtenSpec } from '@shared/mo
 import { MOTION_CRAFT_LINES } from '@shared/motionGuide'
 import { userMotionTemplate } from '@shared/motionTemplates'
 import { applyMotionKitOps, withKit } from './kitOps'
+import { applyMulticamOps, opsTouchMulticam } from './multicamOps'
+import { groupRippleCut } from '@shared/multicam'
 import type { MotionOpSettings } from '@shared/types'
 import { isTransitionKind } from '@shared/transitionPresets'
 import {
@@ -1399,6 +1401,26 @@ export function opsToDiff(
 	// "make it shorter" edit that speeds up 200 clips leaves 200 gaps.
 	const removedIds = new Set(diff.removeItemIds || [])
 	const removedItems = doc.timeline.filter((i) => removedIds.has(i.id))
+	// A camera group's shot takes its stretch out of the group's sound too
+	// (shared with the editor's delete), or later shots lose sync. The cut's
+	// own time is counted by its changes, like a range's.
+	const groupCut = groupRippleCut(doc.timeline, removedItems.filter((r) => !rangeRemovedIds.has(r.id)), uuidv4)
+	if (groupCut.removeIds.length || groupCut.updated.length || groupCut.added.length) {
+		diff.removeItemIds = [...(diff.removeItemIds ?? []), ...groupCut.removeIds]
+		for (const id of groupCut.removeIds) { removedIds.add(id); rangeRemovedIds.add(id) }
+		const list = (diff.updateItems ||= [])
+		for (const u of groupCut.updated) {
+			rangeShapedIds.add(u.id)
+			const fields = { in: u.in, out: u.out, duration: u.duration, timelineStart: u.timelineStart }
+			const existing = list.find((x) => x.id === u.id)
+			if (existing) Object.assign(existing, fields)
+			else list.push({ id: u.id, ...fields })
+		}
+		diff.addItems = [...(diff.addItems ?? []), ...groupCut.added]
+		rangeAdded = [...rangeAdded, ...groupCut.added]
+		rangeChanges.push(...groupCut.changes)
+		notes.push('A removed camera-group shot took the same stretch out of the group\'s sound, so the shots after it stay in sync.')
+	}
 	const updateById = new Map((diff.updateItems || []).map((u) => [u.id, u]))
 
 	// A range's own removals and trims are counted once, by the range itself.
@@ -1709,6 +1731,8 @@ export function opsToDiff(
 	if (motionOps.addMotion?.length || motionOps.updateMotion?.length) {
 		applyMotionOps(motionOps, doc, diff, droppedOps, notes, writer, pageDefinitions)
 	}
+
+	if (opsTouchMulticam(ops)) applyMulticamOps(ops, doc, diff, droppedOps, notes)
 
 	if (ops.addSounds?.length || ops.setSounds?.length || ops.setTrackRoles?.length || ops.placeAudio?.length) {
 		applySoundOps(ops, doc, diff, droppedOps, notes, soundAssets)

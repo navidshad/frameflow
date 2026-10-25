@@ -65,6 +65,9 @@
 					</p>
 				</div>
 
+				<!-- Several cameras of one moment: suggestions, syncing, groups -->
+				<CameraGroups />
+
 				<AssetRow v-for="asset in importedAssets" :key="asset.id" :asset="asset"
 					:active="asset.id === editorStore.selectedAssetId"
 					@select="editorStore.selectAsset(asset.id)" />
@@ -91,6 +94,7 @@ import { computed, ref } from 'vue'
 import SlimTooltip from '../../components/SlimTooltip.vue'
 import { useEditorStore } from '../../stores/editorStore'
 import AssetRow from './AssetRow.vue'
+import CameraGroups from './CameraGroups.vue'
 import ClipTray from './ClipTray.vue'
 import ImportMediaModal from './ImportMediaModal.vue'
 

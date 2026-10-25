@@ -6,7 +6,7 @@ import { pathToFileURL } from 'url'
 import { Pipeline } from './pipeline'
 import { settingsManager } from './settings'
 import { threadManager } from './threads'
-import type { DeliveryFormat, EditorDocument, TimelineItem } from '@shared/types'
+import type { DeliveryFormat, EditorDocument, MulticamGroup, TimelineItem } from '@shared/types'
 import { pruneOrphanItems } from '@shared/timeline'
 import * as extraction from './pipeline/phases/extraction'
 import * as supply from './pipeline/phases/supply'
@@ -16,6 +16,7 @@ import * as imageGeneration from './pipeline/phases/image-generation'
 import { backgroundTaskManager } from './tasks'
 import { GeminiAdapter } from './gemini/adapter'
 
+import { buildCameraGroup } from './multicam/group'
 import { checkFFmpegAvailability, getVideoMetadata, detectSilence } from './ffmpeg'
 import { checkYtDlpAvailability, downloadVideo, getVideoFormats } from './ytdlp'
 import { dependencyManager } from './dependencies/manager'
@@ -484,6 +485,7 @@ app.whenReady().then(() => {
 			captionsEnabled?: boolean
 			loudnessEnabled?: boolean
 			motionKits?: any[]
+			multicams?: any[]
 		}
 	}) => {
 		return await threadManager.updateThreadWith(threadId, (thread) => {
@@ -520,6 +522,7 @@ app.whenReady().then(() => {
 			if (patch.loudnessEnabled !== undefined) editor.loudnessEnabled = patch.loudnessEnabled
 			if (patch.currentRevisionId !== undefined) editor.currentRevisionId = patch.currentRevisionId
 			if (patch.motionKits) editor.motionKits = patch.motionKits
+			if (patch.multicams) editor.multicams = patch.multicams
 
 			// Fold clip-selected flags into the matching clips (the one renderer-owned
 			// field living inside main-owned MediaAsset records).
@@ -606,6 +609,27 @@ app.whenReady().then(() => {
 	// Assistive silence/dead-air finder (§5.6). Read-only analysis over the
 	// asset's proxy/original — returns candidate source-time ranges the user
 	// reviews before applying as ripple-deletes. Never mutates media.
+	// Sync recordings of one moment into a camera group, by their sound. The
+	// group comes back unsaved: the renderer commits it as an undoable edit,
+	// the same way an agent's make_multicam does.
+	ipcMain.handle('multicam-build', async (event, { threadId, assetIds, existing, name }: {
+		threadId: string, assetIds: string[], existing?: MulticamGroup, name?: string
+	}) => {
+		const media = threadManager.getThread(threadId)?.editor?.media
+		if (!media) return { ok: false, error: 'That project is not open.' }
+		try {
+			const { group, ranking } = await buildCameraGroup(media, assetIds, {
+				existing, name,
+				onProgress: (fraction, label) => {
+					if (!event.sender.isDestroyed()) event.sender.send('multicam-progress', { threadId, fraction, label })
+				}
+			})
+			return { ok: true, group, ranking }
+		} catch (e: any) {
+			return { ok: false, error: e?.message || String(e) }
+		}
+	})
+
 	ipcMain.handle('find-silence', async (event, { threadId, assetId, noiseDb, minDurationSec }: {
 		threadId: string, assetId: string, noiseDb?: number, minDurationSec?: number
 	}) => {

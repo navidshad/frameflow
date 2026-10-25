@@ -14,6 +14,16 @@
 				@click="mode = m">
 				{{ m }}
 			</button>
+			<!-- Multicam: the angle strip under the program picture, on or off. -->
+			<button v-if="hasCameraGroups"
+				class="tab-u !h-[31px] !text-[11px] uppercase tracking-[.08em]"
+				:class="{ 'tab-u-active': showAngles && mode === 'timeline' }"
+				:aria-pressed="showAngles"
+				title="Every camera angle at the playhead (1–9 cuts to one)"
+				data-testid="angles-toggle"
+				@click="toggleAngles">
+				Angles
+			</button>
 			<div class="flex-1"></div>
 			<div v-if="mode === 'timeline'" class="h-[31px] flex items-center gap-3.5 text-[11px] text-zinc-500 min-w-0">
 				<span v-if="motionPathShown" class="truncate text-primary">Motion path shown while a position key is selected</span>
@@ -265,6 +275,8 @@
 						<KeyframeMotionPath :frame-width="frameBox.w" :frame-height="frameBox.h" />
 					</div>
 					</div>
+				<!-- Multicam: every angle of the group under the playhead, live. -->
+				<AngleStrip v-if="showAngles" />
 				<!-- Transport row, under the picture. Play and the frame steps live here:
 				     this is where you are looking while you use them. What the picture
 				     cannot show honestly is said here too, never over it. -->
@@ -421,6 +433,7 @@ import { toMediaUrl } from '@shared/media-url'
 import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { useEditorStore } from '../../stores/editorStore'
 import { useEdlPlayback } from '../composables/useEdlPlayback'
+import AngleStrip from './AngleStrip.vue'
 import CanvasGizmo from './CanvasGizmo.vue'
 import MotionLayer from './MotionLayer.vue'
 import KeyframeMotionPath from './KeyframeMotionPath.vue'
@@ -456,6 +469,16 @@ const api = (window as any).api
 // The edit is the subject of this app, so the monitor opens on it. SOURCE is
 // somewhere you go to look at one piece of footage, not where you start.
 const mode = ref<'source' | 'timeline'>('timeline')
+
+// ===== Multicam: the angle strip =====
+const hasCameraGroups = computed(() => !!store.doc?.multicams?.length)
+const readAnglesPref = () => { try { return localStorage.getItem('ff-angles') !== '0' } catch { return true } }
+const showAngles = ref(readAnglesPref())
+const toggleAngles = () => {
+	if (mode.value !== 'timeline') { mode.value = 'timeline'; showAngles.value = true }
+	else showAngles.value = !showAngles.value
+	try { localStorage.setItem('ff-angles', showAngles.value ? '1' : '0') } catch { /* a convenience only */ }
+}
 
 // ===== EDL (timeline) mode =====
 const videoARef = ref<HTMLVideoElement | null>(null)

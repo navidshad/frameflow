@@ -234,6 +234,12 @@ export interface EditorDocument {
 	 * of the timeline state: undoable, and carried in every revision snapshot.
 	 */
 	motionKits?: MotionKit[]
+	/**
+	 * Camera groups: files recorded at the same time from different angles,
+	 * synced to one clock. Part of the timeline state like motion kits —
+	 * undoable and carried in every revision. See shared/multicam.ts.
+	 */
+	multicams?: MulticamGroup[]
 }
 
 export interface TimelineMeta {
@@ -432,6 +438,79 @@ export interface TimelineItem {  // an instance of a clip placed on a track
 	layerRole?: 'subject' | 'background' | 'overlay'
 	/** On a sound clip: the moment it follows. See SoundBinding. */
 	bind?: SoundBinding
+	/**
+	 * Part of a camera group: a SHOT shows one angle of the group, the SOUND is
+	 * the group's main sound under every shot. `in`/`out` stay ordinary source
+	 * seconds of `sourceAssetId`, so render and preview need nothing new; the
+	 * group's offsets are what keep shots and sound on one clock.
+	 */
+	multicam?: MulticamRef
+}
+
+/** Which camera group a clip belongs to, and what it is in that group. */
+export interface MulticamRef {
+	groupId: string
+	role: 'shot' | 'sound'
+}
+
+/**
+ * One file in a camera group. Its place on the group's clock is a straight
+ * line: `groupTime = offset + sourceTime * rate`. `rate` is drift — cameras
+ * count time with their own crystal, and two of them drift apart by tens of
+ * milliseconds an hour. The reference member has offset 0 and rate 1.
+ */
+export interface MulticamMember {
+	assetId: string
+	/** "Cam 1", or what the user calls it. Sound-only members are named too. */
+	name: string
+	/**
+	 * The camera this file came from. A camera that split one recording into
+	 * several files (DJI, GoPro and others cut every 4–17 GB) is ONE angle: its
+	 * files share this key, each keeping its own line on the clock. Absent in
+	 * groups from before: each file is its own camera.
+	 */
+	camera?: string
+	offset: number
+	rate: number
+	sync: MulticamSync
+	/**
+	 * How clean this file's sound is, measured during the sync: voices over the
+	 * room (dB) and the share of clipped samples. What the main-sound picker
+	 * ranks by. Absent for a file with no sound.
+	 */
+	sound?: { snrDb: number; clipped: number }
+}
+
+export interface MulticamSync {
+	/**
+	 * How the offset was found. 'reference' is the member everything else is
+	 * measured against; 'continued' follows on from the same camera's previous
+	 * file (a recording the sound could not place on its own).
+	 */
+	method: 'reference' | 'audio' | 'recorded' | 'manual' | 'continued'
+	/** How sure the match is: strong, weak (check it), or failed (offset is a guess). */
+	confidence: 'strong' | 'weak' | 'failed'
+	/** Clock drift against the reference, parts per million (0 when not measured). */
+	driftPpm: number
+	/** Windows along the recording that agreed, out of those measured. */
+	windows?: { agreed: number; measured: number }
+	/** The worst disagreement between those windows and the fitted line, seconds. */
+	residualSec?: number
+	/** Seconds the user nudged it by after the measurement. */
+	nudgeSec?: number
+}
+
+export interface MulticamGroup {
+	id: string
+	name: string
+	/**
+	 * Every file in the group, reference first. Video members are ANGLES; an
+	 * audio-only member (a separate recorder) can only be the main sound.
+	 */
+	members: MulticamMember[]
+	/** The file whose sound plays under every shot. Any member with audio; the user picks. */
+	soundAssetId: string
+	createdAt: number
 }
 
 /**
@@ -589,6 +668,7 @@ export interface TimelineSnapshot {
 	timeline: TimelineItem[]
 	timelineMeta: TimelineMeta
 	motionKits?: MotionKit[]
+	multicams?: MulticamGroup[]
 }
 
 // ===== Revision tree (coarse, permanent checkpoints above the undo ring) =====
@@ -618,6 +698,7 @@ export interface RevisionSnapshot {
 	timelineMeta: TimelineMeta
 	markers?: EditorMarker[]    // markers ride in the snapshot so switches restore them
 	motionKits?: MotionKit[]    // absent in revisions from before kits: none
+	multicams?: MulticamGroup[] // absent in revisions from before multicam: none
 }
 
 /**
@@ -913,6 +994,31 @@ export interface EditorOps {
 	 * that play exactly as before. Agents (MCP) only.
 	 */
 	splitAt?: Array<{ atSec: number; trackId?: string }>
+	/**
+	 * Camera groups (multicam). Agents (MCP) only. `group` is a group id or
+	 * name, and may be left out when the project has one group. An `angle` is
+	 * a 1-based number, a member name ("Cam 2") or a media id.
+	 */
+	/** Lay a group on the timeline: its main sound, and one shot of `angle` over it. */
+	placeMulticam?: {
+		group?: string
+		/** TIMELINE seconds to place it at; the end of the timeline by default. */
+		atSec?: number
+		/** GROUP seconds (see get_multicam) to place; the whole recording by default. */
+		fromSec?: number
+		toSec?: number
+		angle?: string | number
+	}
+	/** From each atSec (TIMELINE seconds) on, show that angle, until the next switch or untilSec. */
+	switchAngles?: {
+		group?: string
+		switches: Array<{ atSec: number; angle: string | number }>
+		untilSec?: number
+	}
+	/** Which member's sound plays under every shot. */
+	setMainSound?: { group?: string; sound: string | number }
+	/** Move one member on the group clock by bySec (positive = later), when the sync is off by a little. */
+	nudgeAngle?: { group?: string; angle: string | number; bySec: number }
 	/** Burn the transcript into the picture. */
 	captions?: boolean
 	/** Normalise the finished mix to the streaming target. */
@@ -985,6 +1091,9 @@ export type TimelineDiff = {
 	/** Motion kits added or replaced whole, by id. Applied before items. */
 	setMotionKits?: MotionKit[]
 	removeMotionKitIds?: string[]
+	/** Camera groups added or replaced whole, by id. Applied before items. */
+	setMulticams?: MulticamGroup[]
+	removeMulticamIds?: string[]
 }
 
 // ===== Export / render (M4) =====

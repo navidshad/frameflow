@@ -40,10 +40,13 @@ export const familyForMedia = (kind: MediaKind | undefined): TrackFamily =>
  * whose family is the most certain thing about them.
  */
 export function itemFamily(
-	item: Pick<TimelineItem, 'text' | 'generator' | 'motion' | 'sourceAssetId'>,
+	item: Pick<TimelineItem, 'text' | 'generator' | 'motion' | 'sourceAssetId'> & Partial<Pick<TimelineItem, 'multicam'>>,
 	assets: Pick<MediaAsset, 'id' | 'kind'>[] = []
 ): TrackFamily {
 	if (item.text || item.generator || item.motion) return 'video'
+	// A camera group's main sound is often a camera's own file, played for its
+	// sound alone under every shot: it is sound, whatever kind of file it is.
+	if (item.multicam?.role === 'sound') return 'audio'
 	return familyForMedia(assets.find((a) => a.id === item.sourceAssetId)?.kind)
 }
 
@@ -54,7 +57,7 @@ export function itemFamily(
  */
 export function canHostItem(
 	track: Pick<Track, 'kind' | 'locked' | 'hidden'>,
-	item: Pick<TimelineItem, 'text' | 'generator' | 'motion' | 'sourceAssetId'>,
+	item: Pick<TimelineItem, 'text' | 'generator' | 'motion' | 'sourceAssetId'> & Partial<Pick<TimelineItem, 'multicam'>>,
 	assets: Pick<MediaAsset, 'id' | 'kind'>[] = []
 ): { ok: boolean; reason?: string } {
 	if (track.locked) return { ok: false, reason: 'This track is locked.' }
