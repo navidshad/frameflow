@@ -1,5 +1,7 @@
 import { randomUUID } from 'node:crypto'
 import type { EditorOps, MediaAsset, PromptTurn, TimelineItem } from '@shared/types'
+import { motionWorkingHtml, resolveDefinition, resolveMoments, type MotionSpec } from '@shared/motion'
+import { motionStatus } from '@shared/motionCode'
 import { opKeys, opsInputSchema, validateArgs, type AgentPermission, type AgentPermissions, type JsonSchema } from '@shared/agent'
 import {
 	clock, countWords, opChips, pageRows, searchMoments, summarizeMedia, summarizeSearch, summarizeTimeline,
@@ -121,11 +123,60 @@ const versionLabel = (project: LiveProject, revisionId: string | null | undefine
 	return rev ? `V${rev.seq}` : null
 }
 
-function describeItem(item: TimelineItem, names: Map<string, string>, recipes?: Map<string, MediaAsset['synth']>) {
-	const { masterSegmentIndex, sourceClipId, preservePitch, bind, ...rest } = item
+/**
+ * A motion layer without its page source: what it is, how it is timed and set,
+ * how big its page is and whether it passed its checks. A custom page is often
+ * 100 KB or more and is stored twice (working and last passed), so the source
+ * comes only when asked for (`include: ['html']`).
+ */
+export function motionSummary(spec: MotionSpec, clipDuration: number) {
+	const windows = (() => {
+		try {
+			return resolveMoments(spec, clipDuration, resolveDefinition(spec)).map((m) => ({ name: m.name, sec: r3(m.duration) }))
+		} catch {
+			return undefined
+		}
+	})()
+	if (spec.template) {
+		return { kind: 'template' as const, template: spec.template, settings: spec.settings, moments: spec.moments, windows }
+	}
+	const def = resolveDefinition(spec)
+	const working = motionWorkingHtml(spec)
+	const status = motionStatus(spec)
+	return {
+		kind: 'custom' as const,
+		settings: spec.settings,
+		moments: spec.moments,
+		windows,
+		definition: {
+			durationSec: r3(def.duration),
+			settings: def.settings.map((s) => s.key),
+			moments: def.moments.map((m) => m.name)
+		},
+		page: {
+			chars: working.length,
+			passedChars: spec.passed ? spec.passed.html.length : null,
+			// ok: the working page is the one drawn; last-passing: it fails, an older one is drawn; nothing: none has passed.
+			state: status.state,
+			passed: !!spec.passed,
+			verified: !!spec.passed?.verified,
+			workingIsPassed: !!spec.passed && spec.passed.html === working
+		},
+		author: spec.author?.by
+	}
+}
+
+function describeItem(
+	item: TimelineItem,
+	names: Map<string, string>,
+	recipes?: Map<string, MediaAsset['synth']>,
+	options: { html?: boolean } = {}
+) {
+	const { masterSegmentIndex, sourceClipId, preservePitch, bind, motion, ...rest } = item
 	const sound = recipes?.get(item.sourceAssetId)
 	return {
 		...rest,
+		motion: motion ? (options.html ? motion : motionSummary(motion, item.duration)) : undefined,
 		asset: item.sourceAssetId ? names.get(item.sourceAssetId) : undefined,
 		// A synthesised sound: its recipe, and the moment it follows (pass these to setSounds).
 		sound: sound ? { kind: sound.kind, variant: sound.variant, pitch: sound.pitch, levelDb: sound.levelDb, air: sound.air, seed: sound.seed, durationSec: sound.durationSec || undefined } : undefined,
@@ -227,7 +278,10 @@ const getTimeline: ToolDef = {
 		'The edit as it stands this moment, read live from the editor — including changes the user just ' +
 		'made by hand. Every item: id, track, source media, timeline start and end, source in/out, speed, ' +
 		'label, effects, transitions, titles. Timeline items are in TIMELINE seconds; in/out are SOURCE ' +
-		'seconds. Never cached: read it again after the user edits. Paged — pass nextOffset as offset to read on.',
+		'seconds. Motion layers come as a summary (template or custom, settings, moment windows, page size, ' +
+		'whether the page passed its checks, who wrote it) without their page source: pass include ["html"] ' +
+		'with itemIds to read the pages you mean to change. Never cached: read it again after the user edits. ' +
+		'Paged — pass nextOffset as offset to read on.',
 	inputSchema: {
 		type: 'object',
 		properties: {
@@ -235,27 +289,39 @@ const getTimeline: ToolDef = {
 			limit: { type: 'integer', minimum: 1, maximum: 500, description: 'Items per page (default 200)' },
 			trackId: { type: 'string', description: 'Only this track' },
 			fromSec: { type: 'number', description: 'Only items that end after this timeline time' },
-			toSec: { type: 'number', description: 'Only items that start before this timeline time' }
+			toSec: { type: 'number', description: 'Only items that start before this timeline time' },
+			itemIds: { type: 'array', items: { type: 'string' }, description: 'Only these items' },
+			include: {
+				type: 'array', items: { type: 'string', enum: ['html'] },
+				description: 'html: each motion layer in full, with its custom page source (working and last passed). Large: narrow with itemIds'
+			}
 		},
 		additionalProperties: false
 	},
 	async run(args, ctx) {
 		const project = await requireProject(ctx)
 		const { doc } = project
+		const html = Array.isArray(args.include) && args.include.includes('html')
+		const only = Array.isArray(args.itemIds) && args.itemIds.length ? new Set<string>(args.itemIds.map(String)) : null
 		const names = new Map(doc.media.map((a) => [a.id, a.name]))
 		const recipes = new Map(doc.media.filter((a) => a.synth).map((a) => [a.id, a.synth]))
 		const items = [...doc.timeline]
 			.filter((i) => !args.trackId || i.trackId === args.trackId)
+			.filter((i) => !only || only.has(i.id))
 			.filter((i) => args.fromSec === undefined || i.timelineStart + i.duration > args.fromSec)
 			.filter((i) => args.toSec === undefined || i.timelineStart < args.toSec)
 			.sort((a, b) => a.timelineStart - b.timelineStart)
-			.map((i) => describeItem(i, names, recipes))
+			.map((i) => describeItem(i, names, recipes, { html }))
 		const page = pageRows(items, { offset: args.offset, limit: args.limit ?? 200, maxChars: 60_000 })
+		const missing = only ? [...only].filter((id) => !doc.timeline.some((i) => i.id === id)) : []
+		const hasCustom = !html && page.rows.some((i) => !!i.motion && 'kind' in i.motion && i.motion.kind === 'custom')
 		return {
 			content: [json({
 				durationSec: r3(computeContentEnd(doc.timeline)),
 				currentRevision: versionLabel(project, project.currentRevisionId),
-				items: page.rows, offset: page.offset, total: page.total, nextOffset: page.nextOffset
+				items: page.rows, offset: page.offset, total: page.total, nextOffset: page.nextOffset,
+				notFound: missing.length ? missing : undefined,
+				pages: hasCustom ? 'Custom page sources are left out. get_timeline {itemIds: [...], include: ["html"]} returns them.' : undefined
 			})],
 			feed: { detail: summarizeTimeline(doc.timeline) }
 		}
