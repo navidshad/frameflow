@@ -160,13 +160,17 @@ License 1.1. Each pack includes its own `OFL.txt`. OFL permits bundling and
 commercial use; the fonts themselves are not sold, and any modified font is
 renamed as the license requires.
 
-Motion templates embed two fonts into every motion page, so a page renders the
+Motion templates embed three fonts into every motion page, so a page renders the
 same in the preview and the export without reaching the network:
 
 | Font | Copyright | License | Where |
 |---|---|---|---|
 | Inter (variable, latin) | © The Inter Project Authors | SIL OFL 1.1 | `src/shared/motion-templates/fonts/OFL.txt` |
 | Outfit (variable, latin; Google Fonts v15) | © 2021 The Outfit Project Authors (https://github.com/Outfitio/Outfit-Fonts) | SIL OFL 1.1 | `src/shared/motion-templates/fonts/OFL-Outfit.txt` |
+| Vazirmatn (variable, Arabic script; v33.003) | © 2015 The Vazirmatn Project Authors (https://github.com/rastikerdar/vazirmatn) | SIL OFL 1.1 | `src/shared/motion-templates/fonts/OFL-Vazirmatn.txt` |
 
-Both are unmodified subsets as Google Fonts serves them, under their reserved
-names. `scripts/embed-motion-fonts.mjs` turns them into data URLs.
+Inter and Outfit are unmodified subsets as Google Fonts serves them, under their
+reserved names. Vazirmatn is a subset of the official v33.003 release cut by us
+to the Arabic-script range (its licence declares no Reserved Font Name; how it
+was cut is in `src/shared/motion-templates/fonts/README.md`).
+`scripts/embed-motion-fonts.mjs` turns them into data URLs.

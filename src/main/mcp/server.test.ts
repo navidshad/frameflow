@@ -104,7 +104,7 @@ describe('AgentServer over Streamable HTTP', () => {
 		const client = await connect()
 		const { tools } = await client.listTools()
 		expect(tools.map((t) => t.name)).toEqual([
-			'get_project', 'get_timeline', 'get_media', 'search_moments', 'render_frame', 'get_motion_guide',
+			'get_project', 'get_timeline', 'get_media', 'search_moments', 'render_frame', 'get_motion_guide', 'get_motion_kit',
 			'get_sound_guide', 'list_sounds', 'suggest_cues', 'render_sound', 'analyze_audio', 'generate_audio',
 			'apply_ops', 'revert_to_version', 'export'
 		])

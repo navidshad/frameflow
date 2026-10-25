@@ -1,8 +1,9 @@
 import type { EditorDocument, EditorOps } from '@shared/types'
 import type { MotionDefinition } from '@shared/motion'
-import { BLANK_MOTION_DEFINITION, lintMotionHtml } from '@shared/motion'
+import { BLANK_MOTION_DEFINITION, lintMotionHtml, lintMotionKit, type MotionKit } from '@shared/motion'
 import { extractMotionDefinition } from '@shared/motionCode'
 import type { MotionProbeInput, MotionProbeResult } from '../motion/probe'
+import { kitsAfterSet, mergeKitRequest } from './kitOps'
 
 /**
  * One rule for every page a machine writes: CHECK IT BEFORE IT REPLACES
@@ -81,7 +82,9 @@ function differenceReason(result: MotionProbeResult): string {
 export async function vetPage(
 	html: string,
 	frame: { width: number; height: number },
-	probe?: MotionProbe
+	probe?: MotionProbe,
+	/** The project kit the page uses: drawn with it, as it will be shown. */
+	kit?: MotionKit
 ): Promise<PageVerdict> {
 	const lint = lintMotionHtml(html)
 	if (!lint.ok) {
@@ -94,7 +97,7 @@ export async function vetPage(
 	if (!probe) return { reason: null }
 
 	const definition = extractMotionDefinition(html).definition ?? BLANK_MOTION_DEFINITION
-	const result = await probe({ html, definition, frame })
+	const result = await probe({ html, definition, frame, kit })
 	if (result.error) return { reason: `the page throws when it runs: ${result.error}`, definition: result.definition }
 	if (result.determinism === 'fail') {
 		return { reason: differenceReason(result), definition: result.definition, image: result.difference?.image }
@@ -106,25 +109,64 @@ export async function vetPage(
 export async function whyPageFails(
 	html: string,
 	frame: { width: number; height: number },
-	probe?: MotionProbe
+	probe?: MotionProbe,
+	kit?: MotionKit
 ): Promise<string | null> {
-	return (await vetPage(html, frame, probe)).reason
+	return (await vetPage(html, frame, probe, kit)).reason
 }
+
+const KIT_PROBE_SAMPLE = 3
+
+/** Up to `n` spread out across the list: the first, the last, the middle. */
+const sample = <T>(list: T[], n: number): T[] =>
+	list.length <= n ? list : [...new Set(Array.from({ length: n }, (_, k) => Math.round((k * (list.length - 1)) / (n - 1))))].map((i) => list[i])
 
 export async function vetHtmlOps(
 	ops: EditorOps,
-	doc: Pick<EditorDocument, 'timelineMeta'>,
+	doc: Pick<EditorDocument, 'timelineMeta'> & Partial<Pick<EditorDocument, 'timeline' | 'motionKits'>>,
 	probe?: MotionProbe
 ): Promise<VetResult> {
 	const dropped: string[] = []
 	const definitions = new Map<string, MotionDefinition>()
 	const images: VetImage[] = []
 	const frame = { width: doc.timelineMeta?.width || 1920, height: doc.timelineMeta?.height || 1080 }
+	const timeline = doc.timeline ?? []
+
+	// ---- Kits first: the pages below are drawn with the kits that will be. ----
+	// A changed kit is linted, then drawn with a few of the pages that use it (a
+	// kit that throws breaks every one of them). Sampled, not all: a series of 28
+	// layers would otherwise mean 28 probes for one restyle.
+	const setKits: NonNullable<EditorOps['setMotionKits']> = []
+	let accepted: MotionKit[] = [...(doc.motionKits ?? [])]
+	for (const [i, request] of (ops.setMotionKits ?? []).entries()) {
+		const id = String(request?.id ?? '').trim()
+		const kit = mergeKitRequest(accepted.find((k) => k.id === id), request)
+		const problems = lintMotionKit(kit)
+		let reason: string | null = problems.length
+			? `${problems[0]}${problems.length > 1 ? ` (and ${problems.length - 1} more)` : ''}`
+			: null
+		if (!reason && probe) {
+			const pages = [...new Map(timeline
+				.filter((item) => item.motion?.kit === id && !item.motion.template && item.motion.passed?.html)
+				.map((item) => [item.motion!.passed!.html, item])).values()]
+			for (const item of sample(pages, KIT_PROBE_SAMPLE)) {
+				const why = await whyPageFails(item.motion!.passed!.html, frame, probe, kit)
+				if (why) { reason = `with this kit, layer "${item.label || item.id}" fails: ${why}`; break }
+			}
+		}
+		if (reason) {
+			dropped.push(`setMotionKits[${i}] ("${id}") rejected, the kit is unchanged: ${reason}. Fix it and send it again.`)
+			continue
+		}
+		setKits.push(request)
+		accepted = kitsAfterSet({ setMotionKits: [request] }, accepted)
+	}
+	const kitNamed = (kit: string | undefined) => (kit ? accepted.find((k) => k.id === kit) : undefined)
 
 	const added: NonNullable<EditorOps['addMotion']> = []
 	for (const [i, request] of (ops.addMotion ?? []).entries()) {
 		if (!isPage(request?.html)) { added.push(request); continue }
-		const verdict = await vetPage(request.html, frame, probe)
+		const verdict = await vetPage(request.html, frame, probe, kitNamed(request.kit))
 		if (verdict.reason) {
 			dropped.push(`addMotion[${i}] (custom page) rejected, nothing was added: ${verdict.reason}. Fix the page and send it again.`)
 			if (verdict.image) images.push({ op: `addMotion[${i}]`, data: verdict.image, mimeType: 'image/png' })
@@ -136,19 +178,29 @@ export async function vetHtmlOps(
 
 	const updated: NonNullable<EditorOps['updateMotion']> = []
 	for (const request of ops.updateMotion ?? []) {
-		if (!isPage(request?.html)) { updated.push(request); continue }
-		const verdict = await vetPage(request.html, frame, probe)
+		const item = timeline.find((i) => i.id === request?.id)
+		// The kit this layer will draw with: the one the op names, else the one it has.
+		const kit = kitNamed(request?.kit !== undefined ? request.kit : item?.motion?.kit)
+		// A page moved onto a kit without new text is drawn with it too.
+		const html = isPage(request?.html)
+			? request.html
+			: request?.kit && item?.motion && !item.motion.template && item.motion.passed?.html
+				? item.motion.passed.html
+				: null
+		if (!html) { updated.push(request); continue }
+		const verdict = await vetPage(html, frame, probe, kit)
 		if (verdict.reason) {
 			dropped.push(`updateMotion ${request.id} rejected, the layer keeps its previous page: ${verdict.reason}. Fix the page and send it again.`)
 			if (verdict.image) images.push({ op: `updateMotion ${request.id}`, data: verdict.image, mimeType: 'image/png' })
 			continue
 		}
-		if (verdict.definition) definitions.set(request.html, verdict.definition)
+		if (verdict.definition) definitions.set(html, verdict.definition)
 		updated.push(request)
 	}
 
 	if (!dropped.length) return { ops, dropped, definitions, images }
 	const vetted: EditorOps = { ...ops }
+	if (ops.setMotionKits) vetted.setMotionKits = setKits.length ? setKits : undefined
 	if (ops.addMotion) vetted.addMotion = added.length ? added : undefined
 	if (ops.updateMotion) vetted.updateMotion = updated.length ? updated : undefined
 	return { ops: vetted, dropped, definitions, images }

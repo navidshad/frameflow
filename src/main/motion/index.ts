@@ -1,7 +1,7 @@
 import fs from 'fs'
 import path from 'path'
 import type { TimelineItem } from '@shared/types'
-import { composeMotionPage, motionFramePlan, motionFrameState } from '@shared/motion'
+import { composeMotionPage, motionFramePlan, motionFrameState, type MotionKit } from '@shared/motion'
 import { openMotionCapture } from './capture'
 import { encodeFrames, PARTIAL_SUFFIX } from './encode'
 
@@ -19,6 +19,8 @@ export interface MotionJob {
 	item: Pick<TimelineItem, 'id' | 'label' | 'motion' | 'duration' | 'keyframes'>
 	frame: { width: number; height: number; fps: number }
 	outputPath: string
+	/** The project kit the page uses (the one its cache key was hashed with). */
+	kits?: MotionKit[]
 }
 
 /** Render one clip to `outputPath`. Exported for the Electron-run test. */
@@ -29,7 +31,7 @@ export async function renderMotionClip(
 	const { item, frame, outputPath } = job
 	const plan = motionFramePlan(item, frame.fps)
 	fs.mkdirSync(path.dirname(outputPath), { recursive: true })
-	const capture = await openMotionCapture(composeMotionPage(item.motion, frame), frame)
+	const capture = await openMotionCapture(composeMotionPage(item.motion, frame, job.kits), frame)
 	try {
 		await encodeFrames({
 			frame,

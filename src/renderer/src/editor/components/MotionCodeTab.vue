@@ -142,7 +142,7 @@ const settle = async () => {
 	const text = draft.value
 	const mine = ++token
 	runtime.value = { determinism: 'pending' }
-	const report = await store.probeMotionHtml(text, extractMotionDefinition(text).definition ?? resolveDefinition(spec.value))
+	const report = await store.probeMotionHtml(text, extractMotionDefinition(text).definition ?? resolveDefinition(spec.value), spec.value?.kit)
 	// A newer edit, or another layer, took over while the window was drawing.
 	if (mine !== token || text !== draft.value) return
 	runtime.value = report

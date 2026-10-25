@@ -1,5 +1,5 @@
-import type { MotionDefinition, MotionFrameState } from '@shared/motion'
-import { composeMotionPage, settingValues } from '@shared/motion'
+import type { MotionDefinition, MotionFrameState, MotionKit } from '@shared/motion'
+import { composeCandidatePage, settingValues } from '@shared/motion'
 import { coerceDefinition } from '@shared/motionCode'
 import { openMotionCapture } from './capture'
 import { compareFrames, evidenceImage, type FrameDifference } from './frameDiff'
@@ -23,6 +23,8 @@ export interface MotionProbeInput {
 	html: string
 	definition: MotionDefinition
 	frame: { width: number; height: number }
+	/** The project kit the page uses: it is drawn composed with it, as it will be shown. */
+	kit?: MotionKit
 }
 
 export interface MotionProbeResult {
@@ -63,10 +65,8 @@ async function probeNow(input: MotionProbeInput): Promise<MotionProbeResult> {
 
 	const width = Math.min(PROBE_WIDTH, Math.max(2, Math.round(input.frame.width)))
 	const height = Math.max(2, Math.round(width * input.frame.height / Math.max(1, input.frame.width)))
-	// `renderVersion` draws a spec's passing version; make the candidate it.
-	const spec = { html: input.html, definition: input.definition, passed: { html: input.html, definition: input.definition } }
-	const page = composeMotionPage(spec, { width, height })
-	const settings = settingValues(spec, input.definition)
+	const page = composeCandidatePage(input.html, input.definition, { width, height }, input.kit)
+	const settings = settingValues({ html: input.html, definition: input.definition }, input.definition)
 
 	let capture
 	try {

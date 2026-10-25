@@ -22,6 +22,7 @@ import {
 import { extractMotionDefinition, keyframingNote, writtenSpec } from '@shared/motionCode'
 import { MOTION_CRAFT_LINES } from '@shared/motionGuide'
 import { userMotionTemplate } from '@shared/motionTemplates'
+import { applyMotionKitOps, withKit } from './kitOps'
 import type { MotionOpSettings } from '@shared/types'
 import { isTransitionKind } from '@shared/transitionPresets'
 import {
@@ -78,6 +79,11 @@ const MOTION_HTML_SCHEMA = {
 		'Helpers: frameflow.progress("in", t), ease(x), clamp(x, lo, hi). A page that breaks the rules ' +
 		'(clocks, timers, random, CSS animation, network, or drawing differently on a second visit to the same t) ' +
 		'is not applied: the layer keeps its earlier page and the result says why.'
+}
+
+const MOTION_KIT_SCHEMA = {
+	type: 'string',
+	description: 'Custom pages only: the id of a project motion kit whose shared CSS and JS the page builds on. "" stops using one.'
 }
 
 const MOTION_MOMENTS_SCHEMA = {
@@ -264,6 +270,7 @@ export const EDITOR_OPS_SCHEMA = {
 				properties: {
 					template: { type: 'string', description: 'A template id from AVAILABLE MOTION TEMPLATES, or "custom" when you write the page in `html`' },
 					html: MOTION_HTML_SCHEMA,
+					kit: MOTION_KIT_SCHEMA,
 					atSec: { type: 'number', description: 'Timeline seconds where it starts. Land it on the beat it belongs to — the word, not after it.' },
 					durationSec: { type: 'number', description: 'How long it stays. Omit for the template’s own length.' },
 					settings: MOTION_SETTINGS_SCHEMA,
@@ -281,6 +288,7 @@ export const EDITOR_OPS_SCHEMA = {
 				properties: {
 					id: { type: 'string' },
 					html: MOTION_HTML_SCHEMA,
+					kit: MOTION_KIT_SCHEMA,
 					settings: MOTION_SETTINGS_SCHEMA,
 					moments: MOTION_MOMENTS_SCHEMA,
 					atSec: { type: 'number' },
@@ -1603,8 +1611,12 @@ export function opsToDiff(
 		}
 	}
 
-	if (ops.addMotion?.length || ops.updateMotion?.length) {
-		applyMotionOps(ops, doc, diff, droppedOps, notes, writer, pageDefinitions)
+	// Kits before layers: a layer added in this call may name a kit set in it.
+	const motionOps = ops.setMotionKits?.length || ops.removeMotionKits?.length || ops.addMotion?.some((r) => r?.kit) || ops.updateMotion?.some((r) => r?.kit !== undefined)
+		? applyMotionKitOps(ops, doc, diff, droppedOps, notes)
+		: ops
+	if (motionOps.addMotion?.length || motionOps.updateMotion?.length) {
+		applyMotionOps(motionOps, doc, diff, droppedOps, notes, writer, pageDefinitions)
 	}
 
 	if (ops.addSounds?.length || ops.setSounds?.length || ops.setTrackRoles?.length || ops.placeAudio?.length) {
@@ -1793,7 +1805,7 @@ function applyMotionOps(
 		const { values, unknown } = motionSettingsFrom(request.settings, base)
 		if (unknown.length) notes.push(`${label} has no setting ${unknown.map((k) => `"${k}"`).join(', ')} — ignored.`)
 		const timing = motionTiming(base, request.moments, request.durationSec, def.duration)
-		const spec = tidyMotion({ ...base, settings: values, moments: timing.moments })
+		const spec = tidyMotion(withKit({ ...base, settings: values, moments: timing.moments }, request.kit))
 		const start = Math.max(0, finiteNumber(request.atSec) ? request.atSec : 0)
 		const track = motionTrackAt(start, timing.duration)
 		const item: TimelineItem = {
@@ -1839,11 +1851,11 @@ function applyMotionOps(
 		const readable = !html || !!runtime || extractMotionDefinition(html).complete
 		const follows = readable ? lengthAfterPageChange(item.motion, current, item.duration) : item.duration
 		const timing = motionTiming(current, request.moments, request.durationSec, follows)
-		const spec = tidyMotion({
+		const spec = tidyMotion(withKit({
 			...current,
 			settings: { ...(current.settings ?? {}), ...values },
 			moments: timing.moments
-		})
+		}, request.kit))
 		const fields: Partial<TimelineItem> = { motion: spec }
 		const resized = Math.abs(timing.duration - item.duration) > 1e-6
 		if (resized || item.in !== 0) {

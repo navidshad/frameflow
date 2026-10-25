@@ -194,7 +194,7 @@ export interface Thread {
 // ============================================================
 import type { KeySpec } from './keying'
 import type { GeneratorSpec } from './generators'
-import type { MotionSpec } from './motion'
+import type { MotionKit, MotionSpec } from './motion'
 
 // Timeline Video Editor (see video-editor-prd.md §6)
 // Canonical time unit is SECONDS. SRT strings appear only at the boundary
@@ -229,6 +229,11 @@ export interface EditorDocument {
 	loudnessEnabled?: boolean
 	/** Pointer into the revisions sidecar (userData/editor-revisions/{id}.json). */
 	currentRevisionId?: string
+	/**
+	 * Shared CSS/JS that custom motion pages name by id (`MotionSpec.kit`). Part
+	 * of the timeline state: undoable, and carried in every revision snapshot.
+	 */
+	motionKits?: MotionKit[]
 }
 
 export interface TimelineMeta {
@@ -583,6 +588,7 @@ export interface TimelineSnapshot {
 	tracks: Track[]
 	timeline: TimelineItem[]
 	timelineMeta: TimelineMeta
+	motionKits?: MotionKit[]
 }
 
 // ===== Revision tree (coarse, permanent checkpoints above the undo ring) =====
@@ -611,6 +617,7 @@ export interface RevisionSnapshot {
 	timeline: TimelineItem[]
 	timelineMeta: TimelineMeta
 	markers?: EditorMarker[]    // markers ride in the snapshot so switches restore them
+	motionKits?: MotionKit[]    // absent in revisions from before kits: none
 }
 
 /**
@@ -848,6 +855,8 @@ export interface EditorOps {
 		 * need the "Write custom HTML motion layers" permission to send one.
 		 */
 		html?: string
+		/** A custom page only: the project motion kit (`setMotionKits` id) the page builds on. */
+		kit?: string
 	}>
 	/** Change a motion layer already on the timeline: its fields, its windows, its timing. */
 	updateMotion?: Array<{
@@ -858,7 +867,18 @@ export interface EditorOps {
 		durationSec?: number
 		/** Replace the layer's page (it becomes a custom layer). */
 		html?: string
+		/** Use this project motion kit for the page; "" stops using one. */
+		kit?: string
 	}>
+	/**
+	 * Project motion kits: CSS and JS stored once and shared by every custom
+	 * page that names it (`addMotion.kit` / `updateMotion.kit`). Adds a kit, or
+	 * changes one: the fields sent replace that kit's own, the ones left out
+	 * keep theirs, and "" empties one. MCP only, with the HTML permission.
+	 */
+	setMotionKits?: Array<{ id: string; label?: string; css?: string; js?: string }>
+	/** Kit ids to delete. A kit that a layer still uses is not deleted. */
+	removeMotionKits?: string[]
 	/**
 	 * A transition on the cut AFTER each named item. `kind: 'none'` removes one.
 	 * Keyed by the OUTGOING item because that is where the document stores it.
@@ -955,6 +975,9 @@ export type TimelineDiff = {
 	updateItems?: Array<{ id: string } & Partial<TimelineItem>>
 	addTracks?: Track[]
 	removeTrackIds?: string[]
+	/** Motion kits added or replaced whole, by id. Applied before items. */
+	setMotionKits?: MotionKit[]
+	removeMotionKitIds?: string[]
 }
 
 // ===== Export / render (M4) =====

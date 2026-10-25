@@ -71,13 +71,14 @@ export class FakeEditor implements EditorBridge {
 		for (const asset of commit.addAssets ?? []) {
 			if (!this.doc.media.some((a) => a.id === asset.id)) this.doc.media.push(asset)
 		}
-		const state = { tracks: this.doc.tracks, timeline: this.doc.timeline }
+		const state = { tracks: this.doc.tracks, timeline: this.doc.timeline, motionKits: this.doc.motionKits ?? [] }
 		const result = applyTimelineDiff(state, commit.turn.diff!, this.doc.media)
 		// As the store's dry run does: overlaps are pushed right, and said.
 		const shifted = repairOverlapsReporting(state)
 		// It replaces arrays rather than mutating them, as the store expects
 		this.doc.tracks = state.tracks
 		this.doc.timeline = state.timeline
+		this.doc.motionKits = state.motionKits
 		const seq = this.revisions.length
 		const rev = { id: `r${seq}`, seq, label: commit.turn.agent!.name, origin: 'ai' as const, parentId: this.current, createdAt: Date.now() }
 		this.revisions.push(rev)

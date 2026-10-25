@@ -1059,8 +1059,8 @@ export const useEditorStore = defineStore('editor', () => {
 		if (!rev || !doc.value || !held || held.id !== rev.id || held.threadId !== threadId.value) return false
 		const snap = held.snapshot
 		if (diffTimelines(
-			{ tracks: snap.tracks, timeline: snap.timeline },
-			{ tracks: doc.value.tracks, timeline: doc.value.timeline }
+			{ tracks: snap.tracks, timeline: snap.timeline, motionKits: snap.motionKits ?? [] },
+			{ tracks: doc.value.tracks, timeline: doc.value.timeline, motionKits: doc.value.motionKits ?? [] }
 		) !== null) return true
 		// Markers live outside TimelineDiff, so the timeline comparison above is
 		// blind to them. Without this, marker-only work counts as "clean" and
@@ -1251,6 +1251,7 @@ export const useEditorStore = defineStore('editor', () => {
 				historyRef: doc.value.historyRef,
 				markers: doc.value.markers,
 				currentRevisionId: doc.value.currentRevisionId,
+				motionKits: doc.value.motionKits ?? [],
 				// `?? false` because JSON.stringify drops an undefined, and the main
 				// handler would then read the patch as "no opinion" and keep the old
 				// value — the same trap the cleared-transition bug fell into.
@@ -1741,7 +1742,8 @@ export const useEditorStore = defineStore('editor', () => {
 	// ===== History engine (M2) =====
 	const currentState = (): TimelineState => ({
 		tracks: doc.value!.tracks,
-		timeline: doc.value!.timeline
+		timeline: doc.value!.timeline,
+		motionKits: doc.value!.motionKits ?? []
 	})
 
 	const snapshotState = (): TimelineState =>
@@ -1824,7 +1826,7 @@ export const useEditorStore = defineStore('editor', () => {
 		// Persist to the sidecar fire-and-forget; keyframe every 10th push
 		pushCounter++
 		const keyframe: TimelineSnapshot | undefined = pushCounter % 10 === 0
-			? { stepId: step.id, ...snapshotState(), timelineMeta: { ...doc.value.timelineMeta } }
+			? { stepId: step.id, ...snapshotState(), timelineMeta: { ...doc.value.timelineMeta } } as TimelineSnapshot
 			: undefined
 		api.pushEditorStep({
 			threadId: threadId.value,
@@ -1853,7 +1855,8 @@ export const useEditorStore = defineStore('editor', () => {
 		// wrapper of shallow copies and write the results back to the doc.
 		const state: TimelineState = {
 			tracks: [...doc.value.tracks],
-			timeline: [...doc.value.timeline]
+			timeline: [...doc.value.timeline],
+			motionKits: [...(doc.value.motionKits ?? [])]
 		}
 		const result = applyTimelineDiff(state, diff, doc.value.media)
 		if (result.errors.length) {
@@ -1861,6 +1864,7 @@ export const useEditorStore = defineStore('editor', () => {
 		}
 		doc.value.tracks = state.tracks
 		doc.value.timeline = state.timeline
+		doc.value.motionKits = state.motionKits
 		return result.ok || result.errors.length < (diff.updateItems?.length || 0) + (diff.addItems?.length || 0) + 1
 	}
 
@@ -2434,11 +2438,13 @@ export const useEditorStore = defineStore('editor', () => {
 	 * Draw `html` twice in the hidden window and compare. Never rejects: a probe
 	 * that cannot run is `skipped`, which blocks nothing.
 	 */
-	const probeMotionHtml = async (html: string, definition: MotionDefinition): Promise<RuntimeReport> => {
+	const probeMotionHtml = async (html: string, definition: MotionDefinition, kitId?: string): Promise<RuntimeReport> => {
 		const meta = doc.value?.timelineMeta
+		const kit = kitId ? doc.value?.motionKits?.find((k) => k.id === kitId) : undefined
 		try {
 			const result = await api.probeMotionPage({
 				html, definition: JSON.parse(JSON.stringify(definition)),
+				kit: kit ? JSON.parse(JSON.stringify(kit)) : undefined,
 				frame: { width: meta?.width || 1920, height: meta?.height || 1080 }
 			})
 			const report: RuntimeReport = {
@@ -2488,15 +2494,17 @@ export const useEditorStore = defineStore('editor', () => {
 		for (const item of d.timeline) {
 			const page = unverifiedPage(item.motion)
 			if (!page) continue
-			const key = htmlHash(page.html)
+			const kitId = item.motion?.kit
+			// The same text under a different kit is a different page.
+			const key = `${htmlHash(page.html)}:${kitId ?? ''}`
 			if (probing.has(key)) continue
 			probing.add(key)
 			try {
-				const report = await probeMotionHtml(page.html, resolveDefinition(item.motion))
+				const report = await probeMotionHtml(page.html, resolveDefinition(item.motion), kitId)
 				const ok = report.determinism !== 'fail' && !report.error
 				let changed = false
 				for (const other of doc.value?.timeline ?? []) {
-					if (!other.motion || unverifiedPage(other.motion)?.html !== page.html) continue
+					if (!other.motion || unverifiedPage(other.motion)?.html !== page.html || other.motion.kit !== kitId) continue
 					other.motion = ok ? verifiedSpec(other.motion, page.html) : failedSpec(other.motion, page.html)
 					changed = true
 				}
@@ -3181,7 +3189,8 @@ export const useEditorStore = defineStore('editor', () => {
 		tracks: doc.value!.tracks,
 		timeline: doc.value!.timeline,
 		timelineMeta: doc.value!.timelineMeta,
-		markers: doc.value!.markers || []
+		markers: doc.value!.markers || [],
+		motionKits: doc.value!.motionKits ?? []
 	})
 
 	/** Push to the sidecar and mirror the assigned seq back (awaited — cards need real V numbers). */
@@ -3336,6 +3345,7 @@ export const useEditorStore = defineStore('editor', () => {
 		doc.value.timeline = snapState.timeline
 		doc.value.timelineMeta = snap.timelineMeta
 		doc.value.markers = snap.markers || []
+		doc.value.motionKits = snap.motionKits ?? []
 		doc.value.currentRevisionId = id
 		holdAsCurrent(id, stored)
 
@@ -3450,7 +3460,8 @@ export const useEditorStore = defineStore('editor', () => {
 	const dryRunProposal = (diff: TimelineDiff): { applied: TimelineState; pruned: string[]; shifted: string[] } => {
 		const applied: TimelineState = {
 			tracks: JSON.parse(JSON.stringify(doc.value!.tracks)),
-			timeline: JSON.parse(JSON.stringify(doc.value!.timeline))
+			timeline: JSON.parse(JSON.stringify(doc.value!.timeline)),
+			motionKits: JSON.parse(JSON.stringify(doc.value!.motionKits ?? []))
 		}
 		const result = applyTimelineDiff(applied, diff, doc.value!.media)
 		// AI placements aren't gesture-clamped — push any same-track overlaps
@@ -3645,6 +3656,7 @@ export const useEditorStore = defineStore('editor', () => {
 			if (diffed) {
 				doc.value.tracks = applied.tracks
 				doc.value.timeline = applied.timeline
+				doc.value.motionKits = applied.motionKits
 				// Ring step preserved: Cmd+Z undoes the AI diff in place
 				commitStep({ prebuilt: diffed, origin: 'ai', turnId: turn.id, label })
 			}
@@ -3707,7 +3719,8 @@ export const useEditorStore = defineStore('editor', () => {
 	const hasOps = (diff?: TimelineDiff): boolean =>
 		!!diff && !!(
 			diff.addItems?.length || diff.removeItemIds?.length ||
-			diff.updateItems?.length || diff.addTracks?.length || diff.removeTrackIds?.length
+			diff.updateItems?.length || diff.addTracks?.length || diff.removeTrackIds?.length ||
+			diff.setMotionKits?.length || diff.removeMotionKitIds?.length
 		)
 
 	// ===== Ownership-split merge for thread-updated echoes =====
