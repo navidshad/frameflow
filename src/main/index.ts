@@ -37,7 +37,7 @@ import * as editorRevisions from './editor/revisions'
 import { BUILTIN_PERSONAS } from './constants/personas'
 import { v4 as uuidv4 } from 'uuid'
 import { THREAD_DIRS } from './constants/paths'
-import { GEMINI_MODEL_2_5_FLASH, MODEL_METADATA } from './constants/gemini'
+import { GEMINI_MODEL_3_6_FLASH, MODEL_METADATA } from './constants/gemini'
 import { electronApp, optimizer, is } from '@electron-toolkit/utils'
 import { registerMediaProtocol } from './media-protocol'
 import { initAgentAccess } from './mcp'
@@ -997,7 +997,7 @@ app.whenReady().then(() => {
 		if (!context && !attachedImages.length) throw new Error('Message context not found')
 		
 		const modelSettings = settingsManager.getModelSettings()
-		const modelName = modelSettings.selection['intent'] || GEMINI_MODEL_2_5_FLASH
+		const modelName = modelSettings.selection['intent'] || GEMINI_MODEL_3_6_FLASH
 		const adapter = GeminiAdapter.create()
 
 		const systemInstruction = `You are a high-level Prompt Engineer. Your task is to IMPROVISE and REWRITE a user's latest prompt to be much more descriptive, detailed, and effective for high-fidelity AI generation.

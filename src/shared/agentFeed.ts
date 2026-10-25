@@ -130,6 +130,8 @@ export function transcriptHealthLabel(health?: TranscriptHealth, hasTranscript =
 	if (health.looped) problems.push('looped')
 	if (health.truncated) problems.push('stops early')
 	if (health.hasHole) problems.push('has a gap')
+	if (health.timing?.drift) problems.push('timing off')
+	if (health.timing?.silentTextAtSec?.length) problems.push('text over silence')
 	return problems.length ? `transcript ${problems.join(', ')}` : 'health good'
 }
 
