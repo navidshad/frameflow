@@ -15,6 +15,7 @@ import type { Spent } from '@shared/audioProviders'
 import type { EditorBridge } from './bridge'
 import type { MotionProbe } from '../editor/vetHtml'
 import { SERVER_INSTRUCTIONS, ToolError, TOOLS, type ToolContext, type ToolDef } from './tools'
+import { LIVE_PROJECT, writeQueue } from './writeQueue'
 
 /**
  * FrameFlow's MCP server: Streamable HTTP on 127.0.0.1, one MCP `Server` per
@@ -58,6 +59,8 @@ export interface AgentServerOptions {
 	maxToolCalls?: number
 	/** Draws a custom page in the hidden window, for the check every written page gets. */
 	probeMotion?: MotionProbe
+	/** Longest a write waits behind earlier ones before it gives up unapplied. Default 5 minutes. */
+	maxWriteWaitMs?: number
 }
 
 interface Session {
@@ -67,13 +70,6 @@ interface Session {
 	transport: StreamableHTTPServerTransport
 	server: Server
 }
-
-/**
- * One write at a time across every server in the process — the user's
- * external agents and FrameFlow's own engine run on separate servers but edit
- * the same live document, so each write must see the one before it.
- */
-let writeChain: Promise<unknown> = Promise.resolve()
 
 /** What each turn (an engine's chat turn, or an outside agent's session) has spent on generated audio. */
 const spendLedgers = new Map<string, Spent>()
@@ -308,10 +304,18 @@ export class AgentServer {
 		server.setRequestHandler(ListToolsRequestSchema, async () => ({
 			tools: this.tools.map((t) => ({ name: t.name, description: t.description, inputSchema: t.inputSchema as any }))
 		}))
-		server.setRequestHandler(CallToolRequestSchema, async (request) => {
+		server.setRequestHandler(CallToolRequestSchema, async (request, extra) => {
 			const session = transport.sessionId ? this.sessions.get(transport.sessionId) : undefined
 			if (!session) return { content: [{ type: 'text', text: 'Session closed.' }], isError: true }
-			return this.callTool(session, request.params.name, (request.params.arguments || {}) as Record<string, any>)
+			// A client that asked for progress hears it while a write waits its turn.
+			const progressToken = request.params._meta?.progressToken
+			const progress = progressToken === undefined ? undefined : (message: string, waitedMs: number) => {
+				void extra.sendNotification({
+					method: 'notifications/progress',
+					params: { progressToken, progress: Math.round(waitedMs / 1000), message }
+				}).catch(() => { /* the client went away */ })
+			}
+			return this.callTool(session, request.params.name, (request.params.arguments || {}) as Record<string, any>, progress)
 		})
 
 		await server.connect(transport)
@@ -328,7 +332,7 @@ export class AgentServer {
 
 	// ===== Tool calls =====
 
-	private async callTool(session: Session, name: string, args: Record<string, any>) {
+	private async callTool(session: Session, name: string, args: Record<string, any>, progress?: (message: string, waitedMs: number) => void) {
 		const def = this.tools.find((t) => t.name === name)
 		if (!def) {
 			return { content: [{ type: 'text' as const, text: `Unknown tool "${name}". Tools: ${this.tools.map((t) => t.name).join(', ')}.` }], isError: true }
@@ -388,7 +392,9 @@ export class AgentServer {
 		}
 		try {
 			const run = () => def.run(args, ctx)
-			const out = def.writes ? await this.serialize(run) : await run()
+			const out = def.writes
+				? await writeQueue.run(LIVE_PROJECT, run, { maxWaitMs: this.options.maxWriteWaitMs, onWaiting: progress })
+				: await run()
 			finish({
 				...out.feed,
 				title: out.feed.title || activity.title,
@@ -402,16 +408,6 @@ export class AgentServer {
 			finish({ status: 'error', detail: message.split('\n')[0] })
 			return { content: [{ type: 'text' as const, text: message }], isError: true }
 		}
-	}
-
-	/**
-	 * One write at a time across every session: each reads the live document
-	 * the previous one left, so two agents cannot build diffs off the same base.
-	 */
-	private serialize<T>(work: () => Promise<T>): Promise<T> {
-		const next = writeChain.then(work, work)
-		writeChain = next.catch(() => undefined)
-		return next
 	}
 
 	private emit(event: AgentServerEvent): void {

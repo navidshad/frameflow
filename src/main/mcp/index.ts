@@ -8,6 +8,7 @@ import type { AgentAccessState } from '@shared/agentFeed'
 import { settingsManager } from '../settings'
 import { AgentServer, type AgentServerEvent } from './server'
 import { installRendererBridge, lastProjectTitle, rendererBridge } from './rendererBridge'
+import { requestedTokenFile, writeTokenFile } from './tokenFile'
 
 /**
  * Agent access, wired to the app: the Settings card's IPC, the server's
@@ -20,6 +21,19 @@ import { installRendererBridge, lastProjectTitle, rendererBridge } from './rende
 
 let server: AgentServer | null = null
 let lastError: string | undefined
+
+/** Where the launcher asked for the token to be written (`--agent-token-file`); null = nowhere. */
+const tokenFile = requestedTokenFile(process.argv, process.env)
+
+function exportTokenFile(): void {
+	if (!tokenFile) return
+	try {
+		writeTokenFile(tokenFile, settingsManager.getAgentToken())
+		console.log(`[mcp] agent token written to ${tokenFile}`)
+	} catch (error: any) {
+		console.error(`[mcp] could not write the agent token to ${tokenFile}: ${error?.code || error?.message || error}`)
+	}
+}
 
 const url = (port: number | null) => (port ? `http://127.0.0.1:${port}${AGENT_MCP_PATH}` : null)
 
@@ -94,6 +108,7 @@ async function stop(): Promise<void> {
 
 export function initAgentAccess(): void {
 	installRendererBridge()
+	exportTokenFile()
 
 	ipcMain.handle('get-agent-access', () => state())
 
@@ -127,6 +142,7 @@ export function initAgentAccess(): void {
 
 	ipcMain.handle('new-agent-token', async () => {
 		settingsManager.newAgentToken()
+		exportTokenFile()
 		await server?.disconnectAll()
 		broadcastState()
 		return state()
