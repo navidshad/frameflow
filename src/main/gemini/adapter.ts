@@ -159,10 +159,10 @@ export class GeminiAdapter {
 			contents: [{ role: 'user', parts }]
 		};
 
+		// The SDK only reads systemInstruction from request.config; a top-level
+		// field is silently dropped.
 		if (systemInstruction) {
-			request.systemInstruction = {
-				parts: [{ text: systemInstruction }]
-			};
+			request.config = { ...request.config, systemInstruction };
 		}
 
 		try {
