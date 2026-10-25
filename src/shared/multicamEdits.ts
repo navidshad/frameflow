@@ -3,18 +3,19 @@ import {
 	anglesOf, camerasOf, nudgeCamera, placeGroup, planAngleSwitches, rederiveGroupItems, referenceOf, resolveCamera,
 	soundChoicesOf, soundSpan
 } from './multicam'
+import { assignStretch, mergeSpeakers, patchSpeaker, resolveSpeaker } from './speakers'
 import { itemEnd } from './timeline'
 import { nextTrackName, nextTrackOrder, trackFamily } from './tracks'
 
 /**
  * Camera-group edits as ops: placeMulticam, switchAngles, setMainSound,
- * nudgeAngle, mapped onto a TimelineDiff. ONE path for both callers: MCP's
+ * nudgeAngle, and the speaker ops (setSpeaker, mergeSpeakers, setSpeakerTurns), mapped onto a TimelineDiff. ONE path for both callers: MCP's
  * apply_ops (main/editor/ops.ts) and the editor's own controls (the store),
  * so an agent's cut and a number-key cut are the same edit.
  */
 
 export const opsTouchMulticam = (ops: EditorOps): boolean =>
-	!!(ops.placeMulticam || ops.switchAngles || ops.setMainSound || ops.nudgeAngle)
+	!!(ops.placeMulticam || ops.switchAngles || ops.setMainSound || ops.nudgeAngle || ops.setSpeaker || ops.mergeSpeakers || ops.setSpeakerTurns)
 
 function resolveGroup(doc: EditorDocument, ref: string | undefined): MulticamGroup | string {
 	const groups = doc.multicams ?? []
@@ -157,6 +158,60 @@ export function applyMulticamOps(
 				droppedOps.push(`nudgeAngle: ${camera.name} is the reference every other camera is measured against; nudge the others instead`)
 			} else reGroup(group, nudgeCamera(group, camera.members[0].assetId, op.bySec), `nudgeAngle ${camera.name}`)
 		}
+	}
+
+	// Speakers live on the group, so these only rewrite the group; no clip moves.
+	const speakerEdit = (name: string, groupRef: string | undefined, edit: (g: MulticamGroup) => MulticamGroup | string) => {
+		const found = resolveGroup(doc, groupRef)
+		if (typeof found === 'string') { droppedOps.push(`${name}: ${found}`); return }
+		const group = live(found)
+		if (!group.speakers) {
+			droppedOps.push(`${name}: "${group.name}" has no speakers yet (find_speakers first)`)
+			return
+		}
+		const next = edit(group)
+		if (typeof next === 'string') { droppedOps.push(`${name}: ${next}`); return }
+		groups.set(next.id, next)
+		pushGroup(diff, next)
+	}
+
+	if (ops.setSpeaker) {
+		const op = ops.setSpeaker
+		speakerEdit('setSpeaker', op.group, (group) => {
+			let camera: string | null | undefined = undefined
+			if (op.camera === null) camera = null
+			else if (op.camera !== undefined) {
+				const cam = resolveCamera(camerasOf(group, doc.media), op.camera)
+				if (!cam) return `there is no camera "${op.camera}" (cameras: ${camerasOf(group, doc.media).map((c, n) => `${n + 1} ${c.name}`).join(', ')})`
+				camera = cam.key
+			}
+			const next = patchSpeaker(group, op.speaker, { name: op.name, camera, framing: op.framing, color: op.color })
+			if (typeof next !== 'string') notes.push(`setSpeaker: ${resolveSpeaker(next.speakers, op.name ?? op.speaker)?.name ?? op.speaker} updated.`)
+			return next
+		})
+	}
+
+	if (ops.mergeSpeakers) {
+		const op = ops.mergeSpeakers
+		speakerEdit('mergeSpeakers', op.group, (group) => {
+			const next = mergeSpeakers(group, op.from, op.into)
+			if (typeof next !== 'string') notes.push(`mergeSpeakers: ${resolveSpeaker(group.speakers, op.from)?.name} is now ${resolveSpeaker(group.speakers, op.into)?.name}.`)
+			return next
+		})
+	}
+
+	if (ops.setSpeakerTurns) {
+		const op = ops.setSpeakerTurns
+		speakerEdit('setSpeakerTurns', op.group, (group) => {
+			let current: MulticamGroup = group
+			for (const t of op.turns) {
+				const next = assignStretch(current, t.fromSec, t.toSec, t.speaker)
+				if (typeof next === 'string') return `${next} (stretch ${t.fromSec}–${t.toSec} s)`
+				current = next
+			}
+			notes.push(`setSpeakerTurns: ${op.turns.length} stretch(es) set; a new analysis keeps them.`)
+			return current
+		})
 	}
 
 	if (ops.switchAngles) {

@@ -139,6 +139,15 @@ export interface EditorBridge {
 		assetIds: string[],
 		options: { name?: string; existing?: import('@shared/types').MulticamGroup; onProgress?: (fraction: number, label: string) => void }
 	): Promise<{ group: import('@shared/types').MulticamGroup; ranking: string[] }>
+	/**
+	 * Listen to a group's microphones and find who speaks when (not yet saved: the caller commits
+	 * the group with these speakers as an edit). `keepFrom` carries names and hand-fixed turns over.
+	 */
+	diarizeGroup(
+		project: LiveProject,
+		group: import('@shared/types').MulticamGroup,
+		options: { speakers?: number; onProgress?: (fraction: number, label: string) => void }
+	): Promise<import('@shared/types').MulticamSpeakers>
 	/** Whether a preparation chain is running for this media file right now (a stored "running" with none is interrupted). */
 	isPreparing(project: LiveProject, assetId: string): boolean
 	/** Quiet stretches in a media file's sound, in source seconds. */
