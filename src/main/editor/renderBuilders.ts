@@ -356,8 +356,9 @@ export function sliceAtInstant(slice: SourceSlice, T: number, fps: number): Sour
 	}
 	const sOut = Math.min(slice.out, sIn + span)
 	// The instant sits at the very end of the content: back the window off so it
-	// still contains a frame.
-	if (sOut - sIn < span / 2) sIn = Math.max(slice.in, sOut - span)
+	// still contains a frame. One frame is enough (the seek takes the nearest);
+	// backing off from exactly one showed the frame BEFORE a layer's last.
+	if (sOut - sIn < span / 2 - 1e-9) sIn = Math.max(slice.in, sOut - span)
 	if (sOut <= sIn) return null
 
 	return {
@@ -483,6 +484,12 @@ function videoStream(
 	alpha = false
 ): { input: GraphInput; filter: string } {
 	const cut = t3(slice.out - slice.in)
+	// The input seek keeps the first frame AT or after `-ss`, and `-ss` is
+	// written to the millisecond: a frame at 2.46667 s sought as "2.467" was
+	// skipped, so a third of all region starts (and exact frames) opened on the
+	// NEXT frame. Seeking half an output frame early keeps the frame nearest to
+	// `in` instead, whatever the rounding. Never before the source's start.
+	const lead = Math.min(slice.in, (0.5 / plan.fps) * (slice.item.speed || 1))
 	// A keyed clip carries alpha whether or not it is a compositing layer: it
 	// asked for its background to go, and the conform and transform after it
 	// must not fill the hole back in with black.
@@ -514,7 +521,7 @@ function videoStream(
 			// A synthesised source has no timeline to seek into: it is generated
 			// for exactly the window it fills, so `-t` alone bounds it.
 			? { path: slice.srcPath, options: ['-t', cut], format: 'lavfi' }
-			: { path: slice.srcPath, options: ['-ss', t3(slice.in), '-t', cut] },
+			: { path: slice.srcPath, options: ['-ss', t3(slice.in - lead), '-t', t3(slice.out - slice.in + lead)] },
 		filter: `[${idx}:v]${chain.join(',')}${label}`
 	}
 }

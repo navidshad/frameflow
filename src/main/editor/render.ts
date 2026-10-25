@@ -32,6 +32,7 @@ import {
 	allSlices, buildRegionGraph, motionJobsFor,
 	type Region, type RegionPlan, type SourceSlice
 } from './renderBuilders'
+import { concatLists, exactTailFilters, regionAudioOpts, regionSpans, snapItemToFrames, type RegionSpan } from './regionJoin'
 
 export { atempoChain } from './renderBuilders'
 
@@ -42,9 +43,11 @@ export { atempoChain } from './renderBuilders'
  * TimelineSegment[] and reuses assembleVideo unchanged.
  *
  * Region path: the sequence is sliced at clip boundaries into regions
- * (clip | gap); each region renders to a UNIFORM mp4 intermediate
- * (h264 + aac 48kHz stereo, normalized W×H/FPS, both streams always
- * present), then the concat demuxer stitches with -c copy. Per-item
+ * (clip | gap); each region renders to a UNIFORM .mov intermediate
+ * (h264 + PCM 48kHz stereo, normalized W×H/FPS, both streams always
+ * present, exactly its frame and sample count), then the concat demuxer
+ * stitches the picture with -c copy and the sound into one AAC encode
+ * (regionJoin.ts). Per-item
  * speed renders via setpts + chained atempo (or asetrate when
  * preservePitch=false). Gaps render black + silence.
  *
@@ -95,6 +98,14 @@ export function computeRegions(
 		 * temp directory for callers with no project.
 		 */
 		motionDir?: string
+		/**
+		 * Snap every item's start and end to the sequence's frame grid first
+		 * (`snapItemToFrames`), so every region boundary falls on a frame. The
+		 * export and the exact frame set it: a region that starts between two
+		 * frames loses the frame under its start to ffmpeg's input seek and
+		 * plays up to a frame early.
+		 */
+		frameGrid?: boolean
 	} = {}
 ): RegionPlan {
 	// Video tracks TOP-most first (highest order wins visually); [0] of a
@@ -112,10 +123,10 @@ export function computeRegions(
 	// title burns over the finished file with the captions, so it renders from
 	// whichever track it sits on; treated as a layer it would reach `toSlice`,
 	// which would look up its empty `sourceAssetId` and throw.
-	const videoItems = doc.timeline
+	let videoItems = doc.timeline
 		.filter((i) => videoTrackIds.has(i.trackId) && isCompositedItem(i))
 		.sort((a, b) => a.timelineStart - b.timelineStart)
-	const audioItems = doc.timeline
+	let audioItems = doc.timeline
 		.filter((i) => audioTrackById.has(i.trackId))
 		.sort((a, b) => a.timelineStart - b.timelineStart)
 
@@ -162,6 +173,14 @@ export function computeRegions(
 	const fps = Math.min(60, Math.max(10,
 		usedVideoAssets.reduce((max, a) => Math.max(max, a.metadata?.fps || 0), 0) || 30
 	))
+
+	if (options.frameGrid) {
+		// Order-preserving, so items that did not overlap still do not.
+		const snap = (items: TimelineItem[]) =>
+			items.map((i) => snapItemToFrames(i, fps)).filter((i): i is TimelineItem => i !== null)
+		videoItems = snap(videoItems)
+		audioItems = snap(audioItems)
+	}
 
 	const allItems = [...videoItems, ...audioItems]
 	const end = allItems.reduce((max, it) => Math.max(max, itemEnd(it)), 0)
@@ -532,6 +551,9 @@ export function runCommand(
 	})
 }
 
+/** The export's video encoder, without the audio half of `intermediateOpts`. */
+const videoEncodeOpts = (): string[] => intermediateOpts().slice(0, intermediateOpts().indexOf('-c:a'))
+
 /**
  * Renders ONE region to a uniform intermediate: the top video layer (or black)
  * plus the region's mixed audio. 0 audio sources → silence; 1 → that stream;
@@ -539,19 +561,23 @@ export function runCommand(
  * items and a video's own soundtrack mix correctly and stay region-length
  * (§5.9). Per-stream chains are composed from the ORDERED builder registries
  * in renderBuilders.ts — new adjustments plug in there, not here.
+ *
+ * The file is exactly `span.frames` frames and `span.samples` samples, with the
+ * sound as PCM; see regionJoin.ts for why the join needs both.
  */
-async function renderRegion(
+export async function renderRegion(
 	region: Region,
 	index: number,
 	plan: RegionPlan,
+	span: RegionSpan,
 	workDir: string,
 	signal: AbortSignal,
 	onProgress: (percent: number) => void
 ): Promise<string> {
-	const dur = region.duration.toFixed(3)
-	const outputPath = path.join(workDir, `region-${String(index).padStart(3, '0')}.mp4`)
+	const outputPath = path.join(workDir, `region-${String(index).padStart(3, '0')}.mov`)
 
 	const graph = buildRegionGraph(region, plan)
+	const exact = exactTailFilters(graph, span)
 	const command = ffmpeg()
 	for (const input of graph.inputs) {
 		const added = command.input(input.path)
@@ -563,35 +589,46 @@ async function renderRegion(
 	}
 
 	command
-		.complexFilter(graph.filters.join(';'))
-		.map(graph.video)
-		.map(graph.audio)
-		.outputOptions([...intermediateOpts(), '-t', dur])
+		.complexFilter([...graph.filters, ...exact.filters].join(';'))
+		.map(exact.video)
+		.map(exact.audio)
+		.outputOptions([
+			...videoEncodeOpts(), ...regionAudioOpts(),
+			'-video_track_timescale', '90000',
+			'-frames:v', String(Math.max(1, span.frames))
+		])
 
 	await runCommand(command, outputPath, signal, onProgress)
 	return outputPath
 }
 
-async function concatRegions(
+/**
+ * Join the regions: the picture from one list and the sound from another, each
+ * file at its declared length, and the sound encoded to AAC once, here.
+ */
+export async function concatRegions(
 	regionFiles: string[],
+	spans: RegionSpan[],
 	workDir: string,
 	finalPath: string,
 	signal: AbortSignal,
 	reencode: boolean
 ): Promise<void> {
-	const listPath = path.join(workDir, 'list.txt')
-	const list = regionFiles
-		.map((f) => `file '${path.basename(f).replace(/'/g, "'\\''")}'`)
-		.join('\n')
-	fs.writeFileSync(listPath, list)
+	const lists = concatLists(regionFiles, spans)
+	const videoList = path.join(workDir, 'video.txt')
+	const audioList = path.join(workDir, 'audio.txt')
+	fs.writeFileSync(videoList, lists.video)
+	fs.writeFileSync(audioList, lists.audio)
 
-	const command = ffmpeg(listPath)
-		.inputOptions(['-f', 'concat', '-safe', '0'])
-		.outputOptions(
-			reencode
-				? [...intermediateOpts(), '-movflags', '+faststart']
-				: ['-c', 'copy', '-movflags', '+faststart']
-		)
+	const command = ffmpeg()
+		.input(videoList).inputOptions(['-f', 'concat', '-safe', '0'])
+		.input(audioList).inputOptions(['-f', 'concat', '-safe', '0'])
+		.outputOptions([
+			'-map', '0:v:0', '-map', '1:a:0',
+			...(reencode ? videoEncodeOpts() : ['-c:v', 'copy']),
+			...intermediateOpts().slice(intermediateOpts().indexOf('-c:a')),
+			'-movflags', '+faststart'
+		])
 	await runCommand(command, finalPath, signal)
 }
 
@@ -646,7 +683,8 @@ export function startEditorRender(options: {
 	// The transcript sharpens ducking from whole-clip to phrase-level; reading it
 	// here costs one file per asset and nothing when no bed exists.
 	const plan = computeRegions(doc, quality, transcriptsForDoc(doc), {
-		motionDir: motionCacheDir(thread.tempDir)
+		motionDir: motionCacheDir(thread.tempDir),
+		frameGrid: true
 	})
 	// `allSlices` is exhaustive over region kinds, so a slice can never escape this
 	// check by living in a field the pre-flight forgot — which would turn a clean
@@ -755,6 +793,7 @@ export function startEditorRender(options: {
 				let doneWeight = 0
 				let lastEmit = -1
 				const regionFiles: string[] = []
+				const spans = regionSpans(plan.regions.map((r) => r.duration), plan.fps)
 
 				for (let i = 0; i < plan.regions.length; i++) {
 					if (signal.aborted) throw new Error('aborted')
@@ -767,7 +806,7 @@ export function startEditorRender(options: {
 							progress(overall, 'rendering')
 						}
 					}
-					const file = await renderRegion(region, i, plan, workDir, signal, onRegionProgress)
+					const file = await renderRegion(region, i, plan, spans[i], workDir, signal, onRegionProgress)
 					regionFiles.push(file)
 					doneWeight += weight
 					progress(motionWeight + doneWeight * (96 - motionWeight), 'rendering')
@@ -775,11 +814,11 @@ export function startEditorRender(options: {
 
 				progress(96, 'stitching')
 				try {
-					await concatRegions(regionFiles, workDir, finalPath, signal, false)
+					await concatRegions(regionFiles, spans, workDir, finalPath, signal, false)
 				} catch (error) {
 					if (signal.aborted) throw error
 					console.warn('[render] copy-concat failed, retrying with re-encode:', error)
-					await concatRegions(regionFiles, workDir, finalPath, signal, true)
+					await concatRegions(regionFiles, spans, workDir, finalPath, signal, true)
 				}
 			}
 

@@ -1,9 +1,9 @@
 import fs from 'fs'
 import path from 'path'
 import type { TimelineItem } from '@shared/types'
-import { composeMotionPage, motionFramePlan } from '@shared/motion'
+import { composeMotionPage, motionFramePlan, motionFrameState } from '@shared/motion'
 import { openMotionCapture } from './capture'
-import { encodeFrames } from './encode'
+import { encodeFrames, PARTIAL_SUFFIX } from './encode'
 
 /**
  * Motion layers for the export: render each clip once, by content hash, to an
@@ -46,6 +46,59 @@ export async function renderMotionClip(
 
 /** In-flight renders, so the monitor's exact frame and an export share one. */
 const inFlight = new Map<string, Promise<void>>()
+
+/**
+ * Frames `first`..`last` of the clip `job` would render, and nothing else, as
+ * a short clip at `outputPath` whose frame 0 is the clip's frame `first`. The
+ * states are the clip's own (`motionFramePlan`), so the pixels are the ones the
+ * full clip would hold. For the exact frame: a still of a two-minute layer
+ * captures a handful of frames instead of thousands.
+ */
+export async function ensureMotionFrames(job: MotionJob, first: number, last: number, outputPath: string): Promise<string> {
+	if (fs.existsSync(outputPath)) return outputPath
+	const running = inFlight.get(outputPath)
+	if (running) {
+		await running
+		return outputPath
+	}
+	const work = (async () => {
+		// Frame k is clip time k / fps, exactly as `motionFramePlan` builds it.
+		const plan = Array.from({ length: last - first + 1 }, (_, j) => motionFrameState(job.item, (first + j) / job.frame.fps))
+		fs.mkdirSync(path.dirname(outputPath), { recursive: true })
+		const capture = await openMotionCapture(composeMotionPage(job.item.motion, job.frame), job.frame)
+		try {
+			await encodeFrames({ frame: job.frame, count: plan.length, next: (k) => capture.frame(plan[k]), outputPath })
+		} finally {
+			capture.close()
+		}
+	})()
+	inFlight.set(outputPath, work)
+	try {
+		await work
+	} catch (error: any) {
+		const name = job.item.label || job.item.id
+		throw new Error(`Motion layer "${name}" could not be drawn: ${error?.message || error}`)
+	} finally {
+		inFlight.delete(outputPath)
+	}
+	sweepStills(path.dirname(outputPath))
+	return outputPath
+}
+
+/** Stills kept per project; each is a few frames, but a long session makes many. */
+const STILLS_LIMIT = 200
+
+function sweepStills(dir: string): void {
+	try {
+		const files = fs.readdirSync(dir)
+			.filter((f) => f.endsWith('.mov') && !f.endsWith(PARTIAL_SUFFIX))
+			.map((f) => ({ full: path.join(dir, f), at: fs.statSync(path.join(dir, f)).mtimeMs }))
+			.sort((a, b) => b.at - a.at)
+		for (const stale of files.slice(STILLS_LIMIT)) {
+			try { fs.unlinkSync(stale.full) } catch { /* ignore */ }
+		}
+	} catch { /* nothing to sweep */ }
+}
 
 /** Render the clip unless an identical one is already on disk. */
 export async function ensureMotionClip(

@@ -10,10 +10,15 @@ import { cuesForDoc, transcriptsForDoc } from './captions'
 import { burnFrameText } from './frameText'
 import { cuesAtInstant } from '@shared/captions'
 import { motionCacheDir } from '../motion/cache'
-import { ensureMotionJobs } from '../motion'
+import { ensureMotionFrames, ensureMotionJobs } from '../motion'
+import { motionClipLabel } from '@shared/motion'
+import {
+	layerReport, motionClipsReady, motionItemsAt, rebasedSlice, stillClipPath, stillFrameRange, withSlices,
+	type MotionFrameReport, type MotionLayerReport
+} from './exactMotion'
 import {
 	buildRegionGraph, motionJobsFor, regionAtInstant,
-	type OverlapRegion, type Region, type RegionPlan
+	type OverlapRegion, type Region, type RegionPlan, type SourceSlice
 } from './renderBuilders'
 
 /**
@@ -166,7 +171,8 @@ export async function ensureTransitionPreview(options: {
 	// Transcripts ride along so a bed inside the window ducks in the cached
 	// render exactly as it will in the export (it silently did not, before).
 	const full = computeRegions(doc, 'preview', transcriptsForDoc(doc), {
-		motionDir: motionCacheDir(thread.tempDir)
+		motionDir: motionCacheDir(thread.tempDir),
+		frameGrid: true
 	})
 	const plan = previewPlan(full)
 	const region = full.regions.find(
@@ -238,13 +244,15 @@ export async function renderExactFrame(options: {
 	 * overlay and needs them in the picture.
 	 */
 	burnText?: boolean
-}): Promise<{ path: string }> {
+}): Promise<{ path: string; motion: MotionFrameReport }> {
 	const { threadId, doc, timeSec, burnText = false } = options
 	const thread = threadManager.getThread(threadId)
 	if (!thread || thread.type !== 'editor') throw new Error('Not an editor project')
 
+	// On the frame grid, as the export plans it: same regions, same motion keys.
 	const plan = computeRegions(doc, 'original', transcriptsForDoc(doc), {
-		motionDir: motionCacheDir(thread.tempDir)
+		motionDir: motionCacheDir(thread.tempDir),
+		frameGrid: true
 	})
 	let cursor = 0
 	let region: Region | null = null
@@ -259,11 +267,40 @@ export async function renderExactFrame(options: {
 	}
 	if (!region) throw new Error('Nothing on the timeline at that time.')
 
-	const still = region.kind === 'cut' ? regionAtInstant(region, local, plan.fps) : region
-	// A motion layer in the frame is its rendered clip, so render it first. The
-	// first exact frame over a new look pays for the whole clip; every frame
-	// after it, and the export, reuse the file.
-	await ensureMotionJobs(motionJobsFor([still]))
+	const cutStill = region.kind === 'cut' ? regionAtInstant(region, local, plan.fps) : null
+
+	// ---- Motion: exactly the layers this instant shows, never more, never stale ----
+	// Each is read from its rendered clip when that is on disk, and otherwise
+	// drawn from its page for these few frames alone — the first look at a long
+	// layer used to render all of it, and sat behind every other clip a bulk
+	// edit had queued. Both files are named by the layer's recipe.
+	const motionSlices = (cutStill?.videoLayers ?? []).filter((s) => !!s.motion)
+	const expected = motionItemsAt(doc, timeSec, plan.fps)
+	const missing = expected.filter((item) => !motionSlices.some((s) => s.item.id === item.id))
+	if (missing.length) {
+		const names = missing.map((i) => `"${motionClipLabel(i) || i.id}"`).join(', ')
+		throw new Error(`The frame at ${timeSec.toFixed(2)}s would leave out ${names}, which covers it. Nothing was rendered.`)
+	}
+	const swap = new Map<SourceSlice, SourceSlice>()
+	const layers: MotionLayerReport[] = []
+	for (const slice of motionSlices) {
+		if (fs.existsSync(slice.srcPath)) {
+			layers.push(layerReport(slice, 'clip'))
+			continue
+		}
+		const range = stillFrameRange(slice, plan.fps)
+		const file = await ensureMotionFrames(
+			{ item: slice.item, frame: slice.motion!, outputPath: slice.srcPath },
+			range.first, range.last, stillClipPath(slice.srcPath, range)
+		)
+		swap.set(slice, rebasedSlice(slice, range.first, plan.fps, file))
+		layers.push(layerReport(slice, 'captured'))
+	}
+	const motion: MotionFrameReport = {
+		layers,
+		clips: motionClipsReady(plan.regions, (file) => fs.existsSync(file))
+	}
+	const still: Region = cutStill ? withSlices(cutStill, swap) : region
 	const graph = buildRegionGraph(still, plan)
 
 	const command = ffmpeg()
@@ -309,11 +346,11 @@ export async function renderExactFrame(options: {
 			if (burned) {
 				fs.renameSync(burned, outputPath)
 				fs.unlinkSync(partial)
-				return { path: outputPath }
+				return { path: outputPath, motion }
 			}
 		}
 	}
 
 	fs.renameSync(partial, outputPath)
-	return { path: outputPath }
+	return { path: outputPath, motion }
 }

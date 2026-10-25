@@ -2,6 +2,7 @@ import { BrowserWindow, ipcMain, nativeImage } from 'electron'
 import { randomUUID } from 'node:crypto'
 import { emitTurnUpdate, persistTurn } from '../editor/prompt'
 import { renderExactFrame } from '../editor/preview'
+import { describeMotionReport } from '../editor/exactMotion'
 import { transcriptsForAssets } from '../editor/captions'
 import type { ApplyOutcome, EditorBridge, LiveProject } from './bridge'
 import { ToolError } from './tools'
@@ -107,7 +108,7 @@ export const rendererBridge: EditorBridge = {
 
 	async renderFrame(project, timeSec) {
 		// burnText: an agent has no monitor overlay, so titles and captions must be in the picture.
-		const { path } = await renderExactFrame({ threadId: project.threadId, doc: project.doc, timeSec, burnText: true })
+		const { path, motion } = await renderExactFrame({ threadId: project.threadId, doc: project.doc, timeSec, burnText: true })
 		const image = nativeImage.createFromPath(path)
 		if (image.isEmpty()) throw new ToolError('The frame rendered but could not be read back. Try again.')
 		const { width } = image.getSize()
@@ -116,7 +117,8 @@ export const rendererBridge: EditorBridge = {
 		return {
 			data: large.toJPEG(85).toString('base64'),
 			mimeType: 'image/jpeg',
-			thumbnail: `data:image/jpeg;base64,${thumb.toJPEG(75).toString('base64')}`
+			thumbnail: `data:image/jpeg;base64,${thumb.toJPEG(75).toString('base64')}`,
+			motionNote: describeMotionReport(motion) ?? undefined
 		}
 	},
 
