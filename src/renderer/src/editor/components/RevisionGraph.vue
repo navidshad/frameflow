@@ -21,7 +21,7 @@ import { computed, onMounted, watch, nextTick } from 'vue'
 import { VueFlow, useVueFlow, type Edge, type Node } from '@vue-flow/core'
 import { Background } from '@vue-flow/background'
 import { Controls } from '@vue-flow/controls'
-import type { EditorRevision } from '@shared/types'
+import type { EditorRevisionSummary } from '@shared/types'
 import { useEditorStore } from '../../stores/editorStore'
 import RevisionGraphNode from './RevisionGraphNode.vue'
 
@@ -48,7 +48,7 @@ const layout = computed(() => {
 	const positions = new Map<string, { x: number; y: number }>()
 	let nextColumn = 0
 
-	const assign = (rev: EditorRevision, depth: number): number => {
+	const assign = (rev: EditorRevisionSummary, depth: number): number => {
 		const children = store.revisionChildren.get(rev.id) || []
 		let column: number
 		if (children.length === 0) {

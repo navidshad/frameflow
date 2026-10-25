@@ -104,7 +104,7 @@ describe('AgentServer over Streamable HTTP', () => {
 		const client = await connect()
 		const { tools } = await client.listTools()
 		expect(tools.map((t) => t.name)).toEqual([
-			'get_project', 'get_timeline', 'get_media', 'search_moments', 'render_frame', 'get_motion_guide',
+			'get_project', 'get_timeline', 'get_media', 'search_moments', 'render_frame', 'get_motion_guide', 'get_motion_kit',
 			'get_sound_guide', 'list_sounds', 'suggest_cues', 'render_sound', 'analyze_audio', 'generate_audio',
 			'apply_ops', 'revert_to_version', 'export'
 		])
@@ -247,6 +247,63 @@ describe('AgentServer over Streamable HTTP', () => {
 			expect(layer.motion!.html).toBe(PAGE)
 			expect(layer.motion!.passed!.html).toBe(PAGE)
 			expect(layer.motion!.author).toEqual({ by: 'Claude Code', turnId: editor.commits[0].turn.id })
+		})
+
+		it('lands back-to-back page writes from several agents, each waiting its turn', async () => {
+			// Each probe takes a while, as the hidden window does on a real page.
+			probe = () => new Promise((resolve) => setTimeout(() => resolve({ determinism: 'pass' }), 150))
+			const clients = await Promise.all([connect(), connect(TOKEN, 'codex-mcp-client'), connect()])
+			const seen: number[] = []
+			const read = editor.getLiveProject.bind(editor)
+			editor.getLiveProject = async () => {
+				const project = await read()
+				seen.push(project!.doc.timeline.filter((i) => i.motion).length)
+				return project
+			}
+			const results: any[] = await Promise.all(clients.map((client, k) => client.callTool({
+				name: 'apply_ops',
+				arguments: { rationale: `Card ${k}`, addMotion: [{ template: 'custom', atSec: 4 + k * 4, html: PAGE, label: `Card ${k}` }] }
+			})))
+			for (const result of results) expect(result.isError).toBeFalsy()
+			expect(results.map((r) => text(r).revision).sort()).toEqual(['V1', 'V2', 'V3'])
+			// Each write read the document the one before it left, never a stale one.
+			expect(seen).toEqual([0, 1, 2])
+			expect(editor.doc.timeline.filter((i) => i.motion)).toHaveLength(3)
+		})
+
+		it('reads a timeline of many custom layers in one call, pages on request', async () => {
+			// A realistic page: ~100 KB, like a kit with an embedded font.
+			const big = PAGE.replace('<div id="n"></div>', `<div id="n"></div><!-- ${'x'.repeat(100_000)} -->`)
+			const client = await connect()
+			const addMotion = Array.from({ length: 22 }, (_, k) => ({ template: 'custom', atSec: k * 1.2, html: big, label: `Beat ${k + 1}` }))
+			const added: any = await client.callTool({ name: 'apply_ops', arguments: { rationale: 'All the beats', addMotion } })
+			expect(added.isError).toBeFalsy()
+
+			const result: any = await client.callTool({ name: 'get_timeline', arguments: {} })
+			const raw = result.content[0].text as string
+			const body = JSON.parse(raw)
+			expect(body.total).toBe(23)
+			expect(body.items).toHaveLength(23)
+			expect(body.nextOffset).toBeNull()
+			expect(raw.length).toBeLessThan(60_000)
+			expect(raw).not.toContain('frameflow.define')
+			const layer = body.items.find((i: any) => i.label === 'Beat 1')
+			expect(layer.motion).toMatchObject({
+				kind: 'custom',
+				definition: { durationSec: 3, settings: ['value'], moments: ['in', 'hold', 'out'] },
+				page: { chars: big.length, passedChars: big.length, state: 'ok', passed: true, workingIsPassed: true },
+				author: 'Claude Code'
+			})
+			expect(layer.motion.windows.map((w: any) => w.name)).toEqual(['in', 'hold', 'out'])
+			expect(body.pages).toMatch(/include/)
+
+			// The source, for the one layer an agent means to change.
+			const full = text(await client.callTool({ name: 'get_timeline', arguments: { itemIds: [layer.id, 'nope'], include: ['html'] } }))
+			expect(full.items).toHaveLength(1)
+			expect(full.items[0].motion.html).toBe(big)
+			expect(full.items[0].motion.passed.html).toBe(big)
+			expect(full.notFound).toEqual(['nope'])
+			expect(full.pages).toBeUndefined()
 		})
 
 		it('rejects a page that fails the lint, changes nothing, and says which line', async () => {

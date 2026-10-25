@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import type { Clip, EditorDocument, EditorPersona, MediaAsset, TimelineItem, Track } from '@shared/types'
-import { repairOverlaps, TIMELINE_DIFF_SCHEMA_VERSION } from '@shared/timeline'
+import { applyTimelineDiff, repairOverlaps, repairOverlapsReporting, TIMELINE_DIFF_SCHEMA_VERSION } from '@shared/timeline'
 import {
 	composeSystemInstruction, EDITOR_OPS_SCHEMA, editorOpsSchema, measureBuild, opsToDiff, opsWriteHtml,
 	parseTargetLength, routeSurveyResponse, sumUsage, type PromptStats
@@ -1335,6 +1335,98 @@ describe('custom HTML motion ops', () => {
 		it('lets an explicit durationSec win', () => {
 			const { diff } = opsToDiff({ updateMotion: [{ id: 'cl', html: longer, durationSec: 4 }] }, withLayer(GOOD), writer)
 			expect(diff.updateItems![0]).toMatchObject({ duration: 4 })
+		})
+	})
+
+	describe('a page whose define() uses expressions (gap 4)', () => {
+		// The vlog pages: the page runs 9 s, but its text only says SPEC.duration.
+		const SPEC_PAGE = GOOD
+			.replace('<script>frameflow.define({ duration: 5,', '<script>var SPEC = { duration: 9 };\nframeflow.define({ duration: SPEC.duration,')
+		const nine = { ...resolveDefinition(placed(GOOD).motion), duration: 9 }
+		const at = (duration: number) => {
+			const d = makeDoc([asset], [clip, { ...placed(GOOD), duration, out: duration }])
+			d.tracks.push({ id: 'm', kind: 'video', name: 'M1', order: 1, muted: false, locked: false, hidden: false, height: 64 })
+			return d
+		}
+
+		it('never cuts a layer to the 3 s default because the length could not be read, and says why', () => {
+			const { diff, notes } = opsToDiff({ updateMotion: [{ id: 'cl', html: SPEC_PAGE }] }, withLayer(GOOD), writer)
+			expect(diff.updateItems![0].duration).toBeUndefined()
+			expect(notes.join(' ')).toMatch(/"Triage stat": frameflow\.define\(\) uses expressions FrameFlow cannot read from the text \(duration\)/)
+			expect(notes.join(' ')).toMatch(/keeps the length it had/)
+		})
+
+		it('uses what the page reported when it ran, over the text, and names the length change', () => {
+			const { diff, notes } = opsToDiff({ updateMotion: [{ id: 'cl', html: SPEC_PAGE }] }, withLayer(GOOD), writer, undefined, new Map([[SPEC_PAGE, nine]]))
+			expect(diff.updateItems![0]).toMatchObject({ duration: 9, out: 9 })
+			expect(resolveDefinition(diff.updateItems![0].motion).duration).toBe(9)
+			expect(notes.join(' ')).toMatch(/It read them by running the page: 9 s/)
+			expect(notes.join(' ')).toMatch(/"Triage stat" was at its page's length, so it follows the new page: 5 s → 9 s/)
+		})
+
+		it('keeps a 9 s layer at 9 s when the same page is sent again (the vlog restyle)', () => {
+			const d = makeDoc([asset], [clip, { ...placed(SPEC_PAGE), duration: 9, out: 9, motion: writtenSpec(newMotionSpec(), SPEC_PAGE, writer, nine) }])
+			d.tracks.push({ id: 'm', kind: 'video', name: 'M1', order: 1, muted: false, locked: false, hidden: false, height: 64 })
+			const restyled = SPEC_PAGE.replace('<div id="n">', '<div id="n" style="color:red">')
+			for (const known of [new Map(), new Map([[restyled, nine]])]) {
+				const { diff } = opsToDiff({ updateMotion: [{ id: 'cl', html: restyled }] }, d, writer, undefined, known)
+				expect(diff.updateItems![0].duration).toBeUndefined()
+			}
+		})
+
+		it('adds a new layer at the run-time length', () => {
+			const { diff } = opsToDiff({ addMotion: [{ template: 'custom', atSec: 0, html: SPEC_PAGE }] }, makeDoc([asset], [clip]), writer, undefined, new Map([[SPEC_PAGE, nine]]))
+			expect(diff.addItems![0].duration).toBe(9)
+		})
+
+		it('says nothing about the length when the page did not change it', () => {
+			const { notes } = opsToDiff({ updateMotion: [{ id: 'cl', html: GOOD.replace('<div id="n">', '<div id="n" class="x">') }] }, at(5), writer)
+			expect(notes.join(' ')).not.toMatch(/follows the new page/)
+		})
+	})
+
+	describe('retiming a layer onto another (gap 5)', () => {
+		// Two cards on M1: "Triage stat" 3–8 s and "Next" 9–12 s, and a free M2.
+		const two = () => {
+			const d = withLayer(GOOD)
+			d.timeline.push({ ...placed(GOOD), id: 'next', label: 'Next', timelineStart: 9, out: 3, duration: 3 })
+			d.tracks.push({ id: 'm2', kind: 'video', name: 'M2', order: 2, muted: false, locked: false, hidden: false, height: 64 })
+			return d
+		}
+
+		it('moves the retimed layer to a free motion track, and nothing else', () => {
+			const d = two()
+			const { diff, notes } = opsToDiff({ updateMotion: [{ id: 'cl', atSec: 6 }] }, d)
+			expect(diff.updateItems).toEqual([expect.objectContaining({ id: 'cl', timelineStart: 6, trackId: 'm2' })])
+			expect(notes.join(' ')).toMatch(/"Triage stat" moved to M2: it would overlap "Next" on M1 at 6 s–11 s\. Nothing else moved\./)
+			// Applied the way the store applies it, nothing is pushed along M1.
+			const state = { tracks: d.tracks, timeline: JSON.parse(JSON.stringify(d.timeline)) }
+			applyTimelineDiff(state, diff)
+			expect(repairOverlapsReporting(state)).toEqual([])
+			expect(state.timeline.find((i: TimelineItem) => i.id === 'next').timelineStart).toBe(9)
+		})
+
+		it('does the same when a longer duration runs into the next layer', () => {
+			const { diff } = opsToDiff({ updateMotion: [{ id: 'cl', durationSec: 8 }] }, two())
+			expect(diff.updateItems![0]).toMatchObject({ trackId: 'm2', duration: 8 })
+		})
+
+		it('makes a new motion track when every one is busy', () => {
+			const d = two()
+			d.timeline.push({ ...placed(GOOD), id: 'busy', trackId: 'm2', timelineStart: 0, out: 20, duration: 20 })
+			const { diff, notes } = opsToDiff({ updateMotion: [{ id: 'cl', atSec: 6 }] }, d)
+			expect(diff.addTracks).toEqual([expect.objectContaining({ name: 'M3' })])
+			expect(diff.updateItems![0].trackId).toBe(diff.addTracks![0].id)
+			expect(notes.join(' ')).toMatch(/moved to M3/)
+		})
+
+		it('stays on its track when the new time is free, and does not change the document it read', () => {
+			const d = two()
+			const before = JSON.stringify(d.timeline)
+			const { diff, notes } = opsToDiff({ updateMotion: [{ id: 'cl', atSec: 2 }, { id: 'next', atSec: 7.5 }] }, d)
+			expect(diff.updateItems!.map((u) => u.trackId)).toEqual([undefined, undefined])
+			expect(notes).toEqual([])
+			expect(JSON.stringify(d.timeline)).toBe(before)
 		})
 	})
 

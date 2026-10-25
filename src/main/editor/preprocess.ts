@@ -2,7 +2,7 @@ import fs from 'fs'
 import path from 'path'
 import { setMaxListeners } from 'events'
 import { v4 as uuidv4 } from 'uuid'
-import type { Clip, DescriptionHealth, MediaAsset, SilenceRegion, TranscriptHealth } from '@shared/types'
+import type { Clip, DescriptionHealth, MediaAsset, SilenceRegion, TranscriptHealth, TranscriptTiming } from '@shared/types'
 import { analyzeTranscriptHealth } from '@shared/transcript-health'
 import { srtToSeconds } from '@shared/timeline'
 import { MIN_DESCRIBABLE_DURATION } from '../gemini/scene-descriptions'
@@ -13,6 +13,8 @@ import * as ffmpegAdapter from '../ffmpeg'
 import { SceneDetector, type Scene } from '../scenedetect'
 import * as extraction from '../pipeline/phases/extraction'
 import { ASSET_DIRS } from '../constants/paths'
+import { explainTranscriptError } from '../gemini/transcript-errors'
+import { settingsManager } from '../settings'
 import { getAssetDir, patchAsset, patchAssetPreprocessing } from './assets'
 
 /**
@@ -749,6 +751,8 @@ async function runTranscriptStep(
 		throw new Error('Audio must be extracted before transcription.')
 	}
 
+	await patchAsset(threadId, assetId, { transcriptError: undefined })
+
 	// A single Gemini call has no incremental signal — report honest stage
 	// milestones so the bar still moves: upload/transcribe → merge → done.
 	await setTask(threadId, assetId, 'transcript', {
@@ -791,13 +795,26 @@ async function runTranscriptStep(
 					? `${derived} segments — speech stops at ${Math.round((health.lastSpeechEndSec || 0) / 60)}m of ${Math.round((health.durationSec || 0) / 60)}m`
 					: health?.hasHole
 						? `${derived} segments — ${Math.round((health.largestGapSec || 0) / 60)}m with no transcript in the middle`
-						: `${derived} speech segments`
+						: health?.timing?.drift
+							? `${derived} segments — timing does not follow the speech`
+							: `${derived} speech segments`
 		})
 		return
 	}
 
 	await recordTranscriptHealth(threadId, assetId)
 	await setTask(threadId, assetId, 'transcript', { state: 'completed', progress: 100 })
+}
+
+/** The timing verdict written next to a transcript, if that run produced one. */
+function readTiming(transcriptPath: string | undefined): TranscriptTiming | undefined {
+	if (!transcriptPath) return undefined
+	try {
+		const sidecar = extraction.timingSidecarPath(transcriptPath)
+		return fs.existsSync(sidecar) ? JSON.parse(fs.readFileSync(sidecar, 'utf-8')) : undefined
+	} catch {
+		return undefined
+	}
 }
 
 /** Score the transcript for repetition loops and store the verdict on the asset. */
@@ -808,7 +825,16 @@ async function recordTranscriptHealth(
 	const asset = getAsset(threadId, assetId)
 	const clips = asset?.clips || []
 	if (!clips.length) return undefined
-	const health = analyzeTranscriptHealth(clips, { durationSec: asset?.metadata?.duration })
+	const health: TranscriptHealth = {
+		...analyzeTranscriptHealth(clips, { durationSec: asset?.metadata?.duration }),
+		timing: readTiming(asset?.preprocessing.transcriptPath)
+	}
+	if (health.timing?.drift) {
+		console.warn(
+			`[editor] transcript timing drifts in asset ${assetId}: ${Math.round(health.timing.alignedRatio * 100)}% ` +
+			`of phrase starts on an onset, median offset ${health.timing.medianOnsetOffsetSec}s`
+		)
+	}
 	if (health.looped) {
 		console.warn(
 			`[editor] transcript loop in asset ${assetId}: ${health.maxRepeatRun} identical lines, ` +
@@ -1022,7 +1048,18 @@ export async function preprocessMediaAsset(
 				if (signal.aborted || !SOFT_FAIL_STEPS.includes(step)) throw stepError
 				const message = stepError?.message || `${step} failed`
 				console.warn(`[editor] ${step} failed for asset ${assetId} — continuing without it:`, message)
-				await setTask(threadId, assetId, step, { state: 'error', error: message })
+				if (step === 'transcript' || step === 'audio') {
+					// Shown in the Inspector and to agents — a log line alone left the
+					// media looking untranscribed with no reason given.
+					const reason = explainTranscriptError(message, stepError?.model || settingsManager.getModelSettings().selection['raw-transcript'])
+					await setTask(threadId, assetId, step, { state: 'error', error: reason })
+					// A clip with no audio track has nothing to transcribe — not a failure to show.
+					if (getAsset(threadId, assetId)?.metadata?.hasAudio !== false) {
+						await patchAsset(threadId, assetId, { transcriptError: reason })
+					}
+				} else {
+					await setTask(threadId, assetId, step, { state: 'error', error: message })
+				}
 			}
 		}
 
@@ -1038,7 +1075,10 @@ export async function preprocessMediaAsset(
 			console.log(`[editor] Preprocessing aborted for asset ${assetId}`)
 			return
 		}
-		const message = error?.message || 'Preprocessing failed'
+		const raw = error?.message || 'Preprocessing failed'
+		const message = currentStep === 'retranscribe'
+			? explainTranscriptError(raw, error?.model || settingsManager.getModelSettings().selection['corrected-transcript'])
+			: raw
 		console.error(`[editor] Preprocessing failed for asset ${assetId} (step: ${currentStep}):`, error)
 		// Mark the failed step's task and the asset errored; other assets are unaffected.
 		if (currentStep) {

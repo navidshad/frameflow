@@ -1,7 +1,9 @@
 import type { EditorDocument, EditorOps } from '@shared/types'
-import { BLANK_MOTION_DEFINITION, lintMotionHtml } from '@shared/motion'
+import type { MotionDefinition } from '@shared/motion'
+import { BLANK_MOTION_DEFINITION, lintMotionHtml, lintMotionKit, type MotionKit } from '@shared/motion'
 import { extractMotionDefinition } from '@shared/motionCode'
 import type { MotionProbeInput, MotionProbeResult } from '../motion/probe'
+import { kitsAfterSet, mergeKitRequest } from './kitOps'
 
 /**
  * One rule for every page a machine writes: CHECK IT BEFORE IT REPLACES
@@ -21,74 +23,185 @@ import type { MotionProbeInput, MotionProbeResult } from '../motion/probe'
 
 export type MotionProbe = (input: MotionProbeInput) => Promise<MotionProbeResult>
 
+/** A picture that goes back with a rejection, as MCP image content. */
+export interface VetImage {
+	/** The op it belongs to, as named in `dropped`. */
+	op: string
+	data: string
+	mimeType: 'image/png'
+}
+
 export interface VetResult {
 	/** The ops with every rejected page's op taken out. Everything else is untouched. */
 	ops: EditorOps
 	/** One precise reason per rejected op, written for the agent that sent it. */
 	dropped: string[]
+	/**
+	 * What each page that passed reported to `define` when it RAN, by its html.
+	 * The text read misses `duration: SPEC.duration`; the run does not, so the
+	 * mapping uses this ahead of the text (see `opsToDiff`'s `pageDefinitions`).
+	 */
+	definitions: Map<string, MotionDefinition>
+	/** The two renders of a frame that drew two ways, one per rejected op. */
+	images: VetImage[]
+}
+
+export interface PageVerdict {
+	reason: string | null
+	/** What the page passed to `define` at run time, when the probe ran it. */
+	definition?: MotionDefinition
+	/** PNG, base64, when the page drew one frame two ways. */
+	image?: string
 }
 
 const isPage = (html: unknown): html is string => typeof html === 'string' && html.trim() !== ''
 
-/** Why this page may not be applied, or null when it may. */
-export async function whyPageFails(
+const px = (n: number) => `${Math.round(n)}`
+
+/** "drawing the same frame twice gave different pixels at t = …", with what and where. */
+function differenceReason(result: MotionProbeResult): string {
+	const at = result.differsAt === undefined ? '' : ` at t = ${result.differsAt.toFixed(2)}s`
+	const d = result.difference
+	const head = `drawing the same frame twice gave different pixels${at}`
+	if (!d || !d.pixels) {
+		return `${head}. Something in seek(t, settings) depends on state left by an earlier call (a counter, an accumulated value, an element that is moved relative to where it was). Make the picture a pure function of t and settings`
+	}
+	const box = `${px(d.box.width)}×${px(d.box.height)} px at x ${px(d.box.x)}, y ${px(d.box.y)} (sequence pixels)`
+	const share = d.share < 0.001 ? '<0.1%' : `${(d.share * 100).toFixed(1)}%`
+	const facts = `${d.pixels} pixels differ (${share} of the frame, probed at 1/${d.scale} size), in a box ${box}; the largest change is ${d.maxDelta}/255, the average ${d.meanDelta}/255`
+	const image = d.image ? ' The attached image shows that area drawn the first time (left), the second time (middle), and the differing pixels in red (right).' : ''
+	const subPixel = 'faint changes along edges are a sub-pixel position: something near rest sits at a fraction of a pixel (an eased translate, scale or left/top that is not quite 0 or 1), and the browser anti-aliases it a little differently each time. Round positions to whole pixels (Math.round) and snap to the rest value when the motion is within a pixel of it'
+	const state = 'a shape that moved or changed is state from the previous seek, so seek(t, settings) depends on state left by an earlier call: a counter or accumulated value, an element moved relative to where it was, or layout MEASURED before it is UPDATED for this t (getBoundingClientRect/offsetWidth read before you set the text or size, so a revisit reads the previous seek\'s layout). Set everything for t first, then measure, and make the picture a pure function of t and settings'
+	const causes = d.looksSubPixel
+		? `This looks like a sub-pixel position: ${subPixel}. If it is not that, ${state}`
+		: `This looks like state: ${state}. If the change is only faint edges, ${subPixel}`
+	return `${head}: ${facts}.${image} ${causes}`
+}
+
+/** Why this page may not be applied (or null when it may), with what the run showed. */
+export async function vetPage(
 	html: string,
 	frame: { width: number; height: number },
-	probe?: MotionProbe
-): Promise<string | null> {
+	probe?: MotionProbe,
+	/** The project kit the page uses: drawn with it, as it will be shown. */
+	kit?: MotionKit
+): Promise<PageVerdict> {
 	const lint = lintMotionHtml(html)
 	if (!lint.ok) {
 		const first = lint.issues[0]
 		const more = lint.issues.length > 1 ? ` (and ${lint.issues.length - 1} more)` : ''
 		const line = first.excerpt ? ` — “${first.excerpt}”` : ''
-		return `line ${first.line}${line}: ${first.message}${more}`
+		return { reason: `line ${first.line}${line}: ${first.message}${more}` }
 	}
 	// No window to draw in (a test, or a platform without one): the lint decides.
-	if (!probe) return null
+	if (!probe) return { reason: null }
 
 	const definition = extractMotionDefinition(html).definition ?? BLANK_MOTION_DEFINITION
-	const result = await probe({ html, definition, frame })
-	if (result.error) return `the page throws when it runs: ${result.error}`
+	const result = await probe({ html, definition, frame, kit })
+	if (result.error) return { reason: `the page throws when it runs: ${result.error}`, definition: result.definition }
 	if (result.determinism === 'fail') {
-		const at = result.differsAt === undefined ? '' : ` at t = ${result.differsAt.toFixed(2)}s`
-		return `drawing the same frame twice gave different pixels${at}. Something in seek(t, settings) depends on state left by an earlier call (a counter, an accumulated value, an element that is moved relative to where it was). Make the picture a pure function of t and settings`
+		return { reason: differenceReason(result), definition: result.definition, image: result.difference?.image }
 	}
-	return null
+	return { reason: null, definition: result.definition }
 }
+
+/** Why this page may not be applied, or null when it may. */
+export async function whyPageFails(
+	html: string,
+	frame: { width: number; height: number },
+	probe?: MotionProbe,
+	kit?: MotionKit
+): Promise<string | null> {
+	return (await vetPage(html, frame, probe, kit)).reason
+}
+
+const KIT_PROBE_SAMPLE = 3
+
+/** Up to `n` spread out across the list: the first, the last, the middle. */
+const sample = <T>(list: T[], n: number): T[] =>
+	list.length <= n ? list : [...new Set(Array.from({ length: n }, (_, k) => Math.round((k * (list.length - 1)) / (n - 1))))].map((i) => list[i])
 
 export async function vetHtmlOps(
 	ops: EditorOps,
-	doc: Pick<EditorDocument, 'timelineMeta'>,
+	doc: Pick<EditorDocument, 'timelineMeta'> & Partial<Pick<EditorDocument, 'timeline' | 'motionKits'>>,
 	probe?: MotionProbe
 ): Promise<VetResult> {
 	const dropped: string[] = []
+	const definitions = new Map<string, MotionDefinition>()
+	const images: VetImage[] = []
 	const frame = { width: doc.timelineMeta?.width || 1920, height: doc.timelineMeta?.height || 1080 }
+	const timeline = doc.timeline ?? []
+
+	// ---- Kits first: the pages below are drawn with the kits that will be. ----
+	// A changed kit is linted, then drawn with a few of the pages that use it (a
+	// kit that throws breaks every one of them). Sampled, not all: a series of 28
+	// layers would otherwise mean 28 probes for one restyle.
+	const setKits: NonNullable<EditorOps['setMotionKits']> = []
+	let accepted: MotionKit[] = [...(doc.motionKits ?? [])]
+	for (const [i, request] of (ops.setMotionKits ?? []).entries()) {
+		const id = String(request?.id ?? '').trim()
+		const kit = mergeKitRequest(accepted.find((k) => k.id === id), request)
+		const problems = lintMotionKit(kit)
+		let reason: string | null = problems.length
+			? `${problems[0]}${problems.length > 1 ? ` (and ${problems.length - 1} more)` : ''}`
+			: null
+		if (!reason && probe) {
+			const pages = [...new Map(timeline
+				.filter((item) => item.motion?.kit === id && !item.motion.template && item.motion.passed?.html)
+				.map((item) => [item.motion!.passed!.html, item])).values()]
+			for (const item of sample(pages, KIT_PROBE_SAMPLE)) {
+				const why = await whyPageFails(item.motion!.passed!.html, frame, probe, kit)
+				if (why) { reason = `with this kit, layer "${item.label || item.id}" fails: ${why}`; break }
+			}
+		}
+		if (reason) {
+			dropped.push(`setMotionKits[${i}] ("${id}") rejected, the kit is unchanged: ${reason}. Fix it and send it again.`)
+			continue
+		}
+		setKits.push(request)
+		accepted = kitsAfterSet({ setMotionKits: [request] }, accepted)
+	}
+	const kitNamed = (kit: string | undefined) => (kit ? accepted.find((k) => k.id === kit) : undefined)
 
 	const added: NonNullable<EditorOps['addMotion']> = []
 	for (const [i, request] of (ops.addMotion ?? []).entries()) {
 		if (!isPage(request?.html)) { added.push(request); continue }
-		const reason = await whyPageFails(request.html, frame, probe)
-		if (reason) {
-			dropped.push(`addMotion[${i}] (custom page) rejected, nothing was added: ${reason}. Fix the page and send it again.`)
+		const verdict = await vetPage(request.html, frame, probe, kitNamed(request.kit))
+		if (verdict.reason) {
+			dropped.push(`addMotion[${i}] (custom page) rejected, nothing was added: ${verdict.reason}. Fix the page and send it again.`)
+			if (verdict.image) images.push({ op: `addMotion[${i}]`, data: verdict.image, mimeType: 'image/png' })
 			continue
 		}
+		if (verdict.definition) definitions.set(request.html, verdict.definition)
 		added.push(request)
 	}
 
 	const updated: NonNullable<EditorOps['updateMotion']> = []
 	for (const request of ops.updateMotion ?? []) {
-		if (!isPage(request?.html)) { updated.push(request); continue }
-		const reason = await whyPageFails(request.html, frame, probe)
-		if (reason) {
-			dropped.push(`updateMotion ${request.id} rejected, the layer keeps its previous page: ${reason}. Fix the page and send it again.`)
+		const item = timeline.find((i) => i.id === request?.id)
+		// The kit this layer will draw with: the one the op names, else the one it has.
+		const kit = kitNamed(request?.kit !== undefined ? request.kit : item?.motion?.kit)
+		// A page moved onto a kit without new text is drawn with it too.
+		const html = isPage(request?.html)
+			? request.html
+			: request?.kit && item?.motion && !item.motion.template && item.motion.passed?.html
+				? item.motion.passed.html
+				: null
+		if (!html) { updated.push(request); continue }
+		const verdict = await vetPage(html, frame, probe, kit)
+		if (verdict.reason) {
+			dropped.push(`updateMotion ${request.id} rejected, the layer keeps its previous page: ${verdict.reason}. Fix the page and send it again.`)
+			if (verdict.image) images.push({ op: `updateMotion ${request.id}`, data: verdict.image, mimeType: 'image/png' })
 			continue
 		}
+		if (verdict.definition) definitions.set(html, verdict.definition)
 		updated.push(request)
 	}
 
-	if (!dropped.length) return { ops, dropped }
+	if (!dropped.length) return { ops, dropped, definitions, images }
 	const vetted: EditorOps = { ...ops }
+	if (ops.setMotionKits) vetted.setMotionKits = setKits.length ? setKits : undefined
 	if (ops.addMotion) vetted.addMotion = added.length ? added : undefined
 	if (ops.updateMotion) vetted.updateMotion = updated.length ? updated : undefined
-	return { ops: vetted, dropped }
+	return { ops: vetted, dropped, definitions, images }
 }

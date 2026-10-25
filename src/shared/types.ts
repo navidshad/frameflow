@@ -194,7 +194,7 @@ export interface Thread {
 // ============================================================
 import type { KeySpec } from './keying'
 import type { GeneratorSpec } from './generators'
-import type { MotionSpec } from './motion'
+import type { MotionKit, MotionSpec } from './motion'
 
 // Timeline Video Editor (see video-editor-prd.md §6)
 // Canonical time unit is SECONDS. SRT strings appear only at the boundary
@@ -229,6 +229,11 @@ export interface EditorDocument {
 	loudnessEnabled?: boolean
 	/** Pointer into the revisions sidecar (userData/editor-revisions/{id}.json). */
 	currentRevisionId?: string
+	/**
+	 * Shared CSS/JS that custom motion pages name by id (`MotionSpec.kit`). Part
+	 * of the timeline state: undoable, and carried in every revision snapshot.
+	 */
+	motionKits?: MotionKit[]
 }
 
 export interface TimelineMeta {
@@ -277,6 +282,7 @@ export interface MediaAsset {
 	clips: Clip[]               // derived from scene detection
 	filmstrip?: FilmstripEntry[]
 	transcriptHealth?: TranscriptHealth  // set by the transcript step
+	transcriptError?: string     // why the last transcript run failed; cleared on success
 	descriptionHealth?: DescriptionHealth  // set by the descriptions step
 	createdAt: number
 }
@@ -312,7 +318,24 @@ export interface TranscriptHealth {
 	largestGapSec?: number      // longest stretch with no speech
 	gapAtSec?: number           // where that stretch starts, when it counts as a hole
 	hasHole: boolean            // verdict: a window in the MIDDLE came back empty
+	timing?: TranscriptTiming   // timing checked against pauses in the audio
 	checkedAt: number
+}
+
+/** Segment times checked against speech onsets measured from the audio (gemini/transcript-timing.ts). */
+export interface TranscriptTiming {
+	engine: 'words' | 'segments'   // word timestamps from a transcribe model, or model-written segment times
+	language?: string              // BCP-47 code the model reported, when it did
+	phraseStartsChecked: number    // segments after a gap, compared to the nearest onset
+	alignedRatio: number           // share of those within 0.3 s of an onset — 1 is perfect
+	medianOnsetOffsetSec: number
+	snapped: number                // segment starts moved onto an onset
+	drift: boolean                 // verdict: times do not follow the speech
+	driftAtSec: number[]           // phrase starts with no onset within 1 s
+	silentTextAtSec: number[]      // segments whose span is mostly silence (likely invented)
+	repeatedAtSec: number[]        // segments that repeat the previous line
+	untranscribedSec?: number      // sound with no text over it, in stretches of 5 s or more
+	untranscribedAtSec?: number[]  // where those stretches start
 }
 
 export interface Clip {        // a selectable scene piece
@@ -540,6 +563,15 @@ export interface EditorHistoryFile {
 	currentStepId: string          // informational — the pointer of record is doc.historyRef
 }
 
+/** What get-editor-history returns: the steps the renderer replays, no keyframes. */
+export interface EditorHistoryLoad {
+	threadId: string
+	steps: EditorHistoryStep[]
+	currentStepId: string
+	/** Set when the stored history could not be read; it starts empty instead. */
+	problem?: string
+}
+
 export interface EditorHistoryStep {
 	id: string
 	seq: number                 // monotonic (Thread.versionCounter via getNextVersion)
@@ -556,6 +588,7 @@ export interface TimelineSnapshot {
 	tracks: Track[]
 	timeline: TimelineItem[]
 	timelineMeta: TimelineMeta
+	motionKits?: MotionKit[]
 }
 
 // ===== Revision tree (coarse, permanent checkpoints above the undo ring) =====
@@ -575,16 +608,42 @@ export interface EditorRevision {
 	label: string               // persona name / user label / 'Original' / 'Auto checkpoint'
 	turnId?: string             // origin === 'ai'
 	personaId?: string          // origin === 'ai' — drives the list-item icon
-	snapshot: {
-		tracks: Track[]
-		timeline: TimelineItem[]
-		timelineMeta: TimelineMeta
-		markers?: EditorMarker[]  // markers ride in the snapshot so switches restore them
-	}
+	snapshot: RevisionSnapshot
 	createdAt: number
 }
 
-// ---- Revisions sidecar: userData/editor-revisions/{threadId}.json ----
+export interface RevisionSnapshot {
+	tracks: Track[]
+	timeline: TimelineItem[]
+	timelineMeta: TimelineMeta
+	markers?: EditorMarker[]    // markers ride in the snapshot so switches restore them
+	motionKits?: MotionKit[]    // absent in revisions from before kits: none
+}
+
+/**
+ * A revision without its snapshot: what the renderer keeps for every revision.
+ * Snapshots are fetched one at a time (get-editor-revision-snapshot) — holding
+ * all of them made a 28-motion-layer project need gigabytes just to open.
+ */
+export type EditorRevisionSummary = Omit<EditorRevision, 'snapshot'> & {
+	itemCount: number
+	/** The first few items by start time, for the card's thumbnail. */
+	firstClips: Array<{ sourceAssetId?: string; sourceClipId?: string }>
+}
+
+/** What get-editor-revisions returns (sidecar schema 2). */
+export interface EditorRevisionsIndex {
+	threadId: string
+	schemaVersion: 2
+	revisionCounter: number
+	revisions: EditorRevisionSummary[]
+	/** Set when stored revisions could not all be read; the project still opens. */
+	problem?: string
+}
+
+// ---- Legacy (schema 1) revisions sidecar: userData/editor-revisions/{threadId}.json ----
+// Every revision held a full snapshot. Migrated on first open to the schema 2
+// layout in main/editor/revisionStore.ts.
 export interface EditorRevisionsFile {
 	threadId: string
 	schemaVersion: 1
@@ -796,6 +855,8 @@ export interface EditorOps {
 		 * need the "Write custom HTML motion layers" permission to send one.
 		 */
 		html?: string
+		/** A custom page only: the project motion kit (`setMotionKits` id) the page builds on. */
+		kit?: string
 	}>
 	/** Change a motion layer already on the timeline: its fields, its windows, its timing. */
 	updateMotion?: Array<{
@@ -806,7 +867,18 @@ export interface EditorOps {
 		durationSec?: number
 		/** Replace the layer's page (it becomes a custom layer). */
 		html?: string
+		/** Use this project motion kit for the page; "" stops using one. */
+		kit?: string
 	}>
+	/**
+	 * Project motion kits: CSS and JS stored once and shared by every custom
+	 * page that names it (`addMotion.kit` / `updateMotion.kit`). Adds a kit, or
+	 * changes one: the fields sent replace that kit's own, the ones left out
+	 * keep theirs, and "" empties one. MCP only, with the HTML permission.
+	 */
+	setMotionKits?: Array<{ id: string; label?: string; css?: string; js?: string }>
+	/** Kit ids to delete. A kit that a layer still uses is not deleted. */
+	removeMotionKits?: string[]
 	/**
 	 * A transition on the cut AFTER each named item. `kind: 'none'` removes one.
 	 * Keyed by the OUTGOING item because that is where the document stores it.
@@ -903,6 +975,9 @@ export type TimelineDiff = {
 	updateItems?: Array<{ id: string } & Partial<TimelineItem>>
 	addTracks?: Track[]
 	removeTrackIds?: string[]
+	/** Motion kits added or replaced whole, by id. Applied before items. */
+	setMotionKits?: MotionKit[]
+	removeMotionKitIds?: string[]
 }
 
 // ===== Export / render (M4) =====

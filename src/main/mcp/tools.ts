@@ -1,5 +1,7 @@
 import { randomUUID } from 'node:crypto'
 import type { EditorOps, MediaAsset, PromptTurn, TimelineItem } from '@shared/types'
+import { motionWorkingHtml, resolveDefinition, resolveMoments, type MotionSpec } from '@shared/motion'
+import { motionStatus } from '@shared/motionCode'
 import { opKeys, opsInputSchema, validateArgs, type AgentPermission, type AgentPermissions, type JsonSchema } from '@shared/agent'
 import {
 	clock, countWords, opChips, pageRows, searchMoments, summarizeMedia, summarizeSearch, summarizeTimeline,
@@ -10,6 +12,7 @@ import { TRANSITION_PRESETS } from '@shared/transitionPresets'
 import { computeContentEnd } from '@shared/timeline'
 import { EDITOR_OPS_SCHEMA, opsToDiff, opsWriteHtml } from '../editor/ops'
 import { vetHtmlOps, type MotionProbe } from '../editor/vetHtml'
+import { MOTION_KIT_OPS_SCHEMA, opsWriteKits } from '../editor/kitOps'
 import { MOTION_TEMPLATES, userMotionTemplates } from '@shared/motionTemplates'
 import { motionGuideText } from '@shared/motionGuide'
 import { soundGuideText } from '@shared/soundGuide'
@@ -121,11 +124,60 @@ const versionLabel = (project: LiveProject, revisionId: string | null | undefine
 	return rev ? `V${rev.seq}` : null
 }
 
-function describeItem(item: TimelineItem, names: Map<string, string>, recipes?: Map<string, MediaAsset['synth']>) {
-	const { masterSegmentIndex, sourceClipId, preservePitch, bind, ...rest } = item
+/**
+ * A motion layer without its page source: what it is, how it is timed and set,
+ * how big its page is and whether it passed its checks. A custom page is often
+ * 100 KB or more and is stored twice (working and last passed), so the source
+ * comes only when asked for (`include: ['html']`).
+ */
+export function motionSummary(spec: MotionSpec, clipDuration: number) {
+	const windows = (() => {
+		try {
+			return resolveMoments(spec, clipDuration, resolveDefinition(spec)).map((m) => ({ name: m.name, sec: r3(m.duration) }))
+		} catch {
+			return undefined
+		}
+	})()
+	if (spec.template) {
+		return { kind: 'template' as const, template: spec.template, settings: spec.settings, moments: spec.moments, windows }
+	}
+	const def = resolveDefinition(spec)
+	const working = motionWorkingHtml(spec)
+	const status = motionStatus(spec)
+	return {
+		kind: 'custom' as const,
+		settings: spec.settings,
+		moments: spec.moments,
+		windows,
+		definition: {
+			durationSec: r3(def.duration),
+			settings: def.settings.map((s) => s.key),
+			moments: def.moments.map((m) => m.name)
+		},
+		page: {
+			chars: working.length,
+			passedChars: spec.passed ? spec.passed.html.length : null,
+			// ok: the working page is the one drawn; last-passing: it fails, an older one is drawn; nothing: none has passed.
+			state: status.state,
+			passed: !!spec.passed,
+			verified: !!spec.passed?.verified,
+			workingIsPassed: !!spec.passed && spec.passed.html === working
+		},
+		author: spec.author?.by
+	}
+}
+
+function describeItem(
+	item: TimelineItem,
+	names: Map<string, string>,
+	recipes?: Map<string, MediaAsset['synth']>,
+	options: { html?: boolean } = {}
+) {
+	const { masterSegmentIndex, sourceClipId, preservePitch, bind, motion, ...rest } = item
 	const sound = recipes?.get(item.sourceAssetId)
 	return {
 		...rest,
+		motion: motion ? (options.html ? motion : motionSummary(motion, item.duration)) : undefined,
 		asset: item.sourceAssetId ? names.get(item.sourceAssetId) : undefined,
 		// A synthesised sound: its recipe, and the moment it follows (pass these to setSounds).
 		sound: sound ? { kind: sound.kind, variant: sound.variant, pitch: sound.pitch, levelDb: sound.levelDb, air: sound.air, seed: sound.seed, durationSec: sound.durationSec || undefined } : undefined,
@@ -179,6 +231,12 @@ const getProject: ToolDef = {
 				describedScenes: a.clips.filter((c) => c.visual).length
 			})),
 			markers: (doc.markers || []).map((m) => ({ atSec: r3(m.time), label: m.label })),
+			// Shared CSS/JS custom pages name with `kit`. get_motion_kit returns the source.
+			motionKits: (doc.motionKits || []).map((k) => ({
+				id: k.id, label: k.label,
+				cssBytes: k.css?.length ?? 0, jsBytes: k.js?.length ?? 0,
+				usedBy: doc.timeline.filter((i) => i.motion?.kit === k.id).map((i) => i.id)
+			})),
 			captionsEnabled: !!doc.captionsEnabled,
 			loudnessEnabled: !!doc.loudnessEnabled,
 			revisions: {
@@ -227,7 +285,10 @@ const getTimeline: ToolDef = {
 		'The edit as it stands this moment, read live from the editor — including changes the user just ' +
 		'made by hand. Every item: id, track, source media, timeline start and end, source in/out, speed, ' +
 		'label, effects, transitions, titles. Timeline items are in TIMELINE seconds; in/out are SOURCE ' +
-		'seconds. Never cached: read it again after the user edits. Paged — pass nextOffset as offset to read on.',
+		'seconds. Motion layers come as a summary (template or custom, settings, moment windows, page size, ' +
+		'whether the page passed its checks, who wrote it) without their page source: pass include ["html"] ' +
+		'with itemIds to read the pages you mean to change. Never cached: read it again after the user edits. ' +
+		'Paged — pass nextOffset as offset to read on.',
 	inputSchema: {
 		type: 'object',
 		properties: {
@@ -235,27 +296,39 @@ const getTimeline: ToolDef = {
 			limit: { type: 'integer', minimum: 1, maximum: 500, description: 'Items per page (default 200)' },
 			trackId: { type: 'string', description: 'Only this track' },
 			fromSec: { type: 'number', description: 'Only items that end after this timeline time' },
-			toSec: { type: 'number', description: 'Only items that start before this timeline time' }
+			toSec: { type: 'number', description: 'Only items that start before this timeline time' },
+			itemIds: { type: 'array', items: { type: 'string' }, description: 'Only these items' },
+			include: {
+				type: 'array', items: { type: 'string', enum: ['html'] },
+				description: 'html: each motion layer in full, with its custom page source (working and last passed). Large: narrow with itemIds'
+			}
 		},
 		additionalProperties: false
 	},
 	async run(args, ctx) {
 		const project = await requireProject(ctx)
 		const { doc } = project
+		const html = Array.isArray(args.include) && args.include.includes('html')
+		const only = Array.isArray(args.itemIds) && args.itemIds.length ? new Set<string>(args.itemIds.map(String)) : null
 		const names = new Map(doc.media.map((a) => [a.id, a.name]))
 		const recipes = new Map(doc.media.filter((a) => a.synth).map((a) => [a.id, a.synth]))
 		const items = [...doc.timeline]
 			.filter((i) => !args.trackId || i.trackId === args.trackId)
+			.filter((i) => !only || only.has(i.id))
 			.filter((i) => args.fromSec === undefined || i.timelineStart + i.duration > args.fromSec)
 			.filter((i) => args.toSec === undefined || i.timelineStart < args.toSec)
 			.sort((a, b) => a.timelineStart - b.timelineStart)
-			.map((i) => describeItem(i, names, recipes))
+			.map((i) => describeItem(i, names, recipes, { html }))
 		const page = pageRows(items, { offset: args.offset, limit: args.limit ?? 200, maxChars: 60_000 })
+		const missing = only ? [...only].filter((id) => !doc.timeline.some((i) => i.id === id)) : []
+		const hasCustom = !html && page.rows.some((i) => !!i.motion && 'kind' in i.motion && i.motion.kind === 'custom')
 		return {
 			content: [json({
 				durationSec: r3(computeContentEnd(doc.timeline)),
 				currentRevision: versionLabel(project, project.currentRevisionId),
-				items: page.rows, offset: page.offset, total: page.total, nextOffset: page.nextOffset
+				items: page.rows, offset: page.offset, total: page.total, nextOffset: page.nextOffset,
+				notFound: missing.length ? missing : undefined,
+				pages: hasCustom ? 'Custom page sources are left out. get_timeline {itemIds: [...], include: ["html"]} returns them.' : undefined
 			})],
 			feed: { detail: summarizeTimeline(doc.timeline) }
 		}
@@ -305,6 +378,8 @@ const getMedia: ToolDef = {
 			width: asset.metadata?.width, height: asset.metadata?.height,
 			processing: asset.preprocessState || 'pending',
 			transcriptHealth: transcript ? asset.transcriptHealth || null : undefined,
+			// Why there is no transcript, when the last run failed.
+			transcriptError: !transcript ? asset.transcriptError || undefined : undefined,
 			descriptionHealth: asset.descriptionHealth || undefined
 		}
 		if (include.includes('transcript')) {
@@ -411,7 +486,13 @@ const renderFrame: ToolDef = {
 		return {
 			content: [
 				{ type: 'image', data: frame.data, mimeType: frame.mimeType },
-				{ type: 'text', text: `Frame at ${clock(timeSec)} of ${clock(end)} (${project.doc.timelineMeta.width}×${project.doc.timelineMeta.height}).` }
+				{
+					type: 'text',
+					text: [
+						`Frame at ${clock(timeSec)} of ${clock(end)} (${project.doc.timelineMeta.width}×${project.doc.timelineMeta.height}).`,
+						frame.motionNote
+					].filter(Boolean).join('\n')
+				}
 			],
 			feed: {
 				title: `render_frame ${clock(timeSec)}`,
@@ -758,7 +839,10 @@ const analyzeAudio: ToolDef = {
 }
 
 const OPS_BASE_SCHEMA = opsInputSchema(EDITOR_OPS_SCHEMA)
-const OPS_INPUT_SCHEMA = { ...OPS_BASE_SCHEMA, properties: { ...OPS_BASE_SCHEMA.properties, ...SOUND_OPS_SCHEMA } } as typeof OPS_BASE_SCHEMA
+const OPS_INPUT_SCHEMA = {
+	...OPS_BASE_SCHEMA,
+	properties: { ...OPS_BASE_SCHEMA.properties, ...SOUND_OPS_SCHEMA, ...MOTION_KIT_OPS_SCHEMA }
+} as typeof OPS_BASE_SCHEMA
 
 const applyOps: ToolDef = {
 	name: 'apply_ops',
@@ -771,9 +855,10 @@ const applyOps: ToolDef = {
 		'notes. Times: timelineStart, atSec and removeRanges are TIMELINE seconds; in/out are SOURCE seconds. ' +
 		'Read ids from get_timeline and get_media first. Prefer a few focused calls to one huge one — each ' +
 		'is its own revision — and check the result with render_frame. Before sending a custom page in `html`, ' +
-		'read get_motion_guide. Always include a short rationale: the user reads it.',
+		'read get_motion_guide. Layers that share a look share a motion kit (setMotionKits, then `kit` on each ' +
+		'page): a restyle is then one kit edit. Always include a short rationale: the user reads it.',
 	inputSchema: OPS_INPUT_SCHEMA,
-	alsoNeeds: (args) => (opsWriteHtml(args as EditorOps) ? 'html' : opsMakeSound(args as EditorOps) ? 'sound' : null),
+	alsoNeeds: (args) => (opsWriteHtml(args as EditorOps) || opsWriteKits(args as EditorOps) ? 'html' : opsMakeSound(args as EditorOps) ? 'sound' : null),
 	async run(args, ctx) {
 		const errors = validateArgs(OPS_INPUT_SCHEMA, args)
 		if (errors.length) throw new ToolError(`Invalid operations — nothing was changed:\n- ${errors.join('\n- ')}`)
@@ -784,8 +869,16 @@ const applyOps: ToolDef = {
 		// window — BEFORE it replaces anything. One that fails is not applied; the
 		// earlier page stays, and the agent is told what to fix.
 		const vetted = await vetHtmlOps(args as EditorOps, project.doc, ctx.probeMotion)
+		// The two renders of a frame that drew two ways, so the agent can SEE why.
+		const evidence = vetted.images.map((i) => ({ type: 'image' as const, data: i.data, mimeType: i.mimeType }))
 		if (!opKeys(vetted.ops as Record<string, unknown>).length) {
-			throw new ToolError(`Nothing was changed. Every operation was rejected:\n- ${vetted.dropped.join('\n- ')}`)
+			const message = `Nothing was changed. Every operation was rejected:\n- ${vetted.dropped.join('\n- ')}`
+			if (!evidence.length) throw new ToolError(message)
+			return {
+				content: [{ type: 'text', text: message }, ...evidence],
+				isError: true,
+				feed: { detail: 'page rejected: it drew a frame two ways' }
+			}
 		}
 		const ops = vetted.ops
 		const turnId = randomUUID()
@@ -794,7 +887,7 @@ const applyOps: ToolDef = {
 		const wanted = soundRecipesOf(ops, project.doc)
 		const rendered = wanted.length ? await ctx.bridge.prepareSounds(project, wanted) : []
 		const soundAssets = new Map(wanted.map((r, i) => [recipeKey(r), rendered[i]]))
-		const mapped = opsToDiff(ops, project.doc, { by: ctx.clientName, turnId }, soundAssets)
+		const mapped = opsToDiff(ops, project.doc, { by: ctx.clientName, turnId }, soundAssets, vetted.definitions)
 		const { diff, addMarkers, docSettings, notes } = mapped
 		const droppedOps = [...vetted.dropped, ...mapped.droppedOps]
 		const turn: PromptTurn = {
@@ -829,8 +922,9 @@ const applyOps: ToolDef = {
 				undo: parent ? `revert_to_version ${parent.slice(1)} goes back to the state before this edit` : undefined,
 				applied: outcome.counts,
 				droppedOps: [...droppedOps, ...outcome.pruned],
-				notes
-			})],
+				// Anything the live doc moved that the ops did not ask to (an overlap pushed right).
+				notes: [...notes, ...(outcome.shifted ?? [])]
+			}), ...evidence],
 			feed: {
 				detail: ops.rationale || undefined,
 				chips: opChips(ops as Record<string, unknown>, outcome.revisionSeq)
@@ -850,6 +944,34 @@ const getMotionGuide: ToolDef = {
 	inputSchema: { type: 'object', properties: {}, additionalProperties: false },
 	async run() {
 		return { content: [{ type: 'text', text: motionGuideText() }], feed: { detail: 'read the motion page guide' } }
+	}
+}
+
+const getMotionKit: ToolDef = {
+	name: 'get_motion_kit',
+	permission: 'read',
+	description:
+		'The full source (css and js) of a project motion kit, and the layers that use it. get_project lists the ' +
+		'kits. Read it before changing a kit with apply_ops setMotionKits, so you change what is there.',
+	inputSchema: {
+		type: 'object',
+		properties: { id: { type: 'string', description: 'The kit id, from get_project motionKits' } },
+		required: ['id'],
+		additionalProperties: false
+	},
+	title: (args) => `get_motion_kit ${args.id}`,
+	async run(args, ctx) {
+		const project = await requireProject(ctx)
+		const kits = project.doc.motionKits || []
+		const kit = kits.find((k) => k.id === args.id)
+		if (!kit) {
+			throw new ToolError(`There is no kit "${args.id}". Kits: ${kits.map((k) => k.id).join(', ') || 'none yet — add one with apply_ops setMotionKits'}.`)
+		}
+		const usedBy = project.doc.timeline.filter((i) => i.motion?.kit === kit.id).map((i) => ({ id: i.id, label: i.label }))
+		return {
+			content: [json({ id: kit.id, label: kit.label, css: kit.css ?? '', js: kit.js ?? '', usedBy })],
+			feed: { detail: `read kit ${kit.id} · ${usedBy.length} layer${usedBy.length === 1 ? '' : 's'}` }
+		}
 	}
 }
 
@@ -902,7 +1024,7 @@ const exportTool: ToolDef = {
 }
 
 export const TOOLS: ToolDef[] = [
-	getProject, getTimeline, getMedia, searchMomentsTool, renderFrame, getMotionGuide,
+	getProject, getTimeline, getMedia, searchMomentsTool, renderFrame, getMotionGuide, getMotionKit,
 	getSoundGuide, listSounds, suggestCuesTool, renderSoundTool, analyzeAudio, generateAudioTool,
 	applyOps, revertToVersion, exportTool
 ]

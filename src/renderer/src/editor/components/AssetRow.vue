@@ -77,6 +77,14 @@
 			</button>
 		</div>
 
+		<!-- Transcript failed but the import went on without it -->
+		<p v-if="asset.preprocessState === 'completed' && asset.transcriptError"
+			class="mt-1.5 text-[10px] text-amber-600 dark:text-amber-400 font-medium leading-snug line-clamp-2"
+			:title="asset.transcriptError">
+			<span class="iconify tabler--alert-triangle w-3 h-3 inline-block align-[-1px]"></span>
+			No transcript: {{ asset.transcriptError }}
+		</p>
+
 		<!-- Error state -->
 		<div v-if="asset.preprocessState === 'error'" class="mt-2">
 			<p class="text-[11px] text-red-500 font-medium leading-snug line-clamp-2">

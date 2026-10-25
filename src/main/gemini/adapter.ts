@@ -4,12 +4,15 @@ import { settingsManager } from '../settings';
 import * as fs from 'fs';
 import * as path from 'path';
 import { sanitizeFilename } from '../ffmpeg';
+import { parseOffset } from './transcript-timing';
 
 
 export class GeminiAdapter {
 	private client: GoogleGenAI;
+	private apiKey: string;
 
 	constructor(apiKey: string) {
+		this.apiKey = apiKey;
 		this.client = new GoogleGenAI({
 			apiKey,
 			apiVersion: 'v1beta' // required for gemini-3.1-flash-image-preview
@@ -159,10 +162,10 @@ export class GeminiAdapter {
 			contents: [{ role: 'user', parts }]
 		};
 
+		// The SDK only reads systemInstruction from request.config; a top-level
+		// field is silently dropped.
 		if (systemInstruction) {
-			request.systemInstruction = {
-				parts: [{ text: systemInstruction }]
-			};
+			request.config = { ...request.config, systemInstruction };
 		}
 
 		try {
@@ -403,6 +406,99 @@ export class GeminiAdapter {
 			console.error(`[GEMINI ADAPTER] generateTextFromFiles failed:`, error);
 			throw error;
 		}
+	}
+
+	/**
+	 * Rate limits that name their own wait ("Please retry in 20s" — the free
+	 * tier allows gemini-3.5-transcribe 3 calls a minute) outlast withRetry's
+	 * short backoff. Wait as long as the server asks, a few times, up to a minute each.
+	 */
+	private async withServerDelay<T>(operation: () => Promise<T>, signal?: AbortSignal, attempts = 4): Promise<T> {
+		for (let attempt = 1; ; attempt++) {
+			try {
+				return await operation();
+			} catch (error: any) {
+				const wait = String(error?.message || '').match(/retry in ([\d.]+)\s*s/i);
+				if (signal?.aborted || !wait || attempt >= attempts) throw error;
+				const ms = Math.min(65_000, Math.ceil(parseFloat(wait[1]) * 1000) + 1000);
+				console.warn(`[GEMINI ADAPTER] rate limited — waiting ${Math.round(ms / 1000)}s as the server asks`);
+				await new Promise<void>((resolve) => {
+					const timer = setTimeout(resolve, ms);
+					signal?.addEventListener('abort', () => { clearTimeout(timer); resolve(); }, { once: true });
+				});
+				if (signal?.aborted) throw error;
+			}
+		}
+	}
+
+	/**
+	 * Speech-to-text with word timestamps, through a dedicated transcribe model
+	 * (gemini-3.5-transcribe). These models are served by the Interactions API,
+	 * not generateContent, and return each word with measured start/end offsets
+	 * — the times come from the audio, not from text the model writes.
+	 * Limit: 30 minutes of audio per call with word timestamps on.
+	 */
+	async transcribeWords(
+		modelName: string,
+		fileUri: string,
+		audioDuration: number,
+		signal?: AbortSignal,
+		options?: { languageCodes?: string[] }
+	): Promise<{ words: { start: number; end: number; text: string }[]; text: string; record: UsageRecord }> {
+		const transcriptionConfig: Record<string, unknown> = {
+			mode: { type: 'verbatim', timestamp_granularities: ['word'] }
+		};
+		if (options?.languageCodes?.length) transcriptionConfig.language_codes = options.languageCodes;
+
+		const body = {
+			model: modelName,
+			input: [{ type: 'audio', uri: fileUri, mime_type: 'audio/mp3' }],
+			generation_config: { transcription_config: transcriptionConfig }
+		};
+
+		const response: any = await this.withServerDelay(() => this.withRetry(async () => {
+			const res = await fetch('https://generativelanguage.googleapis.com/v1beta/interactions', {
+				method: 'POST',
+				headers: { 'x-goog-api-key': this.apiKey, 'Content-Type': 'application/json' },
+				body: JSON.stringify(body),
+				signal
+			});
+			const json: any = await res.json().catch(() => ({}));
+			if (!res.ok) {
+				const error: any = new Error(json?.error?.message || `Transcription failed (HTTP ${res.status})`);
+				error.status = res.status;
+				throw error;
+			}
+			return json;
+		}, signal), signal);
+
+		if (response?.status && response.status !== 'completed') {
+			throw new Error(`Transcription did not complete (status: ${response.status}).`);
+		}
+
+		const words: { start: number; end: number; text: string }[] = [];
+		const texts: string[] = [];
+		for (const step of response?.steps || []) {
+			for (const part of step?.content || []) {
+				if (typeof part?.text === 'string') texts.push(part.text);
+				for (const a of part?.annotations || []) {
+					if (a?.type !== 'word_info' || !a.text) continue;
+					const start = parseOffset(a.start_offset);
+					const end = parseOffset(a.end_offset);
+					if (Number.isFinite(start) && Number.isFinite(end)) words.push({ start, end: Math.max(start, end), text: a.text });
+				}
+			}
+		}
+
+		const u = response?.usage || {};
+		const usage: Usage = {
+			promptTokens: u.total_input_tokens || 0,
+			candidatesTokens: u.total_output_tokens || 0,
+			thinkingTokens: u.total_thought_tokens || 0,
+			totalTokens: u.total_tokens || 0
+		};
+		const cost = GeminiAdapter.calculateCost(modelName, usage, audioDuration);
+		return { words, text: texts.join('\n'), record: { usage, cost } };
 	}
 
 	/**

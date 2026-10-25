@@ -23,7 +23,7 @@
 <script setup lang="ts">
 import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import type { TimelineItem } from '@shared/types'
-import { composeMotionPage, motionFrameState, normaliseDefinition, type MotionDefinition } from '@shared/motion'
+import { composeMotionPage, motionFrameState, motionKitFor, normaliseDefinition, type MotionDefinition } from '@shared/motion'
 import { useEditorStore } from '../../stores/editorStore'
 
 /**
@@ -50,20 +50,25 @@ const props = defineProps<{
 const store = useEditorStore()
 const frameRef = ref<HTMLIFrameElement | null>(null)
 
+/** The project kit this layer's page uses, if any: editing it reloads only the layers that use it. */
+const kit = computed(() => motionKitFor(props.item.motion, store.doc?.motionKits))
+
 /**
  * The page itself. Keyed only on what changes the DOCUMENT — the template, a
- * custom page's source, its definition, the frame — so editing a setting or
- * moving the playhead re-seeks the loaded page instead of reloading it.
+ * custom page's source, its definition, its kit, the frame — so editing a
+ * setting or moving the playhead re-seeks the loaded page instead of reloading it.
  */
 const pageKey = computed(() => JSON.stringify([
 	props.item.motion?.template ?? null,
 	props.item.motion?.template ? null : props.item.motion?.html ?? null,
 	props.item.motion?.template ? null : props.item.motion?.definition ?? null,
+	props.item.motion?.template ? null : props.item.motion?.passed?.html ?? null,
+	kit.value ?? null,
 	props.frameWidth, props.frameHeight
 ]))
 const page = computed(() => {
 	void pageKey.value
-	return composeMotionPage(props.item.motion, { width: props.frameWidth, height: props.frameHeight })
+	return composeMotionPage(props.item.motion, { width: props.frameWidth, height: props.frameHeight }, kit.value ? [kit.value] : undefined)
 })
 
 const wrapperStyle = computed(() => ({ zIndex: String(props.zIndex), ...props.look }))

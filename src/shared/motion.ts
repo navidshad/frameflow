@@ -140,6 +140,86 @@ export interface MotionSpec {
 	settings?: Record<string, MotionSettingValue>
 	/** Retimed windows, in CLIP seconds, by moment name. Never the flex one. */
 	moments?: Record<string, number>
+	/**
+	 * Custom pages only: the id of a project motion kit (`MotionKit`) whose CSS
+	 * and JS are inlined ahead of the page when it is composed. Absent: the page
+	 * stands alone, exactly as before kits existed.
+	 */
+	kit?: string
+}
+
+// ===== Kits =====
+
+/**
+ * A project's shared look: CSS and JS that many custom pages use, stored ONCE
+ * on the project (`EditorDocument.motionKits`) instead of copied into every
+ * page. A page names it with `MotionSpec.kit`; `composeMotionPage` inlines it,
+ * so the monitor, the export, the probe and the render cache all see one and
+ * the same composed document. Editing a kit is one edit, and only the clips
+ * whose pages use it compose differently, so only they re-render.
+ *
+ * Fonts travel in `css` as `@font-face` rules with data: URLs, like any page's.
+ */
+export interface MotionKit {
+	/** Short, stable, what pages name: `nomad`. Letters, digits, `-` and `_`. */
+	id: string
+	label?: string
+	/** Inlined in a <style> after the bundled fonts, before the page's own styles. */
+	css?: string
+	/**
+	 * Inlined in a <script> after the runtime, before the page's own scripts. It
+	 * runs in the <head>, before the page's elements exist: define functions and
+	 * constants here, and touch the DOM from the page or from seek.
+	 */
+	js?: string
+}
+
+export const MOTION_KIT_ID = /^[A-Za-z0-9][A-Za-z0-9_-]{0,47}$/
+
+/** A kit is small text; a font or two is the most it should ever carry. */
+export const MOTION_KIT_MAX_BYTES = 1024 * 1024
+
+/** The kit a spec's page uses, if it names one the project has. Templates never use one. */
+export function motionKitFor(spec: MotionSpec | undefined, kits: readonly MotionKit[] | undefined): MotionKit | undefined {
+	if (!spec?.kit || motionTemplate(spec.template)) return undefined
+	return kits?.find((k) => k.id === spec.kit)
+}
+
+/** Value comparison for the undo diff. */
+export function sameMotionKit(a: MotionKit | undefined, b: MotionKit | undefined): boolean {
+	if (a === b) return true
+	if (!a || !b) return false
+	return a.id === b.id && (a.label ?? '') === (b.label ?? '') && (a.css ?? '') === (b.css ?? '') && (a.js ?? '') === (b.js ?? '')
+}
+
+/** A kit as stored: trimmed fields, empty ones dropped. */
+export function tidyMotionKit(kit: MotionKit): MotionKit {
+	const out: MotionKit = { id: kit.id.trim() }
+	if (kit.label?.trim()) out.label = kit.label.trim()
+	if (kit.css?.trim()) out.css = kit.css
+	if (kit.js?.trim()) out.js = kit.js
+	return out
+}
+
+/**
+ * Everything wrong with a kit, for the person or agent that wrote it: the same
+ * static rules a page is held to (no clocks, timers, randomness, network or
+ * CSS animation), minus `frameflow.define` — a kit draws nothing by itself.
+ */
+export function lintMotionKit(kit: MotionKit): string[] {
+	const problems: string[] = []
+	if (!MOTION_KIT_ID.test(kit.id)) problems.push(`kit id "${kit.id}" must be 1–48 letters, digits, - or _, starting with a letter or digit`)
+	const size = (kit.css?.length ?? 0) + (kit.js?.length ?? 0)
+	if (size > MOTION_KIT_MAX_BYTES) problems.push(`the kit is ${(size / 1024).toFixed(0)} KB; keep it under ${MOTION_KIT_MAX_BYTES / 1024} KB`)
+	if (/<\/style/i.test(kit.css ?? '')) problems.push('css: must not contain </style> — send the rules alone, not a <style> element')
+	if (/<\/script/i.test(kit.js ?? '')) problems.push('js: must not contain </script> — send the code alone, not a <script> element')
+	for (const [field, text] of [['css', kit.css], ['js', kit.js]] as const) {
+		if (!text) continue
+		for (const issue of lintRules(text)) {
+			problems.push(`${field} line ${issue.line}${issue.excerpt ? ` — “${issue.excerpt}”` : ''}: ${issue.message}`)
+		}
+	}
+	return problems
 }
 
 // ===== Tracks =====
@@ -614,17 +694,21 @@ export const MOTION_PIPELINE_VERSION = 1
 
 /**
  * Everything that changes the rendered clip, as one string — derived, not
- * listed: the composed page itself, every frame's state and the geometry. The
+ * listed: the composed page itself (with its kit), every frame's state and the
+ * geometry. The
  * export hashes this for its cache key, so two clips that would render the same
  * pixels share one file and nothing that changes a pixel can be missed.
  */
 export function motionRenderRecipe(
 	item: Pick<TimelineItem, 'motion' | 'duration' | 'keyframes'>,
-	frame: { width: number; height: number; fps: number }
+	frame: { width: number; height: number; fps: number },
+	kits?: readonly MotionKit[]
 ): string {
 	return JSON.stringify({
 		v: MOTION_PIPELINE_VERSION,
-		page: composeMotionPage(item.motion, frame),
+		// The kit is inside the composed page, so a kit edit changes exactly the
+		// clips whose pages use it, and nothing else.
+		page: composeMotionPage(item.motion, frame, kits),
 		size: [frame.width, frame.height],
 		fps: frame.fps,
 		frames: motionFramePlan(item, frame.fps)
@@ -801,6 +885,8 @@ window.addEventListener('error', function (e) { post({ type: 'frameflow:error', 
 
 /** `</script>` inside a JSON blob would end the script element early. */
 const scriptSafe = (s: string) => s.replace(/<\/(script)/gi, '<\\/$1').replace(/<!--/g, '<\\!--')
+/** Likewise `</style>` inside kit CSS (the kit lint refuses it; this makes sure). */
+const styleSafe = (s: string) => s.replace(/<\/(style)/gi, '<\\/$1')
 
 /**
  * The exact document both the monitor and the export load.
@@ -810,14 +896,20 @@ const scriptSafe = (s: string) => s.replace(/<\/(script)/gi, '<\\/$1').replace(/
  * page laid out in `vw`/`vh` lands identically in a 480px-wide monitor iframe
  * (scaled down by CSS) and a 1920px export window. Animations and transitions
  * are switched off outright; the lint says why, this makes sure.
+ *
+ * `kits` is the project's motion kits; the one the spec names (if any) is
+ * inlined into the head. Every consumer passes the project's list, so a page
+ * and its kit always compose to one document wherever they are drawn.
  */
 export function composeMotionPage(
 	spec: MotionSpec | undefined,
-	frame: { width: number; height: number }
+	frame: { width: number; height: number },
+	kits?: readonly MotionKit[]
 ): string {
 	const def = resolveDefinition(spec)
 	const width = Math.max(2, Math.round(frame.width))
 	const height = Math.max(2, Math.round(frame.height))
+	const kit = motionKitFor(spec, kits)
 	const head = [
 		'<meta charset="utf-8">',
 		`<meta http-equiv="Content-Security-Policy" content="${MOTION_CSP}">`,
@@ -825,7 +917,13 @@ export function composeMotionPage(
 		`<style>${MOTION_FONT_CSS}\n` +
 			`html{color-scheme:normal}html,body{margin:0;padding:0;width:${width}px;height:${height}px;overflow:hidden;background:transparent}\n` +
 			'*,*::before,*::after{animation:none!important;transition:none!important;caret-color:transparent}</style>',
-		`<script>${scriptSafe(RUNTIME.replace('__DEF__', JSON.stringify(def)))}</script>`
+		`<script>${scriptSafe(RUNTIME.replace('__DEF__', JSON.stringify(def)))}</script>`,
+		// The project's kit, after the runtime (its code may use frameflow) and
+		// before the page (whose own styles and scripts build on it).
+		...(kit?.css ? [`<style data-ff-kit="${kit.id}">${styleSafe(kit.css)}</style>`] : []),
+		...(kit?.js ? [`<script data-ff-kit="${kit.id}">${scriptSafe(kit.js)}</script>`] : []),
+		// A page that names a kit the project lacks says so where it can be seen.
+		...(spec?.kit && !kit && !motionTemplate(spec.template) ? [`<!-- motion kit "${spec.kit.replace(/--/g, '')}" is not in this project -->`] : [])
 	].join('\n')
 
 	const source = motionSource(spec)
@@ -840,6 +938,21 @@ export function composeMotionPage(
 		return `${source.slice(0, at)}\n<head>\n${head}\n</head>\n${source.slice(at)}`
 	}
 	return `<!doctype html>\n<html>\n<head>\n${head}\n</head>\n<body>\n${source}\n</body>\n</html>\n`
+}
+
+/**
+ * A candidate page as the probe draws it: the text made the passing version of
+ * a spec, composed with its kit. The same `composeMotionPage` the monitor and
+ * the export call, so a page that passes the probe is the page they show.
+ */
+export function composeCandidatePage(
+	html: string,
+	definition: MotionDefinition,
+	frame: { width: number; height: number },
+	kit?: MotionKit
+): string {
+	const spec: MotionSpec = { html, definition, passed: { html, definition }, kit: kit?.id }
+	return composeMotionPage(spec, frame, kit ? [kit] : undefined)
 }
 
 // ===== Lint =====
@@ -891,6 +1004,20 @@ const LINT_RULES: LintRule[] = [
  */
 export function lintMotionHtml(html: string): MotionLintResult {
 	const source = blankComments(html)
+	const issues = lintRules(html)
+	if (!/\bframeflow\.define\s*\(/.test(source)) {
+		issues.push({
+			rule: 'no-define', line: 1, excerpt: '',
+			message: 'The page never calls frameflow.define({ duration, settings, moments, seek }), so nothing can drive it.'
+		})
+	}
+	issues.sort((a, b) => a.line - b.line)
+	return { ok: issues.length === 0, issues }
+}
+
+/** The rule scan alone — shared by pages and kits (a kit need not define anything). */
+function lintRules(html: string): MotionLintIssue[] {
+	const source = blankComments(html)
 	const issues: MotionLintIssue[] = []
 	const lineAt = (index: number) => source.slice(0, index).split('\n').length
 	const lines = html.split('\n')
@@ -903,14 +1030,7 @@ export function lintMotionHtml(html: string): MotionLintResult {
 			if (match[0].length === 0) rule.pattern.lastIndex++
 		}
 	}
-	if (!/\bframeflow\.define\s*\(/.test(source)) {
-		issues.push({
-			rule: 'no-define', line: 1, excerpt: '',
-			message: 'The page never calls frameflow.define({ duration, settings, moments, seek }), so nothing can drive it.'
-		})
-	}
-	issues.sort((a, b) => a.line - b.line)
-	return { ok: issues.length === 0, issues }
+	return issues
 }
 
 /** Replace HTML, block and line comments with spaces, keeping newlines. */

@@ -37,7 +37,7 @@ import * as editorRevisions from './editor/revisions'
 import { BUILTIN_PERSONAS } from './constants/personas'
 import { v4 as uuidv4 } from 'uuid'
 import { THREAD_DIRS } from './constants/paths'
-import { GEMINI_MODEL_2_5_FLASH, MODEL_METADATA } from './constants/gemini'
+import { GEMINI_MODEL_3_6_FLASH, MODEL_METADATA } from './constants/gemini'
 import { electronApp, optimizer, is } from '@electron-toolkit/utils'
 import { registerMediaProtocol } from './media-protocol'
 import { initAgentAccess } from './mcp'
@@ -481,6 +481,7 @@ app.whenReady().then(() => {
 			currentRevisionId?: string
 			captionsEnabled?: boolean
 			loudnessEnabled?: boolean
+			motionKits?: any[]
 		}
 	}) => {
 		return await threadManager.updateThreadWith(threadId, (thread) => {
@@ -516,6 +517,7 @@ app.whenReady().then(() => {
 			if (patch.captionsEnabled !== undefined) editor.captionsEnabled = patch.captionsEnabled
 			if (patch.loudnessEnabled !== undefined) editor.loudnessEnabled = patch.loudnessEnabled
 			if (patch.currentRevisionId !== undefined) editor.currentRevisionId = patch.currentRevisionId
+			if (patch.motionKits) editor.motionKits = patch.motionKits
 
 			// Fold clip-selected flags into the matching clips (the one renderer-owned
 			// field living inside main-owned MediaAsset records).
@@ -818,14 +820,21 @@ app.whenReady().then(() => {
 		return editorHistory.setPointer(threadId, currentStepId)
 	})
 
-	ipcMain.handle('clear-editor-history', (_event, { threadId }: { threadId: string }) => {
-		editorHistory.clearHistory(threadId)
+	ipcMain.handle('clear-editor-history', async (_event, { threadId }: { threadId: string }) => {
+		await editorHistory.clearHistory(threadId)
 		return true
 	})
 
 	// Revision tree sidecar (renderer owns tree logic; main persists)
+	// Summaries only: snapshots are fetched one at a time below.
 	ipcMain.handle('get-editor-revisions', (_event, threadId: string) => {
 		return editorRevisions.loadRevisions(threadId)
+	})
+
+	ipcMain.handle('get-editor-revision-snapshot', (_event, { threadId, revisionId }: {
+		threadId: string, revisionId: string
+	}) => {
+		return editorRevisions.getRevisionSnapshot(threadId, revisionId)
 	})
 
 	ipcMain.handle('push-editor-revision', (_event, { threadId, revision }: {
@@ -857,8 +866,8 @@ app.whenReady().then(() => {
 				editorPreprocess.abortAssetPreprocessing(id, asset.id)
 			}
 			editorRender.abortRendersForThread(id)
-			editorHistory.deleteHistory(id)
-			editorRevisions.deleteRevisionsFile(id)
+			void editorHistory.deleteHistory(id)
+			void editorRevisions.deleteRevisionsFile(id)
 		}
 		return threadManager.deleteThread(id)
 	})
@@ -997,7 +1006,7 @@ app.whenReady().then(() => {
 		if (!context && !attachedImages.length) throw new Error('Message context not found')
 		
 		const modelSettings = settingsManager.getModelSettings()
-		const modelName = modelSettings.selection['intent'] || GEMINI_MODEL_2_5_FLASH
+		const modelName = modelSettings.selection['intent'] || GEMINI_MODEL_3_6_FLASH
 		const adapter = GeminiAdapter.create()
 
 		const systemInstruction = `You are a high-level Prompt Engineer. Your task is to IMPROVISE and REWRITE a user's latest prompt to be much more descriptive, detailed, and effective for high-fidelity AI generation.

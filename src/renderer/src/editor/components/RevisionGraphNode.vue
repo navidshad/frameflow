@@ -57,12 +57,12 @@
 
 <script setup lang="ts">
 import { computed } from 'vue'
-import type { EditorRevision } from '@shared/types'
+import type { EditorRevisionSummary } from '@shared/types'
 import { useRevisionCard } from '../composables/useRevisionCard'
 
 const props = defineProps<{
 	/** Vue Flow passes node data through here. */
-	data: { revision: EditorRevision; compact?: boolean }
+	data: { revision: EditorRevisionSummary; compact?: boolean }
 }>()
 
 const revision = computed(() => props.data.revision)

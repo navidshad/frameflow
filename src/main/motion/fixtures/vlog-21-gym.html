@@ -1,0 +1,455 @@
+<!--
+  Nomad kit — one look for every motion beat in "Episode 1: a new decision".
+  Cream cards, ink text, a tangerine accent, green for good news.
+  Everything is drawn in seek(t) from SPEC; nothing runs on its own clock.
+-->
+<style>
+	/* B Yekan @font-face removed from this fixture */
+	:root { --accent: #FF6A3D; --paper: #FFF7EC; --ink: #1D1A17; --muted: #6E6257; --good: #1E8A5A; --bad: #D64545; }
+	body { font-family: Outfit, 'FFYekan', sans-serif; direction: rtl; color: var(--ink); }
+	#stage { position: absolute; inset: 0; }
+	/* Always composited, so the first draw of a frame matches the second. */
+	.card, .row, .word, .chip, .opt, .badge, .dot, .ring, .stamp, .lower, .pan, .t1, .t2, .name, .sub { will-change: transform, opacity; }
+	/* The shadow lives on a wrapper: the card itself is clipped as it grows, and a clip would cut a box-shadow off. */
+	.cardw { position: absolute; filter: drop-shadow(0 18px 26px rgba(25, 14, 4, 0.30)) drop-shadow(0 3px 5px rgba(25, 14, 4, 0.18)); }
+	.card { position: relative; box-sizing: border-box; background: var(--paper); border-radius: 30px; padding: 30px 40px 32px 36px; overflow: hidden; }
+	.card .edge { position: absolute; top: 0; bottom: 0; right: 0; width: 12px; background: var(--accent); }
+	.row { position: relative; }
+	.kicker { display: inline-block; background: var(--accent); color: #fff; border-radius: 999px; padding: 4px 22px 8px; font-size: 30px; line-height: 1.35; transform-origin: right center; }
+	.title { font-size: 70px; line-height: 1.22; margin-top: 12px; }
+	.title.big { font-size: 92px; }
+	.word { display: inline-block; white-space: pre; }
+	.text { font-size: 36px; line-height: 1.5; color: var(--muted); margin-top: 10px; }
+	.text b { color: var(--ink); font-weight: normal; box-shadow: inset 0 -14px 0 rgba(255, 106, 61, 0.28); }
+	.chips { display: flex; flex-wrap: wrap; gap: 14px; margin-top: 18px; }
+	.chip { background: #fff; border: 3px solid var(--ink); border-radius: 999px; padding: 4px 24px 8px; font-size: 34px; line-height: 1.35; }
+	.chip.hot { background: var(--accent); border-color: var(--accent); color: #fff; }
+	.line { display: flex; align-items: center; gap: 18px; font-size: 40px; line-height: 1.35; margin-top: 18px; }
+	.ico { width: 50px; height: 50px; flex: none; }
+	.stat { display: flex; flex-wrap: wrap; align-items: baseline; gap: 0 18px; margin-top: 8px; }
+	.stat .num { font-size: 132px; line-height: 1.05; color: var(--accent); }
+	.stat .suf { font-size: 44px; }
+	.stat .lab { font-size: 34px; color: var(--muted); }
+	.cmp { display: flex; align-items: center; gap: 18px; margin-top: 22px; }
+	.cmp .opt { flex: 1; text-align: center; border: 3px solid rgba(29, 26, 23, 0.25); border-radius: 22px; padding: 18px 8px 22px; font-size: 44px; direction: ltr; background: #fff; }
+	.cmp .or { font-size: 32px; color: var(--muted); }
+	.badge { display: inline-block; margin-top: 20px; background: var(--good); color: #fff; border-radius: 16px; padding: 6px 22px 10px; font-size: 34px; }
+	.bar { margin-top: 18px; }
+	.bar .lab { font-size: 34px; display: flex; justify-content: space-between; }
+	.bar .track { height: 26px; border-radius: 999px; background: rgba(29, 26, 23, 0.12); margin-top: 10px; overflow: hidden; }
+	.bar .fill { height: 100%; width: 0; background: linear-gradient(270deg, var(--accent), #FFB23D); border-radius: 999px; margin-right: 0; }
+	.strike { position: absolute; right: -6px; top: 54%; height: 7px; background: var(--bad); border-radius: 4px; width: 0; }
+	.code { direction: ltr; text-align: left; background: #1F1B24; color: #F4EDE4; border-radius: 20px; padding: 22px 26px; margin-top: 20px; font: 30px/1.6 Menlo, 'SF Mono', monospace; min-height: 160px; white-space: pre; }
+	.code .k { color: #FF9E7A; } .code .s { color: #9BE3B5; }
+	.code .cur { display: inline-block; width: 14px; height: 32px; background: var(--accent); vertical-align: -5px; }
+	.nodes { position: relative; margin-top: 18px; overflow: hidden; }
+	.node { position: relative; height: 84px; padding-right: 64px; }
+	.node .dot { position: absolute; right: 8px; top: 12px; width: 30px; height: 30px; border-radius: 50%; background: var(--accent); border: 5px solid var(--paper); box-shadow: 0 0 0 3px var(--accent); }
+	.node .ring { position: absolute; right: 8px; top: 12px; width: 30px; height: 30px; border-radius: 50%; border: 4px solid var(--accent); box-sizing: border-box; }
+	.node .name { font-size: 42px; line-height: 1.15; }
+	.node .sub { font-size: 28px; color: var(--muted); }
+	.wire { position: absolute; right: 26px; width: 4px; top: 30px; background: repeating-linear-gradient(180deg, var(--ink) 0 12px, transparent 12px 22px); opacity: 0.55; }
+	.foot { margin-top: 10px; font-size: 34px; border-top: 3px dashed rgba(29, 26, 23, 0.25); padding-top: 14px; }
+	.stamp { position: absolute; border: 8px solid var(--accent); color: var(--accent); border-radius: 22px; padding: 10px 40px 18px; font-size: 96px; line-height: 1.2; background: rgba(255, 247, 236, 0.92); box-shadow: 0 18px 50px rgba(25, 14, 4, 0.3); }
+	.lower { position: absolute; display: flex; align-items: stretch; }
+	.lower .blk { width: 18px; background: var(--accent); }
+	.lower .pan { background: var(--paper); padding: 16px 36px 22px; box-shadow: 0 16px 44px rgba(25, 14, 4, 0.3); }
+	.lower .t1 { font-size: 64px; line-height: 1.15; direction: ltr; text-align: right; }
+	.lower .t2 { font-size: 32px; color: var(--muted); }
+	.outro { position: absolute; left: 0; right: 0; bottom: 120px; text-align: center; }
+	.outro .t1 { display: inline-block; font-size: 110px; color: #fff; text-shadow: 0 6px 30px rgba(0, 0, 0, 0.55); }
+	.outro .t2 { font-size: 44px; color: #fff; direction: ltr; text-shadow: 0 4px 18px rgba(0, 0, 0, 0.6); margin-top: 6px; }
+	.outro .rule { height: 8px; background: var(--accent); border-radius: 4px; margin: 14px auto 0; width: 0; }
+</style>
+<div id="stage"></div>
+<script>
+	const SPEC = {"duration":40.6,"items":[{"piece":"card","at":0.1,"until":40.6,"pos":{"left":50,"top":60},"w":450,"rows":[{"kind":"kicker","text":"معیار بعدی","at":0.2},{"kind":"title","text":"باشگاه","at":2.1},{"kind":"text","text":"باشگاه داخلی = <b>گرون‌تر</b>","at":14.9},{"kind":"stat","value":1000,"suffix":"دلار","label":"ویتنام: استخر + باشگاه","at":24.4,"dur":1.4},{"kind":"text","text":"ایروان: <b>باشگاه‌های اطراف</b>","at":31.6}]}]}
+	const stage = document.getElementById('stage')
+	const E = frameflow.ease
+	const cl = (x) => Math.max(0, Math.min(1, x))
+	const win = (t, a, d) => cl((t - a) / d)
+	const FA = '۰۱۲۳۴۵۶۷۸۹'
+	const fa = (n) => String(n).replace(/[0-9]/g, (d) => FA[+d])
+	const mk = (cls, parent, html) => {
+		const el = document.createElement('div')
+		if (cls) el.className = cls
+		if (html !== undefined) el.innerHTML = html
+		if (parent) parent.appendChild(el)
+		return el
+	}
+	const place = (el, p) => { for (const k of ['left', 'right', 'top', 'bottom']) if (p[k] !== undefined) el.style[k] = p[k] + 'px' }
+	/** Fade-and-rise for anything that simply arrives. */
+	const rise = (el, t, at, dist) => {
+		const p = E.out(win(t, at, 0.45))
+		el.style.opacity = String(p)
+		// Not yet arrived: out of the picture entirely, so nothing invisible is composited.
+		el.style.visibility = p > 0 ? 'visible' : 'hidden'
+		el.style.transform = `translateY(${Math.round((1 - p) * (dist || 22))}px)`
+		return p
+	}
+	const pop = (el, t, at) => {
+		const p = win(t, at, 0.42)
+		const s = p <= 0 ? 0.6 : 0.6 + 0.4 * E.back(p)
+		el.style.opacity = String(cl(p * 2.2))
+		el.style.visibility = p > 0 ? 'visible' : 'hidden'
+		el.style.transform = `scale(${s.toFixed(3)})`
+		return p
+	}
+	const SVG = 'http://www.w3.org/2000/svg'
+	const svgEl = (tag, attrs, parent) => {
+		const el = document.createElementNS(SVG, tag)
+		for (const k in attrs) el.setAttribute(k, attrs[k])
+		if (parent) parent.appendChild(el)
+		return el
+	}
+	const drawPath = (path, p) => {
+		const len = path.getTotalLength()
+		path.style.strokeDasharray = `${len}`
+		path.style.strokeDashoffset = `${(len * (1 - p)).toFixed(2)}`
+	}
+
+	// ===== Rows (inside a card) =====
+
+	const ROWS = {
+		kicker(box, r) {
+			const el = mk('row kicker', box, r.text)
+			return (t) => {
+				const p = E.out(win(t, r.at, 0.4))
+				el.style.opacity = String(cl(p * 1.6))
+				el.style.transform = `scaleX(${(0.3 + 0.7 * p).toFixed(3)})`
+			}
+		},
+		title(box, r) {
+			const el = mk('row title' + (r.big ? ' big' : ''), box)
+			if (r.dir) { el.style.direction = r.dir; el.style.textAlign = 'right' }
+			const words = r.text.split(' ').map((w, i, a) => mk('word', el, w + (i < a.length - 1 ? ' ' : '')))
+			if (r.color) el.style.color = r.color
+			return (t) => words.forEach((w, i) => {
+				const p = win(t, r.at + i * 0.09, 0.5)
+				w.style.opacity = String(cl(p * 2))
+				w.style.transform = `translateY(${Math.round((1 - E.back(p)) * 46)}px)`
+			})
+		},
+		text(box, r) {
+			const el = mk('row text', box, r.text)
+			if (r.dir) el.style.direction = r.dir
+			return (t) => rise(el, t, r.at)
+		},
+		chips(box, r) {
+			const el = mk('row chips', box)
+			if (r.dir) el.style.direction = r.dir
+			const chips = r.items.map((c) => ({ c, el: mk('chip' + (c.hot ? ' hot' : ''), el, c.text) }))
+			return (t) => chips.forEach(({ c, el }) => pop(el, t, c.at))
+		},
+		check(box, r) {
+			const el = mk('row line', box)
+			const svg = svgEl('svg', { viewBox: '0 0 50 50', class: 'ico' }, el)
+			svgEl('rect', { x: 4, y: 4, width: 42, height: 42, rx: 11, fill: '#fff', stroke: 'var(--ink)', 'stroke-width': 4 }, svg)
+			const tick = svgEl('path', { d: 'M13 26 L22 35 L39 15', fill: 'none', stroke: 'var(--good)', 'stroke-width': 7, 'stroke-linecap': 'round', 'stroke-linejoin': 'round' }, svg)
+			mk('', el, r.text)
+			const done = r.done ?? r.at + 0.5
+			return (t) => { rise(el, t, r.at); drawPath(tick, E.out(win(t, done, 0.35))) }
+		},
+		mark(box, r) {
+			// a pro (+) or a con (−)
+			const el = mk('row line', box)
+			const svg = svgEl('svg', { viewBox: '0 0 50 50', class: 'ico' }, el)
+			const good = r.kind2 === 'pro'
+			svgEl('circle', { cx: 25, cy: 25, r: 22, fill: good ? 'var(--good)' : 'var(--bad)' }, svg)
+			svgEl('path', { d: good ? 'M14 25 H36 M25 14 V36' : 'M14 25 H36', stroke: '#fff', 'stroke-width': 6, 'stroke-linecap': 'round' }, svg)
+			mk('', el, r.text)
+			return (t) => { rise(el, t, r.at); svg.style.transform = `scale(${(0.4 + 0.6 * E.back(win(t, r.at, 0.4))).toFixed(3)})` }
+		},
+		strike(box, r) {
+			const el = mk('row line', box)
+			const label = mk('', el, r.text)
+			label.style.position = 'relative'
+			const s = mk('strike', label)
+			return (t) => {
+				rise(el, t, r.at)
+				s.style.width = `${(E.inOut(win(t, r.strikeAt, 0.4)) * 108).toFixed(2)}%`
+				label.style.color = t > r.strikeAt + 0.2 ? 'var(--muted)' : ''
+			}
+		},
+		stat(box, r) {
+			const el = mk('row stat', box)
+			const num = mk('num', el)
+			mk('suf', el, r.suffix || '')
+			if (r.label) { const lab = mk('lab', el, r.label); lab.style.flexBasis = '100%'; lab.style.marginTop = '-6px' }
+			return (t) => {
+				rise(el, t, r.at)
+				const p = E.out(win(t, r.at, r.dur || 1.1))
+				const v = (r.from || 0) + ((r.value - (r.from || 0)) * p)
+				num.textContent = (r.prefix || '') + (r.latin ? Math.round(v).toLocaleString('en-US') : fa(Math.round(v)))
+			}
+		},
+		compare(box, r) {
+			const el = mk('row cmp', box)
+			const a = mk('opt', el, r.a.text)
+			mk('or', el, 'یا')
+			const b = mk('opt', el, r.b.text)
+			const badge = r.badge ? mk('badge', box, r.badge) : null
+			if (badge) badge.dataset.at = String(r.winAt + 0.15)
+			return (t) => {
+				pop(a, t, r.a.at); pop(b, t, r.b.at)
+				const w = E.out(win(t, r.winAt, 0.4))
+				// 'both': whichever is better wins, so both light up; otherwise one wins and the other fades.
+				const lit = r.winner === 'both' ? [a, b] : [r.winner === 'a' ? a : b]
+				for (const el of lit) {
+					el.style.borderColor = w > 0.5 ? 'var(--good)' : ''
+					el.style.boxShadow = `0 0 0 ${Math.round(w * 6)}px rgba(30,138,90,0.25)`
+				}
+				if (r.winner !== 'both' && w > 0) (r.winner === 'a' ? b : a).style.opacity = String(1 - 0.55 * w)
+				if (badge) rise(badge, t, r.winAt + 0.15)
+			}
+		},
+		bar(box, r) {
+			const el = mk('row bar', box)
+			const lab = mk('lab', el)
+			mk('', lab, r.text)
+			const pct = mk('', lab)
+			const fill = mk('fill', mk('track', el))
+			return (t) => {
+				rise(el, t, r.at)
+				const p = E.inOut(win(t, r.fillAt ?? r.at + 0.3, r.dur || 1.4)) * r.value
+				fill.style.width = `${p.toFixed(2)}%`
+				pct.textContent = fa(Math.round(p)) + '٪'
+			}
+		},
+		energy(box, r) {
+			// a mood line that keeps going up and down
+			const el = mk('row', box)
+			el.style.marginTop = '16px'
+			const svg = svgEl('svg', { viewBox: '0 0 520 190', width: 520, height: 190 }, el)
+			svgEl('line', { x1: 10, y1: 95, x2: 510, y2: 95, stroke: 'rgba(29,26,23,0.2)', 'stroke-width': 3, 'stroke-dasharray': '8 10' }, svg)
+			const pts = []
+			for (let i = 0; i <= 60; i++) {
+				const x = 510 - i * (500 / 60)
+				const y = 95 - Math.sin(i * 0.42) * 62 * (0.55 + 0.45 * Math.sin(i * 0.13 + 1))
+				pts.push([x, y])
+			}
+			const path = svgEl('path', { d: 'M' + pts.map((p) => p.map((v) => v.toFixed(1)).join(' ')).join(' L'), fill: 'none', stroke: 'var(--accent)', 'stroke-width': 7, 'stroke-linecap': 'round', 'stroke-linejoin': 'round' }, svg)
+			const dot = svgEl('circle', { r: 11, fill: 'var(--ink)' }, svg)
+			const up = svgEl('text', { x: 8, y: 30, 'font-size': 26, fill: 'var(--muted)', 'text-anchor': 'start' }, svg)
+			up.textContent = r.up || ''
+			const down = svgEl('text', { x: 8, y: 182, 'font-size': 26, fill: 'var(--muted)', 'text-anchor': 'start' }, svg)
+			down.textContent = r.down || ''
+			return (t) => {
+				rise(el, t, r.at)
+				const p = cl((t - r.at) / r.dur)
+				drawPath(path, p)
+				const len = path.getTotalLength()
+				const head = path.getPointAtLength(len * p)
+				dot.setAttribute('cx', head.x.toFixed(1)); dot.setAttribute('cy', head.y.toFixed(1))
+			}
+		},
+		pin(box, r) {
+			const el = mk('row line', box)
+			el.style.marginTop = '22px'
+			const svg = svgEl('svg', { viewBox: '0 0 80 100', width: 80, height: 100 }, el)
+			svg.style.overflow = 'visible'
+			const ring = svgEl('ellipse', { cx: 40, cy: 92, rx: 30, ry: 9, fill: 'none', stroke: 'var(--accent)', 'stroke-width': 3 }, svg)
+			const g = svgEl('g', {}, svg)
+			svgEl('path', { d: 'M40 92 C40 92 12 58 12 38 A28 28 0 0 1 68 38 C68 58 40 92 40 92 Z', fill: 'var(--accent)' }, g)
+			svgEl('circle', { cx: 40, cy: 38, r: 11, fill: 'var(--paper)' }, g)
+			const words = mk('', el)
+			const n = mk('title', words, r.text)
+			n.style.marginTop = '0'
+			const sub = mk('text', words, r.sub || '')
+			sub.style.marginTop = '0'
+			return (t) => {
+				const p = win(t, r.at, 0.55)
+				const drop = p < 1 ? (1 - E.back(p)) * -90 : 0
+				g.setAttribute('transform', `translate(0 ${drop.toFixed(2)})`)
+				g.style.opacity = String(cl(p * 3))
+				const k = t < r.at + 0.4 ? 0 : ((t - r.at - 0.4) % 1.6) / 1.6
+				ring.setAttribute('rx', (12 + 34 * k).toFixed(1)); ring.setAttribute('ry', (4 + 10 * k).toFixed(1))
+				ring.style.opacity = String(t < r.at + 0.4 ? 0 : 1 - k)
+				rise(n, t, r.at + 0.25); rise(sub, t, r.subAt ?? r.at + 0.5)
+			}
+		},
+		code(box, r) {
+			const el = mk('row code', box)
+			const out = mk('', el)
+			out.style.display = 'inline'
+			const cur = mk('cur', el)
+			cur.style.display = 'inline-block'
+			const total = r.lines.join('\n')
+			const esc = (s) => s.replace(/&/g, '&amp;').replace(/</g, '&lt;')
+			const paint = (s) => esc(s).replace(/("[^"\n]*"?)|\b(const|await|while|true)\b/g, (m, str, kw) => str ? `<span class="s">${str}</span>` : `<span class="k">${kw}</span>`)
+			return (t) => {
+				rise(el, t, r.at)
+				const n = Math.floor(cl((t - r.at - 0.3) / r.dur) * total.length)
+				out.innerHTML = paint(total.slice(0, n))
+				cur.style.opacity = Math.floor(t * 2.2) % 2 === 0 ? '1' : '0.15'
+			}
+		},
+		pending(box, r) {
+			const el = mk('row line', box)
+			el.style.fontSize = '34px'
+			el.style.color = 'var(--muted)'
+			mk('', el, r.text)
+			const dots = [0, 1, 2].map(() => {
+				const d = mk('', el)
+				Object.assign(d.style, { width: '14px', height: '14px', borderRadius: '50%', background: 'var(--accent)', marginRight: '-8px' })
+				return d
+			})
+			return (t) => {
+				rise(el, t, r.at)
+				dots.forEach((d, i) => { d.style.opacity = (0.25 + 0.75 * (Math.sin(t * 5 - i * 0.9) + 1) / 2).toFixed(3) })
+			}
+		},
+		nodes(box, r) {
+			// a vertical route: a dashed wire grows from stop to stop
+			const el = mk('row nodes', box)
+			const wire = mk('wire', el)
+			const items = r.items.map((n) => {
+				const node = mk('node', el)
+				const ring = mk('ring', node)
+				const dot = mk('dot', node)
+				const name = mk('name', node, n.text)
+				const sub = mk('sub', node, n.sub || '')
+				return { n, node, ring, dot, name, sub }
+			})
+			const H = 84
+			return (t) => {
+				let open = 0
+				items.forEach((it, i) => { open += i === 0 ? 1 : E.inOut(win(t, it.n.at - 0.5, 0.5)) })
+				el.style.height = `${Math.round(open * H)}px`
+				let reached = -1
+				items.forEach((it, i) => {
+					if (t >= it.n.at) reached = i
+					const p = win(t, it.n.at, 0.45)
+					it.dot.style.transform = `scale(${(p <= 0 ? 0 : E.back(p)).toFixed(3)})`
+					rise(it.name, t, it.n.at + 0.1, 16)
+					rise(it.sub, t, it.n.subAt ?? it.n.at + 0.35, 12)
+				})
+				// the wire reaches node i while node i is arriving
+				let len = 0
+				items.forEach((it, i) => { if (i > 0) len += H * E.inOut(win(t, it.n.at - 0.5, 0.5)) })
+				wire.style.height = `${len.toFixed(1)}px`
+				items.forEach((it, i) => {
+					const live = i === reached && i < items.length
+					const k = live ? ((t - it.n.at) % 1.4) / 1.4 : 0
+					it.ring.style.opacity = live && t > it.n.at + 0.3 ? String(1 - k) : '0'
+					it.ring.style.transform = `scale(${(1 + 1.4 * k).toFixed(3)})`
+					it.name.style.color = live ? 'var(--accent)' : ''
+				})
+			}
+		},
+		foot(box, r) {
+			const el = mk('row foot', box, r.text)
+			return (t) => rise(el, t, r.at)
+		}
+	}
+
+	// ===== Pieces placed on the frame =====
+
+	const PIECES = {
+		card(it) {
+			const wrap = mk('cardw', stage)
+			place(wrap, it.pos)
+			wrap.style.width = it.w + 'px'
+			const el = mk('card', wrap)
+			mk('edge', el)
+			// Each row remembers when it lands, so the card can grow to fit only what has arrived.
+			const rows = it.rows.map((r, i) => {
+				const at = r.at ?? it.at + 0.12 * (i + 1)
+				const before = el.children.length
+				const draw = ROWS[r.kind](el, { ...r, at })
+				for (let k = before; k < el.children.length; k++) if (!el.children[k].dataset.at) el.children[k].dataset.at = String(at)
+				return draw
+			})
+			const parts = [...el.children].filter((c) => c.dataset.at)
+			const side = it.pos.left !== undefined ? -1 : 1
+			return (t) => {
+				const e = E.out(win(t, it.at, 0.6))
+				const l = E.in(win(t, it.until - 0.45, 0.45))
+				wrap.style.opacity = String(cl(e * 1.4) * (1 - l))
+				wrap.style.transform = `translateX(${Math.round(side * 70 * (1 - e) + side * 50 * l)}px)`
+				// Rows first: a row's text can change its height (a number counting up, code typing),
+				// so measuring before drawing would read the PREVIOUS seek's layout.
+				rows.forEach((f) => f(t))
+				const H = el.offsetHeight
+				let bottom = parts.length ? parts[0].offsetTop : 30
+				let shown = bottom
+				for (const c of parts) {
+					const end = c.offsetTop + c.offsetHeight
+					shown += (end - bottom) * E.inOut(win(t, Number(c.dataset.at) - 0.12, 0.4))
+					bottom = end
+				}
+				const grow = H - (shown + 32)
+				const reveal = (1 - E.out(win(t, it.at, 0.75))) * H
+				el.style.clipPath = `inset(0 0 ${Math.round(Math.max(grow, reveal, 0))}px 0 round 30px)`
+			}
+		},
+		stamp(it) {
+			const el = mk('stamp', stage, it.text)
+			place(el, it.pos)
+			return (t) => {
+				const p = win(t, it.at, 0.32)
+				const l = E.in(win(t, it.until - 0.4, 0.4))
+				const s = 1 + 1.3 * (1 - E.out(p))
+				const settle = p >= 1 ? Math.sin(cl((t - it.at - 0.32) / 0.5) * Math.PI * 3) * 1.5 * (1 - cl((t - it.at - 0.32) / 0.5)) : 0
+				el.style.opacity = String(cl(p * 3) * (1 - l))
+				el.style.transform = `rotate(${(it.rot || -6) + settle}deg) scale(${s.toFixed(3)})`
+			}
+		},
+		lower(it) {
+			const el = mk('lower', stage)
+			place(el, it.pos)
+			mk('blk', el)
+			const pan = mk('pan', el)
+			const t1 = mk('t1', pan, it.title)
+			const t2 = mk('t2', pan, it.sub || '')
+			return (t) => {
+				const e = E.out(win(t, it.at, 0.55))
+				const l = E.in(win(t, it.until - 0.4, 0.4))
+				el.style.opacity = String(cl(e * 2) * (1 - l))
+				pan.style.clipPath = `inset(0 0 0 ${((1 - e) * 100).toFixed(2)}%)`
+				rise(t1, t, it.at + 0.2); rise(t2, t, it.at + 0.4)
+			}
+		},
+		outro(it) {
+			const el = mk('outro', stage)
+			const t1 = mk('t1', el)
+			const words = it.title.split(' ').map((w, i, a) => { const s = mk('word', t1, w + (i < a.length - 1 ? ' ' : '')); return s })
+			const rule = mk('rule', el)
+			const t2 = mk('t2', el, it.sub)
+			return (t) => {
+				const l = E.in(win(t, it.until - 0.35, 0.35))
+				el.style.opacity = String(1 - l)
+				words.forEach((w, i) => {
+					const p = win(t, it.at + i * 0.12, 0.5)
+					w.style.opacity = String(cl(p * 2))
+					w.style.transform = `translateY(${Math.round((1 - E.back(p)) * 60)}px)`
+				})
+				rule.style.width = `${(E.inOut(win(t, it.at + 0.4, 0.6)) * 360).toFixed(1)}px`
+				rise(t2, t, it.at + 0.7)
+			}
+		}
+	}
+
+	const draws = SPEC.items.map((it) => PIECES[it.piece](it))
+
+	frameflow.define({
+		duration: SPEC.duration,
+		settings: [
+			{ key: 'accent', label: 'Accent', type: 'color', default: '#FF6A3D', animate: true },
+			{ key: 'paper', label: 'Card', type: 'color', default: '#FFF7EC', animate: true },
+			{ key: 'ink', label: 'Text', type: 'color', default: '#1D1A17' }
+		],
+		moments: [
+			{ name: 'in', duration: 0.6 },
+			{ name: 'hold', duration: 39.5, flex: true },
+			{ name: 'out', duration: 0.5 }
+		],
+		seek(t, s) {
+			const root = document.documentElement.style
+			root.setProperty('--accent', s.accent)
+			root.setProperty('--paper', s.paper)
+			root.setProperty('--ink', s.ink)
+			draws.forEach((d) => d(t))
+		}
+	})
+</script>

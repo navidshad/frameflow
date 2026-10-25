@@ -44,6 +44,12 @@ export interface RenderedFrame {
 	mimeType: string
 	/** A small data URL for the activity feed. */
 	thumbnail?: string
+	/**
+	 * The motion layers in the frame and the state of each (still being checked,
+	 * showing an older version, drawing nothing), plus how many of the export's
+	 * motion clips are rendered. Absent when the timeline has no motion.
+	 */
+	motionNote?: string
 }
 
 /** What a sound measures, in words an agent can read, and a picture of it. */

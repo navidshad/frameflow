@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import type { EditorOps } from '@shared/types'
-import { vetHtmlOps, whyPageFails, type MotionProbe } from './vetHtml'
+import { vetHtmlOps, vetPage, whyPageFails, type MotionProbe } from './vetHtml'
 
 const PAGE = [
 	'<div id="n"></div>',
@@ -49,6 +49,17 @@ describe('whyPageFails', () => {
 		expect(differs).toMatch(/depends on state left by an earlier call/)
 	})
 
+	it('turns the probe’s evidence into where, how much and the likely cause', async () => {
+		const difference = { box: { x: 30, y: 60, width: 3, height: 90 }, pixels: 30, share: 0.0001, maxDelta: 40, meanDelta: 22, scale: 3, looksSubPixel: true, image: 'PNGDATA' }
+		const verdict = await vetPage(PAGE, { width: 1, height: 1 }, async () => ({ determinism: 'fail', differsAt: 3.9, difference }))
+		expect(verdict.reason).toMatch(/at t = 3\.90s: 30 pixels differ \(<0\.1% of the frame, probed at 1\/3 size\), in a box 3×90 px at x 30, y 60/)
+		expect(verdict.reason).toMatch(/largest change is 40\/255, the average 22\/255/)
+		expect(verdict.reason).toMatch(/This looks like a sub-pixel position: .*Math\.round/)
+		expect(verdict.image).toBe('PNGDATA')
+		const state = await vetPage(PAGE, { width: 1, height: 1 }, async () => ({ determinism: 'fail', differsAt: 1, difference: { ...difference, looksSubPixel: false } }))
+		expect(state.reason).toMatch(/This looks like state: .*layout MEASURED before it is UPDATED/)
+	})
+
 	it('lets the lint decide alone where there is no window, and when the probe cannot run', async () => {
 		expect(await whyPageFails(PAGE, { width: 1, height: 1 })).toBeNull()
 		expect(await whyPageFails(PAGE, { width: 1, height: 1 }, async () => ({ determinism: 'skipped' }))).toBeNull()
@@ -93,6 +104,16 @@ describe('vetHtmlOps', () => {
 		expect(drawn).toBe(0)
 		expect((await vetHtmlOps({ addMotion: [{ template: 'custom', atSec: 1, html: PAGE }] }, doc, probe)).dropped).toEqual([])
 		expect(drawn).toBe(1)
+	})
+
+	it('hands back what each passing page reported at run time, and the image of each that drew two ways', async () => {
+		const reported = { duration: 9, settings: [], moments: [] }
+		const probe: MotionProbe = async (input) => input.html.includes('BAD')
+			? { determinism: 'fail', differsAt: 1, difference: { box: { x: 0, y: 0, width: 1, height: 1 }, pixels: 1, share: 0, maxDelta: 255, meanDelta: 255, scale: 1, looksSubPixel: false, image: 'IMG' } }
+			: { determinism: 'pass', definition: reported }
+		const result = await vetHtmlOps({ addMotion: [{ template: 'custom', atSec: 1, html: PAGE }], updateMotion: [{ id: 'a', html: BAD }] }, doc, probe)
+		expect(result.definitions.get(PAGE)).toEqual(reported)
+		expect(result.images).toEqual([{ op: 'updateMotion a', data: 'IMG', mimeType: 'image/png' }])
 	})
 
 	it('treats a blank html as no page', async () => {

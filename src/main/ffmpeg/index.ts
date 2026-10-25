@@ -697,3 +697,46 @@ export async function detectSilence(
 		command.run()
 	})
 }
+
+/**
+ * Loudness (RMS dB) of every 50 ms of audio, mono at 16 kHz. The transcript
+ * pipeline finds pauses and speech onsets from this (gemini/transcript-timing.ts).
+ * Digital silence reads as -Infinity. About a second per ten minutes of audio.
+ */
+export async function measureLoudness(audioPath: string, signal?: AbortSignal): Promise<number[]> {
+	if (signal?.aborted) throw new Error('Loudness measurement aborted before start')
+	const FRAME_SAMPLES = 800 // 50 ms at 16 kHz — keep in step with LOUDNESS_FRAME_SEC
+	return new Promise((resolve, reject) => {
+		const levels: number[] = []
+		let frame = -1
+		const command = ffmpeg(audioPath)
+			.noVideo()
+			.audioFilters([
+				'aformat=sample_rates=16000:channel_layouts=mono',
+				`asetnsamples=n=${FRAME_SAMPLES}:p=0`,
+				'astats=metadata=1:reset=1:measure_perchannel=none:measure_overall=RMS_level',
+				'ametadata=print:key=lavfi.astats.Overall.RMS_level'
+			])
+			.outputOptions(['-f', 'null'])
+			.output(process.platform === 'win32' ? 'NUL' : '/dev/null')
+			.on('stderr', (line: string) => {
+				const pts = line.match(/pts_time:\s*([\d.]+)/)
+				if (pts) { frame = Math.round(parseFloat(pts[1]) * 16000 / FRAME_SAMPLES); return }
+				const level = line.match(/RMS_level=(\S+)/)
+				if (level && frame >= 0) {
+					const value = parseFloat(level[1])
+					levels[frame] = Number.isFinite(value) ? value : -Infinity
+				}
+			})
+			.on('end', () => {
+				for (let i = 0; i < levels.length; i++) if (levels[i] === undefined) levels[i] = -Infinity
+				resolve(levels)
+			})
+			.on('error', (err) => {
+				if (signal?.aborted) return reject(new Error('Loudness measurement aborted by user'))
+				reject(err)
+			})
+		if (signal) signal.addEventListener('abort', () => command.kill('SIGKILL'), { once: true })
+		command.run()
+	})
+}

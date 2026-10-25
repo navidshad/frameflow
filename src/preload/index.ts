@@ -141,6 +141,8 @@ const api = {
 	clearEditorHistory: (data: { threadId: string }) =>
 		ipcRenderer.invoke('clear-editor-history', data),
 	getEditorRevisions: (threadId: string) => ipcRenderer.invoke('get-editor-revisions', threadId),
+	getEditorRevisionSnapshot: (data: { threadId: string, revisionId: string }) =>
+		ipcRenderer.invoke('get-editor-revision-snapshot', data),
 	pushEditorRevision: (data: { threadId: string, revision: any }) =>
 		ipcRenderer.invoke('push-editor-revision', data),
 	deleteEditorRevisions: (data: { threadId: string, ids: string[] }) =>
@@ -176,7 +178,7 @@ const api = {
 		ipcRenderer.invoke('improvise-message', { threadId, messageId }),
 	getModelMetadata: () => ipcRenderer.invoke('get-model-metadata'),
 	// Custom HTML motion layers: the determinism probe and the saved-template library.
-	probeMotionPage: (input: { html: string; definition: any; frame: { width: number; height: number } }) =>
+	probeMotionPage: (input: { html: string; definition: any; frame: { width: number; height: number }; kit?: any }) =>
 		ipcRenderer.invoke('motion-probe', input),
 	listMotionTemplates: () => ipcRenderer.invoke('motion-templates-list'),
 	saveMotionTemplate: (input: { label: string; description?: string; html: string; definition?: any; author?: string }) =>

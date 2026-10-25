@@ -2,7 +2,7 @@ import crypto from 'node:crypto'
 import os from 'os'
 import path from 'path'
 import type { TimelineItem } from '@shared/types'
-import { motionRenderRecipe } from '@shared/motion'
+import { motionRenderRecipe, type MotionKit } from '@shared/motion'
 import { THREAD_DIRS } from '../constants/paths'
 
 /**
@@ -25,15 +25,17 @@ export const fallbackMotionDir = () => path.join(os.tmpdir(), 'frameflow-motion'
 
 export function motionClipKey(
 	item: Pick<TimelineItem, 'motion' | 'duration' | 'keyframes'>,
-	frame: { width: number; height: number; fps: number }
+	frame: { width: number; height: number; fps: number },
+	kits?: readonly MotionKit[]
 ): string {
-	return crypto.createHash('sha1').update(motionRenderRecipe(item, frame)).digest('hex').slice(0, 24)
+	return crypto.createHash('sha1').update(motionRenderRecipe(item, frame, kits)).digest('hex').slice(0, 24)
 }
 
 export function motionClipPath(
 	dir: string,
 	item: Pick<TimelineItem, 'motion' | 'duration' | 'keyframes'>,
-	frame: { width: number; height: number; fps: number }
+	frame: { width: number; height: number; fps: number },
+	kits?: readonly MotionKit[]
 ): string {
-	return path.join(dir, `${motionClipKey(item, frame)}.mov`)
+	return path.join(dir, `${motionClipKey(item, frame, kits)}.mov`)
 }

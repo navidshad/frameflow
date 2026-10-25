@@ -2,9 +2,12 @@ import { BrowserWindow, ipcMain, nativeImage } from 'electron'
 import { randomUUID } from 'node:crypto'
 import { emitTurnUpdate, persistTurn } from '../editor/prompt'
 import { renderExactFrame } from '../editor/preview'
+import { describeMotionReport } from '../editor/exactMotion'
 import { transcriptsForAssets } from '../editor/captions'
 import type { ApplyOutcome, EditorBridge, LiveProject } from './bridge'
 import { ToolError } from './tools'
+import { writeQueue } from './writeQueue'
+import { isCaptureWindow } from '../motion/capture'
 import { threadManager } from '../threads'
 import { analyzeAudioFile, getAudioAnalysis, spectrogramBase64 } from '../editor/audioAnalysis'
 import { ensureSoundAsset, ensureSoundFile, soundDirFor } from '../editor/synth'
@@ -47,26 +50,67 @@ export function installRendererBridge(): void {
 	})
 }
 
+/**
+ * The window the editor runs in. Not simply the first window: while a motion
+ * page is probed or rendered a hidden capture window is open too, and a request
+ * sent there is never answered (the "did not answer (get-project)" timeouts
+ * agents saw on back-to-back page edits).
+ */
 function editorWindow(): BrowserWindow {
-	const win = BrowserWindow.getAllWindows().find((w) => !w.isDestroyed())
+	const win = BrowserWindow.getAllWindows().find((w) => !w.isDestroyed() && !isCaptureWindow(w))
 	if (!win) throw new ToolError('FrameFlow has no window open. Ask the user to open FrameFlow.')
 	return win
 }
 
-function waitFor<T>(id: string, timeoutMs: number, what: string): Promise<T> {
+/** A read normally answers in well under a second; ten means the editor is reloading or hung. */
+export const READ_TIMEOUT_MS = 10_000
+/**
+ * While the editor works on this process's own edits (a write queued or
+ * running, or the minute after one landed, while it saves the revision and
+ * re-checks new motion pages), a slow answer is expected: wait this long.
+ */
+export const BUSY_READ_TIMEOUT_MS = 120_000
+const SETTLE_MS = 60_000
+
+let settleUntil = 0
+
+/** The editor is busy with work this process gave it, so it may be slow to answer. */
+export function editorBusy(now = Date.now()): boolean {
+	return writeQueue.busy() || now < settleUntil
+}
+
+/** Marks the editor busy for a while after a write: it is still saving and probing. */
+export function noteEditorSettling(now = Date.now()): void {
+	settleUntil = Math.max(settleUntil, now + SETTLE_MS)
+}
+
+/** For tests. */
+export function resetEditorBusy(): void {
+	settleUntil = 0
+}
+
+export function readTimeoutMs(now = Date.now()): number {
+	return editorBusy(now) ? BUSY_READ_TIMEOUT_MS : READ_TIMEOUT_MS
+}
+
+function waitFor<T>(id: string, timeoutMs: number, what: string, busy = false): Promise<T> {
 	return new Promise<T>((resolve, reject) => {
 		const timer = setTimeout(() => {
 			pending.delete(id)
-			reject(new ToolError(`The editor did not answer (${what}) within ${Math.round(timeoutMs / 1000)}s. It may be busy or reloading — try again.`))
+			const secs = Math.round(timeoutMs / 1000)
+			reject(new ToolError(busy
+				? `The editor did not answer (${what}) within ${secs}s. It is still busy with earlier edits (saving revisions and checking motion pages): wait a minute, then try again.`
+				: `The editor did not answer (${what}) within ${secs}s. It may be busy or reloading — try again.`))
 		}, timeoutMs)
 		pending.set(id, { resolve, reject, timer })
 	})
 }
 
-function request<T>(kind: string, payload: unknown, timeoutMs = 10_000): Promise<T> {
+function request<T>(kind: string, payload: unknown, timeoutMs?: number): Promise<T> {
 	const win = editorWindow()
 	const id = randomUUID()
-	const answer = waitFor<T>(id, timeoutMs, kind)
+	const busy = editorBusy()
+	const answer = waitFor<T>(id, timeoutMs ?? readTimeoutMs(), kind, busy)
 	win.webContents.send('mcp-request', { id, kind, payload })
 	return answer
 }
@@ -76,7 +120,7 @@ function request<T>(kind: string, payload: unknown, timeoutMs = 10_000): Promise
  * the turn that is running switch revisions, which it refuses anyone else.
  */
 export function switchRevisionFor(revisionId: string, engineTurnId?: string): Promise<{ ok: true } | { ok: false; error: string }> {
-	return request('switch-revision', { revisionId, engineTurnId }, 20_000)
+	return request('switch-revision', { revisionId, engineTurnId }, Math.max(20_000, readTimeoutMs()))
 }
 
 /** Agent-sized: big enough to read a lower third, small enough to send every few steps. */
@@ -94,10 +138,15 @@ export const rendererBridge: EditorBridge = {
 		editorWindow()
 		await persistTurn(commit.threadId, commit.turn)
 		const replyId = randomUUID()
-		// An auto-checkpoint, a revision push and a sidecar write: generous.
-		const answer = waitFor<ApplyOutcome>(replyId, 30_000, 'apply_ops')
+		// An auto-checkpoint, a revision push and a sidecar write — slow on a
+		// project full of custom pages, and a turn that times out may still land.
+		const answer = waitFor<ApplyOutcome>(replyId, BUSY_READ_TIMEOUT_MS, 'apply_ops', true)
 		emitTurnUpdate({ ...commit, replyId })
-		return answer
+		try {
+			return await answer
+		} finally {
+			noteEditorSettling()
+		}
 	},
 
 	async readTranscripts(project, assetIds) {
@@ -107,7 +156,7 @@ export const rendererBridge: EditorBridge = {
 
 	async renderFrame(project, timeSec) {
 		// burnText: an agent has no monitor overlay, so titles and captions must be in the picture.
-		const { path } = await renderExactFrame({ threadId: project.threadId, doc: project.doc, timeSec, burnText: true })
+		const { path, motion } = await renderExactFrame({ threadId: project.threadId, doc: project.doc, timeSec, burnText: true })
 		const image = nativeImage.createFromPath(path)
 		if (image.isEmpty()) throw new ToolError('The frame rendered but could not be read back. Try again.')
 		const { width } = image.getSize()
@@ -116,7 +165,8 @@ export const rendererBridge: EditorBridge = {
 		return {
 			data: large.toJPEG(85).toString('base64'),
 			mimeType: 'image/jpeg',
-			thumbnail: `data:image/jpeg;base64,${thumb.toJPEG(75).toString('base64')}`
+			thumbnail: `data:image/jpeg;base64,${thumb.toJPEG(75).toString('base64')}`,
+			motionNote: describeMotionReport(motion) ?? undefined
 		}
 	},
 
@@ -125,7 +175,7 @@ export const rendererBridge: EditorBridge = {
 	},
 
 	startExport() {
-		return request('export', {}, 20_000)
+		return request('export', {}, Math.max(20_000, readTimeoutMs()))
 	},
 
 	async prepareSounds(project, recipes) {
@@ -189,7 +239,7 @@ export const rendererBridge: EditorBridge = {
 		}
 		// The renderer owns the live document and its autosave would drop an asset
 		// it never heard of, so it is told before anything can place it.
-		await request('upsert-assets', { assets: [made.asset] }, 10_000)
+		await request('upsert-assets', { assets: [made.asset] })
 		return made
 	}
 }

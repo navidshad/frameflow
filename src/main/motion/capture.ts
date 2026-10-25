@@ -64,6 +64,14 @@ function withTimeout<T>(promise: Promise<T>, ms: number, message: string): Promi
 	]).finally(() => clearTimeout(timer))
 }
 
+/**
+ * The hidden windows that draw motion pages. Anything that looks for "the
+ * editor window" must skip these: they have no preload and never answer IPC,
+ * and one is open whenever a page is being probed or rendered.
+ */
+const captureWindows = new WeakSet<BrowserWindow>()
+export const isCaptureWindow = (win: BrowserWindow): boolean => captureWindows.has(win)
+
 export async function openMotionCapture(
 	html: string,
 	frame: { width: number; height: number },
@@ -92,6 +100,7 @@ export async function openMotionCapture(
 			spellcheck: false
 		}
 	})
+	captureWindows.add(win)
 	const contents = win.webContents
 	contents.setWindowOpenHandler(() => ({ action: 'deny' }))
 	contents.on('will-navigate', (event) => event.preventDefault())

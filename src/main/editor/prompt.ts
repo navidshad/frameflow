@@ -7,7 +7,7 @@ import { applyTimelineDiff, computeContentEnd, itemDuration } from '@shared/time
 import { threadManager } from '../threads'
 import { settingsManager } from '../settings'
 import { GeminiAdapter } from '../gemini/adapter'
-import { GEMINI_MODEL_2_5_FLASH } from '../constants/gemini'
+import { GEMINI_MODEL_3_FLASH_PREVIEW } from '../constants/gemini'
 import { BUILTIN_PERSONAS, DEFAULT_PERSONA_ID } from '../constants/personas'
 import { buildPromptContext } from './context'
 import { vetHtmlOps } from './vetHtml'
@@ -167,7 +167,7 @@ export function runEditorPrompt(options: {
 			}
 
 			const modelSettings = settingsManager.getModelSettings()
-			const modelName = modelSettings.selection['editor-edit'] || GEMINI_MODEL_2_5_FLASH
+			const modelName = modelSettings.selection['editor-edit'] || GEMINI_MODEL_3_FLASH_PREVIEW
 
 			const adapter = GeminiAdapter.create()
 			// No thinkingLevel, and temperature 0.7 — both settings are load-
@@ -272,7 +272,7 @@ export function runEditorPrompt(options: {
 			const freshDoc = threadManager.getThread(threadId)?.editor || doc
 			// Same rule as an agent's: a custom page is checked before it replaces anything.
 			const vetted = await vetHtmlOps(ops || {}, freshDoc, probeMotionPage)
-			const mapped = opsToDiff(vetted.ops, freshDoc, { by: 'FrameFlow AI', turnId })
+			const mapped = opsToDiff(vetted.ops, freshDoc, { by: 'FrameFlow AI', turnId }, undefined, vetted.definitions)
 			const { diff, addMarkers, docSettings, notes } = mapped
 			const droppedOps = [...vetted.dropped, ...mapped.droppedOps]
 			const targetLengthSec = parseTargetLength(ops?.targetLength)

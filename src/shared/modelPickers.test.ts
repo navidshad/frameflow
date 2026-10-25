@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import type { ModelPricing } from './types'
-import { audioModels, groupValue, imageOutputModels, priceHint, withGroupValue } from './modelPickers'
+import { allModels, audioModels, groupValue, imageOutputModels, priceHint, withGroupValue } from './modelPickers'
 
 const pricing: Record<string, ModelPricing> = {
 	lite: { input: { standard: 0.1, audio: 0.3 }, output: { standard: 0.4 } },
@@ -34,5 +34,14 @@ describe('model pickers', () => {
 	it('writes one model to every step and leaves the rest alone', () => {
 		const next = withGroupValue({ a: 'x', b: 'y', z: 'keep' }, ['a', 'b'], 'new')
 		expect(next).toEqual({ a: 'new', b: 'new', z: 'keep' })
+	})
+
+	it('offers the speech-to-text model for transcripts only', () => {
+		const withStt: Record<string, ModelPricing> = {
+			...pricing,
+			'gemini-3.5-transcribe': { input: { standard: 2, audio: 2 }, output: { standard: 12 } }
+		}
+		expect(audioModels(withStt)).toContain('gemini-3.5-transcribe')
+		expect(allModels(withStt)).not.toContain('gemini-3.5-transcribe')
 	})
 })

@@ -630,13 +630,24 @@
 							<span class="iconify tabler--file-text w-3.5 h-3.5 inline-block align-[-2px] mr-1"></span>
 							{{ transcribing ? 'Transcribing…' : `Transcribe (${transcriptModel})` }}
 						</button>
-						<p v-if="!hasTranscript" class="mt-1.5 text-[10px] text-zinc-400 leading-snug">
+						<div v-if="!hasTranscript && transcriptError"
+							class="mt-2 px-2.5 py-2 rounded-lg bg-red-500/10 border border-red-500/20">
+							<p class="text-[10px] font-medium text-red-600 dark:text-red-400 leading-snug">
+								<span class="iconify tabler--alert-circle w-3 h-3 inline-block align-[-1px]"></span>
+								{{ transcriptError }}
+							</p>
+						</div>
+						<p v-else-if="!hasTranscript" class="mt-1.5 text-[10px] text-zinc-400 leading-snug">
 							Adds spoken text to each piece and enriches AI editing context. Costs tokens.
 						</p>
 						<div v-else class="flex items-center justify-between gap-2">
 							<p v-if="badTranscript" class="text-[11px] text-amber-500 font-medium">
 								<span class="iconify tabler--alert-triangle w-3 h-3 inline-block align-[-1px]"></span>
 								{{ badTranscript.looped ? 'Transcript unreliable' : 'Transcript incomplete' }}
+							</p>
+							<p v-else-if="timingIssue" class="text-[11px] text-amber-500 font-medium">
+								<span class="iconify tabler--alert-triangle w-3 h-3 inline-block align-[-1px]"></span>
+								{{ timingIssue.drift ? 'Timing may be off' : 'Check transcript' }}
 							</p>
 							<p v-else class="text-[11px] text-accent font-medium">
 								<span class="iconify tabler--check w-3 h-3 inline-block align-[-1px]"></span>
@@ -679,6 +690,26 @@
 								:disabled="retranscribing" @click="editorStore.repairTranscript(asset.id)">
 								{{ retranscribing ? 'Re-transcribing…' : `Re-transcribe (${correctionModel})` }}
 							</button>
+						</div>
+						<div v-else-if="hasTranscript && timingIssue"
+							class="mt-2 px-2.5 py-2 rounded-lg bg-amber-500/10 border border-amber-500/20">
+							<p v-if="timingIssue.drift"
+								class="text-[10px] font-medium text-amber-600 dark:text-amber-400 leading-snug">
+								Segment times do not follow the pauses in the audio<span v-if="timingIssue.driftAtSec.length">
+								(first at <span class="font-mono">{{ formatSpan(timingIssue.driftAtSec[0]) }}</span>)</span>.
+								Captions and graphics timed from it may land early or late.
+								<template v-if="timingIssue.engine === 'segments'">
+									{{ transcriptModel }} writes its own timestamps; a transcribe model measures them.
+								</template>
+							</p>
+							<p v-if="timingIssue.silentTextAtSec.length"
+								class="text-[10px] font-medium text-amber-600 dark:text-amber-400 leading-snug"
+								:class="timingIssue.drift ? 'mt-1' : ''">
+								<span class="font-mono">{{ timingIssue.silentTextAtSec.length }}</span>
+								{{ timingIssue.silentTextAtSec.length === 1 ? 'line sits' : 'lines sit' }} over silence
+								(first at <span class="font-mono">{{ formatSpan(timingIssue.silentTextAtSec[0]) }}</span>)
+								and may not have been said.
+							</p>
 						</div>
 					</div>
 				</div>
@@ -794,6 +825,15 @@ const hasTranscript = computed(() =>
 const badTranscript = computed(() => {
 	const health = asset.value?.transcriptHealth
 	return health && (health.looped || health.truncated || health.hasHole) ? health : null
+})
+
+/** Set by the transcript step when it failed (retired model, no key, quota). */
+const transcriptError = computed(() => asset.value?.transcriptError || null)
+
+/** Timing checked against the audio's pauses: drift, or text where it is silent. */
+const timingIssue = computed(() => {
+	const timing = asset.value?.transcriptHealth?.timing
+	return timing && (timing.drift || timing.silentTextAtSec?.length) ? timing : null
 })
 
 // Each of these buttons spends tokens, and which model it spends them on is

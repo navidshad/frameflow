@@ -8,6 +8,12 @@ import type { ModelPricing, ModelSelection } from './types'
 
 type PricingMap = Record<string, ModelPricing>
 
+/**
+ * Speech-to-text models (gemini-3.5-transcribe): they only turn audio into
+ * words, so they belong in the transcript pickers and nowhere else.
+ */
+export const isSpeechOnlyModel = (model: string): boolean => /transcribe/i.test(model)
+
 /** Models that can hear audio: the ones priced for audio input. */
 export const audioModels = (pricing: PricingMap): string[] =>
 	Object.keys(pricing).filter((m) => pricing[m]?.input?.audio !== undefined)
@@ -16,7 +22,8 @@ export const audioModels = (pricing: PricingMap): string[] =>
 export const imageOutputModels = (pricing: PricingMap): string[] =>
 	Object.keys(pricing).filter((m) => pricing[m]?.output?.image !== undefined)
 
-export const allModels = (pricing: PricingMap): string[] => Object.keys(pricing)
+/** Every general model: anything but speech-to-text. */
+export const allModels = (pricing: PricingMap): string[] => Object.keys(pricing).filter((m) => !isSpeechOnlyModel(m))
 
 const usd = (n: number): string => {
 	// 0.0672 stays exact; 0.10 and 3 read as money.

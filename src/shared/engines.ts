@@ -110,7 +110,8 @@ export function geminiTextModels(
 	order: string[] = []
 ): GeminiTextModel[] {
 	const models = Object.entries(pricing || {})
-		.filter(([, p]) => p?.output?.image === undefined)
+		// Image makers and speech-to-text models cannot hold a conversation.
+		.filter(([id, p]) => p?.output?.image === undefined && !/transcribe/i.test(id))
 		.map(([value, p]) => ({
 			value,
 			label: metadata?.[value]?.label || value,
@@ -282,7 +283,7 @@ export function normalizeToolName(name: string, server?: string | null): { tool:
 }
 
 const FRAMEFLOW_TOOLS = new Set([
-	'get_project', 'get_timeline', 'get_media', 'search_moments', 'render_frame', 'get_motion_guide', 'apply_ops',
+	'get_project', 'get_timeline', 'get_media', 'search_moments', 'render_frame', 'get_motion_guide', 'get_motion_kit', 'apply_ops',
 	'get_sound_guide', 'list_sounds', 'suggest_cues', 'render_sound', 'analyze_audio',
 	'revert_to_version', 'export'
 ])

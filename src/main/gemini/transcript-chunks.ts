@@ -15,6 +15,8 @@ export interface TranscriptItem {
 	start: string
 	end: string
 	text: string
+	/** Measured word times in seconds, when a word-timestamp engine produced the segment. */
+	words?: { start: number; end: number; text: string }[]
 }
 
 export interface AudioChunk {
