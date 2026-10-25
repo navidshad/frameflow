@@ -995,6 +995,15 @@ export async function preprocessMediaAsset(
 	const asset = getAsset(threadId, assetId)
 	if (!asset) return
 	if (isAssetPreprocessing(threadId, assetId)) return // already running
+	// Sound has no picture to strip. A filmstrip asked for an audio asset is a
+	// no-op, and one that failed before (it used to mark the whole asset as
+	// failed, synthesised sounds included) is cleared.
+	if (asset.kind === 'audio' && options?.steps?.length && options.steps.every((s) => s === 'filmstrip')) {
+		if (asset.preprocessState === 'error' && /strip/.test(asset.preprocessError || '')) {
+			await patchAsset(threadId, assetId, { preprocessState: 'completed', preprocessError: undefined })
+		}
+		return
+	}
 
 	// "Explicit" = the caller named the steps (Transcribe/Describe buttons,
 	// repair flows). The default chain is a resume, so steps whose work already

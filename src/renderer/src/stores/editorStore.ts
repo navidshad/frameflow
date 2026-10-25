@@ -1608,6 +1608,14 @@ export const useEditorStore = defineStore('editor', () => {
 		const usedAssetIds = new Set(doc.value.timeline.map((i) => i.sourceAssetId))
 		for (const asset of doc.value.media) {
 			if (!usedAssetIds.has(asset.id)) continue
+			// Sound has no picture. Main clears an asset an earlier filmstrip wrongly failed.
+			if (asset.kind !== 'video') {
+				if (asset.preprocessState === 'error' && /strip/.test(asset.preprocessError || '') && !filmstripRequested.has(asset.id)) {
+					filmstripRequested.add(asset.id)
+					api.preprocessMedia({ threadId: threadId.value, assetId: asset.id, steps: ['filmstrip'] })
+				}
+				continue
+			}
 			if (asset.preprocessState !== 'completed') continue
 			if (asset.filmstrip?.length || filmstripRequested.has(asset.id)) continue
 			filmstripRequested.add(asset.id)
