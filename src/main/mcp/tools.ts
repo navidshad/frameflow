@@ -371,6 +371,8 @@ const getMedia: ToolDef = {
 			width: asset.metadata?.width, height: asset.metadata?.height,
 			processing: asset.preprocessState || 'pending',
 			transcriptHealth: transcript ? asset.transcriptHealth || null : undefined,
+			// Why there is no transcript, when the last run failed.
+			transcriptError: !transcript ? asset.transcriptError || undefined : undefined,
 			descriptionHealth: asset.descriptionHealth || undefined
 		}
 		if (include.includes('transcript')) {

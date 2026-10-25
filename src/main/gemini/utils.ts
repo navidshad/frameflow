@@ -4,12 +4,17 @@ import * as path from 'path'
 import { GeminiAdapter } from './adapter'
 import { settingsManager } from '../settings'
 import { UsageRecord } from '../../shared/types'
-import { extractAudioSegment } from '../ffmpeg'
+import { extractAudioSegment, measureLoudness } from '../ffmpeg'
+import type { TranscriptTiming } from '../../shared/types'
 import {
-	chunkCoverage, halveChunk, mergeChunkTranscripts, MIN_CHUNK_COVERAGE, MIN_RETRY_SPAN_SEC,
-	planChunks, rebaseChunkItems, sliceTranscriptForChunk,
+	chunkCoverage, halveChunk, MIN_CHUNK_COVERAGE, MIN_RETRY_SPAN_SEC,
+	secondsToTimestamp, sliceTranscriptForChunk, timestampToSeconds,
 	type AudioChunk, type TranscriptItem
 } from './transcript-chunks'
+import {
+	assessTiming, findPauses, groupWordsIntoSegments, planWindowsAtPauses, snapStartsToOnsets, stitchWindows,
+	type Pause, type TimedItem
+} from './transcript-timing'
 
 export type { TranscriptItem }
 
@@ -20,101 +25,31 @@ export type { TranscriptItem }
  */
 const TRANSCRIPT_MAX_OUTPUT_TOKENS = 32_768
 
-const TRANSCRIPT_PROMPT = `Extract a detailed transcript from the provided audio file. 
+export {
+	formatTranscript, parseLanguageLine, parseTranscript
+} from './transcript-format'
+import {
+	applyWordFixes, buildMixedScriptRequest, findMixedScriptWords, formatTranscript, MIXED_SCRIPT_FIX_PROMPT,
+	parseLanguageLine, parseMixedScriptFixes, parseTranscript, TRANSCRIPT_CORRECTION_PROMPT, TRANSCRIPT_PROMPT
+} from './transcript-format'
 
-Each entry must be on a SINGLE LINE and strictly follow this format:
-from-timestamp , to-timestamp - Caption segment text
-
-Example:
-00:00:01,000 , 00:00:05,000 - Text content here.
-00:00:05,000 , 00:00:10,000 - [Music playing]
-
-Rules:
-- Respond ONLY with the transcript content.
-- Each line represents exactly one segment.
-- Use HH:MM:SS,mmm format for timestamps.
-- Use a single comma (with spaces around it) to separate 'from' and 'to' timestamps.
-- Use a single hyphen (with spaces around it) to separate the timestamps from the text.
-- Do not include any preamble, conversational text, or markdown code blocks.
-- **IMPORTANT**: Transcribe significant audio events (e.g., [Music], [Applause], [Laughter], [Silence]) in brackets.`
-
-const TRANSCRIPT_CORRECTION_PROMPT = `You are an expert transcriber. I am providing you with an audio file and an initial transcript (in custom line-based format) that was generated for it. 
-Your task is to review the transcript against the audio and correct any errors (mishearings, missing words, incorrect timestamps).
-
-Rules:
-1. Respond ONLY with the FULL corrected transcript in the same format:
-from-timestamp , to-timestamp - Caption segment text
-2. Each entry must be on its own line.
-3. Do not include any preamble, conversational text, or markdown code blocks.
-4. **CRITICAL**: Preserve all audio event markers (e.g., [Music], [Applause]) unless they are clearly incorrect.
-5. **REPETITION LOOPS**: the initial transcript may contain a stretch where the SAME sentence repeats
-   dozens or hundreds of times. That is a transcription failure, not real speech. Ignore what the initial
-   transcript claims for that stretch, listen to the audio, and write what is actually said. If the audio
-   there really is non-speech, emit a single event marker (e.g. [Music], [Silence]) covering the span
-   instead of repeating a line.
-6. Timestamps must be strictly increasing and must never overlap the previous segment or run past the
-   end of the audio.`
-
-/**
- * Normalizes a timestamp string to HH:MM:SS,mmm format.
- */
-function normalizeTimestamp(t: string): string {
-	const clean = t.trim().replace('.', ',')
-	const [timePart, milliPart = '000'] = clean.split(',')
-
-	const parts = timePart.split(':').map(Number)
-	let hh = 0, mm = 0, ss = 0
-
-	if (parts.length === 3) {
-		[hh, mm, ss] = parts
-	} else if (parts.length === 2) {
-		[mm, ss] = parts
-	} else if (parts.length === 1) {
-		ss = parts[0]
-	}
-
-	const pad = (n: number, z = 2) => n.toString().padStart(z, '0')
-	const ms = milliPart.padEnd(3, '0').substring(0, 3)
-
-	return `${pad(hh)}:${pad(mm)}:${pad(ss)},${ms}`
+/** Model ids served as dedicated speech-to-text (Interactions API, word timestamps). */
+export function isTranscribeModel(model: string | undefined): boolean {
+	return /transcribe/i.test(model || '')
 }
 
+/** Word-timestamp windows: well under the 30-minute limit with timestamps on. */
+const WORD_WINDOW_TARGET_SEC = 20 * 60
+const WORD_WINDOW_MAX_SEC = 25 * 60
 /**
- * Parses custom line-based transcript text into TranscriptItem array.
- * Format: from-timestamp , to-timestamp - Caption segment text
+ * Model-written timestamps drift with window length, so general models get
+ * short windows. Each window restarts the clock at a known pause.
  */
-export function parseTranscript(text: string): TranscriptItem[] {
-	const items: TranscriptItem[] = []
-	let cleanText = text.replace(/```[a-z]*\n?/gi, '').replace(/```/g, '').trim()
-	const allLines = cleanText.split(/\r?\n/).map(l => l.trim()).filter(l => l !== '')
-
-	// Regex to match: TIMESTAMP , TIMESTAMP - TEXT
-	// Groups: 1=start, 2=end, 3=text
-	const lineRegex = /^((?:\d{1,2}:)?\d{1,2}:\d{2}(?:[.,]\d{1,3})?)\s*,\s*((?:\d{1,2}:)?\d{1,2}:\d{2}(?:[.,]\d{1,3})?)\s*-\s*(.*)$/
-
-	for (const line of allLines) {
-		const match = line.match(lineRegex)
-		if (match) {
-			const start = normalizeTimestamp(match[1])
-			const end = normalizeTimestamp(match[2])
-			const segmentText = match[3].trim()
-			items.push({ start, end, text: segmentText })
-		}
-	}
-	return items
-}
-
-/**
- * Generates custom line-based transcript text from TranscriptItem array.
- * Format: from-timestamp , to-timestamp - Caption segment text
- */
-export function formatTranscript(items: TranscriptItem[]): string {
-	return items.map((item) => {
-		const start = normalizeTimestamp(item.start)
-		const end = normalizeTimestamp(item.end)
-		return `${start} , ${end} - ${item.text}`
-	}).join('\n')
-}
+const SEGMENT_WINDOW_TARGET_SEC = 120
+const SEGMENT_WINDOW_MAX_SEC = 180
+/** How far a start may move to reach an onset. Word times are measured, so barely. */
+const SNAP_WINDOW_WORDS_SEC = 0.3
+const SNAP_WINDOW_SEGMENTS_SEC = 1.5
 
 /** One transcription call over one audio file (whole file or a single window). */
 async function transcribeOne(
@@ -123,13 +58,17 @@ async function transcribeOne(
 	audioPath: string,
 	audioDuration: number,
 	priorTranscriptText: string | undefined,
-	signal?: AbortSignal
-): Promise<{ items: TranscriptItem[]; text: string; record: UsageRecord; finishReason?: string }> {
+	signal?: AbortSignal,
+	languageHint?: string
+): Promise<{ items: TranscriptItem[]; text: string; record: UsageRecord; finishReason?: string; language?: string }> {
 	const fileUri = await adapter.uploadFile(audioPath, 'audio/mpeg')
 
+	const hint = languageHint
+		? `\nThe speech is in "${languageHint}". Write it in that language's own script.`
+		: ''
 	const userPrompt = priorTranscriptText
-		? `Initial Transcript:\n${priorTranscriptText}`
-		: 'Generate the transcript for this audio.'
+		? `Initial Transcript:\n${priorTranscriptText}${hint}`
+		: `Generate the transcript for this audio.${hint}`
 	const systemInstruction = priorTranscriptText
 		? TRANSCRIPT_CORRECTION_PROMPT
 		: TRANSCRIPT_PROMPT
@@ -144,7 +83,7 @@ async function transcribeOne(
 		{ maxOutputTokens: TRANSCRIPT_MAX_OUTPUT_TOKENS }
 	)
 
-	return { items: parseTranscript(text), text, record, finishReason }
+	return { items: parseTranscript(text), text, record, finishReason, language: parseLanguageLine(text) }
 }
 
 const sumRecords = (records: UsageRecord[]): UsageRecord => ({
@@ -157,13 +96,76 @@ const sumRecords = (records: UsageRecord[]): UsageRecord => ({
 	cost: records.reduce((s, r) => s + (r.cost || 0), 0)
 })
 
+const toTimed = (items: TranscriptItem[]): TimedItem[] =>
+	items.map((it) => ({ start: timestampToSeconds(it.start), end: timestampToSeconds(it.end), text: it.text }))
+
+const fromTimed = (items: TimedItem[]): TranscriptItem[] =>
+	items.map((it) => ({
+		start: secondsToTimestamp(it.start),
+		end: secondsToTimestamp(it.end),
+		text: it.text,
+		...(it.words?.length ? { words: it.words } : {})
+	}))
+
+/** More than this and the transcript is romanised wholesale — a repair call is not the fix. */
+const MAX_MIXED_SCRIPT_REPAIRS = 200
+
+/**
+ * Words that came back half in Latin letters ("می‌خam") are rewritten in the
+ * script of their sentence by the clean-up model: one small text call, only
+ * when there is something to fix. Word timings are kept. Any failure leaves
+ * the words as they were.
+ */
+async function repairMixedScript(
+	adapter: GeminiAdapter,
+	items: TimedItem[],
+	records: UsageRecord[],
+	signal?: AbortSignal
+): Promise<TimedItem[]> {
+	const broken = findMixedScriptWords(items)
+	if (!broken.length || broken.length > MAX_MIXED_SCRIPT_REPAIRS) return items
+	const model = settingsManager.getModelSettings().selection['corrected-transcript']
+	if (!model || isTranscribeModel(model)) return items
+	try {
+		// Instructions ride in the prompt: generateText's systemInstruction sits where
+		// the SDK does not read it.
+		const { text, record } = await adapter.generateText(
+			model, `${MIXED_SCRIPT_FIX_PROMPT}\n\n${buildMixedScriptRequest(broken)}`, undefined, signal
+		)
+		records.push(record)
+		const fixes = parseMixedScriptFixes(text, broken)
+		if (!fixes) {
+			console.warn(`[transcript] could not read the script repair for ${broken.length} word(s) — left as they were: ${text.slice(0, 160)}`)
+			return items
+		}
+		console.log(`[transcript] rewrote ${fixes.size} of ${broken.length} half-romanised word(s) in their own script`)
+		return applyWordFixes(items, fixes)
+	} catch (error: any) {
+		if (signal?.aborted) throw error
+		console.warn('[transcript] script repair failed — words left as they were:', error?.message || error)
+		return items
+	}
+}
+
+/** Pauses measured from the audio. A failure only costs the snapping and the check. */
+async function measurePauses(audioPath: string, signal?: AbortSignal): Promise<Pause[]> {
+	try {
+		return findPauses(await measureLoudness(audioPath, signal))
+	} catch (error: any) {
+		if (signal?.aborted) throw error
+		console.warn('[transcript] could not measure pauses — timing will not be checked:', error?.message || error)
+		return []
+	}
+}
+
 /**
  * Extracts or corrects a transcript from an audio file using Gemini.
  *
- * Audio longer than one window is transcribed in sequential windows and
- * stitched back together: a single call over an hour of speech hits the
- * model's output ceiling and returns a transcript that stops partway through
- * (or degenerates into one repeated line) with no error to notice.
+ * With a transcribe model (the default) the words come back with measured
+ * timestamps and segments are built from them. With a general model the model
+ * writes segment times itself; those are kept honest by short windows cut at
+ * pauses and by snapping starts to speech onsets. Either way the result is
+ * scored against the pauses (see gemini/transcript-timing.ts).
  */
 export async function extractTranscript(
 	audioPath: string,
@@ -171,7 +173,7 @@ export async function extractTranscript(
 	rawTranscriptText?: string,
 	signal?: AbortSignal,
 	onProgress?: (done: number, total: number) => void
-): Promise<{ items: TranscriptItem[], rawResponseText: string, record: UsageRecord }> {
+): Promise<{ items: TranscriptItem[], rawResponseText: string, record: UsageRecord, timing: TranscriptTiming, model: string }> {
 	const adapter = GeminiAdapter.create()
 	const modelSettings = settingsManager.getModelSettings()
 
@@ -179,50 +181,77 @@ export async function extractTranscript(
 		? modelSettings.selection['corrected-transcript']
 		: modelSettings.selection['raw-transcript']
 
-	const chunks = planChunks(audioDuration)
+	const pauses = await measurePauses(audioPath, signal)
+	const words = isTranscribeModel(modelName)
+	const windows = planWindowsAtPauses(audioDuration, pauses, words
+		? { targetSec: WORD_WINDOW_TARGET_SEC, maxSec: WORD_WINDOW_MAX_SEC }
+		: { targetSec: SEGMENT_WINDOW_TARGET_SEC, maxSec: SEGMENT_WINDOW_MAX_SEC })
+	// Unknown duration: one call over the whole file.
+	if (!windows.length) windows.push({ index: 0, start: 0, end: audioDuration > 0 ? audioDuration : Infinity })
 
-	// Short audio (or unknown duration): exactly one call, as before.
-	if (chunks.length <= 1) {
-		onProgress?.(0, 1)
-		const single = await transcribeOne(adapter, modelName, audioPath, audioDuration, rawTranscriptText, signal)
-		onProgress?.(1, 1)
-		return { items: single.items, rawResponseText: single.text, record: single.record }
-	}
-
-	const priorItems = rawTranscriptText ? parseTranscript(rawTranscriptText) : []
+	const priorItems = rawTranscriptText && !words ? parseTranscript(rawTranscriptText) : []
 	const workDir = fs.mkdtempSync(path.join(os.tmpdir(), 'frameflow-transcript-'))
-	const perChunk: TranscriptItem[][] = []
+	const perWindow: { chunk: AudioChunk; items: TimedItem[] }[] = []
 	const responses: string[] = []
 	const records: UsageRecord[] = []
-
+	let language: string | undefined
 	let segmentCounter = 0
 
-	/**
-	 * Transcribe one window. If it comes back short — empty, cut off by the
-	 * output ceiling, or reaching only part way through — split it and retry.
-	 * A window that silently returns half its audio is how minutes go missing
-	 * from the MIDDLE of a transcript, where a trailing-coverage check can
-	 * never see them.
-	 */
-	const runWindow = async (chunk: AudioChunk, canRetry: boolean): Promise<void> => {
+	/** The window's own audio file: the source itself when there is one window. */
+	const windowAudio = async (chunk: AudioChunk): Promise<{ file: string; temp: boolean }> => {
+		if (windows.length === 1 && chunk.start === 0 && chunk.end >= (audioDuration || Infinity)) {
+			return { file: audioPath, temp: false }
+		}
+		const file = path.join(workDir, `chunk-${segmentCounter++}.mp3`)
+		await extractAudioSegment(audioPath, chunk.start, chunk.end - chunk.start, file, signal)
+		return { file, temp: true }
+	}
+
+	const runWordWindow = async (chunk: AudioChunk): Promise<void> => {
 		if (signal?.aborted) throw new Error('Aborted')
 		const span = chunk.end - chunk.start
-		const segmentPath = path.join(workDir, `chunk-${segmentCounter++}.mp3`)
-		await extractAudioSegment(audioPath, chunk.start, span, segmentPath, signal)
+		const { file, temp } = await windowAudio(chunk)
+		try {
+			const uri = await adapter.uploadFile(file, 'audio/mpeg')
+			const result = await adapter.transcribeWords(modelName, uri, Number.isFinite(span) ? span : 0, signal)
+			records.push(result.record)
+			responses.push(`# window ${chunk.start}s-${chunk.end}s\n${result.text}`)
+			if (!result.words.length && result.text.trim()) {
+				console.warn(`[transcript] window ${Math.round(chunk.start)}s came back with text but no word times`)
+			}
+			perWindow.push({ chunk, items: groupWordsIntoSegments(result.words) })
+		} finally {
+			if (temp) try { fs.unlinkSync(file) } catch { /* best effort */ }
+		}
+	}
 
+	/**
+	 * Transcribe one window with a general model. If it comes back short —
+	 * empty, cut off by the output ceiling, or reaching only part way through —
+	 * split it and retry: a window that silently returns half its audio is how
+	 * minutes go missing from the MIDDLE of a transcript.
+	 */
+	const runSegmentWindow = async (chunk: AudioChunk, canRetry: boolean): Promise<void> => {
+		if (signal?.aborted) throw new Error('Aborted')
+		const span = chunk.end - chunk.start
+		const { file, temp } = await windowAudio(chunk)
 		const prior = priorItems.length
 			? formatTranscript(sliceTranscriptForChunk(priorItems, chunk))
 			: undefined
-
-		const result = await transcribeOne(adapter, modelName, segmentPath, span, prior, signal)
-		try { fs.unlinkSync(segmentPath) } catch { /* best effort */ }
+		let result: Awaited<ReturnType<typeof transcribeOne>>
+		try {
+			result = await transcribeOne(adapter, modelName, file, Number.isFinite(span) ? span : 0, prior, signal, language)
+		} finally {
+			if (temp) try { fs.unlinkSync(file) } catch { /* best effort */ }
+		}
 
 		// The call is paid for either way — always bank the usage.
 		records.push(result.record)
 		responses.push(`# window ${chunk.start}s-${chunk.end}s\n${result.text}`)
+		language = language || result.language
 
 		const cutOff = !!result.finishReason && result.finishReason !== 'STOP'
-		const coverage = chunkCoverage(result.items, span)
+		const coverage = Number.isFinite(span) ? chunkCoverage(result.items, span) : 1
 		const short = result.items.length === 0 || cutOff || coverage < MIN_CHUNK_COVERAGE
 
 		if (short && canRetry && span > MIN_RETRY_SPAN_SEC) {
@@ -231,33 +260,62 @@ export async function extractTranscript(
 				`${Math.round(coverage * 100)}% covered${cutOff ? ` (${result.finishReason})` : ''} — splitting and retrying`
 			)
 			const [first, second] = halveChunk(chunk)
-			await runWindow(first, false)
-			await runWindow(second, false)
+			await runSegmentWindow(first, false)
+			await runSegmentWindow(second, false)
 			return
 		}
-
 		if (short) {
 			console.warn(
 				`[transcript] window ${Math.round(chunk.start)}s-${Math.round(chunk.end)}s is still incomplete ` +
 				`(${Math.round(coverage * 100)}% covered) — that span will read as silence`
 			)
 		}
-		perChunk.push(rebaseChunkItems(result.items, chunk))
+		perWindow.push({ chunk, items: toTimed(result.items) })
 	}
 
 	try {
-		for (const chunk of chunks) {
-			onProgress?.(chunk.index, chunks.length)
-			await runWindow(chunk, true)
+		for (const chunk of windows) {
+			onProgress?.(chunk.index, windows.length)
+			if (words) await runWordWindow(chunk)
+			else await runSegmentWindow(chunk, true)
 		}
+	} catch (error: any) {
+		// Name the model that failed: settings may have changed since the run began.
+		if (error && typeof error === 'object' && !error.model) error.model = modelName
+		throw error
 	} finally {
 		try { fs.rmSync(workDir, { recursive: true, force: true }) } catch { /* best effort */ }
 	}
+	onProgress?.(windows.length, windows.length)
 
-	onProgress?.(chunks.length, chunks.length)
+	const stitched = await repairMixedScript(adapter, stitchWindows(perWindow), records, signal)
+	const { items, snapped } = snapStartsToOnsets(stitched, pauses, {
+		windowSec: words ? SNAP_WINDOW_WORDS_SEC : SNAP_WINDOW_SEGMENTS_SEC,
+		durationSec: audioDuration || undefined
+	})
+	// Scored on the engine's own times: snapped starts sit on onsets by construction.
+	const timing = assessTiming(stitched, pauses, {
+		durationSec: audioDuration || undefined,
+		engine: words ? 'words' : 'segments',
+		language,
+		snapped,
+		windows
+	})
+	if (timing.drift) {
+		console.warn(
+			`[transcript] timing does not follow the speech: ${Math.round(timing.alignedRatio * 100)}% of ` +
+			`${timing.phraseStartsChecked} phrase starts sit on an onset (median offset ${timing.medianOnsetOffsetSec}s)`
+		)
+	}
+	if (timing.silentTextAtSec.length) {
+		console.warn(`[transcript] ${timing.silentTextAtSec.length} segment(s) have text over silence — likely invented`)
+	}
+
 	return {
-		items: mergeChunkTranscripts(perChunk),
+		items: fromTimed(items),
 		rawResponseText: responses.join('\n\n'),
-		record: sumRecords(records)
+		record: sumRecords(records),
+		timing,
+		model: modelName
 	}
 }

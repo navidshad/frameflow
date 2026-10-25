@@ -5,7 +5,7 @@ import path from 'path'
 import { extractTranscript, formatTranscript } from '../../gemini/utils'
 import { GeminiAdapter } from '../../gemini/adapter'
 import { Scene } from '../../scenedetect/types'
-import { GEMINI_MODEL_2_5_FLASH_LITE } from '../../constants/gemini'
+import { DEFAULT_MODEL_SETTINGS } from '../../constants/gemini'
 import { settingsManager } from '../../settings'
 import { THREAD_DIRS } from '../../constants/paths'
 import type { UsageRecord } from '@shared/types'
@@ -38,6 +38,9 @@ export const convertToAudio: PipelineFunction = async (data, context) => {
 	context.next({ ...data, audioPath })
 }
 
+/** Where a transcript's timing verdict is kept: next to it, `<name>.timing.json`. */
+export const timingSidecarPath = (transcriptPath: string) => transcriptPath.replace(/\.json$/, '') + '.timing.json'
+
 export const extractRawTranscript: PipelineFunction = async (data, context) => {
 	const audioPath = data.audioPath || context.preprocessing.audioPath
 	if (!audioPath) {
@@ -47,7 +50,7 @@ export const extractRawTranscript: PipelineFunction = async (data, context) => {
 	context.updateStatus('Extracting raw transcript...')
 	const duration = await ffmpegAdapter.getVideoDuration(audioPath)
 
-	const { items: transcript, rawResponseText, record } = await extractTranscript(
+	const { items: transcript, rawResponseText, record, timing } = await extractTranscript(
 		audioPath, duration, undefined, context.signal,
 		(done, total) => {
 			if (total > 1) context.updateStatus(`Transcribing part ${Math.min(done + 1, total)} of ${total}…`)
@@ -67,6 +70,7 @@ export const extractRawTranscript: PipelineFunction = async (data, context) => {
 
 	const rawTranscriptPath = path.join(transcriptsDir, `raw_transcript.json`)
 	fs.writeFileSync(rawTranscriptPath, JSON.stringify(transcript, null, 2))
+	fs.writeFileSync(timingSidecarPath(rawTranscriptPath), JSON.stringify(timing, null, 2))
 
 	context.savePreprocessing({ rawTranscriptPath, transcriptPath: rawTranscriptPath })
 	context.updateStatus('Raw transcript extracted.')
@@ -89,7 +93,7 @@ export const extractCorrectedTranscript: PipelineFunction = async (data, context
 	const rawTranscript = JSON.parse(transcriptJson)
 	const rawTranscriptText = formatTranscript(rawTranscript)
 
-	const { items: transcript, rawResponseText, record } = await extractTranscript(
+	const { items: transcript, rawResponseText, record, timing } = await extractTranscript(
 		audioPath, duration, rawTranscriptText, context.signal,
 		(done, total) => {
 			if (total > 1) context.updateStatus(`Re-checking part ${Math.min(done + 1, total)} of ${total}…`)
@@ -109,6 +113,7 @@ export const extractCorrectedTranscript: PipelineFunction = async (data, context
 
 	const correctedTranscriptPath = path.join(transcriptsDir, `corrected_transcript.json`)
 	fs.writeFileSync(correctedTranscriptPath, JSON.stringify(transcript, null, 2))
+	fs.writeFileSync(timingSidecarPath(correctedTranscriptPath), JSON.stringify(timing, null, 2))
 
 	context.savePreprocessing({ correctedTranscriptPath, transcriptPath: correctedTranscriptPath })
 	context.updateStatus('Transcript refined.')
@@ -162,7 +167,7 @@ export const generateSceneDescription: PipelineFunction = async (data, context) 
 
 	const gemini = GeminiAdapter.create()
 	const modelSettings = settingsManager.getModelSettings()
-	const modelName = modelSettings.selection['scene-description'] || GEMINI_MODEL_2_5_FLASH_LITE
+	const modelName = modelSettings.selection['scene-description'] || DEFAULT_MODEL_SETTINGS.selection['scene-description']
 
 	const analysisDir = path.join(tempDir, THREAD_DIRS.ANALYSIS)
 	if (!fs.existsSync(analysisDir)) fs.mkdirSync(analysisDir, { recursive: true })

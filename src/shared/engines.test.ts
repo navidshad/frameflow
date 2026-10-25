@@ -241,9 +241,10 @@ describe('geminiTextModels', () => {
 	const pricing = {
 		'a-pro': { input: { standard: 1.25 } },
 		'b-flash': { input: { text: 0.3, standard: 0.3 } },
-		'c-image': { input: { standard: 0.5 }, output: { image: 0.07 } }
+		'c-image': { input: { standard: 0.5 }, output: { image: 0.07 } },
+		'gemini-3.5-transcribe': { input: { standard: 2 } }
 	}
-	it('drops image models, orders as asked, falls back to price', () => {
+	it('drops image and speech-to-text models, orders as asked, falls back to price', () => {
 		const meta = { 'a-pro': { label: 'A Pro' } }
 		expect(geminiTextModels(pricing, meta, ['b-flash']).map((m) => m.value)).toEqual(['b-flash', 'a-pro'])
 		expect(geminiTextModels(pricing, meta)).toEqual([

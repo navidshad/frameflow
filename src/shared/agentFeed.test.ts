@@ -34,6 +34,8 @@ describe('summaries', () => {
 		expect(transcriptHealthLabel(undefined, false)).toBe('no transcript')
 		expect(transcriptHealthLabel({ looped: false, truncated: false, hasHole: false } as any)).toBe('health good')
 		expect(transcriptHealthLabel({ looped: true, truncated: true, hasHole: false } as any)).toBe('transcript looped, stops early')
+		expect(transcriptHealthLabel({ looped: false, truncated: false, hasHole: false, timing: { drift: true, silentTextAtSec: [12] } } as any))
+			.toBe('transcript timing off, text over silence')
 	})
 
 	it('reads like the design: transcript, scenes, health', () => {

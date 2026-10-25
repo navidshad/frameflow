@@ -277,6 +277,7 @@ export interface MediaAsset {
 	clips: Clip[]               // derived from scene detection
 	filmstrip?: FilmstripEntry[]
 	transcriptHealth?: TranscriptHealth  // set by the transcript step
+	transcriptError?: string     // why the last transcript run failed; cleared on success
 	descriptionHealth?: DescriptionHealth  // set by the descriptions step
 	createdAt: number
 }
@@ -312,7 +313,24 @@ export interface TranscriptHealth {
 	largestGapSec?: number      // longest stretch with no speech
 	gapAtSec?: number           // where that stretch starts, when it counts as a hole
 	hasHole: boolean            // verdict: a window in the MIDDLE came back empty
+	timing?: TranscriptTiming   // timing checked against pauses in the audio
 	checkedAt: number
+}
+
+/** Segment times checked against speech onsets measured from the audio (gemini/transcript-timing.ts). */
+export interface TranscriptTiming {
+	engine: 'words' | 'segments'   // word timestamps from a transcribe model, or model-written segment times
+	language?: string              // BCP-47 code the model reported, when it did
+	phraseStartsChecked: number    // segments after a gap, compared to the nearest onset
+	alignedRatio: number           // share of those within 0.3 s of an onset — 1 is perfect
+	medianOnsetOffsetSec: number
+	snapped: number                // segment starts moved onto an onset
+	drift: boolean                 // verdict: times do not follow the speech
+	driftAtSec: number[]           // phrase starts with no onset within 1 s
+	silentTextAtSec: number[]      // segments whose span is mostly silence (likely invented)
+	repeatedAtSec: number[]        // segments that repeat the previous line
+	untranscribedSec?: number      // sound with no text over it, in stretches of 5 s or more
+	untranscribedAtSec?: number[]  // where those stretches start
 }
 
 export interface Clip {        // a selectable scene piece

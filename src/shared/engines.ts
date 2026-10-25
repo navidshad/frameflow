@@ -110,7 +110,8 @@ export function geminiTextModels(
 	order: string[] = []
 ): GeminiTextModel[] {
 	const models = Object.entries(pricing || {})
-		.filter(([, p]) => p?.output?.image === undefined)
+		// Image makers and speech-to-text models cannot hold a conversation.
+		.filter(([id, p]) => p?.output?.image === undefined && !/transcribe/i.test(id))
 		.map(([value, p]) => ({
 			value,
 			label: metadata?.[value]?.label || value,
