@@ -231,7 +231,7 @@ export const rendererBridge: EditorBridge = {
 		const file = asset.proxyPath && fs.existsSync(asset.proxyPath) ? asset.proxyPath : asset.originalPath
 		const durationSec = asset.metadata?.duration ?? (await probeExport(file)).durationSec
 		const times = sheetTimes(durationSec, options)
-		const made = await contactSheet(file, times, { columns: options.columns, tileWidth: options.tileWidth })
+		const made = await contactSheet(file, times, { columns: options.columns, tileWidth: options.tileWidth, labels: options.labels })
 		return { sheet: { data: made.jpeg.toString('base64'), mimeType: 'image/jpeg', times, columns: made.columns, rows: made.rows }, durationSec }
 	},
 

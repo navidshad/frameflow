@@ -90,6 +90,10 @@ describe('multicam over MCP', () => {
 		expect(angles.body.moments).toHaveLength(4)
 		expect(angles.body.moments[0]).toMatchObject({ showing: 'Cam01' })
 		expect(angles.body.said).toContain('gap time')
+		// Each angle's tiles say TIMELINE time, not the file's own: the same moment reads the same in every row.
+		const sheets = editor.sheetRequests.slice(-2)
+		expect(sheets.map((r) => r.labels)).toEqual([['0:41.0', '0:43.0', '0:45.0', '0:47.0'], ['0:41.0', '0:43.0', '0:45.0', '0:47.0']])
+		expect(sheets[0].times).not.toEqual(sheets[1].times)
 
 		// 5. Cut to Cam 2 for ten seconds: the shot splits, the sound does not move, nothing drifts.
 		await call('apply_ops', { rationale: 'Cam 2 for the answer', switchAngles: { switches: [{ atSec: 43, angle: 2 }, { atSec: 53, angle: 'cam01' }] } })

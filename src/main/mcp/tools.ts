@@ -1918,8 +1918,11 @@ const getAngles: ToolDef = {
 			if (!files.length) continue
 			content.push({ type: 'text', text: `Angle ${i + 1} · ${camera.name}` })
 			for (const member of files) {
-				const usable = at.filter((x) => x?.member === member).map((x) => x!.source)
-				const { sheet } = await ctx.bridge.mediaSheet(project, member.assetId, { times: usable, columns: usable.length, tileWidth: args.tileWidth ?? 240 })
+				const picked = at.map((x, k) => ({ x, k })).filter(({ x }) => x?.member === member)
+				const usable = picked.map(({ x }) => x!.source)
+				// Labelled with TIMELINE time, so every angle's tile for one moment reads the same.
+				const labels = picked.map(({ k }) => sheetClock(times[k]))
+				const { sheet } = await ctx.bridge.mediaSheet(project, member.assetId, { times: usable, columns: usable.length, tileWidth: args.tileWidth ?? 240, labels })
 				content.push({ type: 'image', data: sheet.data, mimeType: sheet.mimeType })
 			}
 		}

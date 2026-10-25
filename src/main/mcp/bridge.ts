@@ -62,6 +62,8 @@ export interface InspectOptions {
 	columns?: number
 	tileWidth?: number
 	loudness?: boolean
+	/** mediaSheet: one label per time, drawn instead of the SOURCE time */
+	labels?: string[]
 }
 
 export interface InspectReport {

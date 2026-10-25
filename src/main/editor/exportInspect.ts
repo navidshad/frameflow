@@ -114,6 +114,8 @@ export interface SheetOptions {
 	tileWidth?: number
 	columns?: number
 	workDir?: string
+	/** One label per frame instead of its time in the file (get_angles labels frames with TIMELINE time). */
+	labels?: string[]
 }
 
 const drawLabel = (label: string, tileWidth: number): string => {
@@ -170,7 +172,7 @@ export async function contactSheet(file: string, times: number[], options: Sheet
 			])
 			frames.push(out)
 		}
-		return await tileImages(frames, times.map(sheetClock), options)
+		return await tileImages(frames, options.labels?.length === times.length ? options.labels : times.map(sheetClock), options)
 	} finally {
 		fs.rmSync(work, { recursive: true, force: true })
 	}

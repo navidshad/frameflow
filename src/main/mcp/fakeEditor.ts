@@ -153,7 +153,11 @@ export class FakeEditor implements EditorBridge {
 		}
 	}
 
-	async mediaSheet(_project: LiveProject, _assetId: string, options: InspectOptions) {
+	/** Every mediaSheet request, in order: what a tool asked to be drawn. */
+	sheetRequests: Array<{ assetId: string } & InspectOptions> = []
+
+	async mediaSheet(_project: LiveProject, assetId: string, options: InspectOptions) {
+		this.sheetRequests.push({ assetId, ...options })
 		const times = options.times ?? [0, 10, 20]
 		return { sheet: { data: PIXEL, mimeType: 'image/png', times, columns: times.length, rows: 1 }, durationSec: 30 }
 	}
