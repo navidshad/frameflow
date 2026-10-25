@@ -1,4 +1,4 @@
-import type { EditorRevision } from './types'
+import type { EditorRevision, EditorRevisionSummary } from './types'
 
 /**
  * Pure tree helpers for the editor's revision history, shared by the renderer
@@ -109,4 +109,36 @@ export function applyPrune<T extends RevisionNode>(revisions: readonly T[], prun
 	return revisions.filter((r) => !drop.has(r.id))
 }
 
-export type { EditorRevision }
+/** Cards show this many thumbnails at most. */
+const SUMMARY_CLIPS = 4
+
+/** A revision minus its snapshot, plus what the revision cards draw from it. */
+export function summarizeRevision(revision: EditorRevision): EditorRevisionSummary {
+	const { snapshot, ...meta } = revision
+	const timeline = Array.isArray(snapshot?.timeline) ? snapshot.timeline : []
+	const firstClips = [...timeline]
+		.sort((a, b) => a.timelineStart - b.timelineStart)
+		.slice(0, SUMMARY_CLIPS)
+		.map((item) => ({ sourceAssetId: item.sourceAssetId, sourceClipId: item.sourceClipId }))
+	return { ...meta, itemCount: timeline.length, firstClips }
+}
+
+/**
+ * Points revisions whose parent is gone at the root, so the tree stays one
+ * tree after a partial recovery. Returns how many were re-pointed.
+ */
+export function reattachOrphans<T extends RevisionNode>(revisions: T[]): number {
+	const root = revisions.find((r) => r.parentId === null)
+	if (!root) return 0
+	const ids = new Set(revisions.map((r) => r.id))
+	let fixed = 0
+	for (const rev of revisions) {
+		if (rev.parentId !== null && !ids.has(rev.parentId)) {
+			rev.parentId = root.id
+			fixed++
+		}
+	}
+	return fixed
+}
+
+export type { EditorRevision, EditorRevisionSummary }

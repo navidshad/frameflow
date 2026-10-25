@@ -2,7 +2,7 @@ import { defineStore } from 'pinia'
 import { computed, ref } from 'vue'
 import type { AgentAccessState, AgentActivity, AgentSessionInfo } from '@shared/agentFeed'
 import type { AgentFocus } from '@shared/engines'
-import type { EditorRevision } from '@shared/types'
+import type { EditorRevisionSummary } from '@shared/types'
 import { useEditorStore } from './editorStore'
 
 /**
@@ -63,7 +63,7 @@ export const useAgentStore = defineStore('agent', () => {
 	 * The version before this session's first edit — what "Back to V{n}" in the
 	 * Agent tab returns to, undoing everything the agent did this session.
 	 */
-	const baselineRevision = (sessionId: string | null | undefined): EditorRevision | null => {
+	const baselineRevision = (sessionId: string | null | undefined): EditorRevisionSummary | null => {
 		const editor = useEditorStore()
 		if (!sessionId || !editor.doc) return null
 		const turnIds = new Set(editor.doc.turns.filter((t) => t.agent?.sessionId === sessionId).map((t) => t.id))
@@ -149,7 +149,7 @@ export const useAgentStore = defineStore('agent', () => {
 					threadId: editor.threadId,
 					title: editor.thread?.title || 'Untitled Project',
 					doc,
-					revisions: editor.revisions.map(({ snapshot, ...rest }) => rest),
+					revisions: editor.revisions.map(({ itemCount: _count, firstClips: _clips, ...rest }) => rest),
 					currentRevisionId: doc.currentRevisionId || null,
 					playheadSec: editor.playheadSec
 				}))

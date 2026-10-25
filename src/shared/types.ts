@@ -540,6 +540,15 @@ export interface EditorHistoryFile {
 	currentStepId: string          // informational — the pointer of record is doc.historyRef
 }
 
+/** What get-editor-history returns: the steps the renderer replays, no keyframes. */
+export interface EditorHistoryLoad {
+	threadId: string
+	steps: EditorHistoryStep[]
+	currentStepId: string
+	/** Set when the stored history could not be read; it starts empty instead. */
+	problem?: string
+}
+
 export interface EditorHistoryStep {
 	id: string
 	seq: number                 // monotonic (Thread.versionCounter via getNextVersion)
@@ -575,16 +584,41 @@ export interface EditorRevision {
 	label: string               // persona name / user label / 'Original' / 'Auto checkpoint'
 	turnId?: string             // origin === 'ai'
 	personaId?: string          // origin === 'ai' — drives the list-item icon
-	snapshot: {
-		tracks: Track[]
-		timeline: TimelineItem[]
-		timelineMeta: TimelineMeta
-		markers?: EditorMarker[]  // markers ride in the snapshot so switches restore them
-	}
+	snapshot: RevisionSnapshot
 	createdAt: number
 }
 
-// ---- Revisions sidecar: userData/editor-revisions/{threadId}.json ----
+export interface RevisionSnapshot {
+	tracks: Track[]
+	timeline: TimelineItem[]
+	timelineMeta: TimelineMeta
+	markers?: EditorMarker[]    // markers ride in the snapshot so switches restore them
+}
+
+/**
+ * A revision without its snapshot: what the renderer keeps for every revision.
+ * Snapshots are fetched one at a time (get-editor-revision-snapshot) — holding
+ * all of them made a 28-motion-layer project need gigabytes just to open.
+ */
+export type EditorRevisionSummary = Omit<EditorRevision, 'snapshot'> & {
+	itemCount: number
+	/** The first few items by start time, for the card's thumbnail. */
+	firstClips: Array<{ sourceAssetId?: string; sourceClipId?: string }>
+}
+
+/** What get-editor-revisions returns (sidecar schema 2). */
+export interface EditorRevisionsIndex {
+	threadId: string
+	schemaVersion: 2
+	revisionCounter: number
+	revisions: EditorRevisionSummary[]
+	/** Set when stored revisions could not all be read; the project still opens. */
+	problem?: string
+}
+
+// ---- Legacy (schema 1) revisions sidecar: userData/editor-revisions/{threadId}.json ----
+// Every revision held a full snapshot. Migrated on first open to the schema 2
+// layout in main/editor/revisionStore.ts.
 export interface EditorRevisionsFile {
 	threadId: string
 	schemaVersion: 1

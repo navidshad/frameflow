@@ -1,5 +1,5 @@
 import { computed, type Ref } from 'vue'
-import type { EditorRevision } from '@shared/types'
+import type { EditorRevisionSummary } from '@shared/types'
 import { useEditorStore } from '../../stores/editorStore'
 import { originMeta, relativeTime, revisionThumbs } from '../utils/revisionThumbs'
 
@@ -10,7 +10,7 @@ import { originMeta, relativeTime, revisionThumbs } from '../utils/revisionThumb
  * honoured `promptRunning`, never showed the unsaved-changes marker, and had no
  * origin tooltip. One source keeps them in step.
  */
-export function useRevisionCard(revision: Ref<EditorRevision>, opts?: { thumbCount?: number }) {
+export function useRevisionCard(revision: Ref<EditorRevisionSummary>, opts?: { thumbCount?: number }) {
 	const store = useEditorStore()
 	const thumbCount = opts?.thumbCount ?? 1
 
@@ -27,7 +27,7 @@ export function useRevisionCard(revision: Ref<EditorRevision>, opts?: { thumbCou
 
 	const thumbs = computed(() => revisionThumbs(revision.value, store.doc, thumbCount))
 	const time = computed(() => relativeTime(revision.value.createdAt))
-	const itemCount = computed(() => revision.value.snapshot.timeline.length)
+	const itemCount = computed(() => revision.value.itemCount)
 
 	const origin = computed(() => originMeta(revision.value.origin))
 	const personaIcon = computed(

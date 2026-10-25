@@ -1,8 +1,8 @@
 import { defineStore } from 'pinia'
-import { ref, computed, watch } from 'vue'
+import { ref, shallowRef, computed, watch } from 'vue'
 import type {
 	BackgroundTask, Clip, EditorDocument, EditorHistoryStep, EditorMarker,
-	EditorPersona, EditorRevision, MediaAsset, PromptTurn, Thread, TimelineDiff,
+	EditorPersona, EditorRevision, EditorRevisionSummary, MediaAsset, RevisionSnapshot, PromptTurn, Thread, TimelineDiff,
 	DeliveryFormat, SoundBinding, TimelineItem, TimelineItemTransform, TimelineSnapshot, Track
 } from '@shared/types'
 import {
@@ -33,7 +33,7 @@ import {
 	captionsFromTimeline, type CaptionCue, type TranscriptEntry
 } from '@shared/captions'
 import { sequenceFrame as resolveSequenceFrame } from '@shared/framing'
-import { childrenByParent, collectSubtree, hasBranch } from '@shared/revision-tree'
+import { childrenByParent, collectSubtree, hasBranch, summarizeRevision } from '@shared/revision-tree'
 import { DEFAULT_PERSONA_ID } from '@shared/personas'
 import { agentChangeBadges, type AgentApplyOutcome } from '@shared/agentFeed'
 import { toMediaUrl } from '@shared/media-url'
@@ -129,7 +129,11 @@ export const useEditorStore = defineStore('editor', () => {
 	const scopeWiden = ref<'auto' | 'chapter' | 'full'>('auto')
 
 	// ===== Revision tree =====
-	const revisions = ref<EditorRevision[]>([])
+	// Summaries only. A snapshot can be megabytes of motion page HTML, so only
+	// the current revision's is held (for revisionDirty), and a switch fetches
+	// the target's from main.
+	const revisions = ref<EditorRevisionSummary[]>([])
+	const currentSnapshot = shallowRef<{ threadId: string; id: string; snapshot: RevisionSnapshot } | null>(null)
 
 	/** Result card data for the most recent APPLIED AI edit (already a revision). */
 	interface AiResult {
@@ -1040,26 +1044,61 @@ export const useEditorStore = defineStore('editor', () => {
 		return left.some((value, index) => value !== right[index])
 	}
 
-	const currentRevision = computed<EditorRevision | null>(() =>
+	const currentRevision = computed<EditorRevisionSummary | null>(() =>
 		revisions.value.find((r) => r.id === doc.value?.currentRevisionId) || null
 	)
 
-	/** Working state differs from the current revision's snapshot. */
+	/**
+	 * Working state differs from the current revision's snapshot. False while
+	 * that snapshot is still being fetched — every action that acts on this
+	 * (switch, checkpoint) awaits ensureCurrentSnapshot() first.
+	 */
 	const revisionDirty = computed(() => {
 		const rev = currentRevision.value
-		if (!rev || !doc.value) return false
+		const held = currentSnapshot.value
+		if (!rev || !doc.value || !held || held.id !== rev.id || held.threadId !== threadId.value) return false
+		const snap = held.snapshot
 		if (diffTimelines(
-			{ tracks: rev.snapshot.tracks, timeline: rev.snapshot.timeline },
+			{ tracks: snap.tracks, timeline: snap.timeline },
 			{ tracks: doc.value.tracks, timeline: doc.value.timeline }
 		) !== null) return true
 		// Markers live outside TimelineDiff, so the timeline comparison above is
 		// blind to them. Without this, marker-only work counts as "clean" and
 		// switchRevision overwrites it with no checkpoint and no undo.
-		return markersDiffer(rev.snapshot.markers || [], doc.value.markers || [])
+		return markersDiffer(snap.markers || [], doc.value.markers || [])
 	})
 
+	/** Fetches one revision's snapshot from main; null when it is gone or damaged. */
+	const fetchRevisionSnapshot = async (id: string): Promise<RevisionSnapshot | null> => {
+		if (!threadId.value) return null
+		try {
+			return (await api.getEditorRevisionSnapshot({ threadId: threadId.value, revisionId: id })) || null
+		} catch (error) {
+			console.error('[editorStore] getEditorRevisionSnapshot failed:', error)
+			return null
+		}
+	}
+
+	/** Makes sure the current revision's snapshot is held, so revisionDirty is accurate. */
+	const ensureCurrentSnapshot = async (): Promise<void> => {
+		const id = doc.value?.currentRevisionId
+		const thread = threadId.value
+		// Not listed yet (still loading) or dangling (cleared on load): nothing to fetch.
+		if (!id || !thread || !revisions.value.some((r) => r.id === id)) return
+		const held = currentSnapshot.value
+		if (held && held.id === id && held.threadId === thread) return
+		const snapshot = await fetchRevisionSnapshot(id)
+		// The project or pointer may have moved on while this was in flight.
+		if (snapshot && doc.value?.currentRevisionId === id && threadId.value === thread) {
+			currentSnapshot.value = { threadId: thread, id, snapshot }
+		}
+	}
+	// The pointer also moves outside the actions above (an agent's revision
+	// arriving through thread-updated, a dangling pointer re-aimed on load).
+	watch(() => [threadId.value, doc.value?.currentRevisionId], () => { void ensureCurrentSnapshot() })
+
 	/** Children grouped by parentId (null key = root), createdAt-sorted. */
-	const revisionChildren = computed<Map<string | null, EditorRevision[]>>(
+	const revisionChildren = computed<Map<string | null, EditorRevisionSummary[]>>(
 		() => childrenByParent(revisions.value)
 	)
 
@@ -1298,11 +1337,16 @@ export const useEditorStore = defineStore('editor', () => {
 			// ---- Revisions sidecar + pointer reconciliation ----
 			// Invariant: losing/corrupting the sidecar NEVER mutates the working doc.
 			lastResult.value = null
+			const storageProblems: string[] = []
+			currentSnapshot.value = null
 			try {
-				revisions.value = (await api.getEditorRevisions(id))?.revisions || []
+				const index = await api.getEditorRevisions(id)
+				revisions.value = index?.revisions || []
+				if (index?.problem) storageProblems.push(index.problem)
 			} catch (error) {
 				console.error('[editorStore] Failed to load revisions:', error)
 				revisions.value = []
+				storageProblems.push('Saved versions could not be loaded.')
 			}
 			if (doc.value?.currentRevisionId &&
 				!revisions.value.some((r) => r.id === doc.value!.currentRevisionId)) {
@@ -1315,6 +1359,7 @@ export const useEditorStore = defineStore('editor', () => {
 			try {
 				const hist = await api.getEditorHistory(id)
 				historySteps.value = hist?.steps || []
+				if (hist?.problem) storageProblems.push(hist.problem)
 				const docPointer = doc.value!.historyRef?.currentStepId || ''
 				const inSteps = (p: string) => p === '' || historySteps.value.some((s) => s.id === p)
 				if (!inSteps(docPointer)) {
@@ -1333,7 +1378,19 @@ export const useEditorStore = defineStore('editor', () => {
 			} catch (error) {
 				console.error('[editorStore] Failed to load history:', error)
 				historySteps.value = []
+				storageProblems.push('Undo history could not be loaded.')
 			}
+
+			// The project is open either way; say what was lost, without blocking.
+			if (storageProblems.length) {
+				void dialog.notify({
+					title: 'Some history could not be opened',
+					message: 'Your current timeline is fine.',
+					detail: storageProblems.join(' '),
+					tone: 'warning'
+				})
+			}
+			void ensureCurrentSnapshot()
 
 			// Detect assets interrupted by an app quit mid-preprocess: persisted as
 			// 'running' but with no live task process. Any incoming task update for
@@ -3135,13 +3192,14 @@ export const useEditorStore = defineStore('editor', () => {
 	 * only appeared to work because createRevision writes currentRevisionId
 	 * immediately afterwards and that forced a re-read.
 	 */
-	const pushRevisionInternal = async (rev: EditorRevision): Promise<EditorRevision> => {
-		revisions.value = [...revisions.value, rev]
-		let stored = rev
+	const pushRevisionInternal = async (rev: EditorRevision): Promise<EditorRevisionSummary> => {
+		const summary = summarizeRevision(rev)
+		revisions.value = [...revisions.value, summary]
+		let stored = summary
 		try {
 			const res = await api.pushEditorRevision({ threadId: threadId.value, revision: deepClone(rev) })
 			const pruned = new Set<string>(res?.prunedIds || [])
-			stored = { ...rev, seq: res?.seq ?? rev.seq }
+			stored = { ...summary, seq: res?.seq ?? rev.seq }
 			revisions.value = revisions.value
 				.filter((r) => !pruned.has(r.id))
 				.map((r) => (r.id === rev.id ? stored : r))
@@ -3151,8 +3209,13 @@ export const useEditorStore = defineStore('editor', () => {
 		return stored
 	}
 
+	/** The new revision becomes current: its snapshot is already in hand. */
+	const holdAsCurrent = (id: string, snapshot: RevisionSnapshot) => {
+		if (threadId.value) currentSnapshot.value = { threadId: threadId.value, id, snapshot }
+	}
+
 	/** Lazy root bootstrap: the parent chain is never empty; zero migration. */
-	const ensureRootRevision = async (): Promise<EditorRevision | null> => {
+	const ensureRootRevision = async (): Promise<EditorRevisionSummary | null> => {
 		if (!doc.value || !threadId.value) return null
 		if (revisions.value.length === 0) {
 			const root: EditorRevision = {
@@ -3167,6 +3230,7 @@ export const useEditorStore = defineStore('editor', () => {
 			// Use the returned object: it carries the seq main assigned.
 			const storedRoot = await pushRevisionInternal(root)
 			doc.value.currentRevisionId = storedRoot.id
+			holdAsCurrent(storedRoot.id, root.snapshot)
 			markDirty()
 			return storedRoot
 		}
@@ -3185,9 +3249,10 @@ export const useEditorStore = defineStore('editor', () => {
 		label?: string
 		turnId?: string
 		personaId?: string
-	}): Promise<EditorRevision | null> => {
+	}): Promise<EditorRevisionSummary | null> => {
 		if (!doc.value || !threadId.value) return null
 		await ensureRootRevision()
+		await ensureCurrentSnapshot()
 		// Manual checkpoint with nothing changed = no-op (return the current node)
 		if (options.origin === 'manual' && !revisionDirty.value) return currentRevision.value
 		const rev: EditorRevision = {
@@ -3205,6 +3270,7 @@ export const useEditorStore = defineStore('editor', () => {
 		// local `rev` still has the placeholder seq of 0.
 		const stored = await pushRevisionInternal(rev)
 		doc.value.currentRevisionId = stored.id
+		holdAsCurrent(stored.id, rev.snapshot)
 		markDirty()
 		return stored
 	}
@@ -3226,6 +3292,7 @@ export const useEditorStore = defineStore('editor', () => {
 			!!doc.value.turns.find((t) => t.id === activeTurnId.value)?.engine
 		if (promptRunning.value && !engineTurn) return false
 
+		if (!options.force) await ensureCurrentSnapshot()
 		if (!options.force && revisionDirty.value) {
 			const choice = await dialog.choose<'cancel' | 'discard' | 'save'>({
 				title: 'Unsaved changes',
@@ -3245,8 +3312,17 @@ export const useEditorStore = defineStore('editor', () => {
 			}
 		}
 
-		// Apply the snapshot
-		const snap = deepClone(target.snapshot)
+		// Fetch and apply the snapshot
+		const stored = await fetchRevisionSnapshot(id)
+		if (!stored || !doc.value) {
+			void dialog.notify({
+				title: `V${target.seq} can't be restored`,
+				message: 'This saved version is missing or damaged. Your timeline was not changed.',
+				tone: 'error'
+			})
+			return false
+		}
+		const snap = deepClone(stored)
 		// A revision taken before a media removal still holds that media's clips;
 		// restoring it verbatim would put orphans straight back. Sanitised on the
 		// way in only — the stored revision is a record of what was, not a mirror
@@ -3261,6 +3337,7 @@ export const useEditorStore = defineStore('editor', () => {
 		doc.value.timelineMeta = snap.timelineMeta
 		doc.value.markers = snap.markers || []
 		doc.value.currentRevisionId = id
+		holdAsCurrent(id, stored)
 
 		// Ring reset (local + sidecar; pointer-only reset would rehydrate stale steps)
 		historySteps.value = []
@@ -3281,6 +3358,7 @@ export const useEditorStore = defineStore('editor', () => {
 	const saveCheckpoint = async (label?: string): Promise<'saved' | 'clean' | null> => {
 		if (!doc.value) return null
 		await ensureRootRevision()
+		await ensureCurrentSnapshot()
 		if (!revisionDirty.value) return 'clean'
 		const rev = await createRevision({ origin: 'manual', label: label || 'Checkpoint' })
 		return rev ? 'saved' : null
