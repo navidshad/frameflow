@@ -1068,6 +1068,30 @@ describe('opsToDiff / removeRanges', () => {
 	})
 })
 
+describe('opsToDiff / splitAt', () => {
+	const doc = () => makeDoc([makeAsset('a', uniform(2, 10))], [
+		{ id: 'i1', trackId: 'v1', sourceAssetId: 'a', timelineStart: 2, in: 0, out: 10, speed: 1, preservePitch: true, duration: 10, fadeOutSec: 1 },
+		{ id: 'i2', trackId: 'v1', sourceAssetId: 'a', timelineStart: 12, in: 0, out: 4, speed: 1, preservePitch: true, duration: 4 }
+	])
+
+	it('cuts a clip in two where asked, moving nothing', () => {
+		const base = doc()
+		const { diff, notes } = opsToDiff({ splitAt: [{ atSec: 5 }, { atSec: 8 }] }, base)
+		const state = { tracks: base.tracks, timeline: JSON.parse(JSON.stringify(base.timeline)) }
+		applyTimelineDiff(state, diff, base.media)
+		const v1 = state.timeline.sort((a: any, b: any) => a.timelineStart - b.timelineStart)
+		expect(v1.map((i: any) => [i.timelineStart, i.in, i.out])).toEqual([[2, 0, 3], [5, 3, 6], [8, 6, 10], [12, 0, 4]])
+		// The fade-out stays at the clip's real end.
+		expect(v1[0].fadeOutSec || 0).toBe(0)
+		expect(v1[2].fadeOutSec).toBe(1)
+		expect(notes.at(-1)).toMatch(/Split 1 clip\(s\) into 3 pieces/)
+	})
+
+	it('says when nothing runs across the time', () => {
+		expect(opsToDiff({ splitAt: [{ atSec: 20 }] }, doc()).droppedOps[0]).toMatch(/no clip runs across/)
+	})
+})
+
 describe('opsToDiff / layers', () => {
 	const doc = () => makeDoc([makeAsset('a', uniform(2, 5))], [
 		{ id: 'i1', trackId: 'v1', sourceAssetId: 'a', timelineStart: 0, in: 0, out: 5, speed: 1, preservePitch: true, duration: 5 }

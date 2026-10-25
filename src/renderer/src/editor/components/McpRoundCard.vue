@@ -76,13 +76,9 @@
 		<div v-if="round.kind === 'round' && !working" class="flex flex-col items-end gap-1">
 			<div v-if="round.summary"
 				class="max-w-[88%] px-3 py-2 rounded-2xl rounded-br-md bg-secondary/[0.12] border border-secondary/25 text-xs leading-relaxed text-zinc-800 dark:text-zinc-100 whitespace-pre-wrap">{{ round.summary }}</div>
-			<span class="text-[9px] font-bold uppercase tracking-widest flex items-center gap-1"
+			<span class="max-w-full text-right text-[9px] font-bold uppercase tracking-widest leading-relaxed"
 				:class="round.status === 'done' ? 'text-zinc-400' : 'text-amber-500'">
-				<span>{{ ROUND_STATUS_LABEL[round.status] }}</span>
-				<span class="text-zinc-400">· {{ stats.steps }} step{{ stats.steps === 1 ? '' : 's' }} · {{ elapsedClock(stats.durationMs) }}</span>
-				<span v-if="stats.firstRevision" class="text-secondary">
-					· {{ stats.firstRevision === stats.lastRevision ? stats.firstRevision : `${stats.firstRevision} → ${stats.lastRevision}` }}
-				</span>
+				{{ ROUND_STATUS_LABEL[round.status] }}<span class="text-zinc-400"> · {{ stats.steps }} step{{ stats.steps === 1 ? '' : 's' }} · {{ elapsedClock(stats.durationMs) }}</span><span v-if="stats.firstRevision" class="text-secondary"> · {{ stats.firstRevision === stats.lastRevision ? stats.firstRevision : `${stats.firstRevision} → ${stats.lastRevision}` }}</span>
 			</span>
 		</div>
 	</div>

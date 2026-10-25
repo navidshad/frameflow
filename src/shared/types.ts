@@ -906,6 +906,13 @@ export interface EditorOps {
 	 * it sits in.
 	 */
 	removeRanges?: Array<{ fromSec: number; toSec: number }>
+	/**
+	 * Cut clips in two at a TIMELINE time, without removing anything: each
+	 * picture or sound clip covering that instant (on `trackId`, or on every
+	 * track that is not a motion, title or generated layer) becomes two clips
+	 * that play exactly as before. Agents (MCP) only.
+	 */
+	splitAt?: Array<{ atSec: number; trackId?: string }>
 	/** Burn the transcript into the picture. */
 	captions?: boolean
 	/** Normalise the finished mix to the streaming target. */

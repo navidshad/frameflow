@@ -858,6 +858,15 @@ const analyzeAudio: ToolDef = {
 
 /** Project settings outside the timeline that only agents set through ops. */
 const PROJECT_OPS_SCHEMA = {
+	splitAt: {
+		type: 'array',
+		description: 'Cut clips in two at TIMELINE seconds without removing anything (each half plays as before), so each half can take its own transform, look or transition. Splits every picture/sound clip at that time, or only those on trackId. Send it in an apply_ops of its own, then read the new ids with get_timeline.',
+		items: {
+			type: 'object',
+			properties: { atSec: { type: 'number', minimum: 0 }, trackId: { type: 'string' } },
+			required: ['atSec']
+		}
+	},
 	sequenceFrame: {
 		type: 'object',
 		description: 'The sequence\'s frame size, which the export renders at (e.g. 1920×1080 for a 4K source, to render faster). Footage of another shape follows each clip\'s framing.',
