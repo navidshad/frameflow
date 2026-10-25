@@ -4,7 +4,10 @@ import type { TranscriptEntry } from '@shared/captions'
 import type { AudioAnalysis } from '@shared/audio'
 import { normaliseRecipe, presetOf, recipeKey, soundLength, type SoundRecipe } from '@shared/synth'
 import type { AudioProvenance, GenerateRequest, ProviderId, SpendPolicy } from '@shared/audioProviders'
-import type { EditorBridge, LiveProject, RevisionSummary, SoundReport, TurnCommit } from './bridge'
+import type {
+	EditorBridge, ExportStatus, InspectOptions, InspectReport, LiveProject, MediaSource, ProjectSummary, RevisionSummary,
+	SoundReport, TurnCommit
+} from './bridge'
 
 /**
  * A fake editor for tests: a document in memory that applies diffs the way the
@@ -61,7 +64,7 @@ export class FakeEditor implements EditorBridge {
 		if (!this.open) return null
 		return {
 			threadId: 't1', title: 'BytePets pre-pitch', doc: JSON.parse(JSON.stringify(this.doc)),
-			revisions: [...this.revisions], currentRevisionId: this.current, playheadSec: 0
+			revisions: [...this.revisions], currentRevisionId: this.current, playheadSec: 0, chatBusy: this.chatBusy
 		}
 	}
 
@@ -112,9 +115,69 @@ export class FakeEditor implements EditorBridge {
 		return { ok: true as const }
 	}
 
-	async startExport() {
+	/** Projects the fake knows; t1 is the one open. */
+	projects: ProjectSummary[] = [
+		{ id: 't1', title: 'BytePets pre-pitch', createdAt: 1, updatedAt: 2, mediaCount: 1, durationSec: 30, open: true },
+		{ id: 't2', title: 'Old cut', createdAt: 0, mediaCount: 0, durationSec: 0, open: false }
+	]
+	chatBusy = false
+	imported: MediaSource[] = []
+	exportPhase: ExportStatus['phase'] = 'done'
+
+	async startExport(_project: LiveProject, options: { quality: 'original' | 'preview' }) {
 		this.exports++
-		return { ok: true as const, detail: 'Export started.' }
+		this.lastQuality = options.quality
+		return { ok: true as const, renderId: `render-${this.exports}` }
+	}
+	lastQuality: 'original' | 'preview' | null = null
+
+	exportStatus(query: { renderId?: string; threadId: string }): ExportStatus | null {
+		if (!this.exports) return null
+		const renderId = query.renderId ?? `render-${this.exports}`
+		return {
+			renderId, phase: this.exportPhase, percent: this.exportPhase === 'done' ? 100 : 40,
+			outputPath: this.exportPhase === 'done' ? '/tmp/export.mp4' : undefined, startedAt: 0, updatedAt: 1000
+		}
+	}
+
+	async inspectExport(file: string, options: InspectOptions): Promise<InspectReport> {
+		return {
+			facts: {
+				file, bytes: 1_000_000, durationSec: 30, width: 1920, height: 1080, fps: 30, videoCodec: 'h264',
+				videoFrames: 900, audioCodec: 'aac', sampleRate: 48000, channels: 2
+			},
+			sheet: options.times && !options.times.length ? undefined : { data: PIXEL, mimeType: 'image/png', times: options.times ?? [0, 15], columns: 2, rows: 1 },
+			loudness: options.loudness ? { lufs: -14.2, truePeakDb: -1.1 } : undefined
+		}
+	}
+
+	async listProjects(): Promise<ProjectSummary[]> {
+		return this.projects.map((p) => ({ ...p, open: this.open && p.id === 't1' }))
+	}
+
+	async createProject(title: string) {
+		const id = `t${this.projects.length + 1}`
+		this.projects.push({ id, title, createdAt: Date.now(), mediaCount: 0, durationSec: 0, open: false })
+		return { id, title }
+	}
+
+	opened: string[] = []
+	async openProject(threadId: string) {
+		this.opened.push(threadId)
+		return { ok: true as const }
+	}
+
+	async importMedia(_project: LiveProject, source: MediaSource, onProgress?: (percent: number) => void): Promise<MediaAsset> {
+		this.imported.push(source)
+		onProgress?.(50)
+		onProgress?.(100)
+		const asset: MediaAsset = {
+			id: `m${this.imported.length}`, kind: 'video', name: 'url' in source ? 'Episode 1.mp4' : source.name || 'file.mp4',
+			originalPath: '/tmp/x.mp4', metadata: { duration: 566, width: 1920, height: 1080 } as MediaAsset['metadata'],
+			preprocessing: {}, preprocessState: 'pending', clips: [], createdAt: 0
+		}
+		this.doc.media.push(asset)
+		return asset
 	}
 
 	/** Sounds "rendered" so far, in the order asked. */

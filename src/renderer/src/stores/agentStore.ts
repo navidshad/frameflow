@@ -1,8 +1,9 @@
 import { defineStore } from 'pinia'
-import { computed, ref } from 'vue'
+import { computed, ref, watch } from 'vue'
 import type { AgentAccessState, AgentActivity, AgentSessionInfo } from '@shared/agentFeed'
 import type { AgentFocus } from '@shared/engines'
 import type { EditorRevisionSummary } from '@shared/types'
+import { applyRoundEvent, type AgentLock, type AgentRound, type RoundEvent } from '@shared/agentRounds'
 import { useEditorStore } from './editorStore'
 
 /**
@@ -85,7 +86,7 @@ export const useAgentStore = defineStore('agent', () => {
 		const id = editor.activeTurnId
 		return !!id && !!editor.doc?.turns.find((t) => t.id === id)?.engine
 	})
-	const agentActive = computed(() => !!editingSession.value || engineRunning.value)
+	const agentActive = computed(() => !!editingSession.value || engineRunning.value || !!lock.value)
 
 	const readKey = 'frameflow.followAgent'
 	const followAgent = ref<boolean>((() => {
@@ -138,6 +139,63 @@ export const useAgentStore = defineStore('agent', () => {
 
 	const editorIsOpen = () => window.location.hash.startsWith('#/editor/')
 
+	// ===== Rounds: one agent per project =====
+
+	/** Who holds the project right now (an MCP agent's open round), app-wide. */
+	const lock = ref<AgentLock | null>(null)
+	/** The open project's rounds: the MCP conversation the chat shows. */
+	const rounds = ref<AgentRound[]>([])
+	const roundsThreadId = ref<string | null>(null)
+
+	/** An MCP agent is working on the project the editor shows: the user should not touch it, the chat is locked. */
+	const mcpWorking = computed<AgentLock | null>(() => {
+		const editor = useEditorStore()
+		return lock.value && lock.value.threadId === editor.threadId ? lock.value : null
+	})
+
+	const loadRounds = async (threadId: string | null) => {
+		roundsThreadId.value = threadId
+		if (!threadId || !api?.getAgentRounds) {
+			rounds.value = []
+			return
+		}
+		const state = await api.getAgentRounds(threadId)
+		if (roundsThreadId.value !== threadId) return
+		rounds.value = state?.rounds ?? []
+		lock.value = state?.lock ?? null
+	}
+
+	const onRoundEvent = (event: RoundEvent) => {
+		if (event.type === 'lock') {
+			lock.value = event.lock
+			now.value = Date.now()
+			return
+		}
+		const threadId = event.type === 'round' ? event.round.threadId : event.threadId
+		if (threadId !== roundsThreadId.value) return
+		rounds.value = applyRoundEvent(rounds.value, event)
+	}
+
+	/** Ticks when the user tries to edit while an agent works: the working strip pulses. */
+	const nudges = ref(0)
+	const nudgeWorking = () => { nudges.value++ }
+
+	/** Stop the working agent: its round ends and it is disconnected. */
+	const stopRound = async () => {
+		await api.stopAgentRound?.()
+	}
+
+	/** Resolves once the editor shows this project, loaded. */
+	const waitForProject = async (threadId: string, timeoutMs: number): Promise<boolean> => {
+		const editor = useEditorStore()
+		const until = Date.now() + timeoutMs
+		while (Date.now() < until) {
+			if (editorIsOpen() && editor.threadId === threadId && !!editor.doc && !editor.loading) return true
+			await new Promise((r) => setTimeout(r, 100))
+		}
+		return false
+	}
+
 	const answer = async (kind: string, payload: any): Promise<unknown> => {
 		const editor = useEditorStore()
 		const open = editorIsOpen() && !!editor.doc && !!editor.threadId && !editor.loading
@@ -151,8 +209,21 @@ export const useAgentStore = defineStore('agent', () => {
 					doc,
 					revisions: editor.revisions.map(({ itemCount: _count, firstClips: _clips, ...rest }) => rest),
 					currentRevisionId: doc.currentRevisionId || null,
-					playheadSec: editor.playheadSec
+					playheadSec: editor.playheadSec,
+					chatBusy: editor.promptRunning
 				}))
+			}
+			case 'open-project': {
+				const threadId = String(payload?.threadId || '')
+				if (!threadId) return { ok: false, error: 'No project id.' }
+				if (editor.promptRunning) return { ok: false, error: 'FrameFlow’s own chat is running a prompt. Try again when it finishes.' }
+				if (open && editor.threadId === threadId) return { ok: true }
+				// Flush the project being left before the editor moves on.
+				if (open) await editor.persistDoc?.()
+				window.location.hash = `#/editor/${threadId}`
+				return (await waitForProject(threadId, 45_000))
+					? { ok: true }
+					: { ok: false, error: 'The editor did not finish opening that project within 45 s.' }
 			}
 			case 'switch-revision': {
 				if (!open) return { ok: false, error: 'No project is open in the editor.' }
@@ -169,7 +240,15 @@ export const useAgentStore = defineStore('agent', () => {
 			case 'upsert-assets': {
 				// Sounds main generated for the agent: the store hears of them before any op can place them.
 				if (!open) return { ok: false, error: 'No project is open in the editor.' }
-				for (const asset of payload.assets ?? []) editor.upsertAsset(asset)
+				for (const asset of payload.assets ?? []) {
+					// An agent's import ends its download card the way the user's own does.
+					if (editor.urlImports[asset.id] !== undefined) {
+						const next = { ...editor.urlImports }
+						delete next[asset.id]
+						editor.urlImports = next
+					}
+					editor.upsertAsset(asset)
+				}
 				return { ok: true }
 			}
 			case 'export': {
@@ -199,6 +278,9 @@ export const useAgentStore = defineStore('agent', () => {
 			known.value = next
 		})
 		api.onEngineActivity?.((activity: AgentActivity) => onFocus(activity))
+		api.onAgentRoundsEvent?.((event: RoundEvent) => onRoundEvent(event))
+		// The chat shows the open project's rounds: read them whenever it changes.
+		watch(() => useEditorStore().threadId, (id) => { void loadRounds(id) }, { immediate: true })
 		api.onAgentActivity((activity: AgentActivity) => {
 			onFocus(activity)
 			const index = activities.value.findIndex((a) => a.id === activity.id)
@@ -206,7 +288,7 @@ export const useAgentStore = defineStore('agent', () => {
 			else activities.value = activities.value.map((a, i) => (i === index ? activity : a))
 		})
 		setInterval(() => {
-			if (sessions.value.length || focus.value) now.value = Date.now()
+			if (sessions.value.length || focus.value || lock.value) now.value = Date.now()
 		}, 1000)
 		void refresh()
 	}
@@ -214,6 +296,7 @@ export const useAgentStore = defineStore('agent', () => {
 	return {
 		access, activities, sessions, liveSession, editingSession, shownSession, isLive, now,
 		feedFor, baselineRevision, refresh, disconnect,
-		focus, followAgent, setFollowAgent, readingAsset, lookedAt, isReading, agentActive
+		focus, followAgent, setFollowAgent, readingAsset, lookedAt, isReading, agentActive,
+		lock, rounds, mcpWorking, loadRounds, stopRound, nudges, nudgeWorking
 	}
 })

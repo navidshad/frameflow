@@ -56,7 +56,12 @@
 			<!-- Footer -->
 			<div class="px-4 pt-2.5 pb-3 border-t border-zinc-200 dark:border-zinc-800 flex flex-col gap-2 shrink-0">
 				<p class="m-0 text-[10px] leading-snug text-zinc-500 dark:text-zinc-400">
-					You can keep editing while it works; the agent sees your changes the next time it reads the timeline. Every step it takes lands as a revision.
+					<template v-if="agent.mcpWorking">
+						{{ agent.mcpWorking.clientName }} holds this project for its round {{ agent.mcpWorking.seq }}: editing is paused and the chat is read-only until it ends the round. Every step it takes lands as a revision.
+					</template>
+					<template v-else>
+						Between its rounds you can edit; the agent sees your changes the next time it reads the timeline. Every step it takes lands as a revision.
+					</template>
 				</p>
 				<div class="flex gap-1.5">
 					<button

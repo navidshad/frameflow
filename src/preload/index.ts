@@ -203,6 +203,14 @@ const api = {
 		ipcRenderer.on('agent-activity', listener)
 		return () => ipcRenderer.removeListener('agent-activity', listener)
 	},
+	// Rounds: who holds the project, and the MCP conversation the chat shows.
+	getAgentRounds: (threadId: string) => ipcRenderer.invoke('get-agent-rounds', threadId),
+	stopAgentRound: () => ipcRenderer.invoke('stop-agent-round'),
+	onAgentRoundsEvent: (callback: (event: any) => void) => {
+		const listener = (_event: any, event: any) => callback(event)
+		ipcRenderer.on('agent-rounds-event', listener)
+		return () => ipcRenderer.removeListener('agent-rounds-event', listener)
+	},
 	// AI engine: Gemini API or the user's own CLI.
 	getEngines: () => ipcRenderer.invoke('get-engines'),
 	detectEngines: () => ipcRenderer.invoke('detect-engines'),

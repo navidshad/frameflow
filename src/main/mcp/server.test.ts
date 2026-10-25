@@ -5,6 +5,7 @@ import { DEFAULT_AGENT_PERMISSIONS, type AgentPermissions } from '@shared/agent'
 import type { AgentActivity } from '@shared/agentFeed'
 import { AgentServer, type AgentServerEvent } from './server'
 import { FakeEditor, PIXEL, TOKEN } from './fakeEditor'
+import { applyRoundEvent, RoundBook, type AgentRound, type RoundEvent } from '@shared/agentRounds'
 
 /**
  * The real server on an ephemeral port, driven through the SDK's own client —
@@ -104,9 +105,10 @@ describe('AgentServer over Streamable HTTP', () => {
 		const client = await connect()
 		const { tools } = await client.listTools()
 		expect(tools.map((t) => t.name)).toEqual([
+			'begin_round', 'end_round', 'list_projects', 'create_project', 'open_project', 'import_media', 'wait',
 			'get_project', 'get_timeline', 'get_media', 'search_moments', 'render_frame', 'get_motion_guide', 'get_motion_kit',
 			'get_sound_guide', 'list_sounds', 'suggest_cues', 'render_sound', 'analyze_audio', 'generate_audio',
-			'apply_ops', 'revert_to_version', 'export'
+			'apply_ops', 'revert_to_version', 'export', 'inspect_export'
 		])
 		const apply = tools.find((t) => t.name === 'apply_ops')!
 		expect(Object.keys(apply.inputSchema.properties || {})).toContain('removeRanges')
@@ -645,5 +647,149 @@ describe('AgentServer over Streamable HTTP', () => {
 		const port = await other.start(Number(url.port))
 		expect(port).not.toBe(Number(url.port))
 		await other.stop()
+	})
+
+	describe('rounds: one agent per project, and the chat\'s record', () => {
+		let rounds: RoundBook
+		let roundEvents: RoundEvent[]
+		let roundServer: AgentServer
+		let roundUrl: URL
+
+		const connectTo = async (name: string) => {
+			const client = new Client({ name, version: '1' })
+			await client.connect(new StreamableHTTPClientTransport(roundUrl, {
+				requestInit: { headers: { Authorization: `Bearer ${TOKEN}` } }
+			}))
+			clients.push(client)
+			return client
+		}
+		const history = (): AgentRound[] => roundEvents.reduce(applyRoundEvent, [] as AgentRound[])
+
+		beforeEach(async () => {
+			roundEvents = []
+			rounds = new RoundBook({ onEvent: (e) => roundEvents.push(e) })
+			roundServer = new AgentServer({
+				bridge: editor, token: () => TOKEN, permissions: () => permissions, version: 'test',
+				rounds, currentThreadId: () => 't1'
+			})
+			roundUrl = new URL(`http://127.0.0.1:${await roundServer.start(0)}/mcp`)
+		})
+		afterEach(async () => {
+			await roundServer.stop()
+		})
+
+		it('a round holds the project: a second agent cannot edit until it ends', async () => {
+			const claude = await connectTo('claude-code')
+			const codex = await connectTo('codex-mcp-client')
+			const begun = text(await claude.callTool({ name: 'begin_round', arguments: { goal: 'Tighten the intro' } }))
+			expect(begun).toMatchObject({ round: 1, goal: 'Tighten the intro' })
+			expect(rounds.lock()).toMatchObject({ clientName: 'Claude Code', seq: 1 })
+
+			const blocked: any = await codex.callTool({ name: 'apply_ops', arguments: { rationale: 'x', closeGaps: true } })
+			expect(blocked.isError).toBe(true)
+			expect(blocked.content[0].text).toMatch(/Claude Code is working on this project \(round 1: Tighten the intro\)/)
+			expect((await codex.callTool({ name: 'begin_round', arguments: { goal: 'Mine' } }) as any).isError).toBe(true)
+			// Reading is never refused.
+			expect((await codex.callTool({ name: 'get_project', arguments: {} }) as any).isError).toBeFalsy()
+
+			expect((await claude.callTool({ name: 'apply_ops', arguments: { rationale: 'Close gaps', closeGaps: true } }) as any).isError).toBeFalsy()
+			const ended = text(await claude.callTool({ name: 'end_round', arguments: { summary: 'Intro is 4 s shorter.' } }))
+			expect(ended.ended).toBe(1)
+			expect(rounds.lock()).toBeNull()
+			expect((await codex.callTool({ name: 'begin_round', arguments: { goal: 'Titles' } }) as any).isError).toBeFalsy()
+			expect(rounds.lock()?.seq).toBe(2)
+		})
+
+		it('opens a round for an agent that edits without one, and says so', async () => {
+			const claude = await connectTo('claude-code')
+			const result: any = await claude.callTool({ name: 'apply_ops', arguments: { rationale: 'Close the gaps', closeGaps: true } })
+			expect(result.isError).toBeFalsy()
+			expect(result.content.at(-1).text).toMatch(/FrameFlow opened round 1 for you/)
+			expect(rounds.lock()).toMatchObject({ goal: 'Close the gaps', seq: 1 })
+			expect(history().find((r) => r.kind === 'round')?.implicit).toBe(true)
+		})
+
+		it('refuses to begin while FrameFlow\'s own chat is running', async () => {
+			editor.chatBusy = true
+			const claude = await connectTo('claude-code')
+			const refused: any = await claude.callTool({ name: 'begin_round', arguments: { goal: 'x' } })
+			expect(refused.isError).toBe(true)
+			expect(refused.content[0].text).toMatch(/chat is running a prompt/)
+			const edit: any = await claude.callTool({ name: 'apply_ops', arguments: { rationale: 'x', closeGaps: true } })
+			expect(edit.isError).toBe(true)
+			expect(editor.commits).toHaveLength(0)
+		})
+
+		it('ends the round when the agent disconnects', async () => {
+			const claude = await connectTo('claude-code')
+			await claude.callTool({ name: 'begin_round', arguments: { goal: 'x' } })
+			const [session] = roundServer.listSessions()
+			await roundServer.disconnect(session.id)
+			expect(rounds.lock()).toBeNull()
+			expect(history().find((r) => r.kind === 'round')?.status).toBe('disconnected')
+		})
+
+		it('records what the agent asked and what FrameFlow answered, round by round', async () => {
+			const claude = await connectTo('claude-code')
+			await claude.callTool({ name: 'get_project', arguments: {} })
+			await claude.callTool({ name: 'begin_round', arguments: { goal: 'Cut the dead air' } })
+			await claude.callTool({ name: 'render_frame', arguments: { timeSec: 3, note: 'Before' } })
+			await claude.callTool({
+				name: 'apply_ops',
+				arguments: { rationale: 'Big title', addMotion: [{ template: 'custom', html: '<html>' + 'x'.repeat(5000), atSec: 1 }] }
+			})
+			await claude.callTool({ name: 'end_round', arguments: { summary: 'Done.' } })
+
+			const [loose, round] = history()
+			expect(loose).toMatchObject({ kind: 'loose', status: 'done' })
+			expect(loose.calls.map((c) => c.tool)).toEqual(['get_project'])
+			expect(round).toMatchObject({ kind: 'round', seq: 1, goal: 'Cut the dead air', summary: 'Done.', status: 'done' })
+			expect(round.calls.map((c) => c.tool)).toEqual(['render_frame', 'apply_ops'])
+			const [frame, edit] = round.calls
+			expect(frame).toMatchObject({ status: 'done', quote: 'Before', ask: '{"timeSec":3,"note":"Before"}' })
+			expect(frame.image).toMatch(/^data:image\/png;base64,/)
+			expect(edit.ask).toMatch(/‹page 4\.9 KB›/)
+			expect(edit.answer).toBeTruthy()
+		})
+
+		it('makes, opens and imports into projects', async () => {
+			const claude = await connectTo('claude-code')
+			const list = text(await claude.callTool({ name: 'list_projects', arguments: {} }))
+			expect(list.projects.find((p: any) => p.id === 't1').open).toBe(true)
+			const made = text(await claude.callTool({ name: 'create_project', arguments: { title: 'Digital Nomad · Ep 1' } }))
+			expect(made).toMatchObject({ title: 'Digital Nomad · Ep 1', open: true })
+			expect(editor.opened).toEqual([made.id])
+
+			const imported = text(await claude.callTool({ name: 'import_media', arguments: { url: 'https://www.youtube.com/watch?v=wIMLuSU9bm4' } }))
+			expect(imported).toMatchObject({ name: 'Episode 1.mp4', processing: 'pending' })
+			expect(editor.imported).toEqual([{ url: 'https://www.youtube.com/watch?v=wIMLuSU9bm4' }])
+			// An import changes the project, so it opened a round.
+			expect(rounds.lock()).not.toBeNull()
+			expect((await claude.callTool({ name: 'import_media', arguments: { url: 'ftp://x' } }) as any).isError).toBe(true)
+			expect((await claude.callTool({ name: 'import_media', arguments: {} }) as any).isError).toBe(true)
+
+			const waited = text(await claude.callTool({ name: 'wait', arguments: { for: 'media', timeoutSec: 0 } }))
+			expect(waited.done).toBe(false)
+			expect(waited.media.find((m: any) => m.name === 'Episode 1.mp4').processing).toBe('pending')
+		})
+
+		it('exports, follows the export and looks at the file', async () => {
+			permissions = { ...permissions, export: true }
+			const claude = await connectTo('claude-code')
+			expect((await claude.callTool({ name: 'wait', arguments: { for: 'export', timeoutSec: 0 } }) as any).isError).toBe(true)
+			const started = text(await claude.callTool({ name: 'export', arguments: { quality: 'preview' } }))
+			expect(started.renderId).toBe('render-1')
+			expect(editor.lastQuality).toBe('preview')
+			const done = text(await claude.callTool({ name: 'wait', arguments: { for: 'export', timeoutSec: 5 } }))
+			expect(done).toMatchObject({ phase: 'done', outputPath: '/tmp/export.mp4', done: true })
+
+			const look: any = await claude.callTool({ name: 'inspect_export', arguments: { fromSec: 0, toSec: 30, everySec: 15, loudness: true } })
+			expect(look.content[0]).toMatchObject({ type: 'image' })
+			const facts = JSON.parse(look.content[1].text)
+			expect(facts).toMatchObject({ durationSec: 30, timelineSec: 30, lengthMatchesTimeline: true, loudness: { lufs: -14.2 } })
+
+			editor.exportPhase = 'rendering'
+			expect((await claude.callTool({ name: 'inspect_export', arguments: {} }) as any).isError).toBe(true)
+		})
 	})
 })

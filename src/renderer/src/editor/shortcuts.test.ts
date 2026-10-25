@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { keysFor, matchShortcut, SHORTCUT_GROUPS, SHORTCUTS, shortcutsIn } from './shortcuts'
+import { keysFor, liveWhileAgentWorks, matchShortcut, SHORTCUT_GROUPS, SHORTCUTS, shortcutsIn } from './shortcuts'
 
 /** A KeyboardEvent's worth of fields, which is all `match` reads. */
 const press = (key: string, mods: Partial<Record<'meta' | 'ctrl' | 'shift' | 'alt', boolean>> = {}) =>
@@ -105,5 +105,17 @@ describe('keysFor', () => {
 		expect(keysFor('split')).toContain('S')
 		expect(keysFor('snapping')).toBe('N')
 		expect(keysFor('nope')).toBe('')
+	})
+})
+
+describe('while an agent works', () => {
+	it('plays and scrubs but does not edit', () => {
+		const live = (key: string, mods = {}) => liveWhileAgentWorks(matchShortcut(press(key, mods))!)
+		expect(live(' ')).toBe(true)
+		expect(live('ArrowRight')).toBe(true)
+		expect(live('f')).toBe(true)
+		expect(live('Delete')).toBe(false)
+		expect(live('s')).toBe(false)
+		expect(live('z', { meta: true })).toBe(false)
 	})
 })

@@ -1,7 +1,8 @@
 import { onMounted, onUnmounted, ref } from 'vue'
 import { useEditorStore } from '../../stores/editorStore'
 import { useKeyframeLanesStore } from '../../stores/keyframeLanesStore'
-import { matchShortcut } from '../shortcuts'
+import { liveWhileAgentWorks, matchShortcut } from '../shortcuts'
+import { useAgentStore } from '../../stores/agentStore'
 
 /**
  * The editor's keyboard, driven by the table in `../shortcuts.ts`.
@@ -19,6 +20,7 @@ export function useEditorShortcuts(options: {
 } = {}) {
 	const store = useEditorStore()
 	const lanes = useKeyframeLanesStore()
+	const agent = useAgentStore()
 
 	const frameStep = () => 1 / (store.doc?.timelineMeta.fps || 30)
 
@@ -159,6 +161,12 @@ export function useEditorShortcuts(options: {
 		if (!shortcut) return
 		if (store.shortcutsOpen && blockedWhileHelpOpen(shortcut.id)) {
 			event.preventDefault()
+			return
+		}
+		// An outside agent holds the project: no edit lands under it mid-round.
+		if (agent.mcpWorking && !liveWhileAgentWorks(shortcut)) {
+			event.preventDefault()
+			agent.nudgeWorking()
 			return
 		}
 		// `preventDefault` only once the action actually did something, so an

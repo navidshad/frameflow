@@ -7,7 +7,8 @@ import {
 import type { AgentAccessState } from '@shared/agentFeed'
 import { settingsManager } from '../settings'
 import { AgentServer, type AgentServerEvent } from './server'
-import { installRendererBridge, lastProjectTitle, rendererBridge } from './rendererBridge'
+import { installRendererBridge, lastProjectId, lastProjectTitle, rendererBridge } from './rendererBridge'
+import { initRoundIpc, roundBook } from './roundStore'
 import { requestedTokenFile, writeTokenFile } from './tokenFile'
 
 /**
@@ -88,7 +89,9 @@ async function start(): Promise<void> {
 		permissions: () => settingsManager.getAgentAccess().permissions,
 		version: app.getVersion(),
 		probeMotion: probeMotionPage,
-		onEvent: onServerEvent
+		onEvent: onServerEvent,
+		rounds: roundBook,
+		currentThreadId: () => lastProjectId
 	})
 	try {
 		const port = await next.start(AGENT_DEFAULT_PORT)
@@ -109,6 +112,7 @@ async function stop(): Promise<void> {
 export function initAgentAccess(): void {
 	installRendererBridge()
 	exportTokenFile()
+	initRoundIpc({ disconnect: async (sessionId) => (await server?.disconnect(sessionId)) ?? false })
 
 	ipcMain.handle('get-agent-access', () => state())
 

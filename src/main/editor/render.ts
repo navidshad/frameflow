@@ -623,7 +623,19 @@ export async function concatRegions(
 
 const activeRenders = new Map<string, { controller: AbortController; workDir: string | null }>()
 
+/** Every render's latest progress this run, by id: what an agent asks after when it exports. */
+const renderStatus = new Map<string, EditorRenderProgress & { startedAt: number; updatedAt: number }>()
+
+/** The latest progress of one render, or of the newest render for a project. */
+export function renderProgress(query: { renderId?: string; threadId?: string }): (EditorRenderProgress & { startedAt: number; updatedAt: number }) | null {
+	if (query.renderId) return renderStatus.get(query.renderId) ?? null
+	const mine = [...renderStatus.values()].filter((r) => !query.threadId || r.threadId === query.threadId)
+	return mine.sort((a, b) => b.startedAt - a.startedAt)[0] ?? null
+}
+
 function emitRenderProgress(payload: EditorRenderProgress) {
+	const now = Date.now()
+	renderStatus.set(payload.renderId, { ...payload, startedAt: renderStatus.get(payload.renderId)?.startedAt ?? now, updatedAt: now })
 	BrowserWindow.getAllWindows().forEach((win) => {
 		win.webContents.send('editor-render-progress', payload)
 	})

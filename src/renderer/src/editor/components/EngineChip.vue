@@ -1,6 +1,15 @@
 <template>
 	<div class="relative shrink-0" ref="rootRef" @keydown.esc.stop="close(true)">
-		<button
+		<!-- An outside agent holds the project: the chip says who is working instead -->
+		<div v-if="mcp" class="flex items-center gap-1.5 px-1 py-0.5 rounded-md text-violet-500 dark:text-violet-400"
+			role="status" :title="`${mcp.clientName} is working over MCP (round ${mcp.seq}). The engine can be changed when its round ends.`">
+			<span class="relative flex w-1.5 h-1.5 shrink-0">
+				<span class="absolute inset-0 rounded-full bg-secondary-light animate-ping opacity-75"></span>
+				<span class="relative w-1.5 h-1.5 rounded-full bg-secondary-light"></span>
+			</span>
+			<span class="text-[11px] font-semibold max-w-[170px] truncate">MCP · {{ mcp.clientName }} working</span>
+		</div>
+		<button v-else
 			ref="chipRef"
 			class="flex items-center gap-1.5 px-1 py-0.5 rounded-md text-violet-500 dark:text-violet-400 hover:text-violet-300 transition disabled:opacity-50"
 			:title="`AI engine and model: ${engine.chipLabel} — click to change`"
@@ -51,10 +60,13 @@ import { useRouter } from 'vue-router'
 import { asSetIn, CLI_MODELS, ENGINES, engineRunnable, STATUS_LABEL, type EngineId } from '@shared/engines'
 import { useEngineStore } from '../../stores/engineStore'
 import { useEditorStore } from '../../stores/editorStore'
+import { useAgentStore } from '../../stores/agentStore'
 
 const engine = useEngineStore()
 const editor = useEditorStore()
 const router = useRouter()
+const agent = useAgentStore()
+const mcp = computed(() => agent.mcpWorking)
 
 const open = ref(false)
 const rootRef = ref<HTMLElement | null>(null)

@@ -27,6 +27,7 @@
 import { computed } from 'vue'
 import { useEditorStore } from '../../stores/editorStore'
 import EngineChip from './EngineChip.vue'
+import { useAgentStore } from '../../stores/agentStore'
 
 /**
  * The chat folded to one row under the picture, so a message is always one
@@ -43,10 +44,12 @@ const text = computed({
 	set: (v: string) => { store.promptDraft = v }
 })
 
-const inputDisabled = computed(() => store.promptRunning || !store.canPrompt)
+const agent = useAgentStore()
+const inputDisabled = computed(() => store.promptRunning || !store.canPrompt || !!agent.mcpWorking)
 const canSend = computed(() => text.value.trim().length > 0 && !inputDisabled.value)
 
 const placeholder = computed(() => {
+	if (agent.mcpWorking) return `Locked: ${agent.mcpWorking.clientName} is working over MCP…`
 	if (store.isEmpty && !store.hasLayers) return 'Import media to start…'
 	if (!store.canPrompt && store.mediaProcessing) return 'Preparing media…'
 	if (!store.canPrompt) return 'Media not ready yet…'

@@ -14,6 +14,7 @@
 					<AgentBanner />
 				</template>
 			</EditorTopBar>
+			<AgentWorkingStrip v-if="!editorStore.loading && !notFound" />
 
 			<!-- Loading -->
 			<div v-if="editorStore.loading" class="flex-1 flex items-center justify-center">
@@ -30,8 +31,9 @@
 				</button>
 			</div>
 
-			<!-- Editor workspace -->
-			<template v-else>
+			<!-- Editor workspace. While an outside agent holds the project a scrim
+			     covers it: visible, playable, not editable. -->
+			<div v-else class="flex-1 min-h-0 flex flex-col relative">
 				<div class="flex-1 min-h-0 flex">
 					<LeftPanel v-model:tab="leftTab" :mode="leftMode" :collapsed="!leftOpen" v-model:pinned="inspectPinned"
 						:width="layout.left" :selection-dot="timelineSelected"
@@ -54,7 +56,8 @@
 				<ResizeHandle direction="horizontal" reverse class="-my-1 z-20"
 					@resize="resizeTimeline" @reset="resetTimeline" />
 				<TimelinePanel class="shrink-0" :style="{ height: timelineH + 'px' }" />
-			</template>
+				<AgentWorkingScrim />
+			</div>
 		</div>
 
 		<ChatColumn v-if="!layout.chatFolded" v-model:tab="chatTab" :width="layout.chat"
@@ -84,6 +87,8 @@ import ComposerStrip from './components/ComposerStrip.vue'
 import ExportDialog from './components/ExportDialog.vue'
 import ResizeHandle from './components/ResizeHandle.vue'
 import AgentBanner from './components/AgentBanner.vue'
+import AgentWorkingStrip from './components/AgentWorkingStrip.vue'
+import AgentWorkingScrim from './components/AgentWorkingScrim.vue'
 import { CHAT, LEFT, TIMELINE, resolveEditorLayout } from './layout'
 
 const route = useRoute()

@@ -27,6 +27,8 @@ import {
 	type AudioCapability, type GenerateRequest, type Spent
 } from '@shared/audioProviders'
 import type { EditorBridge, LiveProject } from './bridge'
+import { ROUND_IDLE_MS, type RoundBook } from '@shared/agentRounds'
+import { sheetClock } from '../editor/exportInspect'
 
 /**
  * FrameFlow's MCP tools. Each one says what it is FOR in its description,
@@ -47,6 +49,14 @@ export interface ToolContext {
 	probeMotion?: MotionProbe
 	/** What this turn has already spent generating audio; generate_audio adds to it. */
 	spent?: Spent
+	/**
+	 * Rounds and the one-agent lock. Only the outside agents' server has them;
+	 * FrameFlow's own CLI engine IS the chat, so it neither begins rounds nor
+	 * is locked out by its own turn.
+	 */
+	rounds?: RoundBook
+	/** Tell the client how a long wait is going (an import, an export). */
+	progress?: (message: string, waitedMs: number) => void
 }
 
 /** What the activity feed shows for one call. */
@@ -80,6 +90,14 @@ export interface ToolDef {
 	alsoNeeds?: (args: Record<string, any>) => AgentPermission | null
 	/** Writes are serialised, so each one sees the result of the last. */
 	writes?: boolean
+	/**
+	 * It changes the project (an edit, an import, an export), so it needs the
+	 * project: a round of this agent's own. One is opened for an agent that
+	 * did not begin one. Every `writes` tool claims too.
+	 */
+	claims?: boolean
+	/** begin_round / end_round: the chat shows them as the round's edges, not as calls. */
+	roundTool?: boolean
 	/** The feed title before the call finishes ("render_frame 0:27.5"). */
 	title?: (args: Record<string, any>) => string
 	run(args: Record<string, any>, ctx: ToolContext): Promise<ToolOutcome>
@@ -90,8 +108,8 @@ export interface ToolDef {
 export class ToolError extends Error {}
 
 const NO_PROJECT =
-	'No project is open in FrameFlow’s editor. Ask the user to open the project they want edited ' +
-	'(Home → the project), then try again.'
+	'No project is open in FrameFlow’s editor. list_projects shows the user’s projects and open_project opens ' +
+	'one (create_project makes a new one); or ask the user to open the project they want edited.'
 
 async function requireProject(ctx: ToolContext): Promise<LiveProject> {
 	const project = await ctx.bridge.getLiveProject()
@@ -1009,31 +1027,415 @@ const revertToVersion: ToolDef = {
 const exportTool: ToolDef = {
 	name: 'export',
 	permission: 'export',
+	claims: true,
 	description:
-		'Render the timeline to a video file on disk (H.264 MP4, original quality), exactly as the Export ' +
-		'button does. Refused unless the user has allowed agents to export — if it is, tell the user the ' +
-		'edit is ready and ask them to press Export. Runs in the background; FrameFlow shows progress and ' +
-		'the file lands in the project’s exports folder.',
+		'Render the timeline to a video file on disk (H.264 MP4), exactly as the Export button does, and ' +
+		'return its render id. quality "original" renders from the source files at full size; "preview" ' +
+		'renders from the small proxies, much faster, for checking an edit. Refused unless the user has ' +
+		'allowed agents to export. It runs in the background and FrameFlow shows its progress: follow it ' +
+		'with wait {for: "export"}, then look at the file with inspect_export.',
+	inputSchema: {
+		type: 'object',
+		properties: {
+			quality: { type: 'string', enum: ['original', 'preview'], description: 'Default original' }
+		},
+		additionalProperties: false
+	},
+	title: (args) => `export ${args.quality === 'preview' ? 'preview' : 'original'}`,
+	async run(args, ctx) {
+		const project = await requireProject(ctx)
+		const quality = args.quality === 'preview' ? 'preview' : 'original'
+		const result = await ctx.bridge.startExport(project, { quality })
+		if (!result.ok) throw new ToolError(result.error)
+		return {
+			content: [json({
+				renderId: result.renderId, quality,
+				next: 'wait {for: "export"} follows it to the end; inspect_export then shows the file.'
+			})],
+			feed: { detail: `${quality} export started`, chips: [{ text: quality, tone: 'blue' }] }
+		}
+	}
+}
+
+// ===== Rounds: one agent per project =====
+
+const beginRound: ToolDef = {
+	name: 'begin_round',
+	permission: 'edit',
+	roundTool: true,
+	description:
+		'Call this before you start working on the project, with the goal of this round of work. A round ' +
+		'gives you the project: while it is open the user sees that you are working (the editor shows it ' +
+		'and asks them not to touch the project), FrameFlow\'s own chat is locked, and no other agent may ' +
+		'edit. Refused while the chat is running a prompt or another agent holds a round. One round per ' +
+		'piece of work (a rough cut, a pass of titles, a fix): end it with end_round and begin the next. A ' +
+		`round with no call for ${Math.round(ROUND_IDLE_MS / 60_000)} minutes ends by itself. Edits made without one open a round for you.`,
+	inputSchema: {
+		type: 'object',
+		properties: {
+			goal: { type: 'string', description: 'What this round will do, in one sentence the user reads (e.g. "Tighten the intro and add chapter titles")' }
+		},
+		required: ['goal'],
+		additionalProperties: false
+	},
+	title: (args) => `begin_round ${String(args.goal || '').slice(0, 60)}`,
+	async run(args, ctx) {
+		if (!ctx.rounds) throw new ToolError('Rounds are for outside agents. FrameFlow\'s own chat turn is already a round.')
+		const project = await requireProject(ctx)
+		if (project.chatBusy && !ctx.rounds.roundFor(ctx.sessionId)) {
+			throw new ToolError('FrameFlow\'s own chat is running a prompt on this project. One agent at a time: wait for it to finish, then begin your round.')
+		}
+		const result = ctx.rounds.begin({ id: ctx.sessionId, clientName: ctx.clientName }, project.threadId, String(args.goal || ''))
+		if (!result.ok) throw new ToolError(result.reason)
+		const { round } = result
+		return {
+			content: [json({
+				round: round.seq, goal: round.goal, project: project.title,
+				already: result.already || undefined,
+				note: result.already
+					? 'This round was already open; carry on.'
+					: 'You hold the project. The user sees you working and the chat is locked. Call end_round with a summary when this piece of work is done.'
+			})],
+			feed: { title: `round ${round.seq} began`, detail: round.goal, chips: [{ text: `round ${round.seq}`, tone: 'violet' }] }
+		}
+	}
+}
+
+const endRound: ToolDef = {
+	name: 'end_round',
+	permission: 'read',
+	roundTool: true,
+	description:
+		'End your round of work and give the project back: the editor stops showing you as working and the ' +
+		'chat unlocks. `summary` is what you did and anything left, in a few plain sentences: the user reads ' +
+		'it in the chat. Call it when a piece of work is done, before you wait on the user, and before you ' +
+		'stop.',
+	inputSchema: {
+		type: 'object',
+		properties: {
+			summary: { type: 'string', description: 'What this round did and what is left' }
+		},
+		required: ['summary'],
+		additionalProperties: false
+	},
+	title: () => 'end_round',
+	async run(args, ctx) {
+		if (!ctx.rounds) throw new ToolError('Rounds are for outside agents.')
+		const round = ctx.rounds.end(ctx.sessionId, String(args.summary || ''))
+		if (!round) {
+			return {
+				content: [json({ ended: null, note: 'You had no round open. Nothing to end.' })],
+				feed: { detail: 'no round was open' }
+			}
+		}
+		const minutes = Math.max(1, Math.round(((round.endedAt ?? Date.now()) - round.startedAt) / 60_000))
+		return {
+			content: [json({ ended: round.seq, minutes, note: 'The project is the user\'s again.' })],
+			feed: { title: `round ${round.seq} ended`, detail: round.summary, chips: [{ text: `round ${round.seq}`, tone: 'zinc' }] }
+		}
+	}
+}
+
+// ===== Projects and media =====
+
+const listProjects: ToolDef = {
+	name: 'list_projects',
+	permission: 'read',
+	description:
+		'Every editor project in the user\'s FrameFlow: id, title, when it changed, how much media and how long ' +
+		'its timeline is, and which one the editor shows now. Use the id with open_project. The other tools act ' +
+		'on the project the editor shows.',
 	inputSchema: { type: 'object', properties: {}, additionalProperties: false },
 	async run(_args, ctx) {
-		await requireProject(ctx)
-		const result = await ctx.bridge.startExport()
-		if (!result.ok) throw new ToolError(result.error)
-		return { content: [{ type: 'text', text: result.detail }], feed: { detail: result.detail } }
+		const projects = await ctx.bridge.listProjects()
+		const rows = projects.sort((a, b) => (b.updatedAt ?? b.createdAt) - (a.updatedAt ?? a.createdAt)).slice(0, 100).map((p) => ({
+			id: p.id, title: p.title, open: p.open || undefined,
+			updatedAt: new Date(p.updatedAt ?? p.createdAt).toISOString(),
+			media: p.mediaCount, durationSec: r3(p.durationSec)
+		}))
+		return {
+			content: [json({ projects: rows, total: projects.length })],
+			feed: { detail: `${projects.length} project${projects.length === 1 ? '' : 's'}` }
+		}
+	}
+}
+
+/** Opening another project moves the editor: never from under someone else's round or the chat. */
+async function checkMayMoveEditor(ctx: ToolContext): Promise<void> {
+	const blocked = ctx.rounds?.blockedFor(ctx.sessionId, null)
+	if (blocked) throw new ToolError(blocked)
+	const live = await ctx.bridge.getLiveProject()
+	if (live?.chatBusy) throw new ToolError('FrameFlow\'s own chat is running a prompt on the open project. Wait for it to finish.')
+	// A round on the project being left ends: a round is on one project.
+	const mine = ctx.rounds?.roundFor(ctx.sessionId)
+	if (mine) ctx.rounds!.end(ctx.sessionId, 'Moved to another project.', 'left')
+}
+
+const createProject: ToolDef = {
+	name: 'create_project',
+	permission: 'edit',
+	description:
+		'Make a new, empty editor project and open it in the editor (ending any round you had on the project ' +
+		'you leave). Then import_media to bring footage in and begin_round to start working.',
+	inputSchema: {
+		type: 'object',
+		properties: { title: { type: 'string', description: 'The project\'s name' } },
+		required: ['title'],
+		additionalProperties: false
+	},
+	title: (args) => `create_project ${String(args.title || '').slice(0, 50)}`,
+	async run(args, ctx) {
+		await checkMayMoveEditor(ctx)
+		const title = String(args.title || '').trim().slice(0, 120) || 'Untitled Project'
+		const made = await ctx.bridge.createProject(title)
+		const opened = await ctx.bridge.openProject(made.id)
+		if (!opened.ok) throw new ToolError(`The project was made (${made.id}) but could not be opened: ${opened.error}`)
+		return {
+			content: [json({ id: made.id, title: made.title, open: true, next: 'import_media brings footage in.' })],
+			feed: { detail: `made “${made.title}”` }
+		}
+	}
+}
+
+const openProject: ToolDef = {
+	name: 'open_project',
+	permission: 'edit',
+	description:
+		'Show a project in the editor (an id from list_projects), and wait until it has loaded. The tools then act ' +
+		'on it. Refused while another agent holds a round or the chat is running; ends any round you had on the ' +
+		'project you leave.',
+	inputSchema: {
+		type: 'object',
+		properties: { id: { type: 'string', description: 'A project id from list_projects' } },
+		required: ['id'],
+		additionalProperties: false
+	},
+	title: (args) => `open_project ${args.id}`,
+	async run(args, ctx) {
+		const projects = await ctx.bridge.listProjects()
+		const target = projects.find((p) => p.id === args.id)
+		if (!target) throw new ToolError(`There is no project "${args.id}". list_projects shows them.`)
+		if (target.open) {
+			return { content: [json({ id: target.id, title: target.title, open: true, note: 'It was already open.' })], feed: { detail: `“${target.title}” already open` } }
+		}
+		await checkMayMoveEditor(ctx)
+		const opened = await ctx.bridge.openProject(target.id)
+		if (!opened.ok) throw new ToolError(opened.error)
+		return { content: [json({ id: target.id, title: target.title, open: true })], feed: { detail: `opened “${target.title}”` } }
+	}
+}
+
+const importMedia: ToolDef = {
+	name: 'import_media',
+	permission: 'edit',
+	claims: true,
+	writes: true,
+	description:
+		'Bring media into the open project, as the Media panel\'s import does: `url` downloads a link (YouTube ' +
+		'and the other sites yt-dlp reads) into the project; `path` imports a video or audio file on this computer ' +
+		'(referenced where it is, not copied). Waits for the download, then returns the media id. FrameFlow then ' +
+		'prepares it in the background (proxy, scenes, transcript): wait {for: "media"} until it is ready before ' +
+		'you cut with it or read its transcript.',
+	inputSchema: {
+		type: 'object',
+		properties: {
+			url: { type: 'string', description: 'A link to download' },
+			path: { type: 'string', description: 'An absolute path to a video or audio file' },
+			name: { type: 'string', description: 'With path: the name to show in the Media panel' }
+		},
+		additionalProperties: false
+	},
+	title: (args) => `import_media ${String(args.url || args.path || '').slice(0, 60)}`,
+	async run(args, ctx) {
+		const hasUrl = typeof args.url === 'string' && args.url.trim()
+		const hasPath = typeof args.path === 'string' && args.path.trim()
+		if (!hasUrl === !hasPath) throw new ToolError('Give exactly one of url or path.')
+		if (hasUrl && !/^https?:\/\//i.test(args.url.trim())) throw new ToolError('url must be an http(s) link.')
+		const project = await requireProject(ctx)
+		const startedAt = Date.now()
+		let lastPercent = -1
+		const asset = await ctx.bridge.importMedia(
+			project,
+			hasUrl ? { url: args.url.trim() } : { path: args.path.trim(), name: args.name },
+			(percent, phase) => {
+				if (percent - lastPercent < 5 && !phase) return
+				lastPercent = percent
+				ctx.progress?.(phase ? `download: ${phase}` : `downloaded ${Math.round(percent)}%`, Date.now() - startedAt)
+			}
+		)
+		return {
+			content: [json({
+				id: asset.id, name: asset.name, kind: asset.kind,
+				durationSec: r3(asset.metadata?.duration), width: asset.metadata?.width, height: asset.metadata?.height,
+				processing: asset.preprocessState || 'pending',
+				next: 'wait {for: "media"} until processing is completed, then get_media for its transcript and scenes.'
+			})],
+			feed: { detail: `${asset.name} · ${clock(asset.metadata?.duration ?? 0)}`, chips: [{ text: 'imported', tone: 'green' }] }
+		}
+	}
+}
+
+// ===== Waiting on background work =====
+
+const WAIT_POLL_MS = 2_000
+
+const waitTool: ToolDef = {
+	name: 'wait',
+	permission: 'read',
+	description:
+		'Wait for FrameFlow\'s background work and report where it stands. for "media": until every media file ' +
+		'has finished preparing (proxy, scenes, transcript) or failed. for "export": until the newest export (or ' +
+		'renderId) is done or failed; the result has the file path for inspect_export. Returns early when done; ' +
+		'otherwise after timeoutSec (default 120, at most 600) with the progress so far, so call it again. ' +
+		'timeoutSec 0 just reports.',
+	inputSchema: {
+		type: 'object',
+		properties: {
+			for: { type: 'string', enum: ['media', 'export'] },
+			renderId: { type: 'string', description: 'for export: which one (default the newest)' },
+			timeoutSec: { type: 'number', minimum: 0, maximum: 600 }
+		},
+		required: ['for'],
+		additionalProperties: false
+	},
+	title: (args) => `wait ${args.for}`,
+	async run(args, ctx) {
+		const timeoutMs = Math.min(600, Math.max(0, Number(args.timeoutSec ?? 120))) * 1000
+		const startedAt = Date.now()
+		const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms))
+		for (;;) {
+			const project = await requireProject(ctx)
+			const waited = Date.now() - startedAt
+			if (args.for === 'export') {
+				const status = ctx.bridge.exportStatus({ renderId: args.renderId, threadId: project.threadId })
+				if (!status) throw new ToolError('No export has run on this project yet. export starts one.')
+				const finished = status.phase === 'done' || status.phase === 'error'
+				if (finished || waited >= timeoutMs) {
+					return {
+						content: [json({
+							renderId: status.renderId, phase: status.phase, percent: status.percent,
+							outputPath: status.outputPath, error: status.error,
+							elapsedSec: Math.round((status.updatedAt - status.startedAt) / 1000),
+							done: finished, next: status.phase === 'done' ? 'inspect_export looks at the file.' : finished ? undefined : 'Still running: wait again.'
+						})],
+						isError: status.phase === 'error',
+						feed: { detail: status.phase === 'done' ? 'export finished' : status.phase === 'error' ? `export failed: ${status.error}` : `export ${status.percent}%` }
+					}
+				}
+				ctx.progress?.(`export ${status.percent}% (${status.phase})`, waited)
+			} else {
+				const media = project.doc.media.filter((a) => !a.synth && !a.generated)
+				const rows = media.map((a) => ({
+					id: a.id, name: a.name, processing: a.preprocessState || 'pending',
+					error: a.preprocessError || undefined,
+					hasTranscript: !!a.preprocessing?.transcriptPath,
+					transcriptHealth: a.preprocessing?.transcriptPath ? transcriptHealthLabel(a.transcriptHealth) : undefined,
+					transcriptError: a.transcriptError || undefined,
+					scenes: a.clips.length
+				}))
+				const busy = rows.filter((r) => r.processing === 'pending' || r.processing === 'running')
+				if (!busy.length || waited >= timeoutMs) {
+					return {
+						content: [json({ done: !busy.length, media: rows, next: busy.length ? 'Still preparing: wait again.' : undefined })],
+						feed: { detail: busy.length ? `${busy.length} still preparing` : `${rows.length} media ready` }
+					}
+				}
+				ctx.progress?.(`${busy.length} media still preparing`, waited)
+			}
+			await sleep(Math.min(WAIT_POLL_MS, Math.max(50, timeoutMs - waited)))
+		}
+	}
+}
+
+// ===== Looking at an export =====
+
+const inspectExport: ToolDef = {
+	name: 'inspect_export',
+	permission: 'read',
+	description:
+		'Look at an exported FILE, the way the user will watch it: its length, size, frame size, frame rate and ' +
+		'streams, and a contact sheet of its frames, each labelled with its time. Pick the frames with `times` ' +
+		'(seconds in the file) or with fromSec/toSec/everySec; up to 48 per sheet, so page through a long ' +
+		'video in sheets. `loudness` also measures the mix (LUFS and true peak). Defaults to the newest export ' +
+		'of the open project. Use it to check an export frame by frame before telling the user it is ready.',
+	inputSchema: {
+		type: 'object',
+		properties: {
+			renderId: { type: 'string', description: 'Which export (default the newest)' },
+			times: { type: 'array', items: { type: 'number' }, description: 'Exact seconds to show' },
+			fromSec: { type: 'number', minimum: 0 },
+			toSec: { type: 'number', minimum: 0 },
+			everySec: { type: 'number', minimum: 0.04 },
+			columns: { type: 'integer', minimum: 1, maximum: 8, description: 'Tiles per row (default 6)' },
+			tileWidth: { type: 'integer', minimum: 160, maximum: 640, description: 'Pixels per tile (default 320)' },
+			loudness: { type: 'boolean' },
+			sheet: { type: 'boolean', description: 'false: facts only, no picture' }
+		},
+		additionalProperties: false
+	},
+	title: (args) => `inspect_export${args.fromSec !== undefined ? ` ${clock(args.fromSec)}` : ''}`,
+	async run(args, ctx) {
+		const project = await requireProject(ctx)
+		const status = ctx.bridge.exportStatus({ renderId: args.renderId, threadId: project.threadId })
+		if (!status) throw new ToolError('No export has run on this project yet. export starts one.')
+		if (status.phase !== 'done' || !status.outputPath) {
+			throw new ToolError(status.phase === 'error' ? `That export failed: ${status.error}` : `That export is still running (${status.percent}%). wait {for: "export"} first.`)
+		}
+		const wantSheet = args.sheet !== false
+		const report = await ctx.bridge.inspectExport(status.outputPath, {
+			// [] is "no sheet"; undefined spans the range asked for (the whole file by default).
+			times: wantSheet ? args.times : [],
+			fromSec: args.fromSec, toSec: args.toSec, everySec: args.everySec,
+			columns: args.columns, tileWidth: args.tileWidth, loudness: !!args.loudness
+		})
+		const timelineSec = computeContentEnd(project.doc.timeline)
+		const content: ToolContent[] = []
+		if (report.sheet) content.push({ type: 'image', data: report.sheet.data, mimeType: report.sheet.mimeType })
+		content.push(json({
+			renderId: status.renderId,
+			file: report.facts.file,
+			megabytes: Math.round(report.facts.bytes / 1e5) / 10,
+			durationSec: report.facts.durationSec,
+			timelineSec: r3(timelineSec),
+			lengthMatchesTimeline: Math.abs(report.facts.durationSec - timelineSec) < 0.1,
+			frame: `${report.facts.width}×${report.facts.height} @ ${report.facts.fps} fps`,
+			video: report.facts.videoCodec, frames: report.facts.videoFrames,
+			audio: report.facts.audioCodec ? `${report.facts.audioCodec} ${report.facts.sampleRate} Hz ${report.facts.channels} ch` : null,
+			loudness: report.loudness,
+			sheet: report.sheet ? {
+				columns: report.sheet.columns, rows: report.sheet.rows,
+				times: report.sheet.times.map(sheetClock),
+				next: report.sheet.times.length && report.sheet.times.at(-1)! < report.facts.durationSec - 1
+					? `fromSec ${r3(report.sheet.times.at(-1)! + (args.everySec ?? 0.5))} shows what comes next`
+					: undefined
+			} : undefined
+		}))
+		return {
+			content,
+			feed: {
+				detail: `${clock(report.facts.durationSec)} · ${report.facts.width}×${report.facts.height}${report.sheet ? ` · ${report.sheet.times.length} frames` : ''}`,
+				thumbnail: report.sheet ? `data:${report.sheet.mimeType};base64,${report.sheet.data}` : undefined
+			}
+		}
 	}
 }
 
 export const TOOLS: ToolDef[] = [
+	beginRound, endRound, listProjects, createProject, openProject, importMedia, waitTool,
 	getProject, getTimeline, getMedia, searchMomentsTool, renderFrame, getMotionGuide, getMotionKit,
 	getSoundGuide, listSounds, suggestCuesTool, renderSoundTool, analyzeAudio, generateAudioTool,
-	applyOps, revertToVersion, exportTool
+	applyOps, revertToVersion, exportTool, inspectExport
 ]
 
 export const SERVER_INSTRUCTIONS =
 	'FrameFlow is a video editor running on this computer; these tools act on the project the user has ' +
-	'open in it, live. A good loop: get_project → get_timeline and get_media (or search_moments) to find ' +
+	'open in it, live. One agent works on a project at a time: begin_round with your goal before you work ' +
+	'(the user then sees you working and their chat is locked) and end_round with a summary when the piece ' +
+	'of work is done. No project open: list_projects / open_project / create_project, then import_media and ' +
+	'wait {for: "media"}. A good loop: get_project → get_timeline and get_media (or search_moments) to find ' +
 	'material → apply_ops to edit (get_motion_guide first if you will write an HTML motion page) → ' +
 	'render_frame to look at the result → revert_to_version if it is ' +
 	'wrong. For sound: get_sound_guide, then suggest_cues → apply_ops addSounds (with follow) → analyze_audio; ' +
 	'you cannot hear, so work by the numbers and the spectrogram render_sound gives. Spoken words or a sound the palette cannot make: generate_audio (costs money, capped) then apply_ops placeAudio. Every apply_ops is a revision the user can see and undo; the user may edit at the same time, ' +
-	'so read the timeline again before each edit instead of relying on an old read.'
+	'so read the timeline again before each edit instead of relying on an old read. To deliver: export, wait {for: "export"}, ' +
+	'then inspect_export to look at the file frame by frame.'

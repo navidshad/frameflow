@@ -16,6 +16,10 @@ import { normaliseRecipe } from '../../shared/synth'
 import { connectedProviders, estimateUsd, generateForProject } from '../audio/runtime'
 import { settingsManager } from '../settings'
 import { ProviderError } from '../audio/provider'
+import { renderProgress, startEditorRender } from '../editor/render'
+import { contactSheet, measureExportLoudness, probeExport, sheetTimes } from '../editor/exportInspect'
+import { importMediaFromFile, importMediaFromUrl } from '../editor/importMedia'
+import { computeContentEnd } from '../../shared/timeline'
 
 /**
  * The bridge to the renderer, whose Pinia store owns the live timeline.
@@ -38,6 +42,8 @@ const pending = new Map<string, Waiter>()
 
 /** The title of the project agents last read, for "Recent agent sessions". */
 export let lastProjectTitle = ''
+/** Its id: where a call that reads no project of its own is recorded. */
+export let lastProjectId: string | null = null
 
 export function installRendererBridge(): void {
 	ipcMain.on('mcp-response', (_event, message: { id: string; ok: boolean; result?: unknown; error?: string }) => {
@@ -130,7 +136,10 @@ const THUMB_WIDTH = 224
 export const rendererBridge: EditorBridge = {
 	async getLiveProject() {
 		const project = await request<LiveProject | null>('get-project', {})
-		if (project) lastProjectTitle = project.title
+		if (project) {
+			lastProjectTitle = project.title
+			lastProjectId = project.threadId
+		}
 		return project
 	},
 
@@ -174,8 +183,82 @@ export const rendererBridge: EditorBridge = {
 		return switchRevisionFor(revisionId)
 	},
 
-	startExport() {
-		return request('export', {}, Math.max(20_000, readTimeoutMs()))
+	async startExport(project, options) {
+		const running = renderProgress({ threadId: project.threadId })
+		if (running && (running.phase === 'rendering' || running.phase === 'stitching')) {
+			return { ok: false, error: `An export of this project is already running (${running.percent}%). wait {for: "export"} follows it.` }
+		}
+		try {
+			// The live document, as the Export button passes its snapshot: the render
+			// detaches from the editor and never writes the document back.
+			const { renderId } = startEditorRender({ threadId: project.threadId, quality: options.quality, doc: project.doc })
+			return { ok: true, renderId }
+		} catch (error: any) {
+			return { ok: false, error: `The export could not start: ${error?.message || error}` }
+		}
+	},
+
+	exportStatus(query) {
+		const status = renderProgress(query)
+		if (!status) return null
+		return {
+			renderId: status.renderId, phase: status.phase, percent: status.percent,
+			outputPath: status.outputPath, error: status.error, startedAt: status.startedAt, updatedAt: status.updatedAt
+		}
+	},
+
+	async inspectExport(file, options) {
+		const facts = await probeExport(file)
+		let sheet
+		if (!(options.times && options.times.length === 0)) {
+			const times = sheetTimes(facts.durationSec, options)
+			const made = await contactSheet(file, times, { columns: options.columns, tileWidth: options.tileWidth })
+			sheet = { data: made.jpeg.toString('base64'), mimeType: 'image/jpeg', times, columns: made.columns, rows: made.rows }
+		}
+		const loudness = options.loudness ? await measureExportLoudness(file) : undefined
+		return { facts, sheet, loudness }
+	},
+
+	async listProjects() {
+		const live = await rendererBridge.getLiveProject().catch(() => null)
+		return threadManager.getAllThreads()
+			.filter((t) => t.type === 'editor' && t.editor && !t.missing)
+			.map((t) => ({
+				id: t.id, title: t.title || 'Untitled Project', createdAt: t.createdAt, updatedAt: t.updatedAt,
+				mediaCount: t.editor!.media.filter((a) => !a.synth && !a.generated).length,
+				durationSec: computeContentEnd(t.editor!.timeline),
+				open: live?.threadId === t.id
+			}))
+	},
+
+	async createProject(title) {
+		const thread = await threadManager.createEditorThread(title)
+		return { id: thread.id, title: thread.title }
+	},
+
+	openProject(threadId) {
+		return request('open-project', { threadId }, 60_000)
+	},
+
+	async importMedia(project, source, onProgress) {
+		let asset
+		if ('url' in source) {
+			const win = editorWindow()
+			asset = await importMediaFromUrl(project.threadId, source.url, {
+				onProgress: (assetId, percent, phase) => {
+					// The Media panel shows the same download card it shows for the user's own import.
+					if (!win.isDestroyed()) win.webContents.send('editor-import-progress', { threadId: project.threadId, assetId, url: source.url, percent, phase })
+					onProgress?.(percent, phase)
+				}
+			})
+		} else {
+			asset = await importMediaFromFile(project.threadId, source.path, source.name)
+		}
+		if (!asset) throw new ToolError('The project is not open any more.')
+		if (asset.preprocessState === 'error') throw new ToolError(`FrameFlow could not read that media: ${asset.preprocessError || 'unsupported file'}.`)
+		// The renderer owns the live document; it hears of the asset before anything can place it.
+		await request('upsert-assets', { assets: [asset] })
+		return asset
 	},
 
 	async prepareSounds(project, recipes) {
