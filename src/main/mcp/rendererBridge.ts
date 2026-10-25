@@ -19,6 +19,8 @@ import { ProviderError } from '../audio/provider'
 import { renderProgress, startEditorRender } from '../editor/render'
 import { contactSheet, measureExportLoudness, probeExport, sheetClock, sheetTimes, tileImages } from '../editor/exportInspect'
 import fs from 'node:fs'
+import { join } from 'node:path'
+import { tmpdir } from 'node:os'
 import { detectSilence } from '../ffmpeg'
 import { importMediaFromFile, importMediaFromUrl } from '../editor/importMedia'
 import { computeContentEnd } from '../../shared/timeline'
@@ -241,15 +243,23 @@ export const rendererBridge: EditorBridge = {
 	},
 
 	async timelineSheet(project, times, options) {
-		const files: string[] = []
-		const notes: (string | null)[] = []
-		for (const timeSec of times) {
-			const { path, motion } = await renderExactFrame({ threadId: project.threadId, doc: project.doc, timeSec, burnText: true })
-			files.push(path)
-			notes.push(describeMotionReport(motion) ?? null)
+		// Each frame is copied out at once: the exact-frame renderer sweeps its earlier files.
+		const work = fs.mkdtempSync(join(tmpdir(), 'ff-frames-'))
+		try {
+			const files: string[] = []
+			const notes: (string | null)[] = []
+			for (const [i, timeSec] of times.entries()) {
+				const { path, motion } = await renderExactFrame({ threadId: project.threadId, doc: project.doc, timeSec, burnText: true })
+				const copy = join(work, `${i}.png`)
+				fs.copyFileSync(path, copy)
+				files.push(copy)
+				notes.push(describeMotionReport(motion) ?? null)
+			}
+			const made = await tileImages(files, times.map(sheetClock), options)
+			return { sheet: { data: made.jpeg.toString('base64'), mimeType: 'image/jpeg', times, columns: made.columns, rows: made.rows }, notes }
+		} finally {
+			fs.rmSync(work, { recursive: true, force: true })
 		}
-		const made = await tileImages(files, times.map(sheetClock), options)
-		return { sheet: { data: made.jpeg.toString('base64'), mimeType: 'image/jpeg', times, columns: made.columns, rows: made.rows }, notes }
 	},
 
 	async listProjects() {

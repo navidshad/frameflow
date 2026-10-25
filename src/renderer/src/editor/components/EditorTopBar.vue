@@ -52,9 +52,9 @@
 					? 'bg-primary text-white hover:bg-primary-dark'
 					: 'bg-zinc-200/70 dark:bg-zinc-800 text-zinc-400 cursor-not-allowed'"
 			:disabled="!canExport && !exporting"
-			:title="canExport || exporting ? 'Export the timeline' : 'Add clips to the timeline first'"
+			:title="exporting ? 'Export the timeline' : lockedBy ? `${lockedBy} is working on this project over MCP: export when its round ends` : canExport ? 'Export the timeline' : 'Add clips to the timeline first'"
 			@click="$emit('export')">
-			<span v-if="!exporting" class="iconify tabler--file-export w-3.5 h-3.5"></span>
+			<span v-if="!exporting" class="iconify w-3.5 h-3.5" :class="lockedBy ? 'tabler--lock' : 'tabler--file-export'"></span>
 			{{ exporting ? `Exporting ${percent}%` : 'Export' }}
 		</button>
 	</header>
@@ -82,6 +82,8 @@ const props = defineProps<{
 	canExport: boolean
 	exporting: boolean
 	percent: number
+	/** An MCP agent holding the project: the button says why it is off. */
+	lockedBy?: string | null
 }>()
 const emit = defineEmits<{
 	(e: 'back'): void

@@ -66,7 +66,7 @@
 				<div class="flex gap-1.5">
 					<button
 						class="flex-1 px-3 py-1.5 rounded-xl border border-zinc-300 dark:border-zinc-700 text-xs font-bold text-zinc-600 dark:text-zinc-300 flex items-center justify-center gap-1.5 transition hover:border-primary/40 hover:text-primary disabled:opacity-40 disabled:pointer-events-none"
-						:disabled="!baseline"
+						:disabled="!baseline || !!agent.mcpWorking"
 						:title="baseline ? `Return to V${baseline.seq}, the version before ${session.clientName}’s first edit` : 'The agent has not edited anything yet'"
 						@click="goBack">
 						<span class="iconify tabler--arrow-back-up w-3.5 h-3.5"></span>

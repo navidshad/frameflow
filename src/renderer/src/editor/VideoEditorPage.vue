@@ -8,6 +8,7 @@
 				:show-export="!editorStore.loading && !notFound"
 				:can-export="editorStore.canExport"
 				:exporting="editorStore.isRendering"
+				:locked-by="editorStore.agentHolds"
 				:percent="editorStore.renderState?.percent ?? 0"
 				@back="router.push('/home')" @rename="editorStore.renameProject($event)" @export="showExport = true">
 				<template v-if="agentStore.editingSession" #center>
@@ -99,6 +100,8 @@ const keyframeLanes = useKeyframeLanesStore()
 
 const notFound = ref(false)
 const showExport = ref(false)
+// An agent that begins a round takes the project: an open Export dialog closes.
+watch(() => editorStore.agentHolds, (held) => { if (held) showExport.value = false })
 
 // The v1 layout kept an inspector column and a chat "full height" switch. Neither
 // exists now (Inspect is a tab; chat is always full height), so their saved
