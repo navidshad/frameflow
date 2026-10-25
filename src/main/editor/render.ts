@@ -580,7 +580,7 @@ export async function renderRegion(
 	const outputPath = path.join(workDir, `region-${String(index).padStart(3, '0')}.mov`)
 
 	const graph = buildRegionGraph(region, plan)
-	const exact = exactTailFilters(graph, span, plan)
+	const exact = exactTailFilters(graph, span, plan.fps)
 	const command = ffmpeg()
 	for (const input of graph.inputs) {
 		const added = command.input(input.path)
