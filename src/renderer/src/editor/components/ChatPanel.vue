@@ -3,7 +3,7 @@
 		<!-- Turn history -->
 		<div ref="scrollRef" class="flex-1 min-h-0 overflow-y-auto custom-scrollbar px-3 py-3 space-y-3">
 			<!-- Empty state — reflects whether media is ready to talk about -->
-			<div v-if="turns.length === 0" class="h-full flex flex-col items-center justify-center gap-2 text-center px-4">
+			<div v-if="entries.length === 0" class="h-full flex flex-col items-center justify-center gap-2 text-center px-4">
 				<span class="text-2xl" :class="{ 'opacity-40': !store.canPrompt }">{{ store.activePersona?.icon || '🎬' }}</span>
 				<template v-if="store.canPrompt">
 					<p class="text-xs font-bold text-zinc-600 dark:text-zinc-300">
@@ -33,7 +33,11 @@
 				</template>
 			</div>
 
-			<template v-for="turn in turns" :key="turn.id">
+			<template v-for="entry in entries" :key="entry.kind === 'turn' ? entry.turn.id : entry.round.id">
+				<!-- An outside agent's round over MCP: read-only -->
+				<McpRoundCard v-if="entry.kind === 'round'" :round="entry.round" />
+				<template v-else>
+				<template v-for="turn in [turnOf(entry)]" :key="turn.id">
 				<!-- User prompt -->
 				<div class="flex flex-col items-end gap-1">
 					<div class="max-w-[85%] px-3 py-2 rounded-2xl rounded-br-md bg-primary text-white text-xs leading-relaxed whitespace-pre-wrap">
@@ -120,6 +124,8 @@
 						</div>
 					</div>
 				</div>
+				</template>
+				</template>
 			</template>
 		</div>
 
@@ -141,9 +147,13 @@ import PromptBar from './PromptBar.vue'
 import AiResultCard from './AiResultCard.vue'
 import EngineSteps from './EngineSteps.vue'
 import RetryButton from './RetryButton.vue'
+import McpRoundCard from './McpRoundCard.vue'
 import { ENGINES } from '@shared/engines'
+import { chatEntries, type ChatEntry } from '@shared/agentRounds'
+import { useAgentStore } from '../../stores/agentStore'
 
 const store = useEditorStore()
+const agent = useAgentStore()
 
 const scrollRef = ref<HTMLElement | null>(null)
 
@@ -152,6 +162,10 @@ const scrollRef = ref<HTMLElement | null>(null)
 const turns = computed<PromptTurn[]>(() =>
 	[...(store.doc?.turns || [])].filter((t) => !t.agent?.engineTurnId).sort((a, b) => a.createdAt - b.createdAt)
 )
+
+/** The user's turns and the MCP agents' rounds, in time order (a round shows the edits it made). */
+const entries = computed(() => chatEntries(turns.value, agent.rounds))
+const turnOf = (entry: ChatEntry<PromptTurn>): PromptTurn => (entry as Extract<ChatEntry<PromptTurn>, { kind: 'turn' }>).turn
 
 const engineFooter = (turn: PromptTurn) => (turn.engine ? ENGINES[turn.engine.id]?.footer || turn.engine.label : '')
 
@@ -199,5 +213,8 @@ const scrollToBottom = () => {
 		if (el) el.scrollTop = el.scrollHeight
 	})
 }
-watch(() => [turns.value.length, turns.value[turns.value.length - 1]?.status], scrollToBottom, { immediate: true })
+watch(() => {
+	const last = entries.value[entries.value.length - 1]
+	return [entries.value.length, last?.kind === 'turn' ? last.turn.status : last?.round.calls.length, last?.kind === 'round' ? last.round.status : '']
+}, scrollToBottom, { immediate: true })
 </script>

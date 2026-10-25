@@ -1005,6 +1005,11 @@ export const useEditorStore = defineStore('editor', () => {
 
 	// ===== Proposal computeds (M3) =====
 	const promptRunning = computed(() => activeTurnId.value !== null)
+	/**
+	 * An outside agent holds this project (an open MCP round; the agent store
+	 * sets it). The user's own exports and revision switches wait until it ends.
+	 */
+	const agentHolds = ref<string | null>(null)
 
 	/** Live preview of what scope the NEXT prompt would use (drives the chip). */
 	const scopePreview = computed(() => {
@@ -1132,7 +1137,7 @@ export const useEditorStore = defineStore('editor', () => {
 	)
 
 	const canExport = computed(() => {
-		if (!doc.value || isRendering.value) return false
+		if (!doc.value || isRendering.value || agentHolds.value) return false
 		// ANY visible video lane carrying a picture will do. Asking the lowest one
 		// specifically was already wrong the day generated backgrounds landed —
 		// `BG` sits below everything, so an export with a background and footage
@@ -1602,6 +1607,15 @@ export const useEditorStore = defineStore('editor', () => {
 		if (!threadId.value || !doc.value || timelineView.value !== 'filmstrip') return
 		const usedAssetIds = new Set(doc.value.timeline.map((i) => i.sourceAssetId))
 		for (const asset of doc.value.media) {
+			// Sound has no picture. Main clears an asset an earlier filmstrip wrongly
+			// failed, in use or not (an older take kept for undo too).
+			if (asset.kind !== 'video') {
+				if (asset.preprocessState === 'error' && /strip/.test(asset.preprocessError || '') && !filmstripRequested.has(asset.id)) {
+					filmstripRequested.add(asset.id)
+					api.preprocessMedia({ threadId: threadId.value, assetId: asset.id, steps: ['filmstrip'] })
+				}
+				continue
+			}
 			if (!usedAssetIds.has(asset.id)) continue
 			if (asset.preprocessState !== 'completed') continue
 			if (asset.filmstrip?.length || filmstripRequested.has(asset.id)) continue
@@ -3300,6 +3314,8 @@ export const useEditorStore = defineStore('editor', () => {
 		const engineTurn = !!options.engineTurnId && options.engineTurnId === activeTurnId.value &&
 			!!doc.value.turns.find((t) => t.id === activeTurnId.value)?.engine
 		if (promptRunning.value && !engineTurn) return false
+		// The agent's own switches (over MCP) are forced; the user's wait for its round to end.
+		if (agentHolds.value && !options.force) return false
 
 		if (!options.force) await ensureCurrentSnapshot()
 		if (!options.force && revisionDirty.value) {
@@ -3564,7 +3580,7 @@ export const useEditorStore = defineStore('editor', () => {
 		threadId: string
 		turn: PromptTurn
 		addMarkers?: { time: number; label: string }[]
-		docSettings?: { captionsEnabled?: boolean; loudnessEnabled?: boolean }
+		docSettings?: { captionsEnabled?: boolean; loudnessEnabled?: boolean; frame?: { width: number; height: number } }
 		/** Rendered sounds the diff places: they must exist here before it is applied. */
 		addAssets?: MediaAsset[]
 		thinContext?: boolean
@@ -3665,6 +3681,7 @@ export const useEditorStore = defineStore('editor', () => {
 			// directly rather than through the diff — the same route markers take.
 			if (settings?.captionsEnabled !== undefined) setCaptionsEnabled(settings.captionsEnabled)
 			if (settings?.loudnessEnabled !== undefined) setLoudnessEnabled(settings.loudnessEnabled)
+			if (settings?.frame) setSequenceFrame(settings.frame.width, settings.frame.height)
 
 			const rev = await createRevision({
 				origin: 'ai',
@@ -4022,6 +4039,7 @@ export const useEditorStore = defineStore('editor', () => {
 		setCaptionsEnabled,
 		exportQueue,
 		startExportBatch,
+		agentHolds,
 		toggleTrackMusic,
 		setTrackRole,
 		soundPreviews,

@@ -1023,8 +1023,28 @@ describe('opsToDiff / removeRanges', () => {
 		const { diff, notes } = opsToDiff({ removeRanges: [{ fromSec: 3, toSec: 5 }] }, doc())
 		expect(diff.removeItemIds).toBeUndefined()
 		expect(diff.updateItems![0]).toMatchObject({ id: 'i1', out: 3 })
-		expect(diff.addItems![0]).toMatchObject({ timelineStart: 5, in: 5, out: 10 })
+		// The span is cut OUT: the second half moves up to close it.
+		expect(diff.addItems![0]).toMatchObject({ timelineStart: 3, in: 5, out: 10 })
 		expect(notes[0]).toContain('2.0s')
+	})
+
+	it('closes every span when many are cut from one clip, on every track alike', () => {
+		const base = doc()
+		base.tracks.push({ id: 'm1', kind: 'video', name: 'M1', order: 1, muted: false, locked: false, hidden: false, height: 48 })
+		base.timeline.push({ id: 'title', trackId: 'm1', sourceAssetId: 'a', timelineStart: 8, in: 0, out: 1, speed: 1, preservePitch: true, duration: 1 })
+		const { diff } = opsToDiff({ removeRanges: [{ fromSec: 2, toSec: 3 }, { fromSec: 5, toSec: 5.5 }, { fromSec: 7, toSec: 7.5 }] }, base)
+		const state = { tracks: base.tracks, timeline: JSON.parse(JSON.stringify(base.timeline)) }
+		applyTimelineDiff(state, diff, base.media)
+		const v1 = state.timeline.filter((i: any) => i.trackId === 'v1').sort((a: any, b: any) => a.timelineStart - b.timelineStart)
+		expect(v1.map((i: any) => [i.timelineStart, i.in, i.out])).toEqual([[0, 0, 2], [2, 3, 5], [4, 5.5, 7], [5.5, 7.5, 10]])
+		// The layer on another track, after all three cuts, moved up by all 2 s.
+		expect(state.timeline.find((i: any) => i.id === 'title')!.timelineStart).toBe(6)
+	})
+
+	it('keeps the split halves when the same edit also adds clips', () => {
+		const { diff } = opsToDiff({ removeRanges: [{ fromSec: 3, toSec: 5 }], addClips: [{ assetId: 'a', in: 0, out: 2, atSec: 20 }] }, doc())
+		expect(diff.addItems!.some((i) => i.in === 5 && i.out === 10)).toBe(true)
+		expect(diff.addItems!.some((i) => i.in === 0 && i.out === 2)).toBe(true)
 	})
 
 	it('removes the clip outright when the span covers all of it', () => {
@@ -1045,6 +1065,30 @@ describe('opsToDiff / removeRanges', () => {
 		)
 		expect(diff.removeItemIds).toEqual(['i1'])
 		expect(diff.addItems).toBeUndefined()
+	})
+})
+
+describe('opsToDiff / splitAt', () => {
+	const doc = () => makeDoc([makeAsset('a', uniform(2, 10))], [
+		{ id: 'i1', trackId: 'v1', sourceAssetId: 'a', timelineStart: 2, in: 0, out: 10, speed: 1, preservePitch: true, duration: 10, fadeOutSec: 1 },
+		{ id: 'i2', trackId: 'v1', sourceAssetId: 'a', timelineStart: 12, in: 0, out: 4, speed: 1, preservePitch: true, duration: 4 }
+	])
+
+	it('cuts a clip in two where asked, moving nothing', () => {
+		const base = doc()
+		const { diff, notes } = opsToDiff({ splitAt: [{ atSec: 5 }, { atSec: 8 }] }, base)
+		const state = { tracks: base.tracks, timeline: JSON.parse(JSON.stringify(base.timeline)) }
+		applyTimelineDiff(state, diff, base.media)
+		const v1 = state.timeline.sort((a: any, b: any) => a.timelineStart - b.timelineStart)
+		expect(v1.map((i: any) => [i.timelineStart, i.in, i.out])).toEqual([[2, 0, 3], [5, 3, 6], [8, 6, 10], [12, 0, 4]])
+		// The fade-out stays at the clip's real end.
+		expect(v1[0].fadeOutSec || 0).toBe(0)
+		expect(v1[2].fadeOutSec).toBe(1)
+		expect(notes.at(-1)).toMatch(/Split 1 clip\(s\) into 3 pieces/)
+	})
+
+	it('says when nothing runs across the time', () => {
+		expect(opsToDiff({ splitAt: [{ atSec: 20 }] }, doc()).droppedOps[0]).toMatch(/no clip runs across/)
 	})
 })
 

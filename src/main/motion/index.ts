@@ -67,7 +67,7 @@ export async function ensureMotionFrames(job: MotionJob, first: number, last: nu
 		// Frame k is clip time k / fps, exactly as `motionFramePlan` builds it.
 		const plan = Array.from({ length: last - first + 1 }, (_, j) => motionFrameState(job.item, (first + j) / job.frame.fps))
 		fs.mkdirSync(path.dirname(outputPath), { recursive: true })
-		const capture = await openMotionCapture(composeMotionPage(job.item.motion, job.frame), job.frame)
+		const capture = await openMotionCapture(composeMotionPage(job.item.motion, job.frame, job.kits), job.frame)
 		try {
 			await encodeFrames({ frame: job.frame, count: plan.length, next: (k) => capture.frame(plan[k]), outputPath })
 		} finally {

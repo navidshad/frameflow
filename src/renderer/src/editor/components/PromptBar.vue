@@ -67,8 +67,18 @@
 			</div>
 		</div>
 
+		<!-- An outside agent holds the project: the chat is read-only until its round ends -->
+		<div v-if="mcp" class="mt-1.5 flex items-center gap-2 px-2 py-1.5 rounded-lg bg-secondary/[0.08] border border-secondary/20">
+			<span class="iconify tabler--lock w-3 h-3 text-secondary-light shrink-0"></span>
+			<span class="text-[10px] font-medium text-zinc-600 dark:text-zinc-300 leading-snug flex-1 min-w-0">
+				<b class="text-violet-700 dark:text-violet-300">{{ mcp.clientName }}</b> is working over MCP · round {{ mcp.seq }} · {{ mcp.steps }} step{{ mcp.steps === 1 ? '' : 's' }}.
+				The chat unlocks when it ends its round.
+			</span>
+			<button class="text-[10px] font-semibold text-red-500 hover:text-red-400 transition shrink-0" @click="agent.stopRound()">Stop</button>
+		</div>
+
 		<!-- Running status -->
-		<div v-if="store.promptRunning" class="mt-1.5 flex items-center gap-2 px-2">
+		<div v-else-if="store.promptRunning" class="mt-1.5 flex items-center gap-2 px-2">
 			<div class="w-3 h-3 rounded-full border-2 border-primary border-t-transparent animate-spin"></div>
 			<span class="text-[10px] font-medium text-zinc-500">
 				{{ engine.isCli ? engine.current.label : store.activePersona?.name || 'AI' }} is working on your edit…
@@ -83,9 +93,13 @@ import { useEditorStore } from '../../stores/editorStore'
 import PersonaPicker from './PersonaPicker.vue'
 import EngineChip from './EngineChip.vue'
 import { useEngineStore } from '../../stores/engineStore'
+import { useAgentStore } from '../../stores/agentStore'
 
 const store = useEditorStore()
 const engine = useEngineStore()
+const agent = useAgentStore()
+/** One agent per project: an MCP agent's open round locks the chat. */
+const mcp = computed(() => agent.mcpWorking)
 
 // The draft lives in the store: Home pre-fills it before this mounts, and this
 // component is v-if'd away when the rail collapses.
@@ -101,11 +115,12 @@ const scopeRef = ref<HTMLElement | null>(null)
 // Chat is inert until there is something to work on: media that has finished
 // preprocessing (the AI needs pieces/transcript to reason about footage), or
 // layers that need no footage at all.
-const inputDisabled = computed(() => store.promptRunning || !store.canPrompt)
+const inputDisabled = computed(() => store.promptRunning || !store.canPrompt || !!mcp.value)
 
 // Keep placeholders short — the narrow rail clips a single-row textarea, and
 // the chat empty-state already carries the full guidance.
 const placeholder = computed(() => {
+	if (mcp.value) return `Locked: ${mcp.value.clientName} is working over MCP…`
 	if (store.isEmpty && !store.hasLayers) return 'Import media to start…'
 	if (!store.canPrompt && store.mediaProcessing) return 'Preparing media…'
 	if (!store.canPrompt) return 'Media not ready yet…'

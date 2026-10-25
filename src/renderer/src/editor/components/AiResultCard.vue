@@ -93,8 +93,9 @@
 				~{{ turn.usage.totalTokens.toLocaleString() }} tok · ${{ (turn.cost || 0).toFixed(4) }}
 			</span>
 			<button v-if="parentRevision"
-				class="ml-auto px-3 py-1.5 rounded-xl border border-zinc-200 dark:border-zinc-700 text-xs font-bold text-zinc-600 dark:text-zinc-300 hover:border-primary/40 hover:text-primary transition active:scale-95"
-				:title="'Switch back to the previous revision — this result stays in the tree'"
+				class="ml-auto px-3 py-1.5 rounded-xl border border-zinc-200 dark:border-zinc-700 text-xs font-bold text-zinc-600 dark:text-zinc-300 hover:border-primary/40 hover:text-primary transition active:scale-95 disabled:opacity-40 disabled:pointer-events-none"
+				:title="store.agentHolds ? `${store.agentHolds} is working over MCP: switch when its round ends` : 'Switch back to the previous revision — this result stays in the tree'"
+				:disabled="!!store.agentHolds"
 				@click="goBack">
 				<span class="iconify tabler--arrow-back-up w-3.5 h-3.5 inline-block align-[-2px] mr-1"></span>
 				Back to V{{ parentRevision.seq }}

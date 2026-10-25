@@ -52,6 +52,17 @@ describe('estimateMix', () => {
 		expect(r.warnings.join(' ')).toMatch(/SFX is .* too quiet/)
 	})
 
+	it('leaves sounds too short to meter out of the role level instead of calling the role too quiet', () => {
+		const media2 = [...media, asset('pop', 'audio')]
+		const r = estimateMix(
+			{ tracks, media: media2, timeline: [item('c1', 'v1', 'talk'), item('c3', 'a3', 'whoosh'), item('p1', 'a3', 'pop'), item('p2', 'a3', 'pop'), item('p3', 'a3', 'pop')] },
+			{ talk: analysis(-16, -3), whoosh: analysis(-27, -17), pop: analysis(-70, -17) }
+		)
+		expect(r.roles.find((x) => x.role === 'sfx')!.medianLufs).toBe(-27)
+		expect(r.warnings).toEqual([])
+		expect(r.caveats.join(' ')).toMatch(/3 clips are shorter than the loudness meter/)
+	})
+
 	it('flags a clip that will clip', () => {
 		const r = estimateMix(
 			{ tracks, media, timeline: [item('c1', 'v1', 'talk', { label: 'greeting', gain: 2 })] },

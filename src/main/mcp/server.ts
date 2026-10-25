@@ -16,6 +16,7 @@ import type { EditorBridge } from './bridge'
 import type { MotionProbe } from '../editor/vetHtml'
 import { SERVER_INSTRUCTIONS, ToolError, TOOLS, type ToolContext, type ToolDef } from './tools'
 import { LIVE_PROJECT, writeQueue } from './writeQueue'
+import { summariseAnswer, summariseAsk, type AgentCallRecord, type RoundBook } from '@shared/agentRounds'
 
 /**
  * FrameFlow's MCP server: Streamable HTTP on 127.0.0.1, one MCP `Server` per
@@ -61,6 +62,14 @@ export interface AgentServerOptions {
 	probeMotion?: MotionProbe
 	/** Longest a write waits behind earlier ones before it gives up unapplied. Default 5 minutes. */
 	maxWriteWaitMs?: number
+	/**
+	 * Rounds and the one-agent lock, and the record of every call the chat
+	 * shows. Set for the outside agents' server only: FrameFlow's own CLI
+	 * engine is the chat's turn, shown inside it.
+	 */
+	rounds?: RoundBook
+	/** The project agents last saw, for calls that do not read one themselves (the record needs a project). */
+	currentThreadId?: () => string | null
 }
 
 interface Session {
@@ -195,6 +204,7 @@ export class AgentServer {
 			for (const [id, session] of this.sessions) {
 				if (session.lastSeenAt < cutoff) void this.disconnect(id)
 			}
+			this.options.rounds?.sweep()
 		}, this.options.sweepEveryMs ?? 60_000)
 		this.sweeper.unref()
 		return port
@@ -326,6 +336,7 @@ export class AgentServer {
 		const session = this.sessions.get(sessionId)
 		if (!session) return
 		this.sessions.delete(sessionId)
+		this.options.rounds?.sessionClosed(sessionId)
 		void session.server.close().catch(() => { /* closing anyway */ })
 		this.emit({ type: 'session-closed', session: { ...session.info } })
 	}
@@ -358,13 +369,38 @@ export class AgentServer {
 			this.emit({ type: 'activity', activity })
 		}
 
+		// The chat's record of this call: what was asked, then what FrameFlow answered.
+		const rounds = this.options.rounds
+		const sessionRef = { id: session.info.id, clientName: session.info.clientName }
+		let logged: { roundId: string; callId: string } | null = null
+		const log = (threadId: string | null) => {
+			if (!rounds || def.roundTool) return
+			const record: AgentCallRecord = {
+				id: activity.id, tool: name, ask: summariseAsk(args), title: activity.title,
+				status: 'running', startedAt: activity.startedAt
+			}
+			const round = rounds.callStarted(sessionRef, threadId ?? this.options.currentThreadId?.() ?? null, record)
+			if (round) logged = { roundId: round.id, callId: record.id }
+		}
+		const finishLog = (status: AgentActivity['status'], content: Array<{ type: string; text?: string; data?: string; mimeType?: string }>, feed?: Partial<AgentActivity>) => {
+			if (!rounds) return
+			if (!logged) log(null)
+			if (!logged) return
+			rounds.callFinished(logged.roundId, logged.callId, {
+				status, answer: summariseAnswer(content),
+				detail: feed?.detail, quote: feed?.quote, chips: feed?.chips, title: feed?.title || activity.title,
+				image: feed?.thumbnail
+			})
+		}
+		const refuse = (detail: string, text: string) => {
+			finish({ status: 'refused', detail })
+			finishLog('refused', [{ type: 'text', text }], { detail })
+			return { content: [{ type: 'text' as const, text }], isError: true }
+		}
+
 		const limit = this.options.maxToolCalls
 		if (limit !== undefined && this.toolCalls > limit) {
-			finish({ status: 'refused', detail: 'refused · step limit reached' })
-			return {
-				content: [{ type: 'text' as const, text: `You have used all ${limit} steps for this turn. Do not call any more tools: reply to the user now with what you did and what is left.` }],
-				isError: true
-			}
+			return refuse('refused · step limit reached', `You have used all ${limit} steps for this turn. Do not call any more tools: reply to the user now with what you did and what is left.`)
 		}
 
 		// The tool's own permission, then any this call's arguments add (apply_ops
@@ -373,13 +409,31 @@ export class AgentServer {
 		const extra = def.alsoNeeds?.(args)
 		if (extra) needed.push(extra)
 		const denied = needed.find((p) => permissionRefusal(p, this.options.permissions()))
-		if (denied) {
-			finish({ status: 'refused', detail: REFUSED_SHORT[denied] })
-			return {
-				content: [{ type: 'text' as const, text: permissionRefusal(denied, this.options.permissions())! }],
-				isError: true
+		if (denied) return refuse(REFUSED_SHORT[denied], permissionRefusal(denied, this.options.permissions())!)
+
+		// One agent per project. A change needs this agent's own round: refused
+		// while another agent holds one or the chat is running, and opened for an
+		// agent that edits without having begun one.
+		let liveThreadId: string | null = null
+		let openedNote: string | null = null
+		if (rounds && (def.claims || def.writes) && !def.roundTool) {
+			const live = await this.options.bridge.getLiveProject().catch(() => null)
+			if (live) {
+				liveThreadId = live.threadId
+				const blocked = rounds.blockedFor(session.info.id, live.threadId)
+				if (blocked) return refuse('refused · another agent is working', blocked)
+				if (!rounds.roundFor(session.info.id)) {
+					if (live.chatBusy) {
+						return refuse('refused · the chat is running', 'FrameFlow’s own chat is running a prompt on this project. One agent at a time: wait for it to finish, then begin_round.')
+					}
+					const goal = typeof args.rationale === 'string' && args.rationale.trim() ? args.rationale : `${name} (no goal given)`
+					const begun = rounds.begin(sessionRef, live.threadId, goal, { implicit: true })
+					if (!begun.ok) return refuse('refused · another agent is working', begun.reason)
+					openedNote = `No round was open, so FrameFlow opened round ${begun.round.seq} for you. Next time begin_round with your goal first, and end_round with a summary when you are done.`
+				}
 			}
 		}
+		log(liveThreadId)
 
 		const ctx: ToolContext = {
 			sessionId: session.info.id,
@@ -388,24 +442,30 @@ export class AgentServer {
 			permissions: this.options.permissions,
 			engineTurnId: this.options.engineTurnId,
 			probeMotion: this.options.probeMotion,
-			spent: ledgerFor(this.options.engineTurnId ?? session.info.id)
+			spent: ledgerFor(this.options.engineTurnId ?? session.info.id),
+			rounds,
+			progress
 		}
 		try {
 			const run = () => def.run(args, ctx)
 			const out = def.writes
 				? await writeQueue.run(LIVE_PROJECT, run, { maxWaitMs: this.options.maxWriteWaitMs, onWaiting: progress })
 				: await run()
+			const status = out.isError ? 'error' : 'done'
 			finish({
 				...out.feed,
 				title: out.feed.title || activity.title,
-				status: out.isError ? 'error' : 'done'
+				status
 			})
-			return { content: out.content, isError: out.isError }
+			const content = openedNote ? [...out.content, { type: 'text' as const, text: openedNote }] : out.content
+			finishLog(status, content, out.feed)
+			return { content, isError: out.isError }
 		} catch (error: any) {
 			const message = error instanceof ToolError
 				? error.message
 				: `FrameFlow could not finish ${name}: ${error?.message || error}`
 			finish({ status: 'error', detail: message.split('\n')[0] })
+			finishLog('error', [{ type: 'text', text: message }], { detail: message.split('\n')[0] })
 			return { content: [{ type: 'text' as const, text: message }], isError: true }
 		}
 	}

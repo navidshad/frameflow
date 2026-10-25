@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import { inflateSync } from 'zlib'
-import { compareFrames, encodePng, evidenceImage } from './frameDiff'
+import { compareFrames, encodePng, evidenceImage, isRasterNoise } from './frameDiff'
 
 const W = 64
 const H = 32
@@ -63,5 +63,15 @@ describe('encodePng', () => {
 		const idat = png.indexOf('IDAT')
 		const length = png.readUInt32BE(idat - 4)
 		expect([...inflateSync(png.subarray(idat + 4, idat + 4 + length))]).toEqual([0, ...rgba])
+	})
+})
+
+describe('isRasterNoise', () => {
+	it('lets a few edge pixels off by a shade through, and nothing more', () => {
+		expect(isRasterNoise({ maxDelta: 1, pixels: 16 })).toBe(true)
+		expect(isRasterNoise({ maxDelta: 2, pixels: 64 })).toBe(true)
+		expect(isRasterNoise({ maxDelta: 3, pixels: 4 })).toBe(false)
+		expect(isRasterNoise({ maxDelta: 1, pixels: 400 })).toBe(false)
+		expect(isRasterNoise({ maxDelta: 0, pixels: 0 })).toBe(false)
 	})
 })

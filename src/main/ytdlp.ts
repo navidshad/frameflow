@@ -5,7 +5,7 @@ import { app } from 'electron'
 import { getFFmpegBinaryPath } from './ffmpeg'
 import { dependencyManager } from './dependencies/manager'
 import { updateYtDlpForFailure } from './dependencies/ytdlp-updater'
-import { isStaleYtDlpError } from './dependencies/ytdlp-version'
+import { isMissingYtDlpError, isStaleYtDlpError } from './dependencies/ytdlp-version'
 
 /** Self-heal progress markers surfaced to the UI during auto-recovery. */
 export type YtDlpRecoveryPhase = 'updating-ytdlp' | 'retrying'
@@ -70,6 +70,14 @@ async function withYtDlpSelfHeal<T>(
 	try {
 		return await operation(createYtDlp())
 	} catch (error: any) {
+		// No binary at all: fetch it (as Settings' install button does), then try once more.
+		if (isMissingYtDlpError(error?.message)) {
+			console.warn('[ytdlp] binary missing, installing it:', error?.message)
+			onRecoveryPhase?.('updating-ytdlp')
+			await dependencyManager.installYtDlp({ reason: 'auto-recovery' })
+			onRecoveryPhase?.('retrying')
+			return await operation(createYtDlp())
+		}
 		if (!isStaleYtDlpError(error?.message)) throw error
 
 		console.warn('[ytdlp] stale-binary signature detected, trying auto-update:', error?.message)

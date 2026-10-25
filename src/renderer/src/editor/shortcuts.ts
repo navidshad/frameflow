@@ -162,3 +162,10 @@ export const shortcutsIn = (group: ShortcutGroup): ShortcutDef[] =>
 
 /** The keys for one action, for a tooltip. */
 export const keysFor = (id: string): string => SHORTCUTS.find((s) => s.id === id)?.keys ?? ''
+
+/**
+ * While an outside agent holds the project (an open MCP round), the keyboard
+ * may still play, scrub, select and change the view, but not edit: an edit
+ * would land under the agent mid-round.
+ */
+export const liveWhileAgentWorks = (def: ShortcutDef): boolean => def.group !== 'Editing'

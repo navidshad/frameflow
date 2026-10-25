@@ -21,6 +21,7 @@ import { checkYtDlpAvailability, downloadVideo, getVideoFormats } from './ytdlp'
 import { dependencyManager } from './dependencies/manager'
 import { checkYtDlpFreshness } from './dependencies/ytdlp-updater'
 import * as editorAssets from './editor/assets'
+import { importMediaFromFile, importMediaFromUrl } from './editor/importMedia'
 import { getAudioAnalysis } from './editor/audioAnalysis'
 import { ensureSoundAsset, previewSound } from './editor/synth'
 import { isSoundKind } from '../shared/synth'
@@ -41,6 +42,7 @@ import { GEMINI_MODEL_3_6_FLASH, MODEL_METADATA } from './constants/gemini'
 import { electronApp, optimizer, is } from '@electron-toolkit/utils'
 import { registerMediaProtocol } from './media-protocol'
 import { initAgentAccess } from './mcp'
+import { agentHolding } from './mcp/roundStore'
 import { isCliEngine, type CliEngineId } from '@shared/engines'
 import { checkProjectsFolder, nestProjectsFolder, suggestProjectsFolder } from './setup/folder'
 import { testGeminiKey } from './setup/geminiKey'
@@ -540,82 +542,27 @@ app.whenReady().then(() => {
 	ipcMain.handle('add-media-asset', async (_event, { threadId, filePath, name }: {
 		threadId: string, filePath: string, name?: string
 	}) => {
-		// Reference the user's own file where it lives (copying a 10-15 GB source
-		// would block the main process), but MOVE a file the app itself just
-		// downloaded — left in place it dangles in a scratch folder outside the
-		// project, where removeAsset never cleans it and path-repair cannot find it.
-		//
-		// Match the download scratch dirs SPECIFICALLY. getTempDir() is the artifact
-		// ROOT and contains every project, so testing against it alone would move
-		// files out of other projects — including a chat thread's own source video.
-		const downloadRoot = join(settingsManager.getTempDir(), 'download-')
-		const isFreshDownload = filePath.startsWith(downloadRoot)
-		const asset = await editorAssets.createMediaAsset(threadId, {
-			sourcePath: filePath,
-			name,
-			referenceInPlace: !isFreshDownload,
-			move: isFreshDownload
-		})
-		if (asset && asset.preprocessState !== 'error') {
-			// Fire-and-forget: progress streams via background-task-update
-			editorPreprocess.preprocessMediaAsset(threadId, asset.id).catch((error) => {
-				console.error(`[editor] preprocess failed for ${asset.id}:`, error)
-			})
-		}
-		return asset
+		// Reference the user's own file where it lives; move a file the app just
+		// downloaded (see importMediaFromFile).
+		return await importMediaFromFile(threadId, filePath, name)
 	})
 
 	// Import from URL/YouTube: download straight into the asset's source dir,
 	// with per-asset progress (the legacy 'download-progress' event is keyless
-	// and breaks under concurrent imports).
+	// and breaks under concurrent imports). `phase` marks self-heal detours
+	// (yt-dlp auto-update + retry) so the import cards can say what is happening.
 	ipcMain.handle('import-media-url', async (event, { threadId, url, resolution }: {
 		threadId: string, url: string, resolution?: string
 	}) => {
-		const thread = threadManager.getThread(threadId)
-		if (!thread || thread.type !== 'editor') throw new Error('Not an editor project')
-
-		const assetId = uuidv4()
-		const sourceDir = join(thread.tempDir, 'media', assetId, 'source')
-		fs.mkdirSync(sourceDir, { recursive: true })
-
-		// `phase` marks self-heal detours (yt-dlp auto-update + retry) so the
-		// import cards can say what is happening instead of a stuck bar.
-		const sendProgress = (percent: number, phase?: 'updating-ytdlp' | 'retrying') => {
-			if (!event.sender.isDestroyed()) {
-				event.sender.send('editor-import-progress', { threadId, assetId, url, percent, phase })
+		return await importMediaFromUrl(threadId, url, {
+			resolution,
+			onProgress: (assetId, percent, phase) => {
+				if (!event.sender.isDestroyed()) {
+					event.sender.send('editor-import-progress', { threadId, assetId, url, percent, phase })
+				}
 			}
-		}
-
-		try {
-			const result = await downloadVideo(
-				url,
-				sourceDir,
-				resolution,
-				(percent) => sendProgress(percent),
-				(phase) => sendProgress(0, phase)
-			)
-
-			const asset = await editorAssets.createMediaAsset(threadId, {
-				sourcePath: result.path,
-				name: result.name,
-				assetId
-			})
-			if (asset && asset.preprocessState !== 'error') {
-				editorPreprocess.preprocessMediaAsset(threadId, asset.id).catch((error) => {
-					console.error(`[editor] preprocess failed for ${asset.id}:`, error)
-				})
-			}
-			return asset
-		} catch (error) {
-			// Failed import: remove the partial asset dir so nothing dangles
-			try {
-				fs.rmSync(join(thread.tempDir, 'media', assetId), { recursive: true, force: true })
-			} catch { /* best effort */ }
-			throw error
-		}
+		})
 	})
-
-
 
 	ipcMain.handle('remove-media-asset', async (_event, { threadId, assetId }: {
 		threadId: string, assetId: string
@@ -733,6 +680,9 @@ app.whenReady().then(() => {
 		threadId: string, personaId: string, prompt: string, baseStepId: string,
 		selectedItemIds: string[], playheadSec: number, widen?: 'chapter' | 'full', engine?: CliEngineId
 	}) => {
+		// One agent per project: an outside agent's open round holds it.
+		const holder = agentHolding(options.threadId)
+		if (holder) throw new Error(holder)
 		// The engine picked in Settings or the chat's engine chip: a CLI runs
 		// agentically through FrameFlow's MCP tools, Gemini API as before.
 		// Retry names its engine, so a switch since the failure does not move it.

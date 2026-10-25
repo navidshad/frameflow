@@ -2,7 +2,7 @@ import type { MotionDefinition, MotionFrameState, MotionKit } from '@shared/moti
 import { composeCandidatePage, settingValues } from '@shared/motion'
 import { coerceDefinition } from '@shared/motionCode'
 import { openMotionCapture } from './capture'
-import { compareFrames, evidenceImage, type FrameDifference } from './frameDiff'
+import { compareFrames, isRasterNoise, evidenceImage, type FrameDifference } from './frameDiff'
 
 /**
  * The runtime check behind "Same frame twice gives the same pixels".
@@ -88,6 +88,8 @@ async function probeNow(input: MotionProbeInput): Promise<MotionProbeResult> {
 			const again = await capture.frame(instants[k])
 			if (!again.equals(first[k])) {
 				const difference = compareFrames(first[k], again, { width, height }, input.frame.width / width)
+				// A handful of edge pixels off by a shade is raster noise, not state.
+				if (isRasterNoise(difference)) continue
 				difference.image = evidenceImage(first[k], again, { width, height }, difference)
 				return { determinism: 'fail', differsAt: instants[k].t, difference, definition: runtime }
 			}

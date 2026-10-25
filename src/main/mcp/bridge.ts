@@ -24,7 +24,53 @@ export interface LiveProject {
 	revisions: RevisionSummary[]
 	currentRevisionId: string | null
 	playheadSec: number
+	/**
+	 * FrameFlow's own chat is running a prompt on this project. One agent at a
+	 * time: an outside agent may not begin a round (or edit) until it ends.
+	 */
+	chatBusy?: boolean
 }
+
+/** A project in the user's FrameFlow, for list_projects. */
+export interface ProjectSummary {
+	id: string
+	title: string
+	createdAt: number
+	updatedAt?: number
+	mediaCount: number
+	durationSec: number
+	/** The editor is showing it now. */
+	open: boolean
+}
+
+/** Where an export stands. */
+export interface ExportStatus {
+	renderId: string
+	phase: 'rendering' | 'stitching' | 'done' | 'error'
+	percent: number
+	outputPath?: string
+	error?: string
+	startedAt: number
+	updatedAt: number
+}
+
+export interface InspectOptions {
+	times?: number[]
+	fromSec?: number
+	toSec?: number
+	everySec?: number
+	columns?: number
+	tileWidth?: number
+	loudness?: boolean
+}
+
+export interface InspectReport {
+	facts: import('../editor/exportInspect').ExportFacts
+	sheet?: { data: string; mimeType: string; times: number[]; columns: number; rows: number }
+	loudness?: { lufs: number | null; truePeakDb: number | null }
+}
+
+export type MediaSource = { url: string } | { path: string; name?: string }
 
 /** What the renderer reports after it applied (or could not apply) an agent's turn. */
 export type ApplyOutcome = AgentApplyOutcome
@@ -33,7 +79,7 @@ export interface TurnCommit {
 	threadId: string
 	turn: PromptTurn
 	addMarkers?: { time: number; label: string }[]
-	docSettings?: { captionsEnabled?: boolean; loudnessEnabled?: boolean }
+	docSettings?: { captionsEnabled?: boolean; loudnessEnabled?: boolean; frame?: { width: number; height: number } }
 	/** Assets the turn's diff refers to that the renderer does not have yet (rendered sounds). */
 	addAssets?: MediaAsset[]
 }
@@ -71,7 +117,26 @@ export interface EditorBridge {
 	readTranscripts(project: LiveProject, assetIds: string[]): Promise<Record<string, TranscriptEntry[]>>
 	renderFrame(project: LiveProject, timeSec: number): Promise<RenderedFrame>
 	switchRevision(revisionId: string): Promise<{ ok: true } | { ok: false; error: string }>
-	startExport(): Promise<{ ok: true; detail: string } | { ok: false; error: string }>
+	/** Start an export of the live timeline; FrameFlow shows its progress like any other. */
+	startExport(project: LiveProject, options: { quality: 'original' | 'preview' }): Promise<{ ok: true; renderId: string } | { ok: false; error: string }>
+	/** The latest progress of a render, or of the project's newest one. */
+	exportStatus(query: { renderId?: string; threadId: string }): ExportStatus | null
+	/** What an exported file is, and contact sheets of its frames. */
+	inspectExport(file: string, options: InspectOptions): Promise<InspectReport>
+	/** Frames of a source file (its proxy when there is one) at SOURCE times, tiled and labelled. */
+	mediaSheet(project: LiveProject, assetId: string, options: InspectOptions): Promise<{ sheet: NonNullable<InspectReport['sheet']>; durationSec: number }>
+	/** Exact timeline frames (as render_frame draws them), tiled and labelled; with each frame's motion note. */
+	timelineSheet(project: LiveProject, times: number[], options: { columns?: number; tileWidth?: number }): Promise<{ sheet: NonNullable<InspectReport['sheet']>; notes: (string | null)[] }>
+	/** Quiet stretches in a media file's sound, in source seconds. */
+	findSilences(project: LiveProject, assetId: string, options: { noiseDb: number; minDurationSec: number }): Promise<{ start: number; end: number }[]>
+	/** Every editor project in the user's FrameFlow. */
+	listProjects(): Promise<ProjectSummary[]>
+	createProject(title: string): Promise<{ id: string; title: string }>
+	/** Show a project in the editor, and resolve once it has loaded. */
+	openProject(threadId: string): Promise<{ ok: true } | { ok: false; error: string }>
+	/** Import a link or a file into the project; resolves once the asset exists (its preprocessing runs on). */
+	importMedia(project: LiveProject, source: MediaSource, onProgress?: (percent: number, phase?: string) => void): Promise<MediaAsset>
+
 	/** Render each recipe (cached by recipe) and return its asset, ready to be placed. */
 	prepareSounds(project: LiveProject, recipes: SoundRecipe[]): Promise<MediaAsset[]>
 	/** Measure a recipe, or a sound already in the project. */

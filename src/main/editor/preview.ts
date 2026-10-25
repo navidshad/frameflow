@@ -290,7 +290,8 @@ export async function renderExactFrame(options: {
 		}
 		const range = stillFrameRange(slice, plan.fps)
 		const file = await ensureMotionFrames(
-			{ item: slice.item, frame: slice.motion!, outputPath: slice.srcPath },
+			// With its kit, as the export draws it: a page that builds on one cannot run without it.
+			{ item: slice.item, frame: slice.motion!, outputPath: slice.srcPath, kits: slice.motionKit ? [slice.motionKit] : undefined },
 			range.first, range.last, stillClipPath(slice.srcPath, range)
 		)
 		swap.set(slice, rebasedSlice(slice, range.first, plan.fps, file))
