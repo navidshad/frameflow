@@ -176,7 +176,7 @@ const api = {
 		ipcRenderer.invoke('improvise-message', { threadId, messageId }),
 	getModelMetadata: () => ipcRenderer.invoke('get-model-metadata'),
 	// Custom HTML motion layers: the determinism probe and the saved-template library.
-	probeMotionPage: (input: { html: string; definition: any; frame: { width: number; height: number } }) =>
+	probeMotionPage: (input: { html: string; definition: any; frame: { width: number; height: number }; kit?: any }) =>
 		ipcRenderer.invoke('motion-probe', input),
 	listMotionTemplates: () => ipcRenderer.invoke('motion-templates-list'),
 	saveMotionTemplate: (input: { label: string; description?: string; html: string; definition?: any; author?: string }) =>

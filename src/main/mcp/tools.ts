@@ -10,6 +10,7 @@ import { TRANSITION_PRESETS } from '@shared/transitionPresets'
 import { computeContentEnd } from '@shared/timeline'
 import { EDITOR_OPS_SCHEMA, opsToDiff, opsWriteHtml } from '../editor/ops'
 import { vetHtmlOps, type MotionProbe } from '../editor/vetHtml'
+import { MOTION_KIT_OPS_SCHEMA, opsWriteKits } from '../editor/kitOps'
 import { MOTION_TEMPLATES, userMotionTemplates } from '@shared/motionTemplates'
 import { motionGuideText } from '@shared/motionGuide'
 import { soundGuideText } from '@shared/soundGuide'
@@ -179,6 +180,12 @@ const getProject: ToolDef = {
 				describedScenes: a.clips.filter((c) => c.visual).length
 			})),
 			markers: (doc.markers || []).map((m) => ({ atSec: r3(m.time), label: m.label })),
+			// Shared CSS/JS custom pages name with `kit`. get_motion_kit returns the source.
+			motionKits: (doc.motionKits || []).map((k) => ({
+				id: k.id, label: k.label,
+				cssBytes: k.css?.length ?? 0, jsBytes: k.js?.length ?? 0,
+				usedBy: doc.timeline.filter((i) => i.motion?.kit === k.id).map((i) => i.id)
+			})),
 			captionsEnabled: !!doc.captionsEnabled,
 			loudnessEnabled: !!doc.loudnessEnabled,
 			revisions: {
@@ -758,7 +765,10 @@ const analyzeAudio: ToolDef = {
 }
 
 const OPS_BASE_SCHEMA = opsInputSchema(EDITOR_OPS_SCHEMA)
-const OPS_INPUT_SCHEMA = { ...OPS_BASE_SCHEMA, properties: { ...OPS_BASE_SCHEMA.properties, ...SOUND_OPS_SCHEMA } } as typeof OPS_BASE_SCHEMA
+const OPS_INPUT_SCHEMA = {
+	...OPS_BASE_SCHEMA,
+	properties: { ...OPS_BASE_SCHEMA.properties, ...SOUND_OPS_SCHEMA, ...MOTION_KIT_OPS_SCHEMA }
+} as typeof OPS_BASE_SCHEMA
 
 const applyOps: ToolDef = {
 	name: 'apply_ops',
@@ -771,9 +781,10 @@ const applyOps: ToolDef = {
 		'notes. Times: timelineStart, atSec and removeRanges are TIMELINE seconds; in/out are SOURCE seconds. ' +
 		'Read ids from get_timeline and get_media first. Prefer a few focused calls to one huge one — each ' +
 		'is its own revision — and check the result with render_frame. Before sending a custom page in `html`, ' +
-		'read get_motion_guide. Always include a short rationale: the user reads it.',
+		'read get_motion_guide. Layers that share a look share a motion kit (setMotionKits, then `kit` on each ' +
+		'page): a restyle is then one kit edit. Always include a short rationale: the user reads it.',
 	inputSchema: OPS_INPUT_SCHEMA,
-	alsoNeeds: (args) => (opsWriteHtml(args as EditorOps) ? 'html' : opsMakeSound(args as EditorOps) ? 'sound' : null),
+	alsoNeeds: (args) => (opsWriteHtml(args as EditorOps) || opsWriteKits(args as EditorOps) ? 'html' : opsMakeSound(args as EditorOps) ? 'sound' : null),
 	async run(args, ctx) {
 		const errors = validateArgs(OPS_INPUT_SCHEMA, args)
 		if (errors.length) throw new ToolError(`Invalid operations — nothing was changed:\n- ${errors.join('\n- ')}`)
@@ -853,6 +864,34 @@ const getMotionGuide: ToolDef = {
 	}
 }
 
+const getMotionKit: ToolDef = {
+	name: 'get_motion_kit',
+	permission: 'read',
+	description:
+		'The full source (css and js) of a project motion kit, and the layers that use it. get_project lists the ' +
+		'kits. Read it before changing a kit with apply_ops setMotionKits, so you change what is there.',
+	inputSchema: {
+		type: 'object',
+		properties: { id: { type: 'string', description: 'The kit id, from get_project motionKits' } },
+		required: ['id'],
+		additionalProperties: false
+	},
+	title: (args) => `get_motion_kit ${args.id}`,
+	async run(args, ctx) {
+		const project = await requireProject(ctx)
+		const kits = project.doc.motionKits || []
+		const kit = kits.find((k) => k.id === args.id)
+		if (!kit) {
+			throw new ToolError(`There is no kit "${args.id}". Kits: ${kits.map((k) => k.id).join(', ') || 'none yet — add one with apply_ops setMotionKits'}.`)
+		}
+		const usedBy = project.doc.timeline.filter((i) => i.motion?.kit === kit.id).map((i) => ({ id: i.id, label: i.label }))
+		return {
+			content: [json({ id: kit.id, label: kit.label, css: kit.css ?? '', js: kit.js ?? '', usedBy })],
+			feed: { detail: `read kit ${kit.id} · ${usedBy.length} layer${usedBy.length === 1 ? '' : 's'}` }
+		}
+	}
+}
+
 const revertToVersion: ToolDef = {
 	name: 'revert_to_version',
 	permission: 'edit',
@@ -902,7 +941,7 @@ const exportTool: ToolDef = {
 }
 
 export const TOOLS: ToolDef[] = [
-	getProject, getTimeline, getMedia, searchMomentsTool, renderFrame, getMotionGuide,
+	getProject, getTimeline, getMedia, searchMomentsTool, renderFrame, getMotionGuide, getMotionKit,
 	getSoundGuide, listSounds, suggestCuesTool, renderSoundTool, analyzeAudio, generateAudioTool,
 	applyOps, revertToVersion, exportTool
 ]

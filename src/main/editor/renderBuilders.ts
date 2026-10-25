@@ -6,6 +6,7 @@ import { transformFilter } from '@shared/transform'
 import { keyframeExpression } from '@shared/keyframes'
 import { hasKey, keyFilter } from '@shared/keying'
 import { generatorFilter } from '@shared/generators'
+import type { MotionKit } from '@shared/motion'
 
 /**
  * Handler-based filter builders (PRD §7 — "Render engine is handler-based").
@@ -39,6 +40,8 @@ export interface SourceSlice {
 	 * are its source seconds, so `in`/`out` index straight into the file.
 	 */
 	motion?: { width: number; height: number; fps: number }
+	/** The project kit a motion slice's page uses, composed into it (and into `srcPath`'s hash). */
+	motionKit?: MotionKit
 	in: number                  // source seconds mapped to this region
 	out: number
 	/**
@@ -142,10 +145,10 @@ export function allSlices(region: Region): SourceSlice[] {
 }
 
 /** The motion clips a set of regions composites, as render jobs. */
-export function motionJobsFor(regions: Region[]): { item: TimelineItem; frame: { width: number; height: number; fps: number }; outputPath: string }[] {
+export function motionJobsFor(regions: Region[]): { item: TimelineItem; frame: { width: number; height: number; fps: number }; outputPath: string; kits?: MotionKit[] }[] {
 	return regions.flatMap(allSlices)
 		.filter((s) => !!s.motion)
-		.map((s) => ({ item: s.item, frame: s.motion!, outputPath: s.srcPath }))
+		.map((s) => ({ item: s.item, frame: s.motion!, outputPath: s.srcPath, kits: s.motionKit ? [s.motionKit] : undefined }))
 }
 
 export interface FilterBuilder {

@@ -481,6 +481,7 @@ app.whenReady().then(() => {
 			currentRevisionId?: string
 			captionsEnabled?: boolean
 			loudnessEnabled?: boolean
+			motionKits?: any[]
 		}
 	}) => {
 		return await threadManager.updateThreadWith(threadId, (thread) => {
@@ -516,6 +517,7 @@ app.whenReady().then(() => {
 			if (patch.captionsEnabled !== undefined) editor.captionsEnabled = patch.captionsEnabled
 			if (patch.loudnessEnabled !== undefined) editor.loudnessEnabled = patch.loudnessEnabled
 			if (patch.currentRevisionId !== undefined) editor.currentRevisionId = patch.currentRevisionId
+			if (patch.motionKits) editor.motionKits = patch.motionKits
 
 			// Fold clip-selected flags into the matching clips (the one renderer-owned
 			// field living inside main-owned MediaAsset records).

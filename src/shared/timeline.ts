@@ -5,7 +5,7 @@ import { sameTransform } from './transform'
 import { sameKeyframes } from './keyframes'
 import { sameKey } from './keying'
 import { sameGenerator } from './generators'
-import { sameMotion } from './motion'
+import { sameMotion, sameMotionKit, type MotionKit } from './motion'
 
 /**
  * Pure timeline helpers shared by renderer (manual editing, undo/redo) and
@@ -22,6 +22,12 @@ export const MAX_SPEED = 4
 export interface TimelineState {
 	tracks: Track[]
 	timeline: TimelineItem[]
+	/**
+	 * The project's motion kits. Optional so every older caller keeps working:
+	 * the diff only compares kits when BOTH sides carry a list, so a state built
+	 * without one can never read as "every kit was deleted".
+	 */
+	motionKits?: MotionKit[]
 }
 
 export const clampSpeed = (speed: number): number =>
@@ -410,6 +416,26 @@ export function diffTimelines(
 		}
 	}
 
+	// --- Motion kits (whole kits by id: small, and replaced rather than patched) ---
+	if (before.motionKits && after.motionKits) {
+		const beforeKits = new Map(before.motionKits.map((k) => [k.id, k]))
+		const afterKits = new Map(after.motionKits.map((k) => [k.id, k]))
+		for (const [id, kit] of afterKits) {
+			const was = beforeKits.get(id)
+			if (sameMotionKit(was, kit)) continue
+			;(forward.setMotionKits ||= []).push({ ...kit })
+			if (was) (inverse.setMotionKits ||= []).push({ ...was })
+			else (inverse.removeMotionKitIds ||= []).push(id)
+			dirty = true
+		}
+		for (const [id, was] of beforeKits) {
+			if (afterKits.has(id)) continue
+			;(forward.removeMotionKitIds ||= []).push(id)
+			;(inverse.setMotionKits ||= []).push({ ...was })
+			dirty = true
+		}
+	}
+
 	return dirty ? { forward, inverse } : null
 }
 
@@ -758,6 +784,18 @@ export function applyTimelineDiff(
 			fadeInSec: clampFade(item.fadeInSec),
 			fadeOutSec: clampFade(item.fadeOutSec)
 		}
+	}
+
+	// Kits first: an item added in the same diff may name one.
+	if (diff.removeMotionKitIds?.length || diff.setMotionKits?.length) {
+		const gone = new Set(diff.removeMotionKitIds ?? [])
+		const kits = (state.motionKits ?? []).filter((k) => !gone.has(k.id))
+		for (const kit of diff.setMotionKits ?? []) {
+			const at = kits.findIndex((k) => k.id === kit.id)
+			if (at >= 0) kits[at] = { ...kit }
+			else kits.push({ ...kit })
+		}
+		state.motionKits = kits
 	}
 
 	// Removals before additions (track-update encoding relies on this order).

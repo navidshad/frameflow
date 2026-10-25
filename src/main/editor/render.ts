@@ -19,6 +19,7 @@ import { hasTransform } from '@shared/transform'
 import { hasKeyframes } from '@shared/keyframes'
 import { hasKey } from '@shared/keying'
 import { generatorSource } from '@shared/generators'
+import { motionKitFor } from '@shared/motion'
 import { fallbackMotionDir, motionCacheDir, motionClipPath } from '../motion/cache'
 import { ensureMotionJobs } from '../motion'
 import type { TranscriptEntry } from '@shared/captions'
@@ -250,13 +251,15 @@ export function computeRegions(
 		if (item.motion) {
 			const clip: TimelineItem = { ...item, in: 0, out: item.duration, speed: 1 }
 			const frame = { width, height, fps }
+			const kit = motionKitFor(item.motion, doc.motionKits)
 			return {
 				...common,
 				item: clip,
 				in: s - item.timelineStart,
 				out: e - item.timelineStart,
 				motion: frame,
-				srcPath: motionClipPath(options.motionDir ?? fallbackMotionDir(), clip, frame)
+				motionKit: kit,
+				srcPath: motionClipPath(options.motionDir ?? fallbackMotionDir(), clip, frame, kit ? [kit] : undefined)
 			}
 		}
 		// A generated layer has no footage behind it. It is synthesised for

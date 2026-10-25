@@ -18,14 +18,24 @@
 export const MOTION_CONTRACT_LINES: string[] = [
 	'A page calls frameflow.define({ duration, settings, moments, seek(t, settings) }) and draws ONLY from t',
 	'and settings. No CSS animation or transition, setTimeout, requestAnimationFrame, Date.now, Math.random,',
-	'fetch or remote URLs. Inline everything; Inter and Outfit are bundled.',
+	'fetch or remote URLs. Inline everything. Bundled fonts: Inter, Outfit, and Vazirmatn for Persian and Arabic.',
+	'  Persian/Arabic text in an Inter stack (or "Outfit, Inter") draws in Vazirmatn by itself; name Vazirmatn to',
+	'  ask for it outright. Do not embed a font these cover; for any other, put its @font-face in a kit, once.',
 	'- settings: [{ key, type: "number"|"text"|"color"|"enum", default, label?, min?, max?, animate? }]',
 	'- moments: [{ name, duration, flex? }] partition the duration; the flex window (the hold) absorbs whatever',
 	'  length the clip has beyond the others, so trimming lengthens the hold and never slows the entrance.',
 	'- Helpers: frameflow.progress("in", t) is 0..1 across a moment; frameflow.ease.out/in/inOut/back,',
 	'  frameflow.lerp and frameflow.clamp exist, and plain ease(x) and clamp(x, lo, hi) are globals.',
 	'- A page that fails its checks is kept as the working text but not drawn; the last version that passed',
-	'  stays on screen.'
+	'  stays on screen.',
+	'- Motion kits: CSS and JS stored ONCE on the project and shared by the pages that name it. When two or more',
+	'  layers share a look, put the shared styles, fonts and helpers in a kit (apply_ops setMotionKits',
+	'  [{ id, css, js }]) and send each page with kit: "<id>" and only its own part. A restyle is then one kit',
+	'  edit: every page that uses it redraws, in one revision. The kit\'s css goes in before the page\'s styles and',
+	'  its js runs in the <head> before the page\'s elements exist, so a kit defines helpers (window.myKit = …) and',
+	'  the page calls them; the page still calls frameflow.define itself, with literal numbers. get_project lists',
+	'  the kits, get_motion_kit returns one\'s source. A kit is checked like a page and drawn with a few of the',
+	'  pages that use it before it lands.'
 ]
 
 /** What makes a page good rather than merely valid. */
@@ -37,7 +47,8 @@ export const MOTION_CRAFT_LINES: string[] = [
 	'   "Keep the top and bottom quiet" (the platform covers them with its own interface) means no IMPORTANT',
 	'   content there — still paint the background and scenery through them, edge to edge.',
 	'2. Match the look already in the project. Read the existing custom layers (their pages are in the timeline',
-	'   read), reuse their palette, line weight and helpers, and when the user gives a palette, use only it.',
+	'   read) and the project\'s motion kits, reuse their palette, line weight and helpers (build on the kit they',
+	'   use), and when the user gives a palette, use only it.',
 	'3. Make every subject read at a glance. Give a character or animal its defining silhouette (a dog: a muzzle,',
 	'   floppy or half-folded ears, a tail; a cat: pointed ears, a small nose) and the colours it was asked to have.',
 	'   Upright pointed triangle ears read as a cat or a fox, never a dog: a dog\'s ears are rounded and hang,',
