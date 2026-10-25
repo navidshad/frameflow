@@ -76,12 +76,18 @@ export function regionSpans(durations: number[], fps: number): RegionSpan[] {
  *
  * Video: renumber the frames 0, 1, 2… (a source that seeked onto a late frame
  * otherwise opens on a gap), hold the last frame for two more in case the
- * graph came up one short, then cut at the count. Audio: pad with silence and
- * cut at the sample count. Returns the new output labels.
+ * graph came up one short, and lay that over a black base of exactly the
+ * frame count. The base is what guarantees the count: a region past the end of
+ * its source's PICTURE (a recording whose sound runs a few frames longer than
+ * its video) yields no frames at all, and a region file with no video stream
+ * shifts its audio to stream 0, where the join drops it — the 9:26 vlog lost
+ * its last 66 ms that way. Audio: pad with silence and cut at the sample count.
+ * Returns the new output labels.
  */
 export function exactTailFilters(
 	graph: { video: string; audio: string },
-	span: Pick<RegionSpan, 'frames' | 'samples'>
+	span: Pick<RegionSpan, 'frames' | 'samples'>,
+	frame: { width: number; height: number; fps: number }
 ): { filters: string[]; video: string; audio: string } {
 	// A sub-half-frame sliver adds no picture to the join, but ffmpeg still
 	// needs a frame to write; the video list leaves the file out.
@@ -89,7 +95,9 @@ export function exactTailFilters(
 	const samples = Math.max(1, span.samples)
 	return {
 		filters: [
-			`${graph.video}setpts=N/FRAME_RATE/TB,tpad=stop_mode=clone:stop=2,trim=end_frame=${frames}[vexact]`,
+			`color=c=black:s=${frame.width}x${frame.height}:r=${frame.fps},format=yuv420p,setsar=1,trim=end_frame=${frames}[vbase]`,
+			`${graph.video}setpts=N/FRAME_RATE/TB,tpad=stop_mode=clone:stop=2[vheld]`,
+			`[vbase][vheld]overlay=eof_action=pass:repeatlast=0[vexact]`,
 			`${graph.audio}apad=whole_len=${samples},atrim=end_sample=${samples}[aexact]`
 		],
 		video: '[vexact]',

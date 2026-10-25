@@ -56,10 +56,14 @@ describe('regionSpans — the length math', () => {
 		expect(lists.audio).toContain("file 'b.mov'\nduration 0.010000")
 	})
 
-	it('pins the region to its counts with filters ffmpeg accepts', () => {
-		const tail = exactTailFilters({ video: '[v]', audio: '[a]' }, { frames: 32, samples: 50500 })
-		expect(tail.filters[0]).toBe('[v]setpts=N/FRAME_RATE/TB,tpad=stop_mode=clone:stop=2,trim=end_frame=32[vexact]')
-		expect(tail.filters[1]).toBe('[a]apad=whole_len=50500,atrim=end_sample=50500[aexact]')
+	it('pins the region to its counts over a black base of exactly that many frames', () => {
+		const tail = exactTailFilters({ video: '[v]', audio: '[a]' }, { frames: 32, samples: 50500 }, { width: 320, height: 180, fps: 30 })
+		expect(tail.filters).toEqual([
+			'color=c=black:s=320x180:r=30,format=yuv420p,setsar=1,trim=end_frame=32[vbase]',
+			'[v]setpts=N/FRAME_RATE/TB,tpad=stop_mode=clone:stop=2[vheld]',
+			'[vbase][vheld]overlay=eof_action=pass:repeatlast=0[vexact]',
+			'[a]apad=whole_len=50500,atrim=end_sample=50500[aexact]'
+		])
 	})
 
 	it('declares every file, quoted for the demuxer', () => {
@@ -126,7 +130,9 @@ describe('export length with many motion layers — against the real ffmpeg', ()
 		dir = await fs.mkdtemp(join(tmpdir(), 'ff-join-'))
 		await execFileAsync(ffmpeg, [
 			'-y', '-v', 'error',
-			'-f', 'lavfi', '-i', `color=c=red:s=320x180:r=${FPS}:d=${LENGTH},drawbox=x=0:y=0:w=iw:h=ih:color=blue:t=fill:enable='gte(t,${CUT_AT})'`,
+			// The picture stops 0.1 s before the sound, as a phone recording's
+			// often does: the last regions have sound and no source frames.
+			'-f', 'lavfi', '-i', `color=c=red:s=320x180:r=${FPS}:d=${LENGTH - 0.1},drawbox=x=0:y=0:w=iw:h=ih:color=blue:t=fill:enable='gte(t,${CUT_AT})'`,
 			'-f', 'lavfi', '-i', `sine=frequency=1000:sample_rate=48000:duration=${LENGTH},volume=volume=0:enable='lt(t,${BEEP_AT})'`,
 			'-c:v', 'libx264', '-preset', 'ultrafast', '-g', String(FPS), '-c:a', 'aac', '-t', String(LENGTH), source()
 		])
@@ -195,12 +201,14 @@ describe('export length with many motion layers — against the real ffmpeg', ()
 		await concatRegions(files, spans, dir, out, signal, false)
 
 		const { stdout } = await execFileAsync(ffprobe, [
-			'-v', 'error', '-show_entries', 'format=duration:stream=codec_type,nb_frames', '-of', 'json', out
+			'-v', 'error', '-show_entries', 'format=duration:stream=codec_type,nb_frames,duration', '-of', 'json', out
 		])
 		const probe = JSON.parse(stdout)
 		const video = probe.streams.find((s: any) => s.codec_type === 'video')
 		expect(Number(video.nb_frames)).toBe(LENGTH * FPS)
 		expect(Math.abs(Number(probe.format.duration) - LENGTH)).toBeLessThanOrEqual(1 / FPS)
+		const audio = probe.streams.find((s: any) => s.codec_type === 'audio')
+		expect(Math.abs(Number(audio.duration) - LENGTH)).toBeLessThanOrEqual(1 / FPS)
 
 		// The first blue frame, read from the middle of the picture (the layers
 		// sit in the corner).
