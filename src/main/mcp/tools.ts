@@ -37,7 +37,29 @@ import {
 import type { EditorBridge, LiveProject } from './bridge'
 import { ROUND_IDLE_MS, type RoundBook } from '@shared/agentRounds'
 import { sheetClock } from '../editor/exportInspect'
-import { prepStatus } from '@shared/mediaPrep'
+import { aiReady, laneStatus, mediaReadiness, prepStatus } from '@shared/mediaPrep'
+
+/**
+ * Where one media file's preparation stands, for agents: the overall state as
+ * before, plus each of its two lanes. `transcript` is the words lane (audio,
+ * transcript, pieces); `picture` is the proxy, filmstrip, scenes and thumbnails.
+ * `ready` is true once an agent can read it: the transcript is done and the
+ * pieces exist, which is well before the proxy is.
+ */
+function prepRow(project: LiveProject, bridge: EditorBridge, asset: MediaAsset) {
+	const liveLanes = bridge.preparingLanes?.(project, asset.id) ?? (bridge.isPreparing(project, asset.id) ? (['words', 'picture'] as const) : [])
+	const live = liveLanes.length > 0
+	const readiness = mediaReadiness(asset)
+	return {
+		processing: prepStatus(asset.preprocessState, live),
+		transcript: asset.kind === 'video' ? laneStatus(asset, 'words', liveLanes.includes('words')) : undefined,
+		picture: asset.kind === 'video' ? laneStatus(asset, 'picture', liveLanes.includes('picture')) : undefined,
+		ready: aiReady(asset),
+		// The monitor plays the original until a proxy exists; "needs the proxy" is a file the browser cannot play.
+		playsFrom: asset.kind === 'video' ? readiness.playsFrom : undefined,
+		coloursFinal: asset.kind === 'video' && !readiness.colourFinal ? false : undefined
+	}
+}
 
 /**
  * FrameFlow's MCP tools. Each one says what it is FOR in its description,
@@ -251,7 +273,7 @@ const getProject: ToolDef = {
 				id: a.id, name: a.name, kind: a.kind,
 				durationSec: r3(a.metadata?.duration),
 				width: a.metadata?.width, height: a.metadata?.height,
-				processing: prepStatus(a.preprocessState, ctx.bridge.isPreparing(project, a.id)),
+				...prepRow(project, ctx.bridge, a),
 				hasTranscript: !!a.preprocessing?.transcriptPath,
 				transcriptHealth: a.preprocessing?.transcriptPath ? transcriptHealthLabel(a.transcriptHealth) : undefined,
 				scenes: a.clips.length,
@@ -409,7 +431,7 @@ const getMedia: ToolDef = {
 			id: asset.id, name: asset.name, kind: asset.kind,
 			durationSec: r3(asset.metadata?.duration),
 			width: asset.metadata?.width, height: asset.metadata?.height,
-			processing: prepStatus(asset.preprocessState, ctx.bridge.isPreparing(project, asset.id)),
+			...prepRow(project, ctx.bridge, asset),
 			transcriptHealth: transcript ? asset.transcriptHealth || null : undefined,
 			// Why there is no transcript, when the last run failed.
 			transcriptError: !transcript ? asset.transcriptError || undefined : undefined,
@@ -1316,8 +1338,8 @@ const importMedia: ToolDef = {
 			content: [json({
 				id: asset.id, name: asset.name, kind: asset.kind,
 				durationSec: r3(asset.metadata?.duration), width: asset.metadata?.width, height: asset.metadata?.height,
-				processing: prepStatus(asset.preprocessState, ctx.bridge.isPreparing(project, asset.id)),
-				next: 'wait {for: "media"} until processing is completed, then get_media for its transcript and scenes.'
+				...prepRow(project, ctx.bridge, asset),
+				next: 'The clip can be placed and watched now. wait {for: "media"} returns once its transcript is ready (the proxy keeps building in the background), then get_media reads the transcript and pieces.'
 			})],
 			feed: { detail: `${asset.name} · ${clock(asset.metadata?.duration ?? 0)}`, chips: [{ text: 'imported', tone: 'green' }] }
 		}
@@ -1333,7 +1355,9 @@ const waitTool: ToolDef = {
 	permission: 'read',
 	description:
 		'Wait for FrameFlow\'s background work and report where it stands. for "media": until every media file ' +
-		'has finished preparing (proxy, scenes, transcript) or failed. for "export": until the newest export (or ' +
+		'is ready to read, meaning its transcript is done and its pieces exist (the 480p proxy, filmstrip and ' +
+		'thumbnails keep building in the background and are not needed to read or edit), or it failed. until ' +
+		'"everything" also waits for the proxy and thumbnails. for "export": until the newest export (or ' +
 		'renderId) is done or failed; the result has the file path for inspect_export. Returns early when done; ' +
 		'otherwise after timeoutSec (default 120, at most 600) with the progress so far, so call it again. ' +
 		'timeoutSec 0 just reports.',
@@ -1341,6 +1365,7 @@ const waitTool: ToolDef = {
 		type: 'object',
 		properties: {
 			for: { type: 'string', enum: ['media', 'export'] },
+			until: { type: 'string', enum: ['transcript', 'everything'], description: 'for media: transcript (default) returns once each file is readable; everything also waits for the proxy and thumbnails' },
 			renderId: { type: 'string', description: 'for export: which one (default the newest)' },
 			timeoutSec: { type: 'number', minimum: 0, maximum: 600 }
 		},
@@ -1375,14 +1400,15 @@ const waitTool: ToolDef = {
 			} else {
 				const media = project.doc.media.filter((a) => !a.synth && !a.generated)
 				const rows = media.map((a) => ({
-					id: a.id, name: a.name, processing: prepStatus(a.preprocessState, ctx.bridge.isPreparing(project, a.id)),
+					id: a.id, name: a.name, ...prepRow(project, ctx.bridge, a),
 					error: a.preprocessError || undefined,
 					hasTranscript: !!a.preprocessing?.transcriptPath,
 					transcriptHealth: a.preprocessing?.transcriptPath ? transcriptHealthLabel(a.transcriptHealth) : undefined,
 					transcriptError: a.transcriptError || undefined,
 					scenes: a.clips.length
 				}))
-				const busy = rows.filter((r) => r.processing === 'pending' || r.processing === 'running')
+				const everything = args.until === 'everything'
+				const busy = rows.filter((r) => (r.processing === 'pending' || r.processing === 'running') && (everything || !r.ready))
 				if (!busy.length || waited >= timeoutMs) {
 					// Interrupted work never finishes by itself: say so instead of "wait again" forever.
 					const stopped = rows.filter((r) => r.processing === 'interrupted').map((r) => r.name)

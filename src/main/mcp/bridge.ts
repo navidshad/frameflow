@@ -150,6 +150,8 @@ export interface EditorBridge {
 	): Promise<import('@shared/types').MulticamSpeakers>
 	/** Whether a preparation chain is running for this media file right now (a stored "running" with none is interrupted). */
 	isPreparing(project: LiveProject, assetId: string): boolean
+	/** Which of its two import lanes (transcript, picture) are running for this media file right now. Omitted by a bridge that cannot tell. */
+	preparingLanes?(project: LiveProject, assetId: string): Array<'words' | 'picture'>
 	/** Quiet stretches in a media file's sound, in source seconds. */
 	findSilences(project: LiveProject, assetId: string, options: { noiseDb: number; minDurationSec: number }): Promise<{ start: number; end: number }[]>
 	/** Every editor project in the user's FrameFlow. */

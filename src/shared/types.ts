@@ -31,6 +31,15 @@ export interface VideoMetadata {
 	 * carries no tag (many exports and re-encodes strip it).
 	 */
 	recordedAt?: number
+	/**
+	 * How the picture is coloured, as ffprobe reports it (`arib-std-b67` is an
+	 * iPhone's HLG, `smpte2084` is PQ). Absent on files probed before this was
+	 * recorded. Decides whether the original looks the way the export will.
+	 */
+	colorTransfer?: string
+	colorPrimaries?: string
+	/** ffprobe's pixel format of the picture (`yuv420p10le`); 4:2:2 and 4:4:4 do not play natively. */
+	pixFmt?: string
 }
 
 export interface BackgroundTask {
@@ -262,6 +271,19 @@ export type MediaKind = 'video' | 'image' | 'audio'
 
 export type MediaPreprocessState = 'pending' | 'running' | 'completed' | 'error'
 
+/**
+ * Importing a video runs two lanes side by side: the WORDS (audio from the
+ * original, the transcript, the pieces) and the PICTURE (proxy, filmstrip,
+ * scenes, thumbnails). Each keeps its own state so one can fail, be resumed or
+ * finish first without hiding the other. `preprocessState` stays as the summary
+ * of both.
+ */
+export type PrepLane = 'words' | 'picture'
+export interface PrepLaneRecord {
+	state: 'running' | 'completed' | 'error'
+	error?: string
+}
+
 export interface MediaAsset {
 	id: string
 	kind: MediaKind
@@ -274,6 +296,8 @@ export interface MediaAsset {
 	preprocessTasks?: Record<string, BackgroundTask>
 	preprocessState?: MediaPreprocessState
 	preprocessError?: string
+	/** Where each import lane stands; absent on media imported before the lanes existed. */
+	prepLanes?: Partial<Record<PrepLane, PrepLaneRecord>>
 	/**
 	 * Set when this sound was synthesised rather than imported: the recipe that
 	 * makes it. The file is a cache of the recipe, so it can be re-rolled.
