@@ -186,8 +186,8 @@ function createAssetContext(
 		context: '',
 		baseTimeline: undefined,
 		intentResult: undefined,
-		updateStatus: async (status: string) => {
-			const progress = progressFromStatus(status)
+		updateStatus: async (status: string, explicitProgress?: number) => {
+			const progress = explicitProgress ?? progressFromStatus(status)
 			await setTask(threadId, assetId, step, {
 				state: 'running',
 				status,

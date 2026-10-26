@@ -59,6 +59,22 @@ The AI path is `src/main/editor/prompt.ts`: one Gemini call per turn producing
 applies. Output length comes from the user's request — personas describe style
 only. Each turn becomes a branchable revision.
 
+**The transcript step** (`src/main/gemini/utils.ts` `extractTranscript`, driven by
+`extraction.extractRawTranscript`). The audio is cut at pauses into windows
+(about 20 min each, never more than 25, under the word model's 30-minute limit).
+With the word model (`gemini-3.5-transcribe`) up to `WORD_WINDOW_CONCURRENCY`
+(3) windows are cut, uploaded and sent at once (`transcript-pool.ts`) and
+stitched back in source order; a general model runs short windows one at a time
+because each window carries the language forward. The first window to fail (a
+quota or rate-limit error that survived the adapter's own retries) aborts the
+others so no more calls are spent, and its error is the one the Media row
+explains (`transcript-errors.ts`). Progress is real: `transcript-progress.ts`
+turns "windows done / total, and what each one is doing (cutting, uploading,
+transcribing)" into the row's status line and bar position, and repeats the line
+every 15 s so its elapsed clock keeps moving through a long call. A transcript
+that failed leaves a "No transcript: …" line on the Media row with a
+**Transcribe again** button (the same `transcribeAsset` path as the Inspector).
+
 ---
 
 ## 🚦 Reference: media pre-processing

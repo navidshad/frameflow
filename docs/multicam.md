@@ -86,7 +86,7 @@ One transcript per group (the main sound's, on the group clock): every camera he
 
 ## Not yet
 
-- Each camera is still transcribed at import; only the main sound's transcript is used.
+- Each camera is still transcribed at import; only the main sound's transcript is used (on the real podcast set: about 183 minutes of audio transcribed for 91 used). Proposal, not built (the product choice is open): a setting "Transcribe when imported: always (today) / only when I ask". With "only when I ask", the transcript step marks the file "not transcribed yet" instead of calling Gemini (its pieces come from scene detection until a transcript arrives, which `mergeTranscriptIntoClips` already handles), and building a camera group (`buildCameraGroup`'s two callers: the `multicam-build` IPC and the MCP bridge) transcribes the main sound's files that have none. It touches settings, a Settings toggle, the transcript step, both group-build callers, the Media row's wording and what `wait {for: "media"}` tells an agent, so it waits for that choice and for the import-lane rework.
 - The built-in AI (the chat's own engine) does not have the multicam ops; MCP agents do.
 - A camera that really stopped and restarted (a gap of minutes) is one camera with a gap; the gap shows as "not recording". Nothing joins its files into one clip across that gap.
 - The main-sound suggestion ranks voices-over-room and clipping; it does not yet use who speaks.
