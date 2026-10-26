@@ -109,10 +109,12 @@ describe('AgentServer over Streamable HTTP', () => {
 			'get_project', 'get_timeline', 'get_media', 'inspect_media', 'find_silences', 'search_moments', 'render_frame', 'render_frames',
 			'get_motion_guide', 'get_motion_kit',
 			'get_sound_guide', 'list_sounds', 'suggest_cues', 'render_sound', 'analyze_audio', 'generate_audio',
-			'apply_ops', 'revert_to_version', 'export', 'inspect_export'
+			'apply_ops', 'revert_to_version', 'export', 'inspect_export',
+			'find_camera_groups', 'make_multicam', 'get_multicam', 'get_angles', 'find_speakers', 'get_speakers'
 		])
 		const apply = tools.find((t) => t.name === 'apply_ops')!
 		expect(Object.keys(apply.inputSchema.properties || {})).toContain('removeRanges')
+		expect(Object.keys(apply.inputSchema.properties || {})).toContain('switchAngles')
 		expect(Object.keys(apply.inputSchema.properties || {})).not.toContain('expandRegions')
 		for (const tool of tools) expect(tool.description!.length).toBeGreaterThan(80)
 	})
@@ -783,6 +785,24 @@ describe('AgentServer over Streamable HTTP', () => {
 			const waited = text(await claude.callTool({ name: 'wait', arguments: { for: 'media', timeoutSec: 0 } }))
 			expect(waited.done).toBe(false)
 			expect(waited.media.find((m: any) => m.name === 'Episode 1.mp4').processing).toBe('pending')
+		})
+
+		it('reports preparation the app quit in the middle of as interrupted, not running forever', async () => {
+			// Found editing a podcast: the iPhone file read "running" for two hours after restarts.
+			const claude = await connectTo('claude-code')
+			const media = editor.doc.media[0]
+			media.preprocessState = 'running'
+			const stopped = text(await claude.callTool({ name: 'wait', arguments: { for: 'media', timeoutSec: 0 } }))
+			expect(stopped.media.find((m: any) => m.id === media.id).processing).toBe('interrupted')
+			expect(stopped.done).toBe(true)
+			expect(stopped.next).toMatch(/interrupted.*Retry/)
+			const project = text(await claude.callTool({ name: 'get_project', arguments: {} }))
+			expect(project.media.find((m: any) => m.id === media.id).processing).toBe('interrupted')
+			// While a chain really runs, it is running.
+			editor.preparing.add(media.id)
+			const live = text(await claude.callTool({ name: 'wait', arguments: { for: 'media', timeoutSec: 0 } }))
+			expect(live.media.find((m: any) => m.id === media.id).processing).toBe('running')
+			expect(live.done).toBe(false)
 		})
 
 		it('sets the sequence frame through ops, and measures silences', async () => {

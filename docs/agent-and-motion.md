@@ -147,3 +147,17 @@ The tools an agent needs to go from a link to a checked export without the user'
 | `export` | `quality: original | preview`; returns a render id. |
 | `inspect_export` | The exported file's facts (length vs timeline, size, streams), labelled contact sheets of its frames, and its loudness. |
 | `apply_ops` | Also `splitAt` (cut clips in two without removing anything) and `sequenceFrame` (the export's frame size). |
+
+## Multicam: several cameras of one moment (built)
+
+A podcast or interview shot on two or more cameras, each started a second or two apart, each with its own microphone. Design and decisions: [multicam.md](multicam.md).
+
+| Tool | What it does |
+|---|---|
+| `find_camera_groups` | Files that look like one moment from several cameras (start times in file names and file tags, camera folders, lengths), and the groups the project has. |
+| `make_multicam` | Syncs files by their SOUND into a camera group and lays it on the timeline: the cleanest sound under one shot. Reports each member's offset, drift and confidence. With `group`, re-syncs one. |
+| `get_multicam` | A group's members, main sound, shots, and ONE shared transcript on the group clock and the timeline; after `find_speakers` every line carries its `speaker` (and `turns: true` lists the turns). |
+| `get_angles` | Every angle at the same timeline moments, one image per angle, who is speaking at each moment (the loudest microphone only as a weak hint), and the words spoken. |
+| `find_speakers` | Who speaks when: listens to every camera's microphone once, tells the voices apart, and gives the group Speaker 1…N with turns and a confidence per turn. Give `speakers` (the number of people). |
+| `get_speakers` | The voices found, each with sample moments and one frame per angle, so an agent can see who is who before naming them. |
+| `apply_ops` | `placeMulticam`, `switchAngles` (cut between angles; the sound never moves), `setMainSound`, `nudgeAngle`; `setSpeaker` (name a voice, its camera and where it sits), `mergeSpeakers`, `setSpeakerTurns` (fix a stretch). |

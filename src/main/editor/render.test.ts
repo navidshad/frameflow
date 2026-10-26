@@ -297,6 +297,25 @@ describe('computeRegions — guards', () => {
 		}), 'original')).toThrow(/overlaps a transition/i)
 	})
 
+	it('lets a camera cut that lands 30 ms after a layer edge render: the sliver holds a frame', () => {
+		// A cut between two touching clips at 5.00 s, a layer on v2 ending at 4.97 s: the boundary set
+		// collapses 5.00 into 4.97, so the region [4.97, 10] holds the last 30 ms of A as well as B.
+		// Found exporting a multicam podcast with 26 motion layers over 228 camera cuts.
+		const p = plan({
+			tracks: [track('v1'), track('v2', { order: 1 })],
+			timeline: [
+				item(0, { id: 'A', in: 0, out: 5 }), item(5, { id: 'B', in: 20, out: 25 }),
+				item(1, { id: 'L', trackId: 'v2', in: 0, out: 3.97 })
+			]
+		})
+		expect(total(p)).toBeCloseTo(10, 6)
+		const region = p.regions.find((r) => r.kind === 'cut' && r.videoLayers.some((l) => l.item.id === 'B'))!
+		const b = (region as any).videoLayers.find((l: any) => l.item.id === 'B')
+		expect(b.offset).toBe(0)
+		expect(b.freezeHead).toBeCloseTo(0.03, 6)
+		expect(b.freezeHead + (b.out - b.in) + b.freezeTail).toBeCloseTo(region.duration, 6)
+	})
+
 	it('throws rather than silently rendering one of two overlapping clips', () => {
 		expect(() => plan({
 			timeline: [item(0, { id: 'A', label: 'One' }), item(5, { id: 'B', label: 'Two' })]

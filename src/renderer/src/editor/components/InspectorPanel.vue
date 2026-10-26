@@ -91,6 +91,9 @@
 					</template>
 				</dl>
 
+				<!-- Part of a camera group: its angle, the main sound, and the sync -->
+				<MulticamSection v-if="timelineItem.multicam" :item="timelineItem" />
+
 				<!-- A clip on an audio track: its waveform, role and loudness -->
 				<AudioClipSection v-if="isAudioItem" :item="timelineItem" />
 
@@ -99,6 +102,9 @@
 					<!-- A title has no media behind it, so retiming, framing, gain and
 					     fades mean nothing to it. It gets its own controls instead. -->
 					<template v-if="!titleSpec && !generatorSpec">
+					<!-- A camera group's clip plays at the speed that keeps it on the
+					     group's clock (drift correction): retiming it would lose sync. -->
+					<template v-if="!timelineItem.multicam">
 					<div>
 						<label class="text-[10px] font-bold uppercase tracking-widest text-zinc-500 block mb-1">
 							Speed <span class="normal-case tracking-normal font-mono text-secondary ml-1">{{ timelineItem.speed.toFixed(2) }}×</span>
@@ -123,6 +129,7 @@
 							@change="editorStore.setItemPreservePitch(timelineItem!.id, ($event.target as HTMLInputElement).checked)" />
 						<span class="text-[11px] text-zinc-600 dark:text-zinc-300">Preserve audio pitch when retimed</span>
 					</label>
+					</template>
 
 					<!-- Key: what makes a clip sit IN FRONT of the one below rather
 					     than beside it. Only offered when there IS one below. -->
@@ -748,6 +755,7 @@ import SilenceFinder from './SilenceFinder.vue'
 import MotionInspector from './MotionInspector.vue'
 import KeyframeInspector from './KeyframeInspector.vue'
 import AudioClipSection from './AudioClipSection.vue'
+import MulticamSection from './MulticamSection.vue'
 import { useKeyframeLanesStore } from '../../stores/keyframeLanesStore'
 
 const editorStore = useEditorStore()

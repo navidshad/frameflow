@@ -390,7 +390,20 @@ export function computeRegions(
 		// ---- Video: covering item per video track, top-most first ----
 		const videoLayers: SourceSlice[] = []
 		for (const track of videoTracks) {
-			const hits = videoItems.filter((it) => it.trackId === track.id && intersects(it, t0, t1))
+			let hits = videoItems.filter((it) => it.trackId === track.id && intersects(it, t0, t1))
+			// Two clips that only TOUCH can share a region when the boundary set collapsed their
+			// cut into a nearby edge on another track (a motion layer ending 30 ms before a camera
+			// cut). The one with a sliver under SNAP_EPS in this region gives way: the other holds
+			// its edge frame across the sliver, which is the < SNAP_EPS boundary move the collapse
+			// already allows for. Only for butt-joined clips; a real overlap still throws below.
+			let holdEdges = false
+			if (hits.length === 2) {
+				const share = (it: TimelineItem) => Math.min(t1, itemEnd(it)) - Math.max(t0, it.timelineStart)
+				const [major, minor] = share(hits[0]) >= share(hits[1]) ? hits : [hits[1], hits[0]]
+				const touching = Math.abs(itemEnd(minor) - major.timelineStart) < TIME_EPS ||
+					Math.abs(itemEnd(major) - minor.timelineStart) < TIME_EPS
+				if (touching && share(minor) < SNAP_EPS) { hits = [major]; holdEdges = true }
+			}
 			if (hits.length > 1) {
 				// Illegal in the document model (repairOverlaps guarantees it), and the
 				// old `.find()` silently rendered the first and discarded the rest.
@@ -401,6 +414,12 @@ export function computeRegions(
 			}
 			if (!hits.length) continue
 			const slice = toSlice(hits[0], t0, t1)
+			if (holdEdges) {
+				// Fill the region: the gap before the clip and after it become held frames.
+				const head = slice.offset, tail = duration - slice.offset - slice.duration
+				slice.freezeHead += head; slice.freezeTail += tail
+				slice.offset = 0; slice.duration = duration
+			}
 			if (slice.offset + slice.duration > duration + TIME_EPS) {
 				throw new Error(`Clip "${hits[0].label || hits[0].id}" overruns its region.`)
 			}

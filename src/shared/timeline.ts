@@ -1,5 +1,5 @@
 import type {
-	Clip, EnrichedTimelineSegment, MediaAsset, TimelineDiff, TimelineItem, Track
+	Clip, EnrichedTimelineSegment, MediaAsset, MulticamGroup, TimelineDiff, TimelineItem, Track
 } from './types'
 import { sameTransform } from './transform'
 import { sameKeyframes } from './keyframes'
@@ -28,6 +28,8 @@ export interface TimelineState {
 	 * without one can never read as "every kit was deleted".
 	 */
 	motionKits?: MotionKit[]
+	/** Camera groups. Optional and compared only when both sides carry a list, like kits. */
+	multicams?: MulticamGroup[]
 }
 
 export const clampSpeed = (speed: number): number =>
@@ -223,6 +225,14 @@ const TRACK_FIELDS: (keyof Track)[] = ['kind', 'name', 'order', 'muted', 'locked
  * object, never mutate it — or the before/after snapshots alias and no edit is
  * ever recorded.
  */
+/** A clip's camera-group tag, by value (the same immutability rule as transition). */
+const sameMulticamRef = (a: TimelineItem['multicam'], b: TimelineItem['multicam']): boolean =>
+	a === b || (!!a && !!b && a.groupId === b.groupId && a.role === b.role)
+
+/** Whole groups by value: they are small, and replaced rather than patched. */
+const sameMulticamGroup = (a: MulticamGroup | undefined, b: MulticamGroup): boolean =>
+	!!a && JSON.stringify(a) === JSON.stringify(b)
+
 const sameTransition = (a: TimelineItem['transition'], b: TimelineItem['transition']): boolean => {
 	if (a === b) return true
 	const sameRef = (x?: { kind: string; duration: number }, y?: { kind: string; duration: number }) =>
@@ -335,7 +345,8 @@ export function diffTimelines(
 				!sameKey(beforeItem.key, afterItem.key) ||
 				!sameGenerator(beforeItem.generator, afterItem.generator) ||
 				!sameMotion(beforeItem.motion, afterItem.motion) ||
-				!sameBind(beforeItem.bind, afterItem.bind)
+				!sameBind(beforeItem.bind, afterItem.bind) ||
+				!sameMulticamRef(beforeItem.multicam, afterItem.multicam)
 			const fwd = changedFields(beforeItem, afterItem, ITEM_FIELDS)
 				?? (objectChanged ? {} : null)
 			if (fwd) {
@@ -368,6 +379,9 @@ export function diffTimelines(
 				}
 				if (!sameBind(beforeItem.bind, afterItem.bind)) {
 					fwd.bind = afterItem.bind
+				}
+				if (!sameMulticamRef(beforeItem.multicam, afterItem.multicam)) {
+					fwd.multicam = afterItem.multicam
 				}
 				const keys = Object.keys(fwd) as (keyof TimelineItem)[]
 				;(forward.updateItems ||= []).push({ id, ...fwd })
@@ -432,6 +446,26 @@ export function diffTimelines(
 			if (afterKits.has(id)) continue
 			;(forward.removeMotionKitIds ||= []).push(id)
 			;(inverse.setMotionKits ||= []).push({ ...was })
+			dirty = true
+		}
+	}
+
+	// --- Camera groups (whole groups by id, like kits) ---
+	if (before.multicams && after.multicams) {
+		const beforeGroups = new Map(before.multicams.map((g) => [g.id, g]))
+		const afterGroups = new Map(after.multicams.map((g) => [g.id, g]))
+		for (const [id, group] of afterGroups) {
+			const was = beforeGroups.get(id)
+			if (sameMulticamGroup(was, group)) continue
+			;(forward.setMulticams ||= []).push(JSON.parse(JSON.stringify(group)))
+			if (was) (inverse.setMulticams ||= []).push(JSON.parse(JSON.stringify(was)))
+			else (inverse.removeMulticamIds ||= []).push(id)
+			dirty = true
+		}
+		for (const [id, was] of beforeGroups) {
+			if (afterGroups.has(id)) continue
+			;(forward.removeMulticamIds ||= []).push(id)
+			;(inverse.setMulticams ||= []).push(JSON.parse(JSON.stringify(was)))
 			dirty = true
 		}
 	}
@@ -811,6 +845,19 @@ export function applyTimelineDiff(
 			else kits.push({ ...kit })
 		}
 		state.motionKits = kits
+	}
+
+	// Camera groups next, for the same reason: items in this diff may name one.
+	if (diff.removeMulticamIds?.length || diff.setMulticams?.length) {
+		const gone = new Set(diff.removeMulticamIds ?? [])
+		const groups = (state.multicams ?? []).filter((g) => !gone.has(g.id))
+		for (const group of diff.setMulticams ?? []) {
+			const copy = JSON.parse(JSON.stringify(group)) as MulticamGroup
+			const at = groups.findIndex((g) => g.id === group.id)
+			if (at >= 0) groups[at] = copy
+			else groups.push(copy)
+		}
+		state.multicams = groups
 	}
 
 	// Removals before additions (track-update encoding relies on this order).

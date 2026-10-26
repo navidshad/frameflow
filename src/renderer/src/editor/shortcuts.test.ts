@@ -100,6 +100,23 @@ describe('no two shortcuts answer to the same press', () => {
 	})
 })
 
+describe('camera angles', () => {
+	const digit = (n: number, mods: Partial<Record<'meta' | 'alt' | 'shift', boolean>> = {}) =>
+		({ ...press(mods.alt ? '¡' : String(n), mods), code: `Digit${n}` }) as KeyboardEvent
+
+	it('cuts on a number and switches the whole shot on Alt + number, by the physical key', () => {
+		expect(matchShortcut(digit(2))?.id).toBe('angle-cut')
+		// On a Mac Alt+1 types "¡": the key code is what says it was the 1 key.
+		expect(matchShortcut(digit(1, { alt: true }))?.id).toBe('angle-switch')
+		expect(matchShortcut(digit(1, { meta: true }))).toBeNull()
+		expect(matchShortcut({ ...press('0'), code: 'Digit0' } as KeyboardEvent)).toBeNull()
+	})
+
+	it('is an edit, so it waits while an agent holds the project', () => {
+		expect(liveWhileAgentWorks(SHORTCUTS.find((s) => s.id === 'angle-cut')!)).toBe(false)
+	})
+})
+
 describe('keysFor', () => {
 	it('gives a tooltip the same keys the overlay shows', () => {
 		expect(keysFor('split')).toContain('S')

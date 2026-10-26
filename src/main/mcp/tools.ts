@@ -1,5 +1,5 @@
 import { randomUUID } from 'node:crypto'
-import type { EditorOps, MediaAsset, PromptTurn, TimelineItem } from '@shared/types'
+import type { EditorOps, MediaAsset, MulticamGroup, PromptTurn, TimelineDiff, TimelineItem } from '@shared/types'
 import { motionWorkingHtml, resolveDefinition, resolveMoments, type MotionSpec } from '@shared/motion'
 import { motionStatus } from '@shared/motionCode'
 import { opKeys, opsInputSchema, validateArgs, type AgentPermission, type AgentPermissions, type JsonSchema } from '@shared/agent'
@@ -13,6 +13,14 @@ import { computeContentEnd } from '@shared/timeline'
 import { EDITOR_OPS_SCHEMA, opsToDiff, opsWriteHtml } from '../editor/ops'
 import { vetHtmlOps, type MotionProbe } from '../editor/vetHtml'
 import { MOTION_KIT_OPS_SCHEMA, opsWriteKits } from '../editor/kitOps'
+import { MULTICAM_OPS_SCHEMA, applyMulticamOps } from '../editor/multicamOps'
+import {
+	anglesOf, cameraOf, camerasOf, cameraSound, groupTimeAt, groupTranscript, itemGroupRange, memberAt, memberOf, memberSpan,
+	rederiveGroupItems, soundCameraOf, soundChoicesOf, soundScore, soundSpan, suggestCameraGroups, toSourceTime
+} from '@shared/multicam'
+import { labelTranscript, speakerIn, summarizeSpeakers } from '@shared/speakers'
+import { peaksForRange } from '@shared/audio'
+import { TIMELINE_DIFF_SCHEMA_VERSION } from '@shared/timeline'
 import { MOTION_TEMPLATES, userMotionTemplates } from '@shared/motionTemplates'
 import { motionGuideText } from '@shared/motionGuide'
 import { soundGuideText } from '@shared/soundGuide'
@@ -29,6 +37,7 @@ import {
 import type { EditorBridge, LiveProject } from './bridge'
 import { ROUND_IDLE_MS, type RoundBook } from '@shared/agentRounds'
 import { sheetClock } from '../editor/exportInspect'
+import { prepStatus } from '@shared/mediaPrep'
 
 /**
  * FrameFlow's MCP tools. Each one says what it is FOR in its description,
@@ -242,7 +251,7 @@ const getProject: ToolDef = {
 				id: a.id, name: a.name, kind: a.kind,
 				durationSec: r3(a.metadata?.duration),
 				width: a.metadata?.width, height: a.metadata?.height,
-				processing: a.preprocessState || 'pending',
+				processing: prepStatus(a.preprocessState, ctx.bridge.isPreparing(project, a.id)),
 				hasTranscript: !!a.preprocessing?.transcriptPath,
 				transcriptHealth: a.preprocessing?.transcriptPath ? transcriptHealthLabel(a.transcriptHealth) : undefined,
 				scenes: a.clips.length,
@@ -255,6 +264,12 @@ const getProject: ToolDef = {
 				cssBytes: k.css?.length ?? 0, jsBytes: k.js?.length ?? 0,
 				usedBy: doc.timeline.filter((i) => i.motion?.kit === k.id).map((i) => i.id)
 			})),
+			// Multicam: several cameras of one moment, synced. get_multicam / get_angles say more.
+			cameraGroups: (doc.multicams || []).map((g) => ({
+				id: g.id, name: g.name, members: g.members.map((m) => m.name),
+				mainSound: g.members.find((m) => m.assetId === g.soundAssetId)?.name
+			})),
+			cameraGroupSuggestions: suggestCameraGroups(doc.media, doc.multicams).length || undefined,
 			captionsEnabled: !!doc.captionsEnabled,
 			loudnessEnabled: !!doc.loudnessEnabled,
 			revisions: {
@@ -394,7 +409,7 @@ const getMedia: ToolDef = {
 			id: asset.id, name: asset.name, kind: asset.kind,
 			durationSec: r3(asset.metadata?.duration),
 			width: asset.metadata?.width, height: asset.metadata?.height,
-			processing: asset.preprocessState || 'pending',
+			processing: prepStatus(asset.preprocessState, ctx.bridge.isPreparing(project, asset.id)),
 			transcriptHealth: transcript ? asset.transcriptHealth || null : undefined,
 			// Why there is no transcript, when the last run failed.
 			transcriptError: !transcript ? asset.transcriptError || undefined : undefined,
@@ -881,7 +896,7 @@ const PROJECT_OPS_SCHEMA = {
 const OPS_BASE_SCHEMA = opsInputSchema(EDITOR_OPS_SCHEMA)
 const OPS_INPUT_SCHEMA = {
 	...OPS_BASE_SCHEMA,
-	properties: { ...OPS_BASE_SCHEMA.properties, ...SOUND_OPS_SCHEMA, ...MOTION_KIT_OPS_SCHEMA, ...PROJECT_OPS_SCHEMA }
+	properties: { ...OPS_BASE_SCHEMA.properties, ...SOUND_OPS_SCHEMA, ...MOTION_KIT_OPS_SCHEMA, ...PROJECT_OPS_SCHEMA, ...MULTICAM_OPS_SCHEMA }
 } as typeof OPS_BASE_SCHEMA
 
 const applyOps: ToolDef = {
@@ -1298,7 +1313,7 @@ const importMedia: ToolDef = {
 			content: [json({
 				id: asset.id, name: asset.name, kind: asset.kind,
 				durationSec: r3(asset.metadata?.duration), width: asset.metadata?.width, height: asset.metadata?.height,
-				processing: asset.preprocessState || 'pending',
+				processing: prepStatus(asset.preprocessState, ctx.bridge.isPreparing(project, asset.id)),
 				next: 'wait {for: "media"} until processing is completed, then get_media for its transcript and scenes.'
 			})],
 			feed: { detail: `${asset.name} · ${clock(asset.metadata?.duration ?? 0)}`, chips: [{ text: 'imported', tone: 'green' }] }
@@ -1357,7 +1372,7 @@ const waitTool: ToolDef = {
 			} else {
 				const media = project.doc.media.filter((a) => !a.synth && !a.generated)
 				const rows = media.map((a) => ({
-					id: a.id, name: a.name, processing: a.preprocessState || 'pending',
+					id: a.id, name: a.name, processing: prepStatus(a.preprocessState, ctx.bridge.isPreparing(project, a.id)),
 					error: a.preprocessError || undefined,
 					hasTranscript: !!a.preprocessing?.transcriptPath,
 					transcriptHealth: a.preprocessing?.transcriptPath ? transcriptHealthLabel(a.transcriptHealth) : undefined,
@@ -1366,9 +1381,14 @@ const waitTool: ToolDef = {
 				}))
 				const busy = rows.filter((r) => r.processing === 'pending' || r.processing === 'running')
 				if (!busy.length || waited >= timeoutMs) {
+					// Interrupted work never finishes by itself: say so instead of "wait again" forever.
+					const stopped = rows.filter((r) => r.processing === 'interrupted').map((r) => r.name)
+					const next = busy.length ? 'Still preparing: wait again.'
+						: stopped.length ? `Preparation of ${stopped.join(', ')} was interrupted (the app quit while it ran) and will not finish by itself. Its proxy and filmstrip may be there; scenes or a transcript may be missing. The user can press Retry on it in the Media panel.`
+						: undefined
 					return {
-						content: [json({ done: !busy.length, media: rows, next: busy.length ? 'Still preparing: wait again.' : undefined })],
-						feed: { detail: busy.length ? `${busy.length} still preparing` : `${rows.length} media ready` }
+						content: [json({ done: !busy.length, media: rows, next })],
+						feed: { detail: busy.length ? `${busy.length} still preparing` : stopped.length ? `${stopped.length} interrupted` : `${rows.length} media ready` }
 					}
 				}
 				ctx.progress?.(`${busy.length} media still preparing`, waited)
@@ -1590,11 +1610,549 @@ const inspectExport: ToolDef = {
 	}
 }
 
+// ===== Multicam: camera groups =====
+
+/** The one group a tool means: by id or name, or the only one. */
+function pickGroup(doc: { multicams?: MulticamGroup[] }, ref: unknown): MulticamGroup {
+	const groups = doc.multicams ?? []
+	if (!groups.length) throw new ToolError('This project has no camera group yet. find_camera_groups suggests files; make_multicam makes one.')
+	if (ref === undefined || ref === null || ref === '') {
+		if (groups.length === 1) return groups[0]
+		throw new ToolError(`This project has ${groups.length} camera groups; name one: ${groups.map((g) => `"${g.name}"`).join(', ')}.`)
+	}
+	const want = String(ref).trim().toLowerCase()
+	const group = groups.find((g) => g.id === ref) ?? groups.find((g) => g.name.toLowerCase() === want)
+	if (!group) throw new ToolError(`There is no camera group "${ref}". Groups: ${groups.map((g) => `"${g.name}"`).join(', ')}.`)
+	return group
+}
+
+/** Commit a diff as one agent turn (a revision), as apply_ops does. */
+async function commitAgentEdit(
+	ctx: ToolContext, project: LiveProject,
+	edit: { diff: TimelineDiff; rationale: string; droppedOps: string[]; notes: string[]; prompt: string }
+) {
+	const turn: PromptTurn = {
+		id: randomUUID(),
+		personaId: project.doc.activePersonaId,
+		prompt: edit.prompt,
+		baseStepId: project.doc.historyRef?.currentStepId || '',
+		status: 'completed',
+		diff: edit.diff,
+		rationale: edit.rationale,
+		droppedOps: edit.droppedOps.length ? edit.droppedOps : undefined,
+		notes: edit.notes.length ? edit.notes : undefined,
+		agent: { name: ctx.clientName, sessionId: ctx.sessionId, ...(ctx.engineTurnId ? { engineTurnId: ctx.engineTurnId } : {}) },
+		createdAt: Date.now()
+	}
+	const outcome = await ctx.bridge.commitTurn({ threadId: project.threadId, turn })
+	if (!outcome.ok) throw new ToolError(outcome.error)
+	return outcome
+}
+
+function describeGroup(group: MulticamGroup, doc: { media: MediaAsset[]; timeline: TimelineItem[] }) {
+	const cameras = camerasOf(group, doc.media)
+	const angles = cameras.filter((c) => c.hasPicture)
+	const ranking = soundChoicesOf(group, doc.media)
+		.sort((a, b) => soundScore(cameraSound(b, doc.media)) - soundScore(cameraSound(a, doc.media)))
+	const shots = doc.timeline.filter((i) => i.multicam?.groupId === group.id && i.multicam.role === 'shot')
+		.sort((a, b) => a.timelineStart - b.timelineStart)
+	const sounds = doc.timeline.filter((i) => i.multicam?.groupId === group.id && i.multicam.role === 'sound')
+		.sort((a, b) => a.timelineStart - b.timelineStart)
+	const span = soundSpan(group, doc.media)
+	return {
+		id: group.id,
+		name: group.name,
+		mainSound: soundCameraOf(group, doc.media)?.name,
+		groupSpanSec: span ? [r3(span.start), r3(span.end)] : undefined,
+		// Who speaks, once find_speakers has run (named by setSpeaker).
+		...summarizeSpeakers(group, doc.media),
+		// One entry per camera; a camera that split its recording lists every file.
+		cameras: cameras.map((c) => {
+			const quality = cameraSound(c, doc.media)
+			const rank = ranking.indexOf(c)
+			return {
+				angle: c.hasPicture ? angles.indexOf(c) + 1 : undefined,
+				name: c.name,
+				kind: c.hasPicture ? 'camera' : 'sound recorder',
+				soundQuality: quality ? {
+					voicesOverRoomDb: Math.round(quality.snrDb * 10) / 10,
+					clippedPercent: Math.round(quality.clipped * 10000) / 100,
+					rank: rank >= 0 ? rank + 1 : undefined
+				} : undefined,
+				files: c.members.map((m) => {
+					const asset = doc.media.find((a) => a.id === m.assetId)
+					const ms = memberSpan(m, asset?.metadata?.duration ?? 0)
+					return {
+						media: asset?.name,
+						mediaId: m.assetId,
+						// Where its recording sits on the group clock.
+						recordsGroupSec: [r3(ms.start), r3(ms.end)],
+						offsetSec: r3(m.offset),
+						driftPpm: m.sync.driftPpm,
+						sync: m.sync.method,
+						confidence: m.sync.confidence,
+						windowsAgreed: m.sync.windows ? `${m.sync.windows.agreed}/${m.sync.windows.measured}` : undefined,
+						nudgedSec: m.sync.nudgeSec
+					}
+				})
+			}
+		}),
+		onTimeline: {
+			sound: sounds.map((s) => ({ id: s.id, timelineStart: r3(s.timelineStart), endSec: r3(s.timelineStart + s.duration), trackId: s.trackId })),
+			shots: shots.map((s) => ({
+				id: s.id, angle: cameraOf(group, doc.media, s.sourceAssetId)?.name,
+				timelineStart: r3(s.timelineStart), endSec: r3(s.timelineStart + s.duration),
+				groupStartSec: r3(groupTimeAt(s, group, s.timelineStart) ?? undefined)
+			}))
+		}
+	}
+}
+
+/** Timeline seconds for a group instant, through the placed sound clip that covers it. */
+function timelineAtGroup(group: MulticamGroup, timeline: TimelineItem[], groupSec: number): number | undefined {
+	for (const item of timeline) {
+		if (item.multicam?.groupId !== group.id || item.multicam.role !== 'sound') continue
+		const range = itemGroupRange(item, group)
+		if (!range || groupSec < range.start - 1e-6 || groupSec > range.end + 1e-6) continue
+		const member = memberOf(group, item.sourceAssetId)!
+		return item.timelineStart + (toSourceTime(member, groupSec) - item.in) / (item.speed || 1)
+	}
+	return undefined
+}
+
+/** The group clock at a timeline instant, through the sound clip under it. */
+function groupAtTimeline(group: MulticamGroup, timeline: TimelineItem[], t: number): number | undefined {
+	const sound = timeline.find((i) => i.multicam?.groupId === group.id && i.multicam.role === 'sound' &&
+		t >= i.timelineStart - 1e-6 && t <= i.timelineStart + i.duration + 1e-6)
+	return sound ? groupTimeAt(sound, group, t) ?? undefined : undefined
+}
+
+const findCameraGroups: ToolDef = {
+	name: 'find_camera_groups',
+	permission: 'read',
+	description:
+		'Multicam: which media files look like ONE moment recorded by several cameras (a podcast, an interview), ' +
+		'judged by when each started recording (file names and file times), camera-named folders and lengths. ' +
+		'Also lists the camera groups the project already has. A suggestion is not proof: make_multicam syncs ' +
+		'the files by their sound and says how sure it is.',
+	inputSchema: { type: 'object', properties: {}, additionalProperties: false },
+	async run(_args, ctx) {
+		const project = await requireProject(ctx)
+		const { doc } = project
+		const name = (id: string) => doc.media.find((a) => a.id === id)?.name ?? id
+		const suggestions = suggestCameraGroups(doc.media, doc.multicams)
+		return {
+			content: [json({
+				suggestions: suggestions.map((s) => ({ media: s.assetIds.map(name), mediaIds: s.assetIds, strength: s.strength, why: s.reasons })),
+				groups: (doc.multicams ?? []).map((g) => ({ id: g.id, name: g.name, members: g.members.map((m) => m.name) })),
+				next: suggestions.length ? 'make_multicam {assets: [...mediaIds]} syncs a suggestion into a group and places it.' : undefined
+			})],
+			feed: { detail: `${suggestions.length} suggestion(s) · ${(doc.multicams ?? []).length} group(s)` }
+		}
+	}
+}
+
+const makeMulticam: ToolDef = {
+	name: 'make_multicam',
+	permission: 'edit',
+	writes: true,
+	description:
+		'Multicam: sync recordings of one moment by their SOUND into a camera group, and (by default) lay it on ' +
+		'the timeline: the cleanest sound as the main sound on an audio track, one shot of the first angle over ' +
+		'it. Reports each member\'s offset, clock drift and how sure the match is (strong / weak / failed); ' +
+		'check a weak or failed one with get_angles and fix it with apply_ops nudgeAngle. Takes about a minute ' +
+		'per hour of footage. With `group` instead of `assets`, re-syncs an existing group (every shot follows).',
+	inputSchema: {
+		type: 'object',
+		properties: {
+			assets: { type: 'array', items: { type: 'string' }, description: 'Media ids or names: two or more cameras, plus any separate sound recorder. The first camera is the reference.' },
+			group: { type: 'string', description: 'Re-sync this existing group instead' },
+			name: { type: 'string', description: 'The group\'s name' },
+			place: { type: 'boolean', description: 'Lay it on the timeline (default true for a new group)' },
+			atSec: { type: 'number', minimum: 0, description: 'TIMELINE seconds to place it at; the end of the timeline by default' }
+		},
+		additionalProperties: false
+	},
+	title: (args) => `make_multicam ${args.group ?? (args.assets || []).length + ' files'}`,
+	async run(args, ctx) {
+		const project = await requireProject(ctx)
+		const { doc } = project
+		const existing = args.group !== undefined ? pickGroup(doc, args.group) : undefined
+		const ids: string[] = existing
+			? existing.members.map((m) => m.assetId)
+			: (args.assets ?? []).map((ref: string) => resolveAsset(doc.media, ref).id)
+		if (!existing && ids.length < 2) throw new ToolError('Give at least two media files in `assets` (or `group` to re-sync one).')
+		const taken = (doc.multicams ?? []).filter((g) => g.id !== existing?.id).flatMap((g) => g.members.map((m) => m.assetId))
+		const clash = ids.find((id) => taken.includes(id))
+		if (clash) throw new ToolError(`${doc.media.find((a) => a.id === clash)?.name} is already in another camera group.`)
+		const startedAt = Date.now()
+		const { group } = await ctx.bridge.buildCameraGroup(project, ids, {
+			name: args.name, existing,
+			onProgress: (fraction, label) => ctx.progress?.(`${label} (${Math.round(fraction * 100)}%)`, Date.now() - startedAt)
+		})
+
+		const diff: TimelineDiff = { schemaVersion: TIMELINE_DIFF_SCHEMA_VERSION, setMulticams: [group] }
+		const droppedOps: string[] = []
+		const notes: string[] = []
+		if (existing) {
+			const { updates, adds, dropped, notes: trimmed } = rederiveGroupItems(doc.timeline, existing, group, doc.media, randomUUID)
+			if (updates.length) diff.updateItems = updates
+			if (adds.length) diff.addItems = adds
+			droppedOps.push(...dropped)
+			notes.push(...trimmed)
+			if (updates.length) notes.push(`${updates.length} clip(s) re-timed to the new sync.`)
+		} else if (args.place !== false) {
+			applyMulticamOps({ placeMulticam: { group: group.id, atSec: args.atSec } }, { ...doc, multicams: [...(doc.multicams ?? []), group] }, diff, droppedOps, notes)
+		}
+		const outcome = await commitAgentEdit(ctx, project, {
+			diff, droppedOps, notes,
+			rationale: existing ? `Re-synced camera group "${group.name}"` : `Made camera group "${group.name}" from ${group.members.length} files`,
+			prompt: `${ctx.clientName} made a camera group over MCP`
+		})
+		const weak = group.members.filter((m) => m.sync.confidence !== 'strong')
+		const after = { media: doc.media, timeline: [...doc.timeline.map((i) => ({ ...i, ...diff.updateItems?.find((u) => u.id === i.id) })), ...(diff.addItems ?? [])] }
+		return {
+			content: [json({
+				revision: `V${outcome.revisionSeq}`,
+				group: describeGroup(group, after),
+				droppedOps: [...droppedOps, ...outcome.pruned],
+				notes: [...notes, ...(outcome.shifted ?? [])],
+				check: weak.length
+					? `${weak.map((m) => `${m.name} (${m.sync.confidence})`).join(', ')}: look at get_angles over a stretch with clear lip movement; nudge with apply_ops nudgeAngle if off.`
+					: 'Every member matched strongly.',
+				next: 'get_multicam for the shared transcript; get_angles to compare angles of a stretch; apply_ops switchAngles to cut.'
+			})],
+			feed: {
+				detail: `${group.name} · ${group.members.map((m) => `${m.name} ${m.sync.confidence}`).join(' · ')}`,
+				chips: [{ text: existing ? 're-synced' : 'multicam', tone: weak.length ? 'red' : 'green' }]
+			}
+		}
+	}
+}
+
+const MAX_TRANSCRIPT_LINES = 120
+const MAX_TURNS = 200
+
+const getMulticam: ToolDef = {
+	name: 'get_multicam',
+	permission: 'read',
+	description:
+		'Multicam: one camera group — its members (angle numbers, offsets, drift, sync confidence, each one\'s ' +
+		'sound quality), the main sound, its shots on the timeline, and ONE shared transcript (every camera heard ' +
+		'the same conversation) with GROUP seconds and, where the group is placed, TIMELINE seconds. Page the ' +
+		'transcript with fromSec/toSec in group seconds. After find_speakers every line says WHO speaks it ' +
+		'(`speaker`, with the analysis\'s confidence; "unsure" when it would not guess): choose angles from that.',
+	inputSchema: {
+		type: 'object',
+		properties: {
+			group: { type: 'string', description: 'Group id or name; may be left out when there is one' },
+			fromSec: { type: 'number', description: 'GROUP seconds: transcript from here' },
+			toSec: { type: 'number', description: 'GROUP seconds: transcript up to here' },
+			turns: { type: 'boolean', description: 'Also list the speaker turns (who speaks when) in that range, with confidence; for choosing angles from the voices alone' }
+		},
+		additionalProperties: false
+	},
+	async run(args, ctx) {
+		const project = await requireProject(ctx)
+		const { doc } = project
+		const group = pickGroup(doc, args.group)
+		const transcripts = await ctx.bridge.readTranscripts(project, group.members.map((m) => m.assetId))
+		const lines = labelTranscript(groupTranscript(group, transcripts, doc.media), group.speakers)
+			.filter((l) => (args.fromSec === undefined || l.end >= args.fromSec) && (args.toSec === undefined || l.start <= args.toSec))
+		const page = lines.slice(0, MAX_TRANSCRIPT_LINES)
+		const last = page.at(-1)
+		return {
+			content: [json({
+				...describeGroup(group, doc),
+				transcript: page.map((l) => ({
+					groupSec: [r3(l.start), r3(l.end)],
+					timelineSec: (() => {
+						const a = timelineAtGroup(group, doc.timeline, l.start)
+						const b = timelineAtGroup(group, doc.timeline, l.end)
+						return a !== undefined && b !== undefined ? [r3(a), r3(b)] : undefined
+					})(),
+					speaker: l.speaker,
+					speakerConfidence: l.speakerConfidence,
+					alsoHeard: l.alsoHeard,
+					text: l.text
+				})),
+				speakerTurns: args.turns && group.speakers
+					? group.speakers.turns
+						.filter((t) => (args.fromSec === undefined || t.end >= args.fromSec) && (args.toSec === undefined || t.start <= args.toSec))
+						.slice(0, MAX_TURNS)
+						.map((t) => ({
+							groupSec: [r3(t.start), r3(t.end)],
+							speaker: group.speakers!.people.find((p) => p.id === t.speaker)?.name ?? 'unsure',
+							confidence: t.confidence,
+							fixed: t.fixed || undefined
+						}))
+					: undefined,
+				speakersMissing: group.speakers ? undefined : 'Nobody has said who speaks when yet: find_speakers listens to the microphones once and puts a speaker on every line.',
+				transcriptNext: lines.length > page.length && last ? `fromSec ${r3(last.end)} continues the transcript` : undefined,
+				transcriptMissing: lines.length ? undefined : 'No member has a transcript yet; wait {for: "media"} until processing finishes.'
+			})],
+			feed: { detail: `${group.name} · ${group.members.length} members · ${page.length} transcript lines` }
+		}
+	}
+}
+
+const getAngles: ToolDef = {
+	name: 'get_angles',
+	permission: 'read',
+	description:
+		'Multicam: every angle of a placed camera group at the SAME moments, side by side — one image per angle, ' +
+		'frames at the same TIMELINE seconds — so you can choose the best angle for a stretch. Also says which ' +
+		'angle each moment shows now, who is speaking at each moment (after find_speakers; the loudest microphone ' +
+		'is only a weak hint), and the words spoken. Then cut with apply_ops switchAngles.',
+	inputSchema: {
+		type: 'object',
+		properties: {
+			group: { type: 'string', description: 'Group id or name; may be left out when there is one' },
+			fromSec: { type: 'number', minimum: 0, description: 'TIMELINE seconds' },
+			toSec: { type: 'number', minimum: 0, description: 'TIMELINE seconds' },
+			frames: { type: 'integer', minimum: 1, maximum: 8, description: 'Moments to show across the stretch (default 4)' },
+			tileWidth: { type: 'integer', minimum: 160, maximum: 480, description: 'Pixels per frame (default 240)' }
+		},
+		required: ['fromSec', 'toSec'],
+		additionalProperties: false
+	},
+	title: (args) => `get_angles ${clock(args.fromSec ?? 0)}–${clock(args.toSec ?? 0)}`,
+	async run(args, ctx) {
+		const project = await requireProject(ctx)
+		const { doc } = project
+		const group = pickGroup(doc, args.group)
+		if (!(args.toSec > args.fromSec)) throw new ToolError('toSec must be after fromSec.')
+		const n = args.frames ?? 4
+		const times = Array.from({ length: n }, (_, i) => args.fromSec + ((i + 0.5) / n) * (args.toSec - args.fromSec))
+		const groupTimes = times.map((t) => groupAtTimeline(group, doc.timeline, t))
+		if (groupTimes.every((g) => g === undefined)) {
+			throw new ToolError(`"${group.name}" is not on the timeline between ${clock(args.fromSec)} and ${clock(args.toSec)}. Place it with apply_ops placeMulticam, or read get_multicam for where its sound sits.`)
+		}
+		const angles = anglesOf(group, doc.media)
+		const content: ToolContent[] = []
+		const perAngle: Array<{ angle: number; name: string; recording: boolean[] }> = []
+		for (const [i, camera] of angles.entries()) {
+			// Each moment from the file this camera was recording then.
+			const at = groupTimes.map((g) => {
+				const member = g === undefined ? undefined : memberAt(camera, g, doc.media)
+				if (!member || g === undefined) return undefined
+				const length = doc.media.find((a) => a.id === member.assetId)?.metadata?.duration ?? 0
+				const source = toSourceTime(member, g)
+				return source >= 0 && source <= length ? { member, source } : undefined
+			})
+			perAngle.push({ angle: i + 1, name: camera.name, recording: at.map((x) => !!x) })
+			const files = [...new Set(at.filter((x) => !!x).map((x) => x!.member))]
+			if (!files.length) continue
+			content.push({ type: 'text', text: `Angle ${i + 1} · ${camera.name}` })
+			for (const member of files) {
+				const picked = at.map((x, k) => ({ x, k })).filter(({ x }) => x?.member === member)
+				const usable = picked.map(({ x }) => x!.source)
+				// Labelled with TIMELINE time, so every angle's tile for one moment reads the same.
+				const labels = picked.map(({ k }) => sheetClock(times[k]))
+				const { sheet } = await ctx.bridge.mediaSheet(project, member.assetId, { times: usable, columns: usable.length, tileWidth: args.tileWidth ?? 240, labels })
+				content.push({ type: 'image', data: sheet.data, mimeType: sheet.mimeType })
+			}
+		}
+
+		// Whose microphone is loudest, each against its own usual level (mic gains differ).
+		const withSound = group.members.filter((m) => doc.media.find((a) => a.id === m.assetId)?.metadata?.hasAudio !== false)
+		const analyses = await ctx.bridge.audioAnalyses(project, withSound.map((m) => m.assetId))
+		const median = (xs: number[]) => { const s = xs.filter((x) => x > 0).sort((a, b) => a - b); return s[Math.floor(s.length / 2)] || 1 }
+		const usual = new Map(withSound.map((m) => [m.assetId, analyses[m.assetId] ? median(analyses[m.assetId].peaks) : 1]))
+		const half = (args.toSec - args.fromSec) / n / 2
+		const cameras = camerasOf(group, doc.media)
+		const moments = times.map((t, k) => {
+			const g = groupTimes[k]
+			const shot = doc.timeline.find((i) => i.multicam?.groupId === group.id && i.multicam.role === 'shot' &&
+				t >= i.timelineStart && t < i.timelineStart + i.duration)
+			const mics: Record<string, number> = {}
+			if (g !== undefined) {
+				for (const camera of cameras) {
+					const m = memberAt(camera, g, doc.media)
+					const a = m && withSound.includes(m) ? analyses[m.assetId] : undefined
+					if (!m || !a) continue
+					const peaks = peaksForRange(a, toSourceTime(m, g - half), toSourceTime(m, g + half), 8)
+					const level = peaks.reduce((x, y) => x + y, 0) / peaks.length
+					mics[camera.name] = Math.round((level / usual.get(m.assetId)!) * 100) / 100
+				}
+			}
+			const loudest = Object.entries(mics).sort((a, b) => b[1] - a[1])[0]
+			const spoken = g === undefined ? undefined : speakerIn(group.speakers, g - half, g + half)
+			return {
+				speaking: spoken ? { name: spoken.speaker?.name ?? 'unsure', confidence: spoken.confidence, share: spoken.share, alsoHeard: spoken.alsoHeard.length ? spoken.alsoHeard : undefined } : undefined,
+				timelineSec: r3(t),
+				groupSec: g === undefined ? undefined : r3(g),
+				showing: shot ? cameraOf(group, doc.media, shot.sourceAssetId)?.name : undefined,
+				micLevel: Object.keys(mics).length ? mics : undefined,
+				loudestMic: loudest && loudest[1] > 1.2 ? loudest[0] : undefined
+			}
+		})
+		const transcripts = await ctx.bridge.readTranscripts(project, group.members.map((m) => m.assetId))
+		const g0 = groupAtTimeline(group, doc.timeline, args.fromSec) ?? groupTimes.find((g) => g !== undefined)!
+		const g1 = groupAtTimeline(group, doc.timeline, args.toSec) ?? [...groupTimes].reverse().find((g) => g !== undefined)!
+		const spokenLines = labelTranscript(groupTranscript(group, transcripts, doc.media), group.speakers).filter((l) => l.end >= g0 && l.start <= g1)
+		const words = group.speakers
+			? spokenLines.map((l) => `${l.speaker ?? 'unsure'}: ${l.text}`).join('\n')
+			: spokenLines.map((l) => l.text).join(' ')
+		content.unshift(json({
+			group: group.name,
+			angles: perAngle.map((a) => ({ angle: a.angle, name: a.name, recordingAtEachMoment: a.recording })),
+			moments,
+			said: words || undefined,
+			micNote: group.speakers
+				? '`speaking` is who the voice analysis hears at each moment (between two people on one camera trust it from ~0.95 confidence; women vs men is surer). micLevel / loudestMic are NOT a speaker detector: in a shared room every microphone hears everyone.'
+				: 'micLevel is each microphone against its own usual level, and is a weak hint only (in a shared room every microphone hears everyone). find_speakers gives a real answer to "who is speaking".',
+			next: 'apply_ops switchAngles {switches: [{atSec, angle}]} to cut; the sound is untouched.'
+		}))
+		return {
+			content,
+			feed: { detail: `${group.name} · ${angles.length} angles · ${clock(args.fromSec)}–${clock(args.toSec)}` }
+		}
+	}
+}
+
+const findSpeakers: ToolDef = {
+	name: 'find_speakers',
+	permission: 'edit',
+	writes: true,
+	description:
+		'Multicam: find WHO SPEAKS WHEN in a camera group, once. Listens to every camera\'s microphone, tells the ' +
+		'voices apart (microphone closeness, pitch and timbre, averaged over seconds) and gives the group "Speaker 1, ' +
+		'2…" with turns on the group clock, each with a confidence ("unsure" where it would rather not guess). Takes ' +
+		'about a minute per hour of footage. Then: get_speakers shows frames to see who is who, apply_ops setSpeaker ' +
+		'names them (and says which camera they are on), get_multicam puts the name on every transcript line. Give ' +
+		'`speakers` (count the people in a frame): the number is otherwise guessed, usually one too many (apply_ops ' +
+		'mergeSpeakers fixes that). HONEST LIMITS: people on different microphones/very different voices are told ' +
+		'apart reliably; two people sharing one microphone and a similar pitch (two men side by side on one camera) ' +
+		'only mostly (~85–90% on the first real shoot, worse in short turns), and the analysis cannot tell you WHICH ' +
+		'person is which: check a frame. Fix mistakes with apply_ops setSpeakerTurns. Running it again keeps names ' +
+		'and fixes.',
+	inputSchema: {
+		type: 'object',
+		properties: {
+			group: { type: 'string', description: 'Group id or name; may be left out when there is one' },
+			speakers: { type: 'integer', minimum: 2, maximum: 6, description: 'How many people speak in the recording' }
+		},
+		additionalProperties: false
+	},
+	title: (args) => `find_speakers${args.speakers ? ` (${args.speakers})` : ''}`,
+	async run(args, ctx) {
+		const project = await requireProject(ctx)
+		const { doc } = project
+		const group = pickGroup(doc, args.group)
+		const startedAt = Date.now()
+		const speakers = await ctx.bridge.diarizeGroup(project, group, {
+			speakers: args.speakers,
+			onProgress: (fraction, label) => ctx.progress?.(`${label} (${Math.round(fraction * 100)}%)`, Date.now() - startedAt)
+		})
+		const next: MulticamGroup = { ...group, speakers }
+		const diff: TimelineDiff = { schemaVersion: TIMELINE_DIFF_SCHEMA_VERSION, setMulticams: [next] }
+		const outcome = await commitAgentEdit(ctx, project, {
+			diff, droppedOps: [], notes: [], rationale: `Found ${speakers.people.length} speakers in "${group.name}"`,
+			prompt: `${ctx.clientName} found who speaks when over MCP`
+		})
+		return {
+			content: [json({
+				revision: `V${outcome.revisionSeq}`,
+				...summarizeSpeakers(next, doc.media),
+				turns: speakers.turns.length,
+				next: 'get_speakers shows a few frames per voice so you can tell who is who; then apply_ops setSpeaker {speaker, name, camera, framing}. get_multicam {turns: true} lists the turns.'
+			})],
+			feed: {
+				detail: `${group.name} · ${speakers.people.length} speakers · ${Math.round(speakers.analysis.unsureShare * 100)}% unsure`,
+				chips: [{ text: 'speakers', tone: speakers.analysis.warnings.length ? 'red' : 'green' }]
+			}
+		}
+	}
+}
+
+const getSpeakers: ToolDef = {
+	name: 'get_speakers',
+	permission: 'read',
+	description:
+		'Multicam: the voices find_speakers found, each with its best sample moments (long, confident turns) and ONE ' +
+		'frame per angle at each, so you can see who is who: the iPhone frame of Speaker 1\'s moment shows whether it ' +
+		'is the woman on that camera; in a two-shot frame look at WHO has the mouth open and the gestures, then ' +
+		'apply_ops setSpeaker names the voice, the camera and where the person sits ("left of the two-shot"). Two ' +
+		'people on one camera: use samples ≥ 3 and compare the frames of the two voices.',
+	inputSchema: {
+		type: 'object',
+		properties: {
+			group: { type: 'string', description: 'Group id or name; may be left out when there is one' },
+			samples: { type: 'integer', minimum: 1, maximum: 4, description: 'Moments per speaker (default 2)' },
+			tileWidth: { type: 'integer', minimum: 160, maximum: 480, description: 'Pixels per frame (default 280)' }
+		},
+		additionalProperties: false
+	},
+	async run(args, ctx) {
+		const project = await requireProject(ctx)
+		const { doc } = project
+		const group = pickGroup(doc, args.group)
+		const sp = group.speakers
+		if (!sp) throw new ToolError('This group has no speakers yet: find_speakers listens to the microphones and finds them.')
+		const wanted = args.samples ?? 2
+		const angles = anglesOf(group, doc.media)
+		const transcripts = await ctx.bridge.readTranscripts(project, group.members.map((m) => m.assetId))
+		const lines = groupTranscript(group, transcripts, doc.media)
+		const content: ToolContent[] = []
+		const samples: Array<Record<string, unknown>> = []
+		for (const [n, person] of sp.people.entries()) {
+			const picks = bestSamples(sp.turns.filter((t) => t.speaker === person.id), wanted)
+			if (!picks.length) continue
+			const moments = picks.map((t) => ({ turn: t, at: (t.start + t.end) / 2 }))
+			samples.push({
+				speaker: person.name, number: n + 1,
+				moments: moments.map((m) => ({
+					groupSec: [r3(m.turn.start), r3(m.turn.end)], confidence: m.turn.confidence,
+					saying: lines.filter((l) => l.end >= m.turn.start && l.start <= m.turn.end).map((l) => l.text).join(' ').slice(0, 160) || undefined
+				}))
+			})
+			for (const camera of angles) {
+				const at = moments.map((m) => {
+					const member = memberAt(camera, m.at, doc.media)
+					if (!member) return undefined
+					const source = toSourceTime(member, m.at)
+					const length = doc.media.find((a) => a.id === member.assetId)?.metadata?.duration ?? 0
+					return source >= 0 && source <= length ? { member, source, group: m.at } : undefined
+				})
+				for (const member of new Set(at.filter(Boolean).map((x) => x!.member))) {
+					const mine = at.filter((x) => x?.member === member) as Array<{ source: number; group: number }>
+					content.push({ type: 'text', text: `${person.name} (voice ${n + 1}) · ${camera.name}` })
+					const { sheet } = await ctx.bridge.mediaSheet(project, member.assetId, {
+						times: mine.map((x) => x.source), columns: mine.length, tileWidth: args.tileWidth ?? 280,
+						labels: mine.map((x) => `${clock(x.group)}`)
+					})
+					content.push({ type: 'image', data: sheet.data, mimeType: sheet.mimeType })
+				}
+			}
+		}
+		content.unshift(json({
+			group: group.name,
+			...summarizeSpeakers(group, doc.media),
+			samples,
+			next: 'apply_ops setSpeaker {speaker, name, camera, framing} for each voice; mergeSpeakers if one person was split; setSpeakerTurns to fix a stretch. Frame labels are GROUP seconds, as in get_multicam.'
+		}))
+		return { content, feed: { detail: `${group.name} · ${sp.people.length} speakers` } }
+	}
+}
+
+/** Up to `n` turns that make good samples: long, sure, and spread over the recording. */
+function bestSamples(turns: Array<{ start: number; end: number; confidence: number }>, n: number) {
+	const good = turns.filter((t) => t.end - t.start >= 4).sort((a, b) => b.confidence * Math.sqrt(b.end - b.start) - a.confidence * Math.sqrt(a.end - a.start))
+	const out: typeof good = []
+	for (const t of good) {
+		if (out.every((o) => Math.abs((o.start + o.end) / 2 - (t.start + t.end) / 2) > 120)) out.push(t)
+		if (out.length >= n) break
+	}
+	return out.sort((a, b) => a.start - b.start)
+}
+
 export const TOOLS: ToolDef[] = [
 	beginRound, endRound, listProjects, createProject, openProject, importMedia, waitTool,
 	getProject, getTimeline, getMedia, inspectMedia, findSilences, searchMomentsTool, renderFrame, renderFrames, getMotionGuide, getMotionKit,
 	getSoundGuide, listSounds, suggestCuesTool, renderSoundTool, analyzeAudio, generateAudioTool,
-	applyOps, revertToVersion, exportTool, inspectExport
+	applyOps, revertToVersion, exportTool, inspectExport,
+	findCameraGroups, makeMulticam, getMulticam, getAngles, findSpeakers, getSpeakers
 ]
 
 export const SERVER_INSTRUCTIONS =
@@ -1608,4 +2166,8 @@ export const SERVER_INSTRUCTIONS =
 	'wrong. For sound: get_sound_guide, then suggest_cues → apply_ops addSounds (with follow) → analyze_audio; ' +
 	'you cannot hear, so work by the numbers and the spectrogram render_sound gives. Spoken words or a sound the palette cannot make: generate_audio (costs money, capped) then apply_ops placeAudio. Every apply_ops is a revision the user can see and undo; the user may edit at the same time, ' +
 	'so read the timeline again before each edit instead of relying on an old read. To deliver: export, wait {for: "export"}, ' +
-	'then inspect_export to look at the file frame by frame.'
+	'then inspect_export to look at the file frame by frame. Several cameras of one moment (a podcast): ' +
+	'find_camera_groups → make_multicam (syncs them by sound and places them) → get_multicam for the one shared ' +
+	'transcript → find_speakers (once: who speaks when, so every transcript line has a speaker; give the number of people) → ' +
+	'get_speakers (frames per voice) → apply_ops setSpeaker to name them → get_angles to compare every angle of a stretch ' +
+	'→ apply_ops switchAngles to cut; the sound never moves. Never choose angles from the loudest microphone: use the speakers.'

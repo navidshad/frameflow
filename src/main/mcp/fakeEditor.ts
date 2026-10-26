@@ -1,4 +1,5 @@
-import type { Clip, EditorDocument, MediaAsset, TimelineItem } from '@shared/types'
+import type { Clip, EditorDocument, MediaAsset, MulticamGroup, TimelineItem } from '@shared/types'
+import { buildCameraGroup } from '../multicam/group'
 import { applyTimelineDiff, repairOverlapsReporting } from '@shared/timeline'
 import type { TranscriptEntry } from '@shared/captions'
 import type { AudioAnalysis } from '@shared/audio'
@@ -74,7 +75,7 @@ export class FakeEditor implements EditorBridge {
 		for (const asset of commit.addAssets ?? []) {
 			if (!this.doc.media.some((a) => a.id === asset.id)) this.doc.media.push(asset)
 		}
-		const state = { tracks: this.doc.tracks, timeline: this.doc.timeline, motionKits: this.doc.motionKits ?? [] }
+		const state = { tracks: this.doc.tracks, timeline: this.doc.timeline, motionKits: this.doc.motionKits ?? [], multicams: this.doc.multicams ?? [] }
 		const result = applyTimelineDiff(state, commit.turn.diff!, this.doc.media)
 		// As the store's dry run does: overlaps are pushed right, and said.
 		const shifted = repairOverlapsReporting(state)
@@ -82,6 +83,7 @@ export class FakeEditor implements EditorBridge {
 		this.doc.tracks = state.tracks
 		this.doc.timeline = state.timeline
 		this.doc.motionKits = state.motionKits
+		this.doc.multicams = state.multicams
 		const seq = this.revisions.length
 		const rev = { id: `r${seq}`, seq, label: commit.turn.agent!.name, origin: 'ai' as const, parentId: this.current, createdAt: Date.now() }
 		this.revisions.push(rev)
@@ -151,9 +153,46 @@ export class FakeEditor implements EditorBridge {
 		}
 	}
 
-	async mediaSheet(_project: LiveProject, _assetId: string, options: InspectOptions) {
+	/** Every mediaSheet request, in order: what a tool asked to be drawn. */
+	sheetRequests: Array<{ assetId: string } & InspectOptions> = []
+
+	async mediaSheet(_project: LiveProject, assetId: string, options: InspectOptions) {
+		this.sheetRequests.push({ assetId, ...options })
 		const times = options.times ?? [0, 10, 20]
 		return { sheet: { data: PIXEL, mimeType: 'image/png', times, columns: times.length, rows: 1 }, durationSec: 30 }
+	}
+
+	/** Offsets each test can set, keyed by asset id: what the sync "measures". */
+	syncOffsets: Record<string, number> = {}
+
+	async buildCameraGroup(_project: LiveProject, assetIds: string[], options: { name?: string; existing?: MulticamGroup }) {
+		const { group, ranking } = await buildCameraGroup(this.doc.media, assetIds, {
+			...options,
+			sync: async (inputs) => inputs.map((input, i) => ({
+				assetId: input.assetId,
+				offset: i === 0 ? 0 : (this.syncOffsets[input.assetId] ?? 0),
+				rate: 1,
+				sync: i === 0
+					? { method: 'reference' as const, confidence: 'strong' as const, driftPpm: 0 }
+					: { method: 'audio' as const, confidence: 'strong' as const, driftPpm: 0, windows: { agreed: 12, measured: 12 } },
+				quality: { levelDb: -12, noiseDb: -50 + i * 6, snrDb: 38 - i * 6, clipped: 0 }
+			}))
+		})
+		return { group, ranking }
+	}
+
+	/** What the speaker analysis "hears", set by a test. */
+	diarization: import('@shared/types').MulticamSpeakers | null = null
+
+	async diarizeGroup(_project: LiveProject, _group: MulticamGroup, _options: { speakers?: number }) {
+		if (!this.diarization) throw new Error('No speaker analysis was set up for this test.')
+		return this.diarization
+	}
+
+	/** Media ids whose preparation chain is "live"; a stored 'running' outside it reads as interrupted. */
+	preparing = new Set<string>()
+	isPreparing(_project: LiveProject, assetId: string) {
+		return this.preparing.has(assetId)
 	}
 
 	async findSilences() {

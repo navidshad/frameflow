@@ -18,10 +18,13 @@ import { settingsManager } from '../settings'
 import { ProviderError } from '../audio/provider'
 import { renderProgress, startEditorRender } from '../editor/render'
 import { contactSheet, measureExportLoudness, probeExport, sheetClock, sheetTimes, tileImages } from '../editor/exportInspect'
+import { buildCameraGroup } from '../multicam/group'
+import { diarizeGroup } from '../multicam/diarize'
 import fs from 'node:fs'
 import { join } from 'node:path'
 import { tmpdir } from 'node:os'
 import { detectSilence } from '../ffmpeg'
+import { isAssetPreprocessing } from '../editor/preprocess'
 import { importMediaFromFile, importMediaFromUrl } from '../editor/importMedia'
 import { computeContentEnd } from '../../shared/timeline'
 
@@ -230,8 +233,21 @@ export const rendererBridge: EditorBridge = {
 		const file = asset.proxyPath && fs.existsSync(asset.proxyPath) ? asset.proxyPath : asset.originalPath
 		const durationSec = asset.metadata?.duration ?? (await probeExport(file)).durationSec
 		const times = sheetTimes(durationSec, options)
-		const made = await contactSheet(file, times, { columns: options.columns, tileWidth: options.tileWidth })
+		const made = await contactSheet(file, times, { columns: options.columns, tileWidth: options.tileWidth, labels: options.labels })
 		return { sheet: { data: made.jpeg.toString('base64'), mimeType: 'image/jpeg', times, columns: made.columns, rows: made.rows }, durationSec }
+	},
+
+	async buildCameraGroup(project, assetIds, options) {
+		const { group, ranking } = await buildCameraGroup(project.doc.media, assetIds, options)
+		return { group, ranking }
+	},
+
+	async diarizeGroup(project, group, options) {
+		return diarizeGroup(group, project.doc.media, { ...options, keepFrom: group.speakers })
+	},
+
+	isPreparing(project, assetId) {
+		return isAssetPreprocessing(project.threadId, assetId)
 	},
 
 	async findSilences(project, assetId, options) {

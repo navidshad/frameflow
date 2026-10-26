@@ -1018,6 +1018,19 @@ describe('opsToDiff / removeRanges', () => {
 		{ id: 'i1', trackId: 'v1', sourceAssetId: 'a', timelineStart: 0, in: 0, out: 10, speed: 1, preservePitch: true, duration: 10 }
 	])
 
+	it('moves the trimmed clip up when a cut begins exactly where the clip begins', () => {
+		// The first cut of a long recording: [0, 3] takes the head off a clip that starts at 0.
+		// The clip's surviving piece ripples back to 0, the same start it had before the edit;
+		// that must not read as "did not move", or it stays at 3 and overlaps its own second half.
+		const base = doc()
+		const { diff } = opsToDiff({ removeRanges: [{ fromSec: 0, toSec: 3 }, { fromSec: 5, toSec: 6 }] }, base)
+		const state = { tracks: base.tracks, timeline: JSON.parse(JSON.stringify(base.timeline)) }
+		applyTimelineDiff(state, diff, base.media)
+		const v1 = state.timeline.filter((i: any) => i.trackId === 'v1').sort((a: any, b: any) => a.timelineStart - b.timelineStart)
+		expect(v1.map((i: any) => [i.timelineStart, i.in, i.out])).toEqual([[0, 3, 5], [2, 6, 10]])
+		expect(diff.updateItems!.find((u) => u.id === 'i1')!.timelineStart).toBe(0)
+	})
+
 	it('splits a clip to cut a span out of its middle', () => {
 		// The whole point: removing a sentence without losing the piece.
 		const { diff, notes } = opsToDiff({ removeRanges: [{ fromSec: 3, toSec: 5 }] }, doc())

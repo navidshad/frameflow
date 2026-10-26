@@ -181,10 +181,40 @@ export function useTimelineInteractions(viewport: TimelineViewport) {
 		)
 	}
 
+	/**
+	 * A camera group's clips move as one: its shots and its sound slide by the
+	 * same amount on their own lanes, so picture and sound never part. Refused,
+	 * and said, when anything else is in the way of any of them.
+	 */
+	const moveGroupTick = (target: TimelineItem, groupId: string, start: number) => {
+		const before = new Map((gestureBefore?.timeline ?? []).map((i) => [i.id, i]))
+		const origin = before.get(target.id)?.timelineStart ?? target.timelineStart
+		const members = doc().timeline.filter((o) => o.multicam?.groupId === groupId)
+		const ids = new Set(members.map((m) => m.id))
+		const earliest = Math.min(...members.map((m) => before.get(m.id)?.timelineStart ?? m.timelineStart))
+		const delta = Math.max(start - origin, -earliest)
+		const blocked = members.some((m) => {
+			const s = (before.get(m.id)?.timelineStart ?? m.timelineStart) + delta
+			const end = s + itemDuration(m)
+			return doc().timeline.some((o) => !ids.has(o.id) && o.trackId === m.trackId && s < itemEnd(o) - 1e-6 && end > o.timelineStart + 1e-6)
+		})
+		if (blocked) {
+			dropTarget.value = { trackId: target.trackId, ok: false, reason: 'A camera group moves as one, and another clip is in the way.' }
+			return
+		}
+		dropTarget.value = null
+		for (const m of members) m.timelineStart = (before.get(m.id)?.timelineStart ?? m.timelineStart) + delta
+	}
+
 	const moveTick = (e: PointerEvent) => {
 		const target = item()
 		if (!target) return
 		let start = applySnap(Math.max(0, pointerToTime(e) - grabOffsetSec), target.id)
+
+		if (target.multicam) {
+			moveGroupTick(target, target.multicam.groupId, start)
+			return
+		}
 
 		// Past the end of the stack: the drop will make a lane rather than find
 		// one. Video grows upward (the front of the picture), audio downward,

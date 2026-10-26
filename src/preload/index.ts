@@ -72,6 +72,15 @@ const api = {
 		ipcRenderer.invoke('preprocess-media', data),
 	findSilence: (data: { threadId: string, assetId: string, noiseDb?: number, minDurationSec?: number }) =>
 		ipcRenderer.invoke('find-silence', data),
+	buildMulticam: (data: { threadId: string, assetIds: string[], existing?: unknown, name?: string }) =>
+		ipcRenderer.invoke('multicam-build', data),
+	findSpeakers: (data: { threadId: string, group: unknown, speakers?: number }) =>
+		ipcRenderer.invoke('multicam-speakers', data),
+	onMulticamProgress: (callback: (data: { threadId: string, fraction: number, label: string }) => void) => {
+		const listener = (_event: any, data: any) => callback(data)
+		ipcRenderer.on('multicam-progress', listener)
+		return () => ipcRenderer.removeListener('multicam-progress', listener)
+	},
 	getAudioAnalysis: (data: { threadId: string, assetId: string }) =>
 		ipcRenderer.invoke('editor-audio-analysis', data),
 	audioProviders: () => ipcRenderer.invoke('audio-providers-status'),
