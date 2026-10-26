@@ -3,7 +3,7 @@ import { computed, ref, watch } from 'vue'
 import type { AgentAccessState, AgentActivity, AgentSessionInfo } from '@shared/agentFeed'
 import type { AgentFocus } from '@shared/engines'
 import type { EditorRevisionSummary } from '@shared/types'
-import { applyRoundEvent, type AgentLock, type AgentRound, type RoundEvent } from '@shared/agentRounds'
+import { applyRoundEvent, editingBanner, type AgentLock, type AgentRound, type EditingBanner, type RoundEvent } from '@shared/agentRounds'
 import { useEditorStore } from './editorStore'
 
 /**
@@ -37,14 +37,10 @@ export const useAgentStore = defineStore('agent', () => {
 	)
 
 	/**
-	 * The banner's subject: a live session that acted in the last two minutes.
-	 * A connected client that has gone quiet is not "editing".
+	 * The banner's subject: the agent holding this project through an open round.
+	 * Not "any client that called lately": an idle or reading client is not editing.
 	 */
-	const EDITING_WINDOW_MS = 2 * 60_000
-	const editingSession = computed<AgentSessionInfo | null>(() => {
-		const s = liveSession.value
-		return s && now.value - s.lastActivityAt < EDITING_WINDOW_MS ? s : null
-	})
+	const editingSession = computed<EditingBanner | null>(() => editingBanner(lock.value, useEditorStore().threadId))
 
 	/** Every session seen this run, so a feed outlives its connection. */
 	const known = ref<Record<string, AgentSessionInfo>>({})

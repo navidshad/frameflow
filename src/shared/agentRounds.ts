@@ -91,6 +91,26 @@ export interface AgentLock {
 	steps: number
 }
 
+/** What the editor's top bar says while an agent works. */
+export interface EditingBanner {
+	sessionId: string
+	clientName: string
+	steps: number
+	/** When the round began: the bar's clock counts from here. */
+	startedAt: number
+}
+
+/**
+ * The top bar shows an agent only while it holds THIS project through an open
+ * round. A connected client that is idle, between rounds or reading does not
+ * count: the bar used to key on "acted in the last two minutes", so every
+ * read-only call re-lit it and it counted since the connection, not the work.
+ */
+export function editingBanner(lock: AgentLock | null, threadId: string | null): EditingBanner | null {
+	if (!lock || !threadId || lock.threadId !== threadId) return null
+	return { sessionId: lock.sessionId, clientName: lock.clientName, steps: lock.steps, startedAt: lock.startedAt }
+}
+
 /** What main sends the renderer as rounds change. Applied with `applyRoundEvent`. */
 export type RoundEvent =
 	| { type: 'round'; round: Omit<AgentRound, 'calls'> }
