@@ -25,6 +25,11 @@
 				Angles
 			</button>
 			<div class="flex-1"></div>
+			<!-- The picture is a stand-in until the proxy is ready: say so, here rather than over the picture. -->
+			<span v-if="pictureNote" class="h-[31px] flex items-center gap-1.5 text-[11px] text-amber-500 font-semibold truncate"
+				data-testid="monitor-picture-note">
+				<span class="w-1.5 h-1.5 rounded-full bg-amber-500"></span>{{ pictureNote.text }}
+			</span>
 			<div v-if="mode === 'timeline'" class="h-[31px] flex items-center gap-3.5 text-[11px] text-zinc-500 min-w-0">
 				<span v-if="motionPathShown" class="truncate text-primary">Motion path shown while a position key is selected</span>
 				<span v-else-if="edl.currentSegmentId.value && !agentStore.agentActive" class="font-mono truncate max-w-[220px]">
@@ -903,6 +908,12 @@ const sourceTime = ref(0)
 const sourceDuration = ref(0)
 
 const activeClip = computed(() => store.selectedClip)
+
+const pictureNote = computed(() =>
+	mode.value === 'source'
+		? store.monitorPictureNote(activeClip.value?.sourceAssetId ?? store.selectedAsset?.id)
+		: store.timelinePictureNote
+)
 
 const sourceSrc = computed(() => {
 	const asset = activeClip.value

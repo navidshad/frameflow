@@ -121,6 +121,7 @@ export async function runEngineTurn(options: EngineRunOptions): Promise<EngineRu
 		mediaSheet: (p, id, o) => options.bridge.mediaSheet(p, id, o),
 		findSilences: (p, id, o) => options.bridge.findSilences(p, id, o),
 		isPreparing: (p, id) => options.bridge.isPreparing(p, id),
+		preparingLanes: (p, id) => options.bridge.preparingLanes?.(p, id) ?? [],
 		timelineSheet: (p, t, o) => options.bridge.timelineSheet(p, t, o),
 		listProjects: () => options.bridge.listProjects(),
 		createProject: (t) => options.bridge.createProject(t),

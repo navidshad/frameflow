@@ -52,8 +52,17 @@ intent — that is how "make a thumbnail from my video" works.
 ### B. The timeline editor — video output
 
 Entered from Home's **Video** purpose, or from a blank timeline project. Media is
-imported per asset and preprocessed independently (`src/main/editor/preprocess.ts`:
-proxy → audio → transcript → scenes → thumbnails, every step skip-if-exists).
+imported per asset and preprocessed independently (`src/main/editor/preprocess.ts`).
+A video imports as **two lanes side by side**: *words* (audio pulled from the
+original → transcript → pieces) and *picture* (480p proxy → filmstrip → scenes →
+thumbnails). Every step is skip-if-exists. The lanes meet only at the pieces:
+scene detection never makes pieces before the transcript could, and thumbnails
+wait for both the proxy and the pieces. Each lane has its own record
+(`MediaAsset.prepLanes`; `preprocessState` is their summary), so one can fail,
+be interrupted or be resumed without touching the other. The clip is placeable
+and watchable from the probe on (the monitor plays the original until a proxy
+exists), and the AI unlocks when the words lane is done, not the whole import.
+See `docs/import-lanes.md` for how it works and what was measured.
 The AI path is `src/main/editor/prompt.ts`: one Gemini call per turn producing
 **ops** (`src/main/editor/ops.ts`) which map to a `TimelineDiff` the renderer
 applies. Output length comes from the user's request — personas describe style
@@ -89,7 +98,7 @@ Before the AI can "watch" the video, we need to convert it into formats it can u
 **Key File:** `src/main/pipeline/phases/extraction.ts`
 
 1.  **Low-Res Proxy:** High-quality 4K video is too "heavy" for fast AI analysis. We create a 480p "proxy" version using **FFmpeg**.
-2.  **Audio Extraction:** We pull the audio (MP3) because it's much faster for the AI to "listen" to a transcript than to process raw video pixels for every second.
+2.  **Audio Extraction:** We pull the audio (mono 16 kHz MP3, from the original file, in seconds) because it's much faster for the AI to "listen" to a transcript than to process raw video pixels for every second.
 3.  **Raw Transcript:** We use **Gemini 2.5** to generate an initial timestamped script of everything being said.
 
 ---
