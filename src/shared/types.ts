@@ -511,6 +511,57 @@ export interface MulticamGroup {
 	/** The file whose sound plays under every shot. Any member with audio; the user picks. */
 	soundAssetId: string
 	createdAt: number
+	/** Who speaks when, once "Find speakers" has run. Absent before; see shared/speakers.ts. */
+	speakers?: MulticamSpeakers
+}
+
+/**
+ * One voice in a camera group. Found by sound (main/multicam/diarize.ts), named
+ * by the user or an agent: the sound can tell voices apart but not know whose
+ * they are.
+ */
+export interface MulticamSpeaker {
+	id: string
+	/** "Speaker 1" until someone names it. */
+	name: string
+	/** The camera this person is on (a camera key, as in Camera.key), if known. */
+	camera?: string
+	/** Where in that camera's picture: "left of the two-shot". Free text, for agents and people. */
+	framing?: string
+	/** A colour for the transcript and the turn bar. */
+	color?: string
+	/** Median pitch of the voice, Hz (null if it was never voiced enough to measure). */
+	pitchHz?: number | null
+	/** Seconds of speech the analysis gave this voice. */
+	talkSec?: number
+}
+
+/** One stretch of one voice on the group clock. `speaker` is null when the analysis could not decide. */
+export interface SpeakerTurn {
+	start: number
+	end: number
+	speaker: string | null
+	/** 0..1, how sure the analysis was. 1 for a turn a person set by hand. */
+	confidence: number
+	/** True when a person or an agent set this turn: a re-run keeps it. */
+	fixed?: boolean
+}
+
+export interface MulticamSpeakers {
+	people: MulticamSpeaker[]
+	/** Ascending by start, not overlapping. */
+	turns: SpeakerTurn[]
+	analysis: {
+		analyzedAt: number
+		/** How many voices were asked for; absent when FrameFlow estimated it. */
+		requested?: number
+		/** Cameras whose microphones were listened to. */
+		cameras: string[]
+		/** Share of speech time left "unsure". */
+		unsureShare: number
+		/** Plain-language cautions the user or agent should read (voices alike, estimated count…). */
+		warnings: string[]
+	}
 }
 
 /**
@@ -1019,6 +1070,18 @@ export interface EditorOps {
 	setMainSound?: { group?: string; sound: string | number }
 	/** Move one member on the group clock by bySec (positive = later), when the sync is off by a little. */
 	nudgeAngle?: { group?: string; angle: string | number; bySec: number }
+	/**
+	 * Name or describe a voice found by "Find speakers" (get_multicam lists them): `speaker` is its
+	 * 1-based number, id or current name. `camera` is an angle number or camera name.
+	 */
+	setSpeaker?: { group?: string; speaker: string | number; name?: string; camera?: string | number | null; framing?: string | null; color?: string }
+	/** Two voices that are one person: every turn of `from` becomes `into`'s, and `from` goes away. */
+	mergeSpeakers?: { group?: string; from: string | number; into: string | number }
+	/**
+	 * Fix who speaks: each stretch (GROUP seconds, as get_multicam shows them) is given to `speaker`
+	 * (null: unsure). A re-run of the analysis keeps these.
+	 */
+	setSpeakerTurns?: { group?: string; turns: Array<{ fromSec: number; toSec: number; speaker: string | number | null }> }
 	/** Burn the transcript into the picture. */
 	captions?: boolean
 	/** Normalise the finished mix to the streaming target. */

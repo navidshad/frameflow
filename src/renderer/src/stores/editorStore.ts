@@ -5,7 +5,7 @@ import type {
 	BackgroundTask, Clip, EditorDocument, EditorHistoryStep, EditorMarker,
 	EditorPersona, EditorRevision, EditorRevisionSummary, MediaAsset, RevisionSnapshot, PromptTurn, Thread, TimelineDiff,
 	DeliveryFormat, SoundBinding, TimelineItem, TimelineItemTransform, TimelineSnapshot, Track,
-	EditorOps, MulticamGroup
+	EditorOps, MulticamGroup, MulticamSpeakers
 } from '@shared/types'
 import {
 	groupOfItem, groupRippleCut, groupTimeAt, rederiveGroupItems, resolveAngle, shotRun, suggestCameraGroups, type CameraGroupSuggestion
@@ -2168,6 +2168,47 @@ export const useEditorStore = defineStore('editor', () => {
 		return group
 	}
 
+	/**
+	 * Listen to a group's microphones and find who speaks when (or again, with
+	 * another count). The speakers land on the group as one undoable step; names
+	 * and hand-fixed turns of an earlier run carry over.
+	 */
+	const findSpeakers = async (groupId: string, count?: number): Promise<boolean> => {
+		const group = doc.value?.multicams?.find((g) => g.id === groupId)
+		if (!doc.value || !threadId.value || !group || multicamBusy.value) return false
+		multicamError.value = null
+		multicamBusy.value = { label: 'Listening', fraction: 0 }
+		const thread = threadId.value
+		const off = api.onMulticamProgress?.((d: { threadId: string; fraction: number; label: string }) => {
+			if (d.threadId === thread) multicamBusy.value = { label: d.label, fraction: d.fraction }
+		})
+		let result: { ok: boolean; speakers?: MulticamSpeakers; error?: string }
+		try {
+			result = await api.findSpeakers({ threadId: thread, group: JSON.parse(JSON.stringify(group)), speakers: count })
+		} catch (e: any) {
+			result = { ok: false, error: e?.message || String(e) }
+		} finally {
+			off?.()
+			multicamBusy.value = null
+		}
+		const live = doc.value?.multicams?.find((g) => g.id === groupId)
+		if (!result.ok || !result.speakers || !live || threadId.value !== thread) {
+			multicamError.value = result.error || 'Finding speakers did not finish.'
+			return false
+		}
+		const before = snapshotState()
+		applyDiffToDoc({ schemaVersion: TIMELINE_DIFF_SCHEMA_VERSION, setMulticams: [{ ...live, speakers: result.speakers }] })
+		commitStep({ before, label: 'Find speakers' })
+		return true
+	}
+
+	/** Name a voice, or say which camera it is on: the same op as MCP's setSpeaker. */
+	const setSpeaker = (groupId: string, speaker: string, patch: { name?: string; camera?: string | number | null; framing?: string | null }) =>
+		applyMulticamEdit({ setSpeaker: { group: groupId, speaker, ...patch } }, patch.name !== undefined ? 'Rename speaker' : 'Edit speaker')
+
+	const mergeSpeakers = (groupId: string, from: string, into: string) =>
+		applyMulticamEdit({ mergeSpeakers: { group: groupId, from, into } }, 'Merge speakers')
+
 	const resyncMulticam = (groupId: string) => {
 		const group = doc.value?.multicams?.find((g) => g.id === groupId)
 		if (!group) return Promise.resolve(null)
@@ -4205,6 +4246,9 @@ export const useEditorStore = defineStore('editor', () => {
 		cameraGroupSuggestions,
 		dismissCameraGroupSuggestion,
 		buildMulticam,
+		findSpeakers,
+		setSpeaker,
+		mergeSpeakers,
 		resyncMulticam,
 		placeMulticam,
 		multicamAtPlayhead,

@@ -74,6 +74,8 @@ const api = {
 		ipcRenderer.invoke('find-silence', data),
 	buildMulticam: (data: { threadId: string, assetIds: string[], existing?: unknown, name?: string }) =>
 		ipcRenderer.invoke('multicam-build', data),
+	findSpeakers: (data: { threadId: string, group: unknown, speakers?: number }) =>
+		ipcRenderer.invoke('multicam-speakers', data),
 	onMulticamProgress: (callback: (data: { threadId: string, fraction: number, label: string }) => void) => {
 		const listener = (_event: any, data: any) => callback(data)
 		ipcRenderer.on('multicam-progress', listener)

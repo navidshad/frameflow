@@ -18,6 +18,7 @@ import {
 	anglesOf, cameraOf, camerasOf, cameraSound, groupTimeAt, groupTranscript, itemGroupRange, memberAt, memberOf, memberSpan,
 	rederiveGroupItems, soundCameraOf, soundChoicesOf, soundScore, soundSpan, suggestCameraGroups, toSourceTime
 } from '@shared/multicam'
+import { labelTranscript, speakerIn, summarizeSpeakers } from '@shared/speakers'
 import { peaksForRange } from '@shared/audio'
 import { TIMELINE_DIFF_SCHEMA_VERSION } from '@shared/timeline'
 import { MOTION_TEMPLATES, userMotionTemplates } from '@shared/motionTemplates'
@@ -1663,6 +1664,8 @@ function describeGroup(group: MulticamGroup, doc: { media: MediaAsset[]; timelin
 		name: group.name,
 		mainSound: soundCameraOf(group, doc.media)?.name,
 		groupSpanSec: span ? [r3(span.start), r3(span.end)] : undefined,
+		// Who speaks, once find_speakers has run (named by setSpeaker).
+		...summarizeSpeakers(group, doc.media),
 		// One entry per camera; a camera that split its recording lists every file.
 		cameras: cameras.map((c) => {
 			const quality = cameraSound(c, doc.media)
@@ -1828,6 +1831,7 @@ const makeMulticam: ToolDef = {
 }
 
 const MAX_TRANSCRIPT_LINES = 120
+const MAX_TURNS = 200
 
 const getMulticam: ToolDef = {
 	name: 'get_multicam',
@@ -1836,13 +1840,15 @@ const getMulticam: ToolDef = {
 		'Multicam: one camera group — its members (angle numbers, offsets, drift, sync confidence, each one\'s ' +
 		'sound quality), the main sound, its shots on the timeline, and ONE shared transcript (every camera heard ' +
 		'the same conversation) with GROUP seconds and, where the group is placed, TIMELINE seconds. Page the ' +
-		'transcript with fromSec/toSec in group seconds.',
+		'transcript with fromSec/toSec in group seconds. After find_speakers every line says WHO speaks it ' +
+		'(`speaker`, with the analysis\'s confidence; "unsure" when it would not guess): choose angles from that.',
 	inputSchema: {
 		type: 'object',
 		properties: {
 			group: { type: 'string', description: 'Group id or name; may be left out when there is one' },
 			fromSec: { type: 'number', description: 'GROUP seconds: transcript from here' },
-			toSec: { type: 'number', description: 'GROUP seconds: transcript up to here' }
+			toSec: { type: 'number', description: 'GROUP seconds: transcript up to here' },
+			turns: { type: 'boolean', description: 'Also list the speaker turns (who speaks when) in that range, with confidence; for choosing angles from the voices alone' }
 		},
 		additionalProperties: false
 	},
@@ -1851,7 +1857,7 @@ const getMulticam: ToolDef = {
 		const { doc } = project
 		const group = pickGroup(doc, args.group)
 		const transcripts = await ctx.bridge.readTranscripts(project, group.members.map((m) => m.assetId))
-		const lines = groupTranscript(group, transcripts, doc.media)
+		const lines = labelTranscript(groupTranscript(group, transcripts, doc.media), group.speakers)
 			.filter((l) => (args.fromSec === undefined || l.end >= args.fromSec) && (args.toSec === undefined || l.start <= args.toSec))
 		const page = lines.slice(0, MAX_TRANSCRIPT_LINES)
 		const last = page.at(-1)
@@ -1865,8 +1871,23 @@ const getMulticam: ToolDef = {
 						const b = timelineAtGroup(group, doc.timeline, l.end)
 						return a !== undefined && b !== undefined ? [r3(a), r3(b)] : undefined
 					})(),
+					speaker: l.speaker,
+					speakerConfidence: l.speakerConfidence,
+					alsoHeard: l.alsoHeard,
 					text: l.text
 				})),
+				speakerTurns: args.turns && group.speakers
+					? group.speakers.turns
+						.filter((t) => (args.fromSec === undefined || t.end >= args.fromSec) && (args.toSec === undefined || t.start <= args.toSec))
+						.slice(0, MAX_TURNS)
+						.map((t) => ({
+							groupSec: [r3(t.start), r3(t.end)],
+							speaker: group.speakers!.people.find((p) => p.id === t.speaker)?.name ?? 'unsure',
+							confidence: t.confidence,
+							fixed: t.fixed || undefined
+						}))
+					: undefined,
+				speakersMissing: group.speakers ? undefined : 'Nobody has said who speaks when yet: find_speakers listens to the microphones once and puts a speaker on every line.',
 				transcriptNext: lines.length > page.length && last ? `fromSec ${r3(last.end)} continues the transcript` : undefined,
 				transcriptMissing: lines.length ? undefined : 'No member has a transcript yet; wait {for: "media"} until processing finishes.'
 			})],
@@ -1881,8 +1902,8 @@ const getAngles: ToolDef = {
 	description:
 		'Multicam: every angle of a placed camera group at the SAME moments, side by side — one image per angle, ' +
 		'frames at the same TIMELINE seconds — so you can choose the best angle for a stretch. Also says which ' +
-		'angle each moment shows now, whose microphone is loudest at each moment (a sign of who is speaking: the ' +
-		'camera nearest a speaker hears them loudest), and the words spoken. Then cut with apply_ops switchAngles.',
+		'angle each moment shows now, who is speaking at each moment (after find_speakers; the loudest microphone ' +
+		'is only a weak hint), and the words spoken. Then cut with apply_ops switchAngles.',
 	inputSchema: {
 		type: 'object',
 		properties: {
@@ -1956,7 +1977,9 @@ const getAngles: ToolDef = {
 				}
 			}
 			const loudest = Object.entries(mics).sort((a, b) => b[1] - a[1])[0]
+			const spoken = g === undefined ? undefined : speakerIn(group.speakers, g - half, g + half)
 			return {
+				speaking: spoken ? { name: spoken.speaker?.name ?? 'unsure', confidence: spoken.confidence, share: spoken.share, alsoHeard: spoken.alsoHeard.length ? spoken.alsoHeard : undefined } : undefined,
 				timelineSec: r3(t),
 				groupSec: g === undefined ? undefined : r3(g),
 				showing: shot ? cameraOf(group, doc.media, shot.sourceAssetId)?.name : undefined,
@@ -1967,13 +1990,18 @@ const getAngles: ToolDef = {
 		const transcripts = await ctx.bridge.readTranscripts(project, group.members.map((m) => m.assetId))
 		const g0 = groupAtTimeline(group, doc.timeline, args.fromSec) ?? groupTimes.find((g) => g !== undefined)!
 		const g1 = groupAtTimeline(group, doc.timeline, args.toSec) ?? [...groupTimes].reverse().find((g) => g !== undefined)!
-		const words = groupTranscript(group, transcripts, doc.media).filter((l) => l.end >= g0 && l.start <= g1).map((l) => l.text).join(' ')
+		const spokenLines = labelTranscript(groupTranscript(group, transcripts, doc.media), group.speakers).filter((l) => l.end >= g0 && l.start <= g1)
+		const words = group.speakers
+			? spokenLines.map((l) => `${l.speaker ?? 'unsure'}: ${l.text}`).join('\n')
+			: spokenLines.map((l) => l.text).join(' ')
 		content.unshift(json({
 			group: group.name,
 			angles: perAngle.map((a) => ({ angle: a.angle, name: a.name, recordingAtEachMoment: a.recording })),
 			moments,
 			said: words || undefined,
-			micNote: 'micLevel is each microphone against its own usual level: above 1 is louder than usual. The loudest is usually nearest whoever is speaking.',
+			micNote: group.speakers
+				? '`speaking` is who the voice analysis hears at each moment (between two people on one camera trust it from ~0.95 confidence; women vs men is surer). micLevel / loudestMic are NOT a speaker detector: in a shared room every microphone hears everyone.'
+				: 'micLevel is each microphone against its own usual level, and is a weak hint only (in a shared room every microphone hears everyone). find_speakers gives a real answer to "who is speaking".',
 			next: 'apply_ops switchAngles {switches: [{atSec, angle}]} to cut; the sound is untouched.'
 		}))
 		return {
@@ -1983,12 +2011,148 @@ const getAngles: ToolDef = {
 	}
 }
 
+const findSpeakers: ToolDef = {
+	name: 'find_speakers',
+	permission: 'edit',
+	writes: true,
+	description:
+		'Multicam: find WHO SPEAKS WHEN in a camera group, once. Listens to every camera\'s microphone, tells the ' +
+		'voices apart (microphone closeness, pitch and timbre, averaged over seconds) and gives the group "Speaker 1, ' +
+		'2…" with turns on the group clock, each with a confidence ("unsure" where it would rather not guess). Takes ' +
+		'about a minute per hour of footage. Then: get_speakers shows frames to see who is who, apply_ops setSpeaker ' +
+		'names them (and says which camera they are on), get_multicam puts the name on every transcript line. Give ' +
+		'`speakers` (count the people in a frame): the number is otherwise guessed, usually one too many (apply_ops ' +
+		'mergeSpeakers fixes that). HONEST LIMITS: people on different microphones/very different voices are told ' +
+		'apart reliably; two people sharing one microphone and a similar pitch (two men side by side on one camera) ' +
+		'only mostly (~85–90% on the first real shoot, worse in short turns), and the analysis cannot tell you WHICH ' +
+		'person is which: check a frame. Fix mistakes with apply_ops setSpeakerTurns. Running it again keeps names ' +
+		'and fixes.',
+	inputSchema: {
+		type: 'object',
+		properties: {
+			group: { type: 'string', description: 'Group id or name; may be left out when there is one' },
+			speakers: { type: 'integer', minimum: 2, maximum: 6, description: 'How many people speak in the recording' }
+		},
+		additionalProperties: false
+	},
+	title: (args) => `find_speakers${args.speakers ? ` (${args.speakers})` : ''}`,
+	async run(args, ctx) {
+		const project = await requireProject(ctx)
+		const { doc } = project
+		const group = pickGroup(doc, args.group)
+		const startedAt = Date.now()
+		const speakers = await ctx.bridge.diarizeGroup(project, group, {
+			speakers: args.speakers,
+			onProgress: (fraction, label) => ctx.progress?.(`${label} (${Math.round(fraction * 100)}%)`, Date.now() - startedAt)
+		})
+		const next: MulticamGroup = { ...group, speakers }
+		const diff: TimelineDiff = { schemaVersion: TIMELINE_DIFF_SCHEMA_VERSION, setMulticams: [next] }
+		const outcome = await commitAgentEdit(ctx, project, {
+			diff, droppedOps: [], notes: [], rationale: `Found ${speakers.people.length} speakers in "${group.name}"`,
+			prompt: `${ctx.clientName} found who speaks when over MCP`
+		})
+		return {
+			content: [json({
+				revision: `V${outcome.revisionSeq}`,
+				...summarizeSpeakers(next, doc.media),
+				turns: speakers.turns.length,
+				next: 'get_speakers shows a few frames per voice so you can tell who is who; then apply_ops setSpeaker {speaker, name, camera, framing}. get_multicam {turns: true} lists the turns.'
+			})],
+			feed: {
+				detail: `${group.name} · ${speakers.people.length} speakers · ${Math.round(speakers.analysis.unsureShare * 100)}% unsure`,
+				chips: [{ text: 'speakers', tone: speakers.analysis.warnings.length ? 'red' : 'green' }]
+			}
+		}
+	}
+}
+
+const getSpeakers: ToolDef = {
+	name: 'get_speakers',
+	permission: 'read',
+	description:
+		'Multicam: the voices find_speakers found, each with its best sample moments (long, confident turns) and ONE ' +
+		'frame per angle at each, so you can see who is who: the iPhone frame of Speaker 1\'s moment shows whether it ' +
+		'is the woman on that camera; in a two-shot frame look at WHO has the mouth open and the gestures, then ' +
+		'apply_ops setSpeaker names the voice, the camera and where the person sits ("left of the two-shot"). Two ' +
+		'people on one camera: use samples ≥ 3 and compare the frames of the two voices.',
+	inputSchema: {
+		type: 'object',
+		properties: {
+			group: { type: 'string', description: 'Group id or name; may be left out when there is one' },
+			samples: { type: 'integer', minimum: 1, maximum: 4, description: 'Moments per speaker (default 2)' },
+			tileWidth: { type: 'integer', minimum: 160, maximum: 480, description: 'Pixels per frame (default 280)' }
+		},
+		additionalProperties: false
+	},
+	async run(args, ctx) {
+		const project = await requireProject(ctx)
+		const { doc } = project
+		const group = pickGroup(doc, args.group)
+		const sp = group.speakers
+		if (!sp) throw new ToolError('This group has no speakers yet: find_speakers listens to the microphones and finds them.')
+		const wanted = args.samples ?? 2
+		const angles = anglesOf(group, doc.media)
+		const transcripts = await ctx.bridge.readTranscripts(project, group.members.map((m) => m.assetId))
+		const lines = groupTranscript(group, transcripts, doc.media)
+		const content: ToolContent[] = []
+		const samples: Array<Record<string, unknown>> = []
+		for (const [n, person] of sp.people.entries()) {
+			const picks = bestSamples(sp.turns.filter((t) => t.speaker === person.id), wanted)
+			if (!picks.length) continue
+			const moments = picks.map((t) => ({ turn: t, at: (t.start + t.end) / 2 }))
+			samples.push({
+				speaker: person.name, number: n + 1,
+				moments: moments.map((m) => ({
+					groupSec: [r3(m.turn.start), r3(m.turn.end)], confidence: m.turn.confidence,
+					saying: lines.filter((l) => l.end >= m.turn.start && l.start <= m.turn.end).map((l) => l.text).join(' ').slice(0, 160) || undefined
+				}))
+			})
+			for (const camera of angles) {
+				const at = moments.map((m) => {
+					const member = memberAt(camera, m.at, doc.media)
+					if (!member) return undefined
+					const source = toSourceTime(member, m.at)
+					const length = doc.media.find((a) => a.id === member.assetId)?.metadata?.duration ?? 0
+					return source >= 0 && source <= length ? { member, source, group: m.at } : undefined
+				})
+				for (const member of new Set(at.filter(Boolean).map((x) => x!.member))) {
+					const mine = at.filter((x) => x?.member === member) as Array<{ source: number; group: number }>
+					content.push({ type: 'text', text: `${person.name} (voice ${n + 1}) · ${camera.name}` })
+					const { sheet } = await ctx.bridge.mediaSheet(project, member.assetId, {
+						times: mine.map((x) => x.source), columns: mine.length, tileWidth: args.tileWidth ?? 280,
+						labels: mine.map((x) => `${clock(x.group)}`)
+					})
+					content.push({ type: 'image', data: sheet.data, mimeType: sheet.mimeType })
+				}
+			}
+		}
+		content.unshift(json({
+			group: group.name,
+			...summarizeSpeakers(group, doc.media),
+			samples,
+			next: 'apply_ops setSpeaker {speaker, name, camera, framing} for each voice; mergeSpeakers if one person was split; setSpeakerTurns to fix a stretch. Frame labels are GROUP seconds, as in get_multicam.'
+		}))
+		return { content, feed: { detail: `${group.name} · ${sp.people.length} speakers` } }
+	}
+}
+
+/** Up to `n` turns that make good samples: long, sure, and spread over the recording. */
+function bestSamples(turns: Array<{ start: number; end: number; confidence: number }>, n: number) {
+	const good = turns.filter((t) => t.end - t.start >= 4).sort((a, b) => b.confidence * Math.sqrt(b.end - b.start) - a.confidence * Math.sqrt(a.end - a.start))
+	const out: typeof good = []
+	for (const t of good) {
+		if (out.every((o) => Math.abs((o.start + o.end) / 2 - (t.start + t.end) / 2) > 120)) out.push(t)
+		if (out.length >= n) break
+	}
+	return out.sort((a, b) => a.start - b.start)
+}
+
 export const TOOLS: ToolDef[] = [
 	beginRound, endRound, listProjects, createProject, openProject, importMedia, waitTool,
 	getProject, getTimeline, getMedia, inspectMedia, findSilences, searchMomentsTool, renderFrame, renderFrames, getMotionGuide, getMotionKit,
 	getSoundGuide, listSounds, suggestCuesTool, renderSoundTool, analyzeAudio, generateAudioTool,
 	applyOps, revertToVersion, exportTool, inspectExport,
-	findCameraGroups, makeMulticam, getMulticam, getAngles
+	findCameraGroups, makeMulticam, getMulticam, getAngles, findSpeakers, getSpeakers
 ]
 
 export const SERVER_INSTRUCTIONS =
@@ -2004,4 +2168,6 @@ export const SERVER_INSTRUCTIONS =
 	'so read the timeline again before each edit instead of relying on an old read. To deliver: export, wait {for: "export"}, ' +
 	'then inspect_export to look at the file frame by frame. Several cameras of one moment (a podcast): ' +
 	'find_camera_groups → make_multicam (syncs them by sound and places them) → get_multicam for the one shared ' +
-	'transcript → get_angles to compare every angle of a stretch → apply_ops switchAngles to cut; the sound never moves.'
+	'transcript → find_speakers (once: who speaks when, so every transcript line has a speaker; give the number of people) → ' +
+	'get_speakers (frames per voice) → apply_ops setSpeaker to name them → get_angles to compare every angle of a stretch ' +
+	'→ apply_ops switchAngles to cut; the sound never moves. Never choose angles from the loudest microphone: use the speakers.'

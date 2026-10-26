@@ -19,6 +19,7 @@ import { ProviderError } from '../audio/provider'
 import { renderProgress, startEditorRender } from '../editor/render'
 import { contactSheet, measureExportLoudness, probeExport, sheetClock, sheetTimes, tileImages } from '../editor/exportInspect'
 import { buildCameraGroup } from '../multicam/group'
+import { diarizeGroup } from '../multicam/diarize'
 import fs from 'node:fs'
 import { join } from 'node:path'
 import { tmpdir } from 'node:os'
@@ -239,6 +240,10 @@ export const rendererBridge: EditorBridge = {
 	async buildCameraGroup(project, assetIds, options) {
 		const { group, ranking } = await buildCameraGroup(project.doc.media, assetIds, options)
 		return { group, ranking }
+	},
+
+	async diarizeGroup(project, group, options) {
+		return diarizeGroup(group, project.doc.media, { ...options, keepFrom: group.speakers })
 	},
 
 	isPreparing(project, assetId) {

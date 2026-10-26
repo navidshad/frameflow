@@ -17,6 +17,7 @@ import { backgroundTaskManager } from './tasks'
 import { GeminiAdapter } from './gemini/adapter'
 
 import { buildCameraGroup } from './multicam/group'
+import { diarizeGroup } from './multicam/diarize'
 import { checkFFmpegAvailability, getVideoMetadata, detectSilence } from './ffmpeg'
 import { checkYtDlpAvailability, downloadVideo, getVideoFormats } from './ytdlp'
 import { dependencyManager } from './dependencies/manager'
@@ -625,6 +626,26 @@ app.whenReady().then(() => {
 				}
 			})
 			return { ok: true, group, ranking }
+		} catch (e: any) {
+			return { ok: false, error: e?.message || String(e) }
+		}
+	})
+
+	// Find who speaks when in a camera group, by sound. The speakers come back unsaved: the renderer
+	// commits them as an undoable edit, as an agent's find_speakers does.
+	ipcMain.handle('multicam-speakers', async (event, { threadId, group, speakers }: {
+		threadId: string, group: MulticamGroup, speakers?: number
+	}) => {
+		const media = threadManager.getThread(threadId)?.editor?.media
+		if (!media) return { ok: false, error: 'That project is not open.' }
+		try {
+			const found = await diarizeGroup(group, media, {
+				speakers, keepFrom: group.speakers,
+				onProgress: (fraction, label) => {
+					if (!event.sender.isDestroyed()) event.sender.send('multicam-progress', { threadId, fraction, label })
+				}
+			})
+			return { ok: true, speakers: found }
 		} catch (e: any) {
 			return { ok: false, error: e?.message || String(e) }
 		}

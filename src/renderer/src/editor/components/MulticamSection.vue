@@ -90,6 +90,53 @@
 			</p>
 		</div>
 
+		<!-- Who speaks when: found by sound once, named here. Names reach the agent's transcript too. -->
+		<div data-testid="speakers">
+			<div class="flex items-center mb-1.5 gap-2">
+				<p class="lbl">Speakers</p>
+				<div class="flex-1"></div>
+				<label v-if="!group.speakers" class="flex items-center gap-1 text-[10px] text-zinc-500" title="How many people speak in the recording">
+					People
+					<input v-model.number="people" type="number" min="2" max="6" aria-label="Number of speakers"
+						class="w-9 bg-transparent text-xs tabular-nums text-zinc-700 dark:text-zinc-300 text-center outline-none shadow-[inset_0_-1px_0_rgb(var(--primary)/0.4)]" />
+				</label>
+				<button class="text-[11px] font-semibold text-zinc-500 hover:text-primary transition disabled:opacity-40"
+					:disabled="!!store.multicamBusy"
+					:title="group.speakers ? 'Listen again (names and fixed turns are kept)' : 'Listen to the microphones and tell the voices apart'"
+					@click="findSpeakers">
+					{{ store.multicamBusy ? store.multicamBusy.label : group.speakers ? 'Find again' : 'Find speakers' }}
+				</button>
+			</div>
+			<template v-if="group.speakers">
+				<div class="h-2 rounded-sm overflow-hidden bg-zinc-200 dark:bg-zinc-800" :style="{ background: turnBar }"
+					title="Who speaks across the recording; grey is silence or unsure"></div>
+				<div v-for="(p, i) in group.speakers.people" :key="p.id" class="flex items-center gap-2.5 py-1">
+					<span class="w-2 h-2 rounded-full shrink-0" :style="{ background: p.color }"></span>
+					<span class="flex-1 min-w-0">
+						<input :value="p.name" :aria-label="`Name of speaker ${i + 1}`"
+							class="w-full bg-transparent text-xs font-semibold text-zinc-700 dark:text-zinc-300 outline-none focus:shadow-[inset_0_-1px_0_rgb(var(--primary))]"
+							@change="store.setSpeaker(group!.id, p.id, { name: ($event.target as HTMLInputElement).value })" />
+						<span class="block text-[10px] tabular-nums text-zinc-500 truncate">
+							{{ speakingTime(p.talkSec) }}<template v-if="p.pitchHz"> · {{ p.pitchHz }} Hz</template><template v-if="cameraName(p.camera)"> · on {{ cameraName(p.camera) }}</template>
+						</span>
+					</span>
+					<select v-if="group.speakers.people.length > 1" class="w-14 bg-transparent text-[10px] text-zinc-500 outline-none cursor-pointer"
+						title="This is the same person as…" aria-label="Merge into"
+						@change="mergeInto(p.id, $event)">
+						<option value="">merge</option>
+						<option v-for="q in group.speakers.people.filter((x) => x.id !== p.id)" :key="q.id" :value="q.id">{{ q.name }}</option>
+					</select>
+				</div>
+				<p v-if="Math.round(group.speakers.analysis.unsureShare * 100) >= 1" class="mt-1 text-[10px] leading-snug text-zinc-500">
+					{{ Math.round(group.speakers.analysis.unsureShare * 100) }}% of the talk is marked unsure.
+				</p>
+				<p v-for="w in group.speakers.analysis.warnings" :key="w" class="mt-1 text-[10px] leading-snug text-amber-500">{{ w }}</p>
+			</template>
+			<p v-else class="text-[10px] leading-snug text-zinc-500">
+				Tells the voices apart from the sound, so you (or an agent) can cut to whoever is speaking. Two people on one camera can only be told apart by their voices.
+			</p>
+		</div>
+
 		<button class="text-[11px] font-semibold text-zinc-500 hover:text-red-500 transition"
 			title="Every clip stays where it is, as an ordinary clip"
 			@click="store.ungroupMulticam(group!.id)">
@@ -99,12 +146,13 @@
 </template>
 
 <script setup lang="ts">
-import { computed } from 'vue'
+import { computed, ref } from 'vue'
 import type { MulticamSync, TimelineItem } from '@shared/types'
 import {
 	anglesOf, camerasOf, cameraSound, groupOfItem, groupTimeAt, memberAt, recordedPieces, referenceOf,
-	soundChoicesOf, soundScore, toSourceTime, type Camera
+	soundChoicesOf, soundScore, soundSpan, toSourceTime, type Camera
 } from '@shared/multicam'
+import { speakerIn } from '@shared/speakers'
 import { toMediaUrl } from '@shared/media-url'
 import { useEditorStore } from '../../stores/editorStore'
 
@@ -180,6 +228,33 @@ const signed = (n: number, digits: number) => `${n >= 0 ? '+' : '−'}${Math.abs
 const driftTitle = (ppm: number) => ppm
 	? `Its clock runs ${Math.abs(ppm)} parts per million ${ppm > 0 ? 'fast' : 'slow'}: ${(Math.abs(ppm) * 3.6).toFixed(0)} ms an hour, corrected on every shot.`
 	: 'No clock drift measured.'
+
+// ===== Speakers =====
+const people = ref(3)
+const findSpeakers = () => store.findSpeakers(group.value!.id, group.value?.speakers ? group.value.speakers.people.length : people.value)
+const speakingTime = (sec?: number) => (sec === undefined ? '' : sec >= 90 ? `${Math.round(sec / 60)} min` : `${Math.round(sec)} s`)
+const cameraName = (key?: string) => (key ? cameras.value.find((c) => c.key === key)?.name : undefined)
+const mergeInto = (from: string, event: Event) => {
+	const select = event.target as HTMLSelectElement
+	const into = select.value
+	select.value = ''
+	if (into) store.mergeSpeakers(group.value!.id, from, into)
+}
+/** The recording as one strip: the speaker who holds each slice, grey where nobody (or unsure). */
+const turnBar = computed(() => {
+	const sp = group.value?.speakers
+	const span = group.value ? soundSpan(group.value, media.value) : null
+	if (!sp?.turns.length || !span) return undefined
+	const slices = 160
+	const width = (span.end - span.start) / slices
+	const stops: string[] = []
+	for (let i = 0; i < slices; i++) {
+		const found = speakerIn(sp, span.start + i * width, span.start + (i + 1) * width)
+		const colour = found?.speaker && found.share >= 0.5 ? found.speaker.color ?? '#a1a1aa' : 'transparent'
+		stops.push(`${colour} ${((i / slices) * 100).toFixed(2)}% ${(((i + 1) / slices) * 100).toFixed(2)}%`)
+	}
+	return `linear-gradient(to right, ${stops.join(', ')})`
+})
 
 const unsure = computed(() => {
 	const off = cameras.value.filter((c) => worst(c) !== 'strong')

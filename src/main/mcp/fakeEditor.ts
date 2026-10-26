@@ -181,6 +181,14 @@ export class FakeEditor implements EditorBridge {
 		return { group, ranking }
 	}
 
+	/** What the speaker analysis "hears", set by a test. */
+	diarization: import('@shared/types').MulticamSpeakers | null = null
+
+	async diarizeGroup(_project: LiveProject, _group: MulticamGroup, _options: { speakers?: number }) {
+		if (!this.diarization) throw new Error('No speaker analysis was set up for this test.')
+		return this.diarization
+	}
+
 	/** Media ids whose preparation chain is "live"; a stored 'running' outside it reads as interrupted. */
 	preparing = new Set<string>()
 	isPreparing(_project: LiveProject, assetId: string) {
