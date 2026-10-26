@@ -68,6 +68,7 @@ const api = {
 		ipcRenderer.invoke('import-media-url', data),
 	removeMediaAsset: (data: { threadId: string, assetId: string }) =>
 		ipcRenderer.invoke('remove-media-asset', data),
+	ensureProxyTags: (threadId: string) => ipcRenderer.invoke('ensure-proxy-tags', threadId),
 	preprocessMedia: (data: { threadId: string, assetId: string, steps?: string[], sensitivity?: number }) =>
 		ipcRenderer.invoke('preprocess-media', data),
 	findSilence: (data: { threadId: string, assetId: string, noiseDb?: number, minDurationSec?: number }) =>
@@ -154,6 +155,8 @@ const api = {
 		ipcRenderer.invoke('get-editor-revision-snapshot', data),
 	pushEditorRevision: (data: { threadId: string, revision: any }) =>
 		ipcRenderer.invoke('push-editor-revision', data),
+	replaceEditorRevision: (data: { threadId: string, revision: any }) =>
+		ipcRenderer.invoke('replace-editor-revision', data),
 	deleteEditorRevisions: (data: { threadId: string, ids: string[] }) =>
 		ipcRenderer.invoke('delete-editor-revisions', data),
 	// Thread Management
@@ -179,6 +182,11 @@ const api = {
 		ipcRenderer.invoke('show-confirmation', options),
 	saveVideo: (sourcePath: string) => ipcRenderer.invoke('save-video', sourcePath),
 	openThreadDir: (threadId: string) => ipcRenderer.invoke('open-thread-dir', threadId),
+	listEditorExports: (threadId: string) => ipcRenderer.invoke('list-editor-exports', threadId),
+	revealEditorExport: (threadId: string, filePath: string) =>
+		ipcRenderer.invoke('reveal-editor-export', { threadId, filePath }),
+	openEditorExport: (threadId: string, filePath: string) =>
+		ipcRenderer.invoke('open-editor-export', { threadId, filePath }),
 	getVideoMetadata: (filePath: string) => ipcRenderer.invoke('get-video-metadata', filePath),
 	showOpenDialog: (options: any) => ipcRenderer.invoke('show-open-dialog', options),
 	upscaleImage: (data: { threadId: string, messageId: string, imagePath: string, upscaleFactor: string }) => 

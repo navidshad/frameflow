@@ -10,6 +10,7 @@ import type { PipelineContext } from '../pipeline'
 import { threadManager } from '../threads'
 import { backgroundTaskManager } from '../tasks'
 import * as ffmpegAdapter from '../ffmpeg'
+import { tagProxyForMonitor } from '../ffmpeg/proxyTags'
 import { SceneDetector, type Scene } from '../scenedetect'
 import * as extraction from '../pipeline/phases/extraction'
 import { ASSET_DIRS } from '../constants/paths'
@@ -213,9 +214,41 @@ function createAssetContext(
 
 // ===== Steps =====
 
+/**
+ * Tag a finished proxy so the monitor shows the pixels the export makes (see
+ * ffmpeg/proxyTags.ts). Never fails the step: an untagged proxy only looks off.
+ */
+async function tagProxy(proxyPath: string | undefined, originalPath: string) {
+	if (!proxyPath || proxyPath === originalPath) return // a source reused as its own proxy is not ours to rewrite
+	try {
+		await tagProxyForMonitor(proxyPath)
+	} catch (error: any) {
+		console.warn('[editor] could not tag the proxy for the monitor:', error?.message || error)
+	}
+}
+
+/**
+ * Tag every proxy of a project that is not tagged yet: older projects, and
+ * proxies made before the tagging existed. Called as the editor opens one.
+ */
+export async function ensureProxyTags(threadId: string): Promise<number> {
+	const thread = threadManager.getThread(threadId)
+	let changed = 0
+	for (const asset of thread?.editor?.media ?? []) {
+		if (asset.kind !== 'video' || !asset.proxyPath || asset.proxyPath === asset.originalPath) continue
+		try {
+			if (await tagProxyForMonitor(asset.proxyPath)) changed++
+		} catch (error: any) {
+			console.warn(`[editor] could not tag the proxy of ${asset.name}:`, error?.message || error)
+		}
+	}
+	return changed
+}
+
 async function runProxyStep(threadId: string, assetId: string, signal: AbortSignal) {
 	const asset = getAsset(threadId, assetId)!
 	if (exists(asset.proxyPath)) {
+		await tagProxy(asset.proxyPath, asset.originalPath)
 		await setTask(threadId, assetId, 'proxy', { state: 'completed', progress: 100 })
 		return
 	}
@@ -242,6 +275,7 @@ async function runProxyStep(threadId: string, assetId: string, signal: AbortSign
 		)
 	}
 
+	await tagProxy(proxyPath, asset.originalPath)
 	await patchAsset(threadId, assetId, { proxyPath })
 	await patchAssetPreprocessing(threadId, assetId, { lowResVideoPath: proxyPath })
 	await setTask(threadId, assetId, 'proxy', { state: 'completed', progress: 100 })

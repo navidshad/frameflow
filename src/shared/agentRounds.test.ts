@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import {
-	applyRoundEvent, chatEntries, elapsedClock, RoundBook, roundStats, settleStaleRounds, summariseAnswer, summariseAsk,
+	applyRoundEvent, chatEntries, editingBanner, elapsedClock, RoundBook, roundStats, settleStaleRounds, summariseAnswer, summariseAsk,
 	type AgentCallRecord, type AgentRound, type RoundEvent
 } from './agentRounds'
 
@@ -180,5 +180,30 @@ describe('chatEntries', () => {
 		]
 		const round: AgentRound = { id: 'r', threadId: 'p', sessionId: 's-a', clientName: 'x', kind: 'round', seq: 1, status: 'done', startedAt: 20, calls: [] }
 		expect(chatEntries(turns, [round]).map((e) => (e.kind === 'turn' ? e.turn.id : e.round.id))).toEqual(['t1', 'r'])
+	})
+})
+
+describe('editingBanner', () => {
+	const lock = { threadId: 't1', roundId: 'r1', sessionId: 's-a', clientName: 'Claude Code', seq: 3, goal: 'cut', startedAt: 5_000, lastCallAt: 9_000, steps: 4 }
+
+	it('names the agent holding this project, counting from the round start', () => {
+		expect(editingBanner(lock, 't1')).toEqual({ sessionId: 's-a', clientName: 'Claude Code', steps: 4, startedAt: 5_000 })
+	})
+
+	it('is gone when no round is open, however recently the client called', () => {
+		expect(editingBanner(null, 't1')).toBeNull()
+	})
+
+	it('does not show another project\'s agent, or anything with no project open', () => {
+		expect(editingBanner(lock, 't2')).toBeNull()
+		expect(editingBanner(lock, null)).toBeNull()
+	})
+
+	it('clears when the round ends', () => {
+		const { rounds } = book()
+		expect(rounds.begin(A, 't1', 'cut').ok).toBe(true)
+		expect(editingBanner(rounds.lock(), 't1')?.clientName).toBe('Claude Code')
+		rounds.end('s-a', 'done')
+		expect(editingBanner(rounds.lock(), 't1')).toBeNull()
 	})
 })

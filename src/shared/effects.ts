@@ -103,13 +103,66 @@ const adjust = (
 	...(css ? { css: (p: EffectParams) => css(num(p, param)) } : {})
 })
 
+/**
+ * The gain ffmpeg's `colortemperature` puts on red, green and blue, from its
+ * blackbody fit (libavfilter/vf_colortemperature.c, `kelvin2rgb`). With the
+ * filter's defaults (mix 1, no lightness preservation) that gain is all it
+ * does to a pixel, so the monitor can copy it exactly.
+ */
+export function kelvinGains(kelvin: number): [number, number, number] {
+	const k = kelvin / 100
+	let r: number, g: number
+	if (k <= 66) {
+		r = 1
+		g = 0.39008157876901960784 * Math.log(k) - 0.63184144378862745098
+	} else {
+		const t = Math.max(k - 60, 0)
+		r = 1.29293618606274509804 * Math.pow(t, -0.1332047592)
+		g = 1.12989086089529411765 * Math.pow(t, -0.0755148492)
+	}
+	const b = k >= 66 ? 1 : k <= 19 ? 0 : 0.54320678911019607843 * Math.log(k - 10) - 1.19625408914
+	return [clamp(r, 0, 1), clamp(g, 0, 1), clamp(b, 0, 1)]
+}
+
+/**
+ * CSS has no colour temperature, but an SVG colour matrix is a per-channel
+ * gain, which is exactly what ffmpeg does. `sRGB` interpolation matters: SVG
+ * filters work in linear light by default, ffmpeg works on the stored values.
+ */
+function warmthCss(kelvin: number): string {
+	const [r, g, b] = kelvinGains(kelvin).map((v) => Number(v.toFixed(4)))
+	const svg = "<svg xmlns='http://www.w3.org/2000/svg'><filter id='w' color-interpolation-filters='sRGB'>" +
+		`<feColorMatrix type='matrix' values='${r} 0 0 0 0 0 ${g} 0 0 0 0 0 ${b} 0 0 0 0 0 1 0'/></filter></svg>`
+	return `url("data:image/svg+xml,${encodeURIComponent(svg)}#w")`
+}
+
+/**
+ * `eq=brightness` ADDS the same amount to every pixel: v on the 0..255 luma
+ * codes, and the 16..235 luma range spans the whole of RGB, so every channel
+ * moves by v * 255 * 255/219 levels (measured against the real filter to within
+ * five levels from -0.5 to 0.5, see exposure.test.ts). CSS `brightness()` MULTIPLIES, which
+ * brightens highlights far more than shadows and shifts colours (a clip with
+ * warmth and +0.07 came out 10 levels too blue in the monitor). An SVG
+ * component transfer is the same addition, in the same stored values (`sRGB`).
+ */
+function exposureCss(v: number): string {
+	const shift = Number(((v * 255) / 219).toFixed(4))
+	const svg = "<svg xmlns='http://www.w3.org/2000/svg'><filter id='e' color-interpolation-filters='sRGB'><feComponentTransfer>" +
+		['R', 'G', 'B'].map((c) => `<feFunc${c} type='linear' slope='1' intercept='${shift}'/>`).join('') +
+		'</feComponentTransfer></filter></svg>'
+	return `url("data:image/svg+xml,${encodeURIComponent(svg)}#e")`
+}
+
+/** The shift `exposureCss` makes, in 0..255 levels: what the monitor adds for an `exposure` amount. */
+export function exposureShiftLevels(v: number): number {
+	return (v * 255 * 255) / 219
+}
+
 const ADJUST: EffectDef[] = [
 	adjust('exposure', 'Exposure', 'Lifts or drops the whole picture.',
 		number('amount', 'Amount', -0.5, 0.5, 0.01, 0),
 		(v) => (v === 0 ? '' : `eq=brightness=${fmt(v)}`),
-		// Matched at midtone: `eq` ADDS v to a 0.5 pixel, CSS MULTIPLIES it, so
-		// the equivalent factor is 1 + 2v. They drift at the extremes on purpose.
-		(v) => (v === 0 ? '' : `brightness(${fmt(1 + v * 2)})`)),
+		(v) => (v === 0 ? '' : exposureCss(v))),
 
 	adjust('contrast', 'Contrast', 'Pushes shadows down and highlights up.',
 		number('amount', 'Amount', 0, 3, 0.01, 1),
@@ -129,7 +182,8 @@ const ADJUST: EffectDef[] = [
 
 	adjust('warmth', 'Warmth', 'Cools toward blue or warms toward orange.',
 		number('kelvin', 'Temperature', 2000, 12000, 100, 6500, 'K'),
-		(v) => (v === 6500 ? '' : `colortemperature=temperature=${fmt(v)}`)),
+		(v) => (v === 6500 ? '' : `colortemperature=temperature=${fmt(v)}`),
+		(v) => (v === 6500 ? '' : warmthCss(v))),
 
 	adjust('hue', 'Hue', 'Rotates every colour around the wheel.',
 		number('degrees', 'Rotation', -180, 180, 1, 0, '\u00b0'),
@@ -268,6 +322,8 @@ export interface AppliedEffect {
 	id: string
 	kind: string
 	params?: EffectParams
+	/** Switched off (compare with and without): skipped everywhere, settings kept. */
+	disabled?: boolean
 }
 
 /**
@@ -280,6 +336,7 @@ export function effectChain(effects: AppliedEffect[] | undefined, stream: Effect
 	if (!effects?.length) return []
 	const out: string[] = []
 	for (const applied of effects) {
+		if (applied.disabled) continue
 		const def = registry.get(applied.kind)
 		if (!def || def.stream !== stream) continue
 		const fragment = def.build(applied.params ?? {})
@@ -293,6 +350,7 @@ export function effectCss(effects: AppliedEffect[] | undefined): string {
 	if (!effects?.length) return ''
 	const parts: string[] = []
 	for (const applied of effects) {
+		if (applied.disabled) continue
 		const def = registry.get(applied.kind)
 		if (!def || def.stream !== 'video' || !def.css) continue
 		const fragment = def.css(applied.params ?? {})

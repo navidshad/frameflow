@@ -6,7 +6,7 @@
 		<span class="text-[11px] text-zinc-500 whitespace-nowrap">is editing · via MCP · {{ steps }} · {{ elapsed }}</span>
 		<button
 			class="ml-1 text-[11px] font-semibold text-red-500 hover:text-red-400 transition"
-			:title="`Disconnect ${session.clientName}`" @click="agent.disconnect(session.id)">
+			:title="`Disconnect ${session.clientName}`" @click="agent.disconnect(session.sessionId)">
 			Stop
 		</button>
 	</div>
@@ -17,7 +17,7 @@ import { computed } from 'vue'
 import { useAgentStore } from '../../stores/agentStore'
 
 /**
- * "Claude Code is editing · via MCP · 9 steps · 2:31" in the editor's top bar.
+ * "Claude Code is editing · via MCP · 9 steps · 2:31" in the editor's top bar, while its round is open.
  * Stop disconnects that session — the same as Disconnect in the Agent tab.
  */
 
@@ -29,10 +29,10 @@ const steps = computed(() => {
 	return `${n} step${n === 1 ? '' : 's'}`
 })
 
-/** Time since it connected, m:ss — ticks with the store's clock. */
+/** Time since its round began, m:ss — ticks with the store's clock. */
 const elapsed = computed(() => {
 	if (!session.value) return ''
-	const total = Math.max(0, Math.floor((agent.now - session.value.connectedAt) / 1000))
+	const total = Math.max(0, Math.floor((agent.now - session.value.startedAt) / 1000))
 	const minutes = Math.floor(total / 60)
 	return minutes >= 60
 		? `${Math.floor(minutes / 60)}:${String(minutes % 60).padStart(2, '0')}:${String(total % 60).padStart(2, '0')}`

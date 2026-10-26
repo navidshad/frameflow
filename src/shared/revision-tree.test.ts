@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import {
+	withoutProbeStamps,
 	applyPrune,
 	childrenByParent,
 	collectSubtree,
@@ -161,5 +162,29 @@ describe('applyPrune', () => {
 		const out = applyPrune(chain, [])
 		expect(out).toEqual(chain)
 		expect(out).not.toBe(chain)
+	})
+})
+
+describe('withoutProbeStamps', () => {
+	const item = (verified?: boolean) => ({
+		id: 'm', motion: { html: '<p/>', passed: { html: '<p/>', ...(verified === undefined ? {} : { verified }) } }
+	}) as any
+
+	it('makes a stamped page equal to the same page without the stamp', () => {
+		expect(withoutProbeStamps([item(true)])).toEqual(withoutProbeStamps([item()]))
+	})
+
+	it('leaves other items and other fields alone', () => {
+		const plain = { id: 'v', label: 'clip' } as any
+		const [a, b] = withoutProbeStamps([plain, item(true)])
+		expect(a).toBe(plain)
+		expect(b.motion?.html).toBe('<p/>')
+		expect(b.motion?.passed?.html).toBe('<p/>')
+	})
+
+	it('does not mutate its input', () => {
+		const stamped = item(true)
+		withoutProbeStamps([stamped])
+		expect(stamped.motion.passed.verified).toBe(true)
 	})
 })

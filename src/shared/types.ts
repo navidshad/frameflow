@@ -595,7 +595,13 @@ export interface TimelineItemTransform { x?: number; y?: number; scale?: number;
  */
 export interface ItemFraming { mode: 'fit' | 'fill'; pan?: number }
 /** One effect on a clip. `kind` indexes the catalogue in shared/effects.ts. */
-export interface EffectRef { id: string; kind: string; params?: Record<string, number | string> }
+export interface EffectRef {
+	id: string
+	kind: string
+	params?: Record<string, number | string>
+	/** Switched off: skipped by the monitor and the export alike, settings kept. Absent = on. */
+	disabled?: boolean
+}
 export interface TransitionRef { kind: string; duration: number }                          // stub
 /**
  * A title: text placed on the frame for the length of its timeline item.
@@ -1228,4 +1234,14 @@ export interface ModelSelection {
 export interface ModelSettings {
 	pricing: Record<string, ModelPricing>
 	selection: ModelSelection
+}
+/** A finished export on disk (see main/editor/exports.ts). */
+export interface EditorExportFile {
+	name: string
+	/** Absolute path, inside the project's exports folder. */
+	path: string
+	/** Bytes. */
+	size: number
+	/** Last-modified, ms since epoch. */
+	modifiedAt: number
 }

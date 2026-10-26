@@ -21,6 +21,7 @@
 		</div>
 		<ChatPanel v-show="tab === 'chat'" class="flex-1 min-h-0" />
 		<RevisionsPanel v-if="tab === 'revisions'" class="flex-1 min-h-0" />
+			<ExportsPanel v-if="tab === 'exports'" class="flex-1 min-h-0" />
 		<AgentPanel v-if="tab === 'agent'" class="flex-1 min-h-0" />
 	</aside>
 </template>
@@ -28,32 +29,34 @@
 <script setup lang="ts">
 import ChatPanel from './ChatPanel.vue'
 import RevisionsPanel from './RevisionsPanel.vue'
+import ExportsPanel from './ExportsPanel.vue'
 import ResizeHandle from './ResizeHandle.vue'
 import AgentPanel from './AgentPanel.vue'
 import SlimTooltip from '../../components/SlimTooltip.vue'
 import { computed } from 'vue'
 import { useAgentStore } from '../../stores/agentStore'
+import type { ChatTab } from '../chatTab'
 
 /**
- * Chat / Revisions / Agent. A full-height column on the right of the window:
+ * Chat / Revisions / Exports / Agent. A full-height column on the right of the window:
  * the timeline sits beside it, not under it, and nothing opens over it. It does
  * not close by itself — selecting a clip never opens, pushes or covers it. When
  * the person folds it, or the window is too narrow, the page shows a composer
  * strip under the picture instead (ComposerStrip).
  */
-defineProps<{ width: number; tab: 'chat' | 'revisions' | 'agent'; revisionsBadge?: boolean }>()
+defineProps<{ width: number; tab: ChatTab; revisionsBadge?: boolean }>()
 defineEmits<{
 	(e: 'collapse'): void
 	(e: 'resize', deltaPx: number): void
 	(e: 'reset-size'): void
-	(e: 'update:tab', tab: 'chat' | 'revisions' | 'agent'): void
+	(e: 'update:tab', tab: ChatTab): void
 }>()
 
 // The Agent tab (MCP) appears once agent access is on, or an agent has been here.
 const agent = useAgentStore()
 const tabs = computed(() =>
 	agent.access?.enabled || agent.shownSession
-		? (['chat', 'revisions', 'agent'] as const)
-		: (['chat', 'revisions'] as const)
+		? (['chat', 'revisions', 'exports', 'agent'] as const)
+		: (['chat', 'revisions', 'exports'] as const)
 )
 </script>

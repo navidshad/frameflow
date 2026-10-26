@@ -124,6 +124,32 @@ describe('RevisionStore', () => {
 		expect(total).toBeLessThan(naive / 10)
 	})
 
+	it('replaces a revision in place: same id and seq, new snapshot, old text collected', async () => {
+		const store = new RevisionStore(root)
+		await store.push(THREAD, revision('a', null, snapshot(3), 1))
+		await store.push(THREAD, revision('b', 'a', snapshot(3, { 1: page('first') }), 2))
+		const before = fs.readdirSync(path.join(root, THREAD, 'blobs')).length
+
+		const res = await store.replace(THREAD, { ...revision('b', 'a', snapshot(3, { 1: page('second') }), 99), label: 'round' })
+		expect(res.seq).toBe(2)
+
+		const index = await store.loadIndex(THREAD)
+		expect(index.revisions.map((r) => [r.id, r.seq, r.parentId, r.label, r.createdAt])).toEqual([['a', 1, null, 'a', 1], ['b', 2, 'a', 'round', 2]])
+		const restored = await store.getSnapshot(THREAD, 'b')
+		expect(restored?.timeline[1].motion?.html).toBe(page('second'))
+		// The first edit's page is no revision's any more: its text is gone, the new one took its place.
+		expect(fs.readdirSync(path.join(root, THREAD, 'blobs')).length).toBe(before)
+		expect(index.revisions).toHaveLength(2)
+	})
+
+	it('replace of an unknown id appends it, so a save is never lost', async () => {
+		const store = new RevisionStore(root)
+		await store.push(THREAD, revision('a', null, snapshot(2), 1))
+		const res = await store.replace(THREAD, revision('z', 'a', snapshot(2), 5))
+		expect(res.seq).toBe(2)
+		expect((await store.loadIndex(THREAD)).revisions.map((r) => r.id)).toEqual(['a', 'z'])
+	})
+
 	it('lists summaries without snapshots and restores any snapshot exactly', async () => {
 		const store = new RevisionStore(root)
 		const snaps = [snapshot(5), snapshot(5, { 2: page('two') }), snapshot(3)]

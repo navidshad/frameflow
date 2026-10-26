@@ -905,11 +905,13 @@ const applyOps: ToolDef = {
 	writes: true,
 	description:
 		'Edit the timeline. The arguments are FrameFlow’s edit operations — the same contract its built-in ' +
-		'AI uses. The edit is applied to the editor at once, as one turn, and saved as a new revision (a V ' +
-		'number) the user can undo or go back from. Returns that revision, any ops dropped as invalid, and ' +
+		'AI uses. The edit is applied to the editor at once, as one turn. Inside an open round (begin_round) ' +
+		'all your edits share ONE revision (a V number) that each call rewrites in place, so the user ' +
+		'switches between whole sessions; outside a round each call is its own revision. Returns that ' +
+		'revision, any ops dropped as invalid, and ' +
 		'notes. Times: timelineStart, atSec and removeRanges are TIMELINE seconds; in/out are SOURCE seconds. ' +
-		'Read ids from get_timeline and get_media first. Prefer a few focused calls to one huge one — each ' +
-		'is its own revision — and check the result with render_frame. Before sending a custom page in `html`, ' +
+		'Read ids from get_timeline and get_media first. Prefer a few focused calls to one huge one, ' +
+		'and check the result with render_frame. Before sending a custom page in `html`, ' +
 		'read get_motion_guide. Layers that share a look share a motion kit (setMotionKits, then `kit` on each ' +
 		'page): a restyle is then one kit edit. Always include a short rationale: the user reads it.',
 	inputSchema: OPS_INPUT_SCHEMA,
@@ -1042,7 +1044,8 @@ const revertToVersion: ToolDef = {
 	description:
 		'Go back to an earlier revision of the timeline — a V number from get_project or from an ' +
 		'apply_ops result. Nothing is lost: the version you leave stays in the revision list, so this can ' +
-		'itself be undone. Use it when render_frame shows an edit did not work.',
+		'itself be undone. Use it when render_frame shows an edit did not work. A round\'s edits share one ' +
+		'revision, so this undoes a whole round (go to the V before it), not a single step: fix a single step with a new edit.',
 	inputSchema: {
 		type: 'object',
 		properties: { version: { type: 'integer', minimum: 0, description: 'The V number, e.g. 7 for V7' } },
@@ -2164,7 +2167,7 @@ export const SERVER_INSTRUCTIONS =
 	'material → apply_ops to edit (get_motion_guide first if you will write an HTML motion page) → ' +
 	'render_frame to look at the result → revert_to_version if it is ' +
 	'wrong. For sound: get_sound_guide, then suggest_cues → apply_ops addSounds (with follow) → analyze_audio; ' +
-	'you cannot hear, so work by the numbers and the spectrogram render_sound gives. Spoken words or a sound the palette cannot make: generate_audio (costs money, capped) then apply_ops placeAudio. Every apply_ops is a revision the user can see and undo; the user may edit at the same time, ' +
+	'you cannot hear, so work by the numbers and the spectrogram render_sound gives. Spoken words or a sound the palette cannot make: generate_audio (costs money, capped) then apply_ops placeAudio. Inside a round all your apply_ops are one revision the user can see and undo; the user may edit at the same time, ' +
 	'so read the timeline again before each edit instead of relying on an old read. To deliver: export, wait {for: "export"}, ' +
 	'then inspect_export to look at the file frame by frame. Several cameras of one moment (a podcast): ' +
 	'find_camera_groups → make_multicam (syncs them by sound and places them) → get_multicam for the one shared ' +

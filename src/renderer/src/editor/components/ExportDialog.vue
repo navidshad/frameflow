@@ -46,6 +46,12 @@
 				</span>
 				<span class="font-mono text-xs break-all">{{ fileName }}</span>
 			</div>
+			<p class="mt-3 text-[11px] leading-relaxed text-zinc-500 dark:text-zinc-400">
+				It stays in this project's
+				<button class="font-semibold text-primary hover:text-primary-dark transition-colors"
+					@click="showExports">Exports tab</button>
+				— you can find it there any time.
+			</p>
 		</template>
 
 		<!-- ===== Error / canceled ===== -->
@@ -90,7 +96,7 @@ import OptionRow from '../../components/OptionRow.vue'
 import { useEditorStore } from '../../stores/editorStore'
 
 defineProps<{ modelValue: boolean }>()
-const emit = defineEmits<{ (e: 'update:modelValue', value: boolean): void }>()
+const emit = defineEmits<{ (e: 'update:modelValue', value: boolean): void; (e: 'show-exports'): void }>()
 
 const store = useEditorStore()
 const quality = ref<'original' | 'preview'>('original')
@@ -145,6 +151,13 @@ const close = () => emit('update:modelValue', false)
 const finish = () => {
 	store.clearRenderState()
 	close()
+}
+
+// Done, and on to the file: clear the result (it is in the list now) and hand
+// the page the cue to open the Exports tab.
+const showExports = () => {
+	emit('show-exports')
+	finish()
 }
 
 const saveAs = async () => {

@@ -1,4 +1,4 @@
-import type { EditorRevision, EditorRevisionSummary } from './types'
+import type { EditorRevision, EditorRevisionSummary, TimelineItem } from './types'
 
 /**
  * Pure tree helpers for the editor's revision history, shared by the renderer
@@ -142,3 +142,18 @@ export function reattachOrphans<T extends RevisionNode>(revisions: T[]): number 
 }
 
 export type { EditorRevision, EditorRevisionSummary }
+
+/**
+ * The timeline as a revision compares it. The motion probe stamps a page
+ * `passed.verified` AFTER the revision that wrote it was taken; that stamp is
+ * bookkeeping, not an edit, so it must not make the next action think the
+ * project has unsaved work (it used to add an "Auto checkpoint" to every edit).
+ */
+export function withoutProbeStamps(timeline: TimelineItem[]): TimelineItem[] {
+	return timeline.map((item) => {
+		const passed = item.motion?.passed
+		if (!passed || !('verified' in passed)) return item
+		const { verified: _stamp, ...rest } = passed
+		return { ...item, motion: { ...item.motion!, passed: rest } }
+	})
+}
