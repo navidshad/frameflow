@@ -15,6 +15,12 @@ export function explainTranscriptError(message: string, model?: string): string 
 	if (lower.includes('api key not found') || lower.includes('api key not valid') || lower.includes('api_key_invalid')) {
 		return 'No working Gemini API key. Add one in Settings, then transcribe again.'
 	}
+	// Billing, not a rate limit: waiting never helps, and it looks the same as a
+	// quota error (RESOURCE_EXHAUSTED) unless the 402 / "credits" text is read first.
+	if (lower.includes('prepayment') || lower.includes('credits are depleted') || /\b402\b/.test(lower)) {
+		return 'Your Gemini prepaid credits are depleted, so no model can transcribe until you add credit. ' +
+			'Open AI Studio (ai.studio/projects), add credit in the project\u2019s billing, then transcribe again.'
+	}
 	if (lower.includes('quota') || lower.includes('resource_exhausted') || /\b429\b/.test(lower)) {
 		return `${name} is over its quota for this API key. Wait and retry, or pick another model in Settings → Models.`
 	}
