@@ -146,6 +146,74 @@ describe('planAngleSwitches', () => {
 	})
 })
 
+describe('shotRun after trimming and punching in', () => {
+	/**
+	 * What the podcast edit looked like: a wide piece, a 1.8x punch-in on the same camera, another
+	 * wide piece, then a piece after 40 s of source were trimmed out (it touches on the timeline but
+	 * not on the group's clock). Found when one click on an angle tile switched four pieces.
+	 */
+	function trimmedAndPunched() {
+		const base = placed(1)
+		const shot = base.find((i) => i.multicam?.role === 'shot')!
+		const piece = (id: string, start: number, inSec: number, outSec: number, over: Partial<TimelineItem> = {}): TimelineItem =>
+			({ ...shot, id, timelineStart: start, in: inSec, out: outSec, duration: outSec - inSec, ...over })
+		const pieces = [
+			piece('wide1', 0, 0, 30),
+			piece('punch', 30, 30, 40, { transform: { x: -0.4, y: 0.18, scale: 1.8, rotation: 0 } }),
+			piece('wide2', 40, 40, 60),
+			piece('afterTrim', 60, 100, 120)
+		]
+		return { items: base.filter((i) => i.id !== shot.id).concat(pieces), pieces }
+	}
+
+	it('ends a shot at a punch-in, and at time trimmed out', () => {
+		const { items, pieces } = trimmedAndPunched()
+		const run = (id: string) => shotRun(items, pieces.find((p) => p.id === id)!, group, media)
+		expect(run('wide1')).toEqual({ start: 0, end: 30 })
+		expect(run('punch')).toEqual({ start: 30, end: 40 })
+		expect(run('wide2')).toEqual({ start: 40, end: 60 })
+		expect(run('afterTrim')).toEqual({ start: 60, end: 80 })
+	})
+
+	it('still joins pieces that carry on from each other with the same framing', () => {
+		const { items, pieces } = trimmedAndPunched()
+		// afterTrim continues straight into a second piece of the same look.
+		const next: TimelineItem = { ...pieces[3], id: 'afterTrim2', timelineStart: 80, in: 120, out: 130, duration: 10 }
+		const run = shotRun([...items, next], pieces[3], group, media)
+		expect(run).toEqual({ start: 60, end: 90 })
+	})
+
+	it('switches only the clip you chose, and drops the old camera\'s framing', () => {
+		const { items, pieces } = trimmedAndPunched()
+		const punch = pieces[1]
+		const run = shotRun(items, punch, group, media)
+		const plan = planAngleSwitches(items, group, [{ atSec: run.start, angle: 2 }], media, newId, run.end)
+		expect(plan.dropped).toEqual([])
+		const after = items.map((i) => ({ ...i, ...plan.updates.find((u) => u.id === i.id) })).concat(plan.adds)
+		const shots = after.filter((i) => i.multicam?.role === 'shot').sort((a, b) => a.timelineStart - b.timelineStart)
+		expect(shots.map((s) => [s.timelineStart, s.label])).toEqual([[0, 'Cam 1'], [30, 'Cam 2'], [40, 'Cam 1'], [60, 'Cam 1']])
+		// The iPhone-style single has the full picture: the crop belonged to the other camera.
+		expect(shots[1].transform).toBeUndefined()
+		const update = plan.updates.find((u) => u.id === 'punch')!
+		expect('transform' in update).toBe(true)
+		expect(update.transform).toBeUndefined()
+		// The neighbours keep what they had.
+		expect(shots[0].id).toBe('wide1')
+		expect(shots[2].id).toBe('wide2')
+		expect(shots[3].id).toBe('afterTrim')
+	})
+
+	it('does not strip the framing of a clip that is not switched', () => {
+		const { items, pieces } = trimmedAndPunched()
+		// Cut the wide piece before it to camera 2: the punch-in beside it is untouched.
+		const plan = planAngleSwitches(items, group, [{ atSec: 0, angle: 2 }], media, newId, 30)
+		const after = items.filter((i) => !plan.removeIds.includes(i.id)).map((i) => ({ ...i, ...plan.updates.find((u) => u.id === i.id) })).concat(plan.adds)
+		const punch = after.find((i) => i.id === pieces[1].id)!
+		expect(punch.transform).toMatchObject({ scale: 1.8 })
+		expect(punch.label).toBe('Cam 1')
+	})
+})
+
 describe('groupRippleCut', () => {
 	it('takes a deleted shot’s stretch out of the sound too, so later shots stay in sync', () => {
 		const base = placed(1)

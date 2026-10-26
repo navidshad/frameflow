@@ -32,6 +32,8 @@ Their `in`/`out` are plain source seconds worked out from the group's line, so e
 - A switch to an angle that was not recording all of a stretch switches the part it recorded; the rest stays on its angle (cameras stop at different times).
 - A ripple delete of a shot cuts the same stretch out of the group's sound (`groupRippleCut`), in the editor and over MCP.
 - Dragging a group's clip moves the whole group.
+- A shot, for number keys, Alt + number and the angle tiles, is what the viewer sees as one shot: pieces of one camera that touch, look the same and carry on from each other on the group's clock (`shotRun`). A file join is not a cut; a punch-in, a reframe or time trimmed out is, so a click changes exactly the clip you chose.
+- Switching a clip to another camera drops its transform and framing: a punch-in was made for the camera it framed.
 - Retiming controls are hidden for group clips.
 - Re-sync, a nudge or a new main sound re-derive every clip of the group from the old line to the new one; a clip that would need footage from before a camera started loses that sliver, not the whole clip.
 

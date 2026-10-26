@@ -295,11 +295,16 @@ export function recordedPieces(
 	return out
 }
 
+/** How far apart two touching pieces may be on the group's clock and still be one recording (a file join). */
+const SHOT_JOIN_SLACK = 0.04
+
 /**
  * The SHOT a clip belongs to, as the user sees it: the run of the group's
- * clips on its lane that play one camera back to back. A camera that split its
+ * clips on its lane that play one camera on, unbroken. A camera that split its
  * recording is several clips at a file join, and a join is not a cut: number
- * keys and Alt + number act on the whole run.
+ * keys and Alt + number act on the whole run. Anything the viewer sees as a
+ * cut ends it: a punch-in or reframe, or time trimmed out (the pieces on
+ * either side touch on the timeline but not on the group's clock).
  */
 export function shotRun(
 	timeline: readonly TimelineItem[],
@@ -311,16 +316,29 @@ export function shotRun(
 	const same = (i: TimelineItem) => i.multicam?.groupId === group.id && i.multicam.role === 'shot' &&
 		i.trackId === shot.trackId && !!camera && camera.members.some((m) => m.assetId === i.sourceAssetId)
 	const lane = timeline.filter(same).sort((a, b) => a.timelineStart - b.timelineStart)
-	let start = shot.timelineStart
-	let end = shot.timelineStart + itemDuration(shot)
+	// `b` plays on straight after `a`: it touches on the timeline, looks the same (a punch-in or a
+	// reframe is a cut the editor can see) and carries on from where `a` stopped ON THE GROUP'S
+	// CLOCK. A trimmed-out pause or tangent leaves a hole on that clock, so the pieces on either
+	// side are two shots even though they touch; the join between a camera's files, sealed to the
+	// millisecond, is not.
+	const continues = (a: TimelineItem, b: TimelineItem): boolean => {
+		const aEnd = a.timelineStart + itemDuration(a)
+		if (Math.abs(aEnd - b.timelineStart) >= MIN_ITEM_DURATION || !sameLook(a, b)) return false
+		const ga = groupTimeAt(a, group, aEnd)
+		const gb = groupTimeAt(b, group, b.timelineStart)
+		return ga !== null && gb !== null && Math.abs(ga - gb) < SHOT_JOIN_SLACK
+	}
+	let first = shot
+	let last = shot
 	for (let moved = true; moved;) {
 		moved = false
 		for (const i of lane) {
-			const iEnd = i.timelineStart + itemDuration(i)
-			if (Math.abs(iEnd - start) < MIN_ITEM_DURATION && i.timelineStart < start) { start = i.timelineStart; moved = true }
-			if (Math.abs(i.timelineStart - end) < MIN_ITEM_DURATION && iEnd > end) { end = iEnd; moved = true }
+			if (i !== first && continues(i, first)) { first = i; moved = true }
+			if (i !== last && continues(last, i)) { last = i; moved = true }
 		}
 	}
+	const start = first.timelineStart
+	const end = last.timelineStart + itemDuration(last)
 	return { start, end }
 }
 
@@ -439,6 +457,10 @@ export function planAngleSwitches(
 					continue
 				}
 				Object.assign(piece, next.fields)
+				// A punch-in or reframe was made for the camera it framed; on another camera
+				// it would crop the wrong thing, so the new angle starts from the full picture.
+				piece.transform = undefined
+				piece.framing = undefined
 				if (shots.has(piece.id)) updated.add(piece.id)
 				covered += itemDuration(piece)
 			}
@@ -476,7 +498,8 @@ export function planAngleSwitches(
 		const s = shots.get(id)!
 		return {
 			id, sourceAssetId: s.sourceAssetId, in: s.in, out: s.out, speed: s.speed,
-			duration: s.duration, label: s.label, transition: s.transition
+			duration: s.duration, label: s.label, transition: s.transition,
+			transform: s.transform, framing: s.framing
 		}
 	})
 	return { updates, adds: added, removeIds, dropped, notes, switched }
