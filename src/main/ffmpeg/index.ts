@@ -5,6 +5,8 @@ import { join, basename, extname } from 'path'
 import process from 'node:process'
 import { TimelineSegment, SilenceRegion } from '../../shared/types'
 import { srtToSeconds } from '../../shared/timeline'
+import { createSlotPool } from '../concurrency'
+import { proxyArgs, proxyModes, MAX_SOFTWARE_PROXIES, type ProxyMode } from './proxyArgs'
 
 const IS_MAC = process.platform === 'darwin'
 
@@ -150,7 +152,10 @@ export async function getVideoMetadata(filePath: string): Promise<import('../../
 				fps: Math.round(fps * 100) / 100,
 				format: metadata.format.format_name || 'unknown',
 				hasAudio: !!audioStream,
-				recordedAt: parseRecordedAt(metadata)
+				recordedAt: parseRecordedAt(metadata),
+				colorTransfer: videoStream.color_transfer || undefined,
+				colorPrimaries: videoStream.color_primaries || undefined,
+				pixFmt: videoStream.pix_fmt || undefined
 			})
 		})
 	})
@@ -198,12 +203,32 @@ export async function isVideoLowResolution(filePath: string): Promise<boolean> {
 }
 
 /**
- * Converts video to low resolution (480p).
+ * The rotation a phone wrote into a file (degrees, 0 when none). A file whose
+ * picture is stored sideways and turned by a tag needs the CPU scaler, which
+ * turns it upright; the GPU scaler would not (see proxyArgs.ts).
  */
-// A proxy for scrubbing / thumbnails / scene detection never needs more than
-// this; halving a 60fps source roughly halves proxy encode time.
-const PROXY_MAX_FPS = 30
+export async function getVideoRotation(filePath: string): Promise<number> {
+	return new Promise((resolve) => {
+		ffmpeg.ffprobe(filePath, (err, metadata) => {
+			if (err) return resolve(0)
+			const stream: any = metadata.streams.find((s) => s.codec_type === 'video')
+			const side = (stream?.side_data_list || []).find((d: any) => d?.rotation !== undefined)
+			const rotation = Number(side?.rotation ?? stream?.tags?.rotate ?? stream?.rotation ?? 0)
+			resolve(Number.isFinite(rotation) ? rotation : 0)
+		})
+	})
+}
 
+// Software proxies use every core: one at a time, however many files are importing.
+const softwareProxies = createSlotPool(MAX_SOFTWARE_PROXIES)
+
+/**
+ * Converts video to low resolution (480p).
+ *
+ * Tries the quickest way first (GPU decode and scale on a Mac), then falls back
+ * one step at a time (GPU decode with the CPU scaler, then software) so a file
+ * the hardware rejects still gets its proxy. See proxyArgs.ts for the plan.
+ */
 export async function toLowResolution(
 	filePath: string,
 	outputDir: string,
@@ -221,51 +246,14 @@ export async function toLowResolution(
 	}
 
 	const isWebm = ext === '.webm'
+	const plan = { isMac: IS_MAC, isWebm, sourceFps: opts?.sourceFps, rotated: false }
+	if (IS_MAC && !isWebm) plan.rotated = (await getVideoRotation(filePath)) % 360 !== 0
 
-	// Cap fps only when the source is above the ceiling — applying fps=30 to a
-	// <=30fps source would DUPLICATE frames (slower + larger), not drop any.
-	const capFps = !!opts?.sourceFps && opts.sourceFps > PROXY_MAX_FPS
-	const vf = capFps ? `fps=${PROXY_MAX_FPS},scale=-2:480` : 'scale=-2:480'
-
-	// Hardware-accelerated DECODE (Mac) is a clear win for decode-bound proxies
-	// (~-25%). But when we're already dropping frames via the fps filter,
-	// benchmarks show the per-frame GPU→CPU download makes it slower than plain
-	// software decode — so only use hw decode when NOT capping fps.
-	const preferHwDecode = IS_MAC && !isWebm && !capFps
-
-	const encode = (hwDecode: boolean): Promise<string> => new Promise((resolve, reject) => {
+	const encode = (mode: ProxyMode): Promise<string> => new Promise((resolve, reject) => {
+		const args = proxyArgs(mode, plan)
 		const command = ffmpeg(filePath)
-		if (hwDecode) command.inputOptions(['-hwaccel', 'videotoolbox'])
-		command.outputOptions(['-vf', vf])
-
-		if (isWebm) {
-			// WebM (VP8/VP9) optimizations
-			command.outputOptions([
-				'-c:v', 'libvpx-vp9',
-				'-deadline', 'realtime',
-				'-cpu-used', '8',
-				'-threads', '0',
-				'-row-mt', '1',
-				'-b:v', '1M'
-			])
-		} else if (IS_MAC) {
-			// Mac hardware encode
-			command.outputOptions([
-				'-c:v', 'h264_videotoolbox',
-				'-b:v', '2M',
-				'-realtime', 'true',
-				'-threads', '0'
-			])
-		} else {
-			// CPU-based x264
-			command.outputOptions([
-				'-c:v', 'libx264',
-				'-preset', 'ultrafast',
-				'-crf', '32',
-				'-tune', 'fastdecode',
-				'-threads', '0'
-			])
-		}
+		if (args.input.length) command.inputOptions(args.input)
+		command.outputOptions(args.output)
 
 		if (signal) {
 			signal.addEventListener('abort', () => command.kill('SIGKILL'))
@@ -283,24 +271,67 @@ export async function toLowResolution(
 				if (signal?.aborted) {
 					return reject(new Error('FFmpeg downscaling aborted by user'))
 				}
-				console.error('FFmpeg toLowResolution error:', err)
+				console.error(`FFmpeg toLowResolution error (${mode}):`, err)
 				console.error('FFmpeg stderr:', stderr)
 				reject(new Error(`FFmpeg failed: ${err.message}. ${stderr}`))
 			})
 			.run()
 	})
 
-	try {
-		return await encode(preferHwDecode)
-	} catch (err) {
-		// Hardware decode can reject some inputs — fall back to software decode
-		// once rather than failing the whole proxy step.
-		if (!signal?.aborted && preferHwDecode) {
-			console.warn('[ffmpeg] hw-decode proxy failed, retrying with software decode:', (err as Error).message)
-			return await encode(false)
+	const modes = proxyModes(plan)
+	let lastError: unknown
+	for (let i = 0; i < modes.length; i++) {
+		const mode = modes[i]
+		try {
+			// Software decode is the one that eats the machine: one at a time.
+			return mode === 'software' && IS_MAC
+				? await softwareProxies.run(() => encode(mode))
+				: await encode(mode)
+		} catch (err) {
+			lastError = err
+			if (signal?.aborted) throw err
+			if (i < modes.length - 1) {
+				console.warn(`[ffmpeg] ${mode} proxy failed, retrying with ${modes[i + 1]}:`, (err as Error).message)
+			}
 		}
-		throw err
 	}
+	throw lastError
+}
+
+/**
+ * The words from a media file, as the transcript wants them: mono, 16 kHz,
+ * about 48 kbps (Gemini listens to 16 kbps mono anyway, so more bytes are
+ * wasted). Read from the ORIGINAL, so transcript times and the sync and
+ * speaker passes run on the same clock; a 91-minute 4K file takes about 10 s
+ * and comes out 33 MB.
+ */
+export async function toLeanAudio(
+	filePath: string,
+	outputDir: string,
+	onProgress?: (percent: number) => void,
+	signal?: AbortSignal
+): Promise<string> {
+	const outputPath = join(outputDir, `${sanitizeFilename(basename(filePath, extname(filePath)))}.mp3`)
+	if (signal?.aborted) throw new Error('FFmpeg audio extraction aborted by user before start')
+
+	return new Promise((resolve, reject) => {
+		const command = ffmpeg(filePath)
+			.noVideo()
+			// The first audio track: a phone also writes a 4-channel spatial track.
+			.outputOptions(['-map', '0:a:0', '-ac', '1', '-ar', '16000', '-b:a', '48k'])
+			.toFormat('mp3')
+			.output(outputPath)
+			.on('progress', (progress) => {
+				if (onProgress && progress.percent) onProgress(Math.round(progress.percent))
+			})
+			.on('end', () => resolve(outputPath))
+			.on('error', (err) => {
+				if (signal?.aborted) return reject(new Error('FFmpeg audio extraction aborted by user'))
+				reject(err)
+			})
+		signal?.addEventListener('abort', () => command.kill('SIGKILL'))
+		command.run()
+	})
 }
 
 /**
