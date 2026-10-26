@@ -78,12 +78,19 @@
 		</div>
 
 		<!-- Transcript failed but the import went on without it -->
-		<p v-if="asset.preprocessState === 'completed' && asset.transcriptError"
-			class="mt-1.5 text-[10px] text-amber-600 dark:text-amber-400 font-medium leading-snug line-clamp-2"
-			:title="asset.transcriptError">
-			<span class="iconify tabler--alert-triangle w-3 h-3 inline-block align-[-1px]"></span>
-			No transcript: {{ asset.transcriptError }}
-		</p>
+		<div v-if="asset.preprocessState === 'completed' && asset.transcriptError" class="mt-1.5 flex items-start gap-2">
+			<p class="flex-1 min-w-0 text-[10px] text-amber-600 dark:text-amber-400 font-medium leading-snug line-clamp-2"
+				:title="asset.transcriptError">
+				<span class="iconify tabler--alert-triangle w-3 h-3 inline-block align-[-1px]"></span>
+				No transcript: {{ asset.transcriptError }}
+			</p>
+			<button
+				class="px-2 py-1 rounded-lg bg-amber-500/10 text-amber-600 dark:text-amber-400 text-[10px] font-bold uppercase tracking-widest hover:bg-amber-500/20 transition shrink-0"
+				title="Try the transcript again"
+				@click.stop="editorStore.transcribeAsset(asset.id)">
+				Transcribe again
+			</button>
+		</div>
 
 		<!-- Error state -->
 		<div v-if="asset.preprocessState === 'error'" class="mt-2">

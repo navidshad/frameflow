@@ -11,6 +11,8 @@ import {
 	secondsToTimestamp, sliceTranscriptForChunk, timestampToSeconds,
 	type AudioChunk, type TranscriptItem
 } from './transcript-chunks'
+import { runPool } from './transcript-pool'
+import type { TranscriptProgress, WindowPhase } from './transcript-progress'
 import {
 	assessTiming, findPauses, groupWordsIntoSegments, planWindowsAtPauses, snapStartsToOnsets, stitchWindows,
 	type Pause, type TimedItem
@@ -41,6 +43,12 @@ export function isTranscribeModel(model: string | undefined): boolean {
 /** Word-timestamp windows: well under the 30-minute limit with timestamps on. */
 const WORD_WINDOW_TARGET_SEC = 20 * 60
 const WORD_WINDOW_MAX_SEC = 25 * 60
+/**
+ * Word-model windows in flight at once. Each is its own upload and call, so a
+ * long file takes about 1/N of the time; three stays inside the free tier's
+ * request rate (the adapter waits out a named "retry in Ns" when it is hit).
+ */
+export const WORD_WINDOW_CONCURRENCY = 3
 /**
  * Model-written timestamps drift with window length, so general models get
  * short windows. Each window restarts the clock at a known pause.
@@ -172,7 +180,7 @@ export async function extractTranscript(
 	audioDuration: number = 0,
 	rawTranscriptText?: string,
 	signal?: AbortSignal,
-	onProgress?: (done: number, total: number) => void
+	onProgress?: (progress: TranscriptProgress) => void
 ): Promise<{ items: TranscriptItem[], rawResponseText: string, record: UsageRecord, timing: TranscriptTiming, model: string }> {
 	const adapter = GeminiAdapter.create()
 	const modelSettings = settingsManager.getModelSettings()
@@ -192,7 +200,7 @@ export async function extractTranscript(
 	const priorItems = rawTranscriptText && !words ? parseTranscript(rawTranscriptText) : []
 	const workDir = fs.mkdtempSync(path.join(os.tmpdir(), 'frameflow-transcript-'))
 	const perWindow: { chunk: AudioChunk; items: TimedItem[] }[] = []
-	const responses: string[] = []
+	const responses: { start: number; text: string }[] = []
 	const records: UsageRecord[] = []
 	let language: string | undefined
 	let segmentCounter = 0
@@ -207,21 +215,50 @@ export async function extractTranscript(
 		return { file, temp: true }
 	}
 
+	// Where each window is, so the row can say what is happening, not just that something is.
+	const activeWindows = new Map<number, WindowPhase>()
+	let windowsDone = 0
+	const report = (finishing = false) => onProgress?.({
+		done: windowsDone, total: windows.length, active: [...activeWindows.values()], ...(finishing ? { finishing } : {})
+	})
+	const enter = (chunk: AudioChunk, phase: WindowPhase) => { activeWindows.set(chunk.index, phase); report() }
+	const leave = (chunk: AudioChunk, finished: boolean) => {
+		activeWindows.delete(chunk.index)
+		if (finished) windowsDone++
+		report()
+	}
+
+	// One window failing (a quota error, say) cancels the others through this,
+	// so they stop their calls instead of spending them on a run that is lost.
+	const runAbort = new AbortController()
+	const onOuterAbort = () => runAbort.abort()
+	if (signal?.aborted) runAbort.abort()
+	else signal?.addEventListener('abort', onOuterAbort, { once: true })
+
 	const runWordWindow = async (chunk: AudioChunk): Promise<void> => {
-		if (signal?.aborted) throw new Error('Aborted')
+		if (runAbort.signal.aborted) throw new Error('Aborted')
 		const span = chunk.end - chunk.start
-		const { file, temp } = await windowAudio(chunk)
+		let finished = false
+		enter(chunk, 'cutting')
 		try {
-			const uri = await adapter.uploadFile(file, 'audio/mpeg')
-			const result = await adapter.transcribeWords(modelName, uri, Number.isFinite(span) ? span : 0, signal)
-			records.push(result.record)
-			responses.push(`# window ${chunk.start}s-${chunk.end}s\n${result.text}`)
-			if (!result.words.length && result.text.trim()) {
-				console.warn(`[transcript] window ${Math.round(chunk.start)}s came back with text but no word times`)
+			const { file, temp } = await windowAudio(chunk)
+			try {
+				enter(chunk, 'uploading')
+				const uri = await adapter.uploadFile(file, 'audio/mpeg')
+				enter(chunk, 'transcribing')
+				const result = await adapter.transcribeWords(modelName, uri, Number.isFinite(span) ? span : 0, runAbort.signal)
+				records.push(result.record)
+				responses.push({ start: chunk.start, text: `# window ${chunk.start}s-${chunk.end}s\n${result.text}` })
+				if (!result.words.length && result.text.trim()) {
+					console.warn(`[transcript] window ${Math.round(chunk.start)}s came back with text but no word times`)
+				}
+				perWindow.push({ chunk, items: groupWordsIntoSegments(result.words) })
+				finished = true
+			} finally {
+				if (temp) try { fs.unlinkSync(file) } catch { /* best effort */ }
 			}
-			perWindow.push({ chunk, items: groupWordsIntoSegments(result.words) })
 		} finally {
-			if (temp) try { fs.unlinkSync(file) } catch { /* best effort */ }
+			leave(chunk, finished)
 		}
 	}
 
@@ -247,7 +284,7 @@ export async function extractTranscript(
 
 		// The call is paid for either way — always bank the usage.
 		records.push(result.record)
-		responses.push(`# window ${chunk.start}s-${chunk.end}s\n${result.text}`)
+		responses.push({ start: chunk.start, text: `# window ${chunk.start}s-${chunk.end}s\n${result.text}` })
 		language = language || result.language
 
 		const cutOff = !!result.finishReason && result.finishReason !== 'STOP'
@@ -274,19 +311,26 @@ export async function extractTranscript(
 	}
 
 	try {
-		for (const chunk of windows) {
-			onProgress?.(chunk.index, windows.length)
-			if (words) await runWordWindow(chunk)
-			else await runSegmentWindow(chunk, true)
+		report()
+		if (words) {
+			await runPool(windows, WORD_WINDOW_CONCURRENCY, runWordWindow, () => runAbort.abort())
+		} else {
+			// General models carry the language forward from window to window: one at a time.
+			for (const chunk of windows) {
+				enter(chunk, 'transcribing')
+				await runSegmentWindow(chunk, true)
+				leave(chunk, true)
+			}
 		}
 	} catch (error: any) {
 		// Name the model that failed: settings may have changed since the run began.
 		if (error && typeof error === 'object' && !error.model) error.model = modelName
 		throw error
 	} finally {
+		signal?.removeEventListener('abort', onOuterAbort)
 		try { fs.rmSync(workDir, { recursive: true, force: true }) } catch { /* best effort */ }
 	}
-	onProgress?.(windows.length, windows.length)
+	report(true)
 
 	const stitched = await repairMixedScript(adapter, stitchWindows(perWindow), records, signal)
 	const { items, snapped } = snapStartsToOnsets(stitched, pauses, {
@@ -313,7 +357,7 @@ export async function extractTranscript(
 
 	return {
 		items: fromTimed(items),
-		rawResponseText: responses.join('\n\n'),
+		rawResponseText: responses.sort((a, b) => a.start - b.start).map((r) => r.text).join('\n\n'),
 		record: sumRecords(records),
 		timing,
 		model: modelName

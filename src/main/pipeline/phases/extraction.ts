@@ -3,6 +3,7 @@ import * as ffmpegAdapter from '../../ffmpeg'
 import fs from 'fs'
 import path from 'path'
 import { extractTranscript, formatTranscript } from '../../gemini/utils'
+import { trackTranscriptProgress } from '../../gemini/transcript-progress'
 import { GeminiAdapter } from '../../gemini/adapter'
 import { Scene } from '../../scenedetect/types'
 import { DEFAULT_MODEL_SETTINGS } from '../../constants/gemini'
@@ -50,12 +51,14 @@ export const extractRawTranscript: PipelineFunction = async (data, context) => {
 	context.updateStatus('Extracting raw transcript...')
 	const duration = await ffmpegAdapter.getVideoDuration(audioPath)
 
-	const { items: transcript, rawResponseText, record, timing } = await extractTranscript(
-		audioPath, duration, undefined, context.signal,
-		(done, total) => {
-			if (total > 1) context.updateStatus(`Transcribing part ${Math.min(done + 1, total)} of ${total}…`)
-		}
-	)
+	const tracker = trackTranscriptProgress(context)
+	let result: Awaited<ReturnType<typeof extractTranscript>>
+	try {
+		result = await extractTranscript(audioPath, duration, undefined, context.signal, tracker.onProgress)
+	} finally {
+		tracker.stop()
+	}
+	const { items: transcript, rawResponseText, record, timing } = result
 
 	// Record usage immediately
 	await context.recordUsage(record)
@@ -93,12 +96,14 @@ export const extractCorrectedTranscript: PipelineFunction = async (data, context
 	const rawTranscript = JSON.parse(transcriptJson)
 	const rawTranscriptText = formatTranscript(rawTranscript)
 
-	const { items: transcript, rawResponseText, record, timing } = await extractTranscript(
-		audioPath, duration, rawTranscriptText, context.signal,
-		(done, total) => {
-			if (total > 1) context.updateStatus(`Re-checking part ${Math.min(done + 1, total)} of ${total}…`)
-		}
-	)
+	const tracker = trackTranscriptProgress(context)
+	let result: Awaited<ReturnType<typeof extractTranscript>>
+	try {
+		result = await extractTranscript(audioPath, duration, rawTranscriptText, context.signal, tracker.onProgress)
+	} finally {
+		tracker.stop()
+	}
+	const { items: transcript, rawResponseText, record, timing } = result
 
 	// Record usage immediately
 	await context.recordUsage(record)
