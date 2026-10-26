@@ -32,6 +32,14 @@ export function pushRevision(
 	return revisionStore().push(threadId, revision)
 }
 
+/** Rewrites one revision in place (same id and seq): an agent round keeps a single revision. */
+export function replaceRevision(
+	threadId: string,
+	revision: EditorRevision
+): Promise<{ seq: number; count: number; prunedIds: string[] }> {
+	return revisionStore().replace(threadId, revision)
+}
+
 /** Deletes the given ids (the renderer sends the fully collected subtree). */
 export function deleteRevisions(threadId: string, ids: string[]): Promise<boolean> {
 	return revisionStore().delete(threadId, ids)

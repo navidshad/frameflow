@@ -39,7 +39,7 @@ import {
 	captionsFromTimeline, type CaptionCue, type TranscriptEntry
 } from '@shared/captions'
 import { sequenceFrame as resolveSequenceFrame } from '@shared/framing'
-import { childrenByParent, collectSubtree, hasBranch, summarizeRevision } from '@shared/revision-tree'
+import { childrenByParent, collectSubtree, hasBranch, summarizeRevision, withoutProbeStamps } from '@shared/revision-tree'
 import { DEFAULT_PERSONA_ID } from '@shared/personas'
 import { agentChangeBadges, type AgentApplyOutcome } from '@shared/agentFeed'
 import { toMediaUrl } from '@shared/media-url'
@@ -1018,6 +1018,10 @@ export const useEditorStore = defineStore('editor', () => {
 	 * sets it). The user's own exports and revision switches wait until it ends.
 	 */
 	const agentHolds = ref<string | null>(null)
+	/** The open MCP round that holds the project (the agent store sets it): its id and goal. */
+	const agentRound = ref<{ id: string; goal?: string } | null>(null)
+	/** Round id -> the one revision that round keeps, rewritten in place by each of its edits. */
+	const roundRevisions = new Map<string, string>()
 
 	/** Live preview of what scope the NEXT prompt would use (drives the chip). */
 	const scopePreview = computed(() => {
@@ -1072,8 +1076,8 @@ export const useEditorStore = defineStore('editor', () => {
 		if (!rev || !doc.value || !held || held.id !== rev.id || held.threadId !== threadId.value) return false
 		const snap = held.snapshot
 		if (diffTimelines(
-			{ tracks: snap.tracks, timeline: snap.timeline, motionKits: snap.motionKits ?? [], multicams: snap.multicams ?? [] },
-			{ tracks: doc.value.tracks, timeline: doc.value.timeline, motionKits: doc.value.motionKits ?? [], multicams: doc.value.multicams ?? [] }
+			{ tracks: snap.tracks, timeline: withoutProbeStamps(snap.timeline), motionKits: snap.motionKits ?? [], multicams: snap.multicams ?? [] },
+			{ tracks: doc.value.tracks, timeline: withoutProbeStamps(doc.value.timeline), motionKits: doc.value.motionKits ?? [], multicams: doc.value.multicams ?? [] }
 		) !== null) return true
 		// Markers live outside TimelineDiff, so the timeline comparison above is
 		// blind to them. Without this, marker-only work counts as "clean" and
@@ -3584,6 +3588,33 @@ export const useEditorStore = defineStore('editor', () => {
 	}
 
 	/**
+	 * An agent round keeps ONE revision: each later edit of the round rewrites it
+	 * in place (same id, same V number, same place in the tree) rather than
+	 * adding another, so switching between revisions stays about whole sessions.
+	 */
+	const replaceRoundRevision = async (
+		id: string, options: { label: string; turnId?: string; personaId?: string }
+	): Promise<EditorRevisionSummary | null> => {
+		const existing = revisions.value.find((r) => r.id === id)
+		if (!existing || !doc.value || !threadId.value) return null
+		const rev: EditorRevision = {
+			id, parentId: existing.parentId, seq: existing.seq, origin: 'ai', label: options.label,
+			turnId: options.turnId, personaId: options.personaId,
+			snapshot: snapshotOfWorkingState(), createdAt: existing.createdAt
+		}
+		const summary = { ...summarizeRevision(rev), seq: existing.seq }
+		revisions.value = revisions.value.map((r) => (r.id === id ? summary : r))
+		try {
+			await api.replaceEditorRevision({ threadId: threadId.value, revision: deepClone(rev) })
+		} catch (error) {
+			console.error('[editorStore] replaceEditorRevision failed:', error)
+		}
+		holdAsCurrent(id, rev.snapshot)
+		markDirty()
+		return summary
+	}
+
+	/**
 	 * Switches the working state to a revision's snapshot.
 	 * Resets the fine-grained undo ring (its diffs were computed against
 	 * pre-switch states — redo onto the switched snapshot would corrupt it).
@@ -3946,16 +3977,23 @@ export const useEditorStore = defineStore('editor', () => {
 			}
 
 			await ensureRootRevision()
+			// An agent inside an open round keeps that round's one revision: later
+			// edits rewrite it, as long as it is still the revision being worked on.
+			const roundId = isAgent ? agentRound.value?.id : undefined
+			const keptId = roundId ? roundRevisions.get(roundId) : undefined
+			const keepRound = !!keptId && doc.value.currentRevisionId === keptId && revisions.value.some((r) => r.id === keptId)
 			// Unsaved manual work is auto-checkpointed FIRST, so the AI revision's
 			// parent snapshot is exactly the state the diff applied to and nothing
 			// is ever stranded inside a child snapshot.
-			if (revisionDirty.value) {
+			if (!keepRound && revisionDirty.value) {
 				await createRevision({ origin: 'manual', label: 'Auto checkpoint' })
 			}
 
 			const persona = findPersona(turn.personaId)
 			// An agent's turn is labelled with the agent: "Claude Code", not a persona.
-			const label = turn.agent?.name || persona?.name || 'AI edit'
+			const name = turn.agent?.name || persona?.name || 'AI edit'
+			const goal = roundId ? agentRound.value?.goal?.trim() : ''
+			const label = goal ? `${name}: ${goal.length > 60 ? goal.slice(0, 59) + '…' : goal}` : name
 			if (diffed) {
 				doc.value.tracks = applied.tracks
 				doc.value.timeline = applied.timeline
@@ -3971,12 +4009,15 @@ export const useEditorStore = defineStore('editor', () => {
 			if (settings?.loudnessEnabled !== undefined) setLoudnessEnabled(settings.loudnessEnabled)
 			if (settings?.frame) setSequenceFrame(settings.frame.width, settings.frame.height)
 
-			const rev = await createRevision({
-				origin: 'ai',
-				turnId: turn.id,
-				personaId: turn.personaId,
-				label
-			})
+			const rev = keepRound
+				? await replaceRoundRevision(keptId!, { label, turnId: turn.id, personaId: turn.personaId })
+				: await createRevision({
+					origin: 'ai',
+					turnId: turn.id,
+					personaId: turn.personaId,
+					label
+				})
+			if (rev && roundId && !keepRound) roundRevisions.set(roundId, rev.id)
 			if (!rev) return isAgent ? { ok: false, error: 'The edit applied but its revision could not be saved.' } : undefined
 			const counts = {
 				added: diffed?.forward.addItems?.length || 0,
@@ -4349,6 +4390,7 @@ export const useEditorStore = defineStore('editor', () => {
 		exportQueue,
 		startExportBatch,
 		agentHolds,
+		agentRound,
 		toggleTrackMusic,
 		setTrackRole,
 		soundPreviews,

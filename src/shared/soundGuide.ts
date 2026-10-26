@@ -57,5 +57,5 @@ HOW
 2. suggest_cues: the moments on the timeline that want a sound, each with a suggested sound. Skip the ones you do not want.
 3. apply_ops with addSounds: one entry per sound, each with follow {item, at} so it lands on its moment and stays there if the clip moves. Use setSounds to change a sound (kind, pitch, levelDb, seed) or its moment; setTrackRoles for roles.
 4. render_sound a recipe BEFORE adding it if you are unsure; analyze_audio AFTER, and fix what it warns about. render_frame as usual for the picture.
-5. revert_to_version if it is wrong. Every apply_ops is a revision the user can undo.`
+5. revert_to_version if it is wrong. Inside a round all your apply_ops are one revision the user can undo.`
 }

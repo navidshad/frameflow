@@ -155,6 +155,8 @@ const api = {
 		ipcRenderer.invoke('get-editor-revision-snapshot', data),
 	pushEditorRevision: (data: { threadId: string, revision: any }) =>
 		ipcRenderer.invoke('push-editor-revision', data),
+	replaceEditorRevision: (data: { threadId: string, revision: any }) =>
+		ipcRenderer.invoke('replace-editor-revision', data),
 	deleteEditorRevisions: (data: { threadId: string, ids: string[] }) =>
 		ipcRenderer.invoke('delete-editor-revisions', data),
 	// Thread Management

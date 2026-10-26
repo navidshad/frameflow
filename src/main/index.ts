@@ -842,6 +842,12 @@ app.whenReady().then(() => {
 		return editorRevisions.pushRevision(threadId, revision)
 	})
 
+	ipcMain.handle('replace-editor-revision', (_event, { threadId, revision }: {
+		threadId: string, revision: any
+	}) => {
+		return editorRevisions.replaceRevision(threadId, revision)
+	})
+
 	ipcMain.handle('delete-editor-revisions', (_event, { threadId, ids }: {
 		threadId: string, ids: string[]
 	}) => {

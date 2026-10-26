@@ -280,7 +280,11 @@ export const useAgentStore = defineStore('agent', () => {
 		api.onEngineActivity?.((activity: AgentActivity) => onFocus(activity))
 		api.onAgentRoundsEvent?.((event: RoundEvent) => onRoundEvent(event))
 		// While an agent holds the open project, the editor's own export and revision switches wait.
-		watch(mcpWorking, (held) => { useEditorStore().agentHolds = held ? held.clientName : null }, { immediate: true })
+		watch(mcpWorking, (held) => {
+			const editor = useEditorStore()
+			editor.agentHolds = held ? held.clientName : null
+			editor.agentRound = held ? { id: held.roundId, goal: held.goal } : null
+		}, { immediate: true })
 		// The chat shows the open project's rounds: read them whenever it changes.
 		watch(() => useEditorStore().threadId, (id) => { void loadRounds(id) }, { immediate: true })
 		api.onAgentActivity((activity: AgentActivity) => {

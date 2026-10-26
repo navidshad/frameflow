@@ -311,6 +311,34 @@ export class RevisionStore {
 		})
 	}
 
+	/**
+	 * Rewrites an existing revision's snapshot and label in place: same id, same
+	 * seq, same place in the tree. An agent's round keeps ONE revision this way
+	 * instead of one per edit. Unknown ids are appended like push, so a replace
+	 * never loses a save. Text only the old snapshot used is collected.
+	 */
+	replace(threadId: string, revision: EditorRevision): Promise<{ seq: number; count: number; prunedIds: string[] }> {
+		return this.serial(threadId, async () => {
+			const index = await this.openIndex(threadId)
+			const at = index.revisions.findIndex((r) => r.id === revision.id)
+			if (at === -1) {
+				const seq = ++index.revisionCounter
+				index.revisions.push(this.writeRevision(threadId, { ...revision, seq }))
+				const prunedIds = pruneToCap(index.revisions, revision.id, MAX_REVISIONS)
+				index.revisions = applyPrune(index.revisions, prunedIds)
+				this.writeIndex(index)
+				if (prunedIds.length) this.collectGarbage(threadId, index, prunedIds)
+				return { seq, count: index.revisions.length, prunedIds }
+			}
+			const old = index.revisions[at]
+			// Parent, seq and birth time belong to the revision's place in the tree: they stay.
+			index.revisions[at] = this.writeRevision(threadId, { ...revision, parentId: old.parentId, seq: old.seq, createdAt: old.createdAt })
+			this.writeIndex(index)
+			this.collectGarbage(threadId, index, [])
+			return { seq: old.seq, count: index.revisions.length, prunedIds: [] }
+		})
+	}
+
 	/** Deletes the given ids (the renderer sends the fully collected subtree). Never the root. */
 	delete(threadId: string, ids: string[]): Promise<boolean> {
 		return this.serial(threadId, async () => {
