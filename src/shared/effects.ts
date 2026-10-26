@@ -136,13 +136,33 @@ function warmthCss(kelvin: number): string {
 	return `url("data:image/svg+xml,${encodeURIComponent(svg)}#w")`
 }
 
+/**
+ * `eq=brightness` ADDS the same amount to every pixel: v on the 0..255 luma
+ * codes, and the 16..235 luma range spans the whole of RGB, so every channel
+ * moves by v * 255 * 255/219 levels (measured against the real filter to within
+ * five levels from -0.5 to 0.5, see exposure.test.ts). CSS `brightness()` MULTIPLIES, which
+ * brightens highlights far more than shadows and shifts colours (a clip with
+ * warmth and +0.07 came out 10 levels too blue in the monitor). An SVG
+ * component transfer is the same addition, in the same stored values (`sRGB`).
+ */
+function exposureCss(v: number): string {
+	const shift = Number(((v * 255) / 219).toFixed(4))
+	const svg = "<svg xmlns='http://www.w3.org/2000/svg'><filter id='e' color-interpolation-filters='sRGB'><feComponentTransfer>" +
+		['R', 'G', 'B'].map((c) => `<feFunc${c} type='linear' slope='1' intercept='${shift}'/>`).join('') +
+		'</feComponentTransfer></filter></svg>'
+	return `url("data:image/svg+xml,${encodeURIComponent(svg)}#e")`
+}
+
+/** The shift `exposureCss` makes, in 0..255 levels: what the monitor adds for an `exposure` amount. */
+export function exposureShiftLevels(v: number): number {
+	return (v * 255 * 255) / 219
+}
+
 const ADJUST: EffectDef[] = [
 	adjust('exposure', 'Exposure', 'Lifts or drops the whole picture.',
 		number('amount', 'Amount', -0.5, 0.5, 0.01, 0),
 		(v) => (v === 0 ? '' : `eq=brightness=${fmt(v)}`),
-		// Matched at midtone: `eq` ADDS v to a 0.5 pixel, CSS MULTIPLIES it, so
-		// the equivalent factor is 1 + 2v. They drift at the extremes on purpose.
-		(v) => (v === 0 ? '' : `brightness(${fmt(1 + v * 2)})`)),
+		(v) => (v === 0 ? '' : exposureCss(v))),
 
 	adjust('contrast', 'Contrast', 'Pushes shadows down and highlights up.',
 		number('amount', 'Amount', 0, 3, 0.01, 1),

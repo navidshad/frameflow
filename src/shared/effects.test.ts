@@ -96,11 +96,17 @@ describe('build', () => {
 })
 
 describe('the monitor’s approximation', () => {
-	it('matches the export at midtone for the eq family', () => {
-		// eq ADDS to a pixel, CSS MULTIPLIES it. A 0.5 pixel with brightness=0.1
-		// becomes 0.6 either way; that is the equivalence, and it is deliberate
-		// that they part company at the extremes.
-		expect(effectCss(applied('exposure', { amount: 0.1 }))).toBe('brightness(1.2)')
+	it('shows exposure as an addition, like eq, and the rest of the eq family as CSS', () => {
+		expect(effectCss(applied('exposure', { amount: 0 }))).toBe('')
+		const css = effectCss(applied('exposure', { amount: 0.1 }))
+		expect(css.startsWith('url("data:image/svg+xml,')).toBe(true)
+		const svg = decodeURIComponent(css.slice('url("data:image/svg+xml,'.length, css.lastIndexOf('#e')))
+		// The values ffmpeg adds to are the stored ones, not linear light.
+		expect(svg).toContain("color-interpolation-filters='sRGB'")
+		// 0.1 of 255 luma codes, spread over the 219-code range that is the whole of RGB.
+		expect(svg.match(/intercept='([\d.-]+)'/g)).toEqual(Array(3).fill("intercept='0.1164'"))
+		expect(svg).toContain("slope='1'")
+		expect(effectCss(applied('exposure', { amount: -0.25 }))).toContain(encodeURIComponent("intercept='-0.2911'"))
 		expect(effectCss(applied('contrast', { amount: 1.4 }))).toBe('contrast(1.4)')
 		expect(effectCss(applied('saturation', { amount: 0 }))).toBe('saturate(0)')
 	})
