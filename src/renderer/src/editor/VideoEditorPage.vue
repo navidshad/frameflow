@@ -66,7 +66,7 @@
 			@collapse="chatColOpen = false" @resize="resizeChat" @reset-size="resetChat" />
 
 		<template v-if="!editorStore.loading && !notFound">
-			<ExportDialog v-model="showExport" />
+			<ExportDialog v-model="showExport" @show-exports="showExportsTab" />
 			<ShortcutsOverlay />
 		</template>
 	</div>
@@ -84,6 +84,7 @@ import PreviewMonitor from './components/PreviewMonitor.vue'
 import TimelinePanel from './components/TimelinePanel.vue'
 import ShortcutsOverlay from './components/ShortcutsOverlay.vue'
 import ChatColumn from './components/ChatColumn.vue'
+import type { ChatTab } from './chatTab'
 import ComposerStrip from './components/ComposerStrip.vue'
 import ExportDialog from './components/ExportDialog.vue'
 import ResizeHandle from './components/ResizeHandle.vue'
@@ -195,11 +196,17 @@ watch(timelineSelected, (selected) => {
 })
 
 // ===== Chat column =====
-const chatTab = ref<'chat' | 'revisions' | 'agent'>('chat')
+const chatTab = ref<ChatTab>('chat')
 const revisionsBadge = ref(false)
 const chatBadge = ref(false)
 
 // Opening the revisions tab clears its badge (tab is v-modeled from ChatColumn)
+// The Export dialog's "Exports tab" link: open the column on that tab.
+const showExportsTab = () => {
+	chatColOpen.value = true
+	chatTab.value = 'exports'
+}
+
 watch(chatTab, (tab) => {
 	if (tab === 'revisions') revisionsBadge.value = false
 })
