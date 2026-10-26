@@ -575,6 +575,10 @@ app.whenReady().then(() => {
 	})
 
 	// Retry / re-run / opt-in steps (e.g. ['descriptions']) for one asset.
+	// The editor asks as it opens a project: proxies made before the monitor-tagging existed
+	// are tagged now, before the monitor plays them (a few seconds on the first open only).
+	ipcMain.handle('ensure-proxy-tags', async (_event, threadId: string) => editorPreprocess.ensureProxyTags(String(threadId)))
+
 	ipcMain.handle('preprocess-media', async (_event, { threadId, assetId, steps, sensitivity }: {
 		threadId: string, assetId: string, steps?: string[], sensitivity?: number
 	}) => {

@@ -1407,6 +1407,11 @@ export const useEditorStore = defineStore('editor', () => {
 			}
 			void ensureCurrentSnapshot()
 
+			// Proxies made before the monitor-tagging existed are tagged now, so the monitor shows
+			// the pixels the export makes (iPhone HDR especially). A stream copy of the tags only:
+			// instant once done, and a few seconds the first time a big project opens.
+			try { await api.ensureProxyTags(threadId.value) } catch { /* the monitor only looks off */ }
+
 			// Detect assets interrupted by an app quit mid-preprocess: persisted as
 			// 'running' but with no live task process. Any incoming task update for
 			// the asset clears the flag.
