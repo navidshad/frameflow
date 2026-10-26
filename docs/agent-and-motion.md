@@ -140,7 +140,7 @@ The tools an agent needs to go from a link to a checked export without the user'
 |---|---|
 | `list_projects`, `create_project`, `open_project` | Find, make and open projects; opening waits until the editor has loaded it. |
 | `import_media` | A link (yt-dlp, installed on first use) or a local file, as the Media panel imports it; returns the media id. |
-| `wait` | Follows background work: `media` until preparation (proxy, scenes, transcript) finishes, `export` until the file is done. Reports progress to the client. |
+| `wait` | Follows background work: `media` until each file is readable (transcript done, pieces exist; `until: "everything"` also waits for the proxy and thumbnails), `export` until the file is done. Reports progress to the client. |
 | `inspect_media` | A labelled contact sheet of a source file's own frames, at source seconds. |
 | `find_silences` | Measured pauses in a source's sound, for tightening by measurement. |
 | `render_frames` | Up to 24 exact timeline frames in one sheet, with each frame's motion note. |

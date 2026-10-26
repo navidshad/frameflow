@@ -42,7 +42,7 @@
 				<div v-if="usesLanes && !readiness.settled && readiness.chips.length" class="flex flex-wrap items-center gap-1 mt-1"
 					data-testid="asset-readiness">
 					<span v-for="chip in readiness.chips" :key="chip.text"
-						class="text-[9px] font-semibold px-1.5 py-0.5 rounded"
+						class="text-[9px] font-semibold px-1.5 py-0.5 rounded whitespace-nowrap"
 						:class="chipToneClass(chip.tone)">
 						{{ chip.text }}
 					</span>
