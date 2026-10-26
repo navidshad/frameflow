@@ -122,11 +122,12 @@ const turn = computed(() =>
 /**
  * The card repeats the assistant's message and the revision chip already in the
  * chat, so it only appears when something needs the user: changes that could
- * not be applied, a note or a retry, or a cut that came out short.
+ * not be applied, a retry on offer, or a cut that came out short. Notes alone
+ * are plain information ("Added whoosh at 0:00.3", 74 times) and don't count.
  */
 const needsAttention = computed(() => !!(
 	result.value?.droppedOps.length ||
-	turn.value?.notes?.length ||
+	(turn.value && store.retryFor(turn.value)) ||
 	turn.value?.build?.shortfall
 ))
 
