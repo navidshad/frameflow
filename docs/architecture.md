@@ -52,12 +52,37 @@ intent — that is how "make a thumbnail from my video" works.
 ### B. The timeline editor — video output
 
 Entered from Home's **Video** purpose, or from a blank timeline project. Media is
-imported per asset and preprocessed independently (`src/main/editor/preprocess.ts`:
-proxy → audio → transcript → scenes → thumbnails, every step skip-if-exists).
+imported per asset and preprocessed independently (`src/main/editor/preprocess.ts`).
+A video imports as **two lanes side by side**: *words* (audio pulled from the
+original → transcript → pieces) and *picture* (480p proxy → filmstrip → scenes →
+thumbnails). Every step is skip-if-exists. The lanes meet only at the pieces:
+scene detection never makes pieces before the transcript could, and thumbnails
+wait for both the proxy and the pieces. Each lane has its own record
+(`MediaAsset.prepLanes`; `preprocessState` is their summary), so one can fail,
+be interrupted or be resumed without touching the other. The clip is placeable
+and watchable from the probe on (the monitor plays the original until a proxy
+exists), and the AI unlocks when the words lane is done, not the whole import.
+See `docs/import-lanes.md` for how it works and what was measured.
 The AI path is `src/main/editor/prompt.ts`: one Gemini call per turn producing
 **ops** (`src/main/editor/ops.ts`) which map to a `TimelineDiff` the renderer
 applies. Output length comes from the user's request — personas describe style
 only. Each turn becomes a branchable revision.
+
+**The transcript step** (`src/main/gemini/utils.ts` `extractTranscript`, driven by
+`extraction.extractRawTranscript`). The audio is cut at pauses into windows
+(about 20 min each, never more than 25, under the word model's 30-minute limit).
+With the word model (`gemini-3.5-transcribe`) up to `WORD_WINDOW_CONCURRENCY`
+(3) windows are cut, uploaded and sent at once (`transcript-pool.ts`) and
+stitched back in source order; a general model runs short windows one at a time
+because each window carries the language forward. The first window to fail (a
+quota or rate-limit error that survived the adapter's own retries) aborts the
+others so no more calls are spent, and its error is the one the Media row
+explains (`transcript-errors.ts`). Progress is real: `transcript-progress.ts`
+turns "windows done / total, and what each one is doing (cutting, uploading,
+transcribing)" into the row's status line and bar position, and repeats the line
+every 15 s so its elapsed clock keeps moving through a long call. A transcript
+that failed leaves a "No transcript: …" line on the Media row with a
+**Transcribe again** button (the same `transcribeAsset` path as the Inspector).
 
 ---
 
@@ -73,7 +98,7 @@ Before the AI can "watch" the video, we need to convert it into formats it can u
 **Key File:** `src/main/pipeline/phases/extraction.ts`
 
 1.  **Low-Res Proxy:** High-quality 4K video is too "heavy" for fast AI analysis. We create a 480p "proxy" version using **FFmpeg**.
-2.  **Audio Extraction:** We pull the audio (MP3) because it's much faster for the AI to "listen" to a transcript than to process raw video pixels for every second.
+2.  **Audio Extraction:** We pull the audio (mono 16 kHz MP3, from the original file, in seconds) because it's much faster for the AI to "listen" to a transcript than to process raw video pixels for every second.
 3.  **Raw Transcript:** We use **Gemini 2.5** to generate an initial timestamped script of everything being said.
 
 ---

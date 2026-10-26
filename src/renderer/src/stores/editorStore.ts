@@ -1,11 +1,11 @@
-import { wantsFilmstrip } from '@shared/mediaPrep'
+import { PREP_LANES, aiReady, laneOfStep, laneRecord, laneStatus, mediaReadiness, wantsFilmstrip } from '@shared/mediaPrep'
 import { defineStore } from 'pinia'
 import { ref, shallowRef, computed, watch } from 'vue'
 import type {
 	BackgroundTask, Clip, EditorDocument, EditorHistoryStep, EditorMarker,
 	EditorPersona, EditorRevision, EditorRevisionSummary, MediaAsset, RevisionSnapshot, PromptTurn, Thread, TimelineDiff,
 	DeliveryFormat, SoundBinding, TimelineItem, TimelineItemTransform, TimelineSnapshot, Track,
-	EditorOps, MulticamGroup, MulticamSpeakers
+	EditorOps, MulticamGroup, MulticamSpeakers, PrepLane
 } from '@shared/types'
 import {
 	groupOfItem, groupRippleCut, groupTimeAt, rederiveGroupItems, resolveAngle, shotRun, suggestCameraGroups, type CameraGroupSuggestion
@@ -85,7 +85,22 @@ export const useEditorStore = defineStore('editor', () => {
 		percent: number
 		phase?: 'updating-ytdlp' | 'retrying'
 	}>>({})
-	const interruptedAssets = ref<Set<string>>(new Set())
+	// Lanes (transcript / picture) the app quit in the middle of: stored "running", nothing live.
+	const interruptedLanes = ref<Record<string, PrepLane[]>>({})
+	const interruptedAssets = computed(() => new Set(Object.keys(interruptedLanes.value).filter((id) => interruptedLanes.value[id].length > 0)))
+	/** Forget an interruption: one lane's, or (no lane given) all of the asset's. */
+	const clearInterrupted = (assetId: string, lane?: PrepLane) => {
+		const current = interruptedLanes.value[assetId]
+		if (!current) return
+		const left = lane ? current.filter((l) => l !== lane) : []
+		if (left.length === current.length) return
+		const next = { ...interruptedLanes.value }
+		if (left.length) next[assetId] = left
+		else delete next[assetId]
+		interruptedLanes.value = next
+	}
+	/** The user chose to talk to the AI before the transcript is done (this session only). */
+	const chatBeforeTranscript = ref(false)
 	const dirty = ref(false)
 	const saveInFlight = ref(false)
 	const deps = ref<{ ffmpeg: boolean; ytDlp: boolean }>({
@@ -211,7 +226,8 @@ export const useEditorStore = defineStore('editor', () => {
 	})
 
 	// Chain order, so a running task list reads top-to-bottom like the pipeline.
-	const STEP_ORDER = ['proxy', 'audio', 'transcript', 'retranscribe', 'scenes', 'thumbnails', 'descriptions']
+	// Words lane first (audio, transcript), then the picture lane: the two run side by side.
+	const STEP_ORDER = ['audio', 'transcript', 'retranscribe', 'proxy', 'filmstrip', 'scenes', 'thumbnails', 'descriptions']
 
 	const assetTasks = (assetId: string): BackgroundTask[] => {
 		const prefix = `${assetId}:`
@@ -587,6 +603,33 @@ export const useEditorStore = defineStore('editor', () => {
 		selectItems([id])
 		return id
 	}
+
+	/**
+	 * What the monitor cannot yet show truthfully: footage at the playhead (or the
+	 * asset open in Source) whose colours come from an HDR original, or that the
+	 * browser cannot play until its proxy is built. Both clear when the proxy lands.
+	 * See hdrOriginalNeedsProxy / playsNatively in shared/mediaPrep.ts.
+	 */
+	const monitorPictureNote = (assetId: string | null | undefined): { text: string; tone: 'warn' } | null => {
+		const asset = assetId ? doc.value?.media.find((a) => a.id === assetId) : undefined
+		if (!asset || asset.kind !== 'video') return null
+		const ready = mediaReadiness(asset, { interrupted: interruptedLanes.value[asset.id] })
+		if (ready.playsFrom === 'nothing') return { text: 'This file needs its proxy before it plays', tone: 'warn' }
+		if (!ready.colourFinal) return { text: 'Colours not final until the proxy is ready', tone: 'warn' }
+		return null
+	}
+	const timelinePictureNote = computed(() => {
+		const d = doc.value
+		if (!d) return null
+		const t = playheadSec.value
+		const hidden = new Set(d.tracks.filter((tr) => tr.hidden).map((tr) => tr.id))
+		for (const item of d.timeline) {
+			if (!item.sourceAssetId || hidden.has(item.trackId) || t < item.timelineStart || t >= item.timelineStart + item.duration) continue
+			const note = monitorPictureNote(item.sourceAssetId)
+			if (note) return note
+		}
+		return null
+	})
 
 	/** Generated layers covering the playhead — the monitor draws them in CSS. */
 	const activeGenerators = computed(() => {
@@ -1134,16 +1177,16 @@ export const useEditorStore = defineStore('editor', () => {
 
 	// The AI has nothing to work with until at least one asset finished
 	// preprocessing (pieces/transcript exist) — the chat gates on this.
-	const hasReadyMedia = computed(() =>
-		assets.value.some((a) => a.preprocessState === 'completed' && (a.clips?.length ?? 0) > 0)
-	)
+	// The transcript lane is enough: the proxy, filmstrip and thumbnails keep building without it.
+	const hasReadyMedia = computed(() => assets.value.some((a) => aiReady(a)))
 	/**
 	 * Chat has something to work on: footage that is ready, or layers (motion pages,
 	 * backgrounds, titles) that need no footage. A motion-only timeline used to be
 	 * told to "import media to start" with the input disabled — so the AI could not
 	 * be asked to make the very thing the timeline is for.
 	 */
-	const canPrompt = computed(() => hasReadyMedia.value || hasLayers.value)
+	const canPrompt = computed(() => hasReadyMedia.value || hasLayers.value ||
+		(chatBeforeTranscript.value && assets.value.some((a) => (a.metadata?.duration || 0) > 0)))
 	const mediaProcessing = computed(() =>
 		assets.value.some((a) => a.preprocessState === 'running' || a.preprocessState === 'pending')
 	)
@@ -1419,11 +1462,14 @@ export const useEditorStore = defineStore('editor', () => {
 			// Detect assets interrupted by an app quit mid-preprocess: persisted as
 			// 'running' but with no live task process. Any incoming task update for
 			// the asset clears the flag.
-			interruptedAssets.value = new Set(
-				(doc.value?.media || [])
-					.filter((a) => a.preprocessState === 'running')
-					.map((a) => a.id)
-			)
+			const interrupted: Record<string, PrepLane[]> = {}
+			for (const a of doc.value?.media || []) {
+				const lanes = a.kind === 'video'
+					? PREP_LANES.filter((l) => laneRecord(a, l)?.state === 'running')
+					: a.preprocessState === 'running' ? (['picture'] as PrepLane[]) : []
+				if (lanes.length) interrupted[a.id] = lanes
+			}
+			interruptedLanes.value = interrupted
 
 			// Fire-and-forget: the ffmpeg/yt-dlp binary checks spawn processes
 			// and can take seconds — never block first paint on them.
@@ -1552,10 +1598,11 @@ export const useEditorStore = defineStore('editor', () => {
 		}
 	}
 
-	const retryAsset = async (assetId: string, steps?: string[]) => {
+	/** Run what is not done yet: both lanes, or just `lane` (resume the transcript alone, or the proxy alone). */
+	const retryAsset = async (assetId: string, steps?: string[], lane?: PrepLane) => {
 		if (!threadId.value) return
-		interruptedAssets.value.delete(assetId)
-		await api.preprocessMedia({ threadId: threadId.value, assetId, steps })
+		clearInterrupted(assetId, lane)
+		await api.preprocessMedia({ threadId: threadId.value, assetId, steps, lane })
 	}
 
 	const describeAsset = async (assetId: string) => {
@@ -1634,7 +1681,8 @@ export const useEditorStore = defineStore('editor', () => {
 				}
 				continue
 			}
-			const live = asset.preprocessState === 'running' && !interruptedAssets.value.has(asset.id)
+			// The picture lane draws the strip itself right after the proxy; the transcript lane never does.
+			const live = laneStatus(asset, 'picture', !(interruptedLanes.value[asset.id] || []).includes('picture')) === 'running'
 			if (!wantsFilmstrip(asset, { usedOnTimeline: usedAssetIds.has(asset.id), live, alreadyRequested: filmstripRequested.has(asset.id) })) continue
 			filmstripRequested.add(asset.id)
 			api.preprocessMedia({ threadId: threadId.value, assetId: asset.id, steps: ['filmstrip'] })
@@ -1642,7 +1690,7 @@ export const useEditorStore = defineStore('editor', () => {
 	}
 	// Also when a proxy lands or a file stops being live (interrupted, finished).
 	watch([timelineView, () => doc.value?.timeline.length,
-		() => doc.value?.media.map((a) => `${a.id}:${a.preprocessState}:${!!a.proxyPath}:${interruptedAssets.value.has(a.id)}`).join('|')],
+		() => doc.value?.media.map((a) => `${a.id}:${a.preprocessState}:${a.prepLanes?.picture?.state}:${!!a.proxyPath}:${(interruptedLanes.value[a.id] || []).join('+')}`).join('|')],
 	() => ensureFilmstrips())
 
 	/**
@@ -4101,7 +4149,9 @@ export const useEditorStore = defineStore('editor', () => {
 		// Merge main-owned media state
 		const merged: MediaAsset[] = remoteMedia.map((remote) => {
 			const local = doc.value!.media.find((a) => a.id === remote.id)
-			if (remote.preprocessState !== 'running') interruptedAssets.value.delete(remote.id)
+			for (const lane of PREP_LANES) {
+				if (laneRecord(remote, lane)?.state !== 'running') clearInterrupted(remote.id, lane)
+			}
 			return local ? mergeMainOwnedAsset(local, remote) : remote
 		})
 		// Keep local-only assets (mid-creation, not yet broadcast)
@@ -4138,7 +4188,7 @@ export const useEditorStore = defineStore('editor', () => {
 			backgroundTasks.value = { ...backgroundTasks.value, [data.taskId]: data.task }
 			const [assetId, step] = data.taskId.split(':')
 			// A filmstrip side job does not resume an interrupted file: it keeps its Retry.
-			if (assetId && step !== 'filmstrip') interruptedAssets.value.delete(assetId)
+			if (assetId && step && step !== 'filmstrip') clearInterrupted(assetId, laneOfStep(step))
 		})
 
 		api.onThreadUpdated((updated: Thread) => {
@@ -4234,6 +4284,10 @@ export const useEditorStore = defineStore('editor', () => {
 		selectedClipId,
 		urlImports,
 		interruptedAssets,
+		interruptedLanes,
+		chatBeforeTranscript,
+		monitorPictureNote,
+		timelinePictureNote,
 		dirty,
 		saveInFlight,
 		deps,

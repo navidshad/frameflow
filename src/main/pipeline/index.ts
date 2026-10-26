@@ -6,7 +6,8 @@ export type PipelineFunction = (data: any, context: PipelineContext) => Promise<
 import { threadManager } from '../threads'
 
 export interface PipelineContext {
-	updateStatus: (status: string) => Promise<void>;
+	/** `progress` (0-100) moves the step's bar; without it the bar is read from the text, if it has a number. */
+	updateStatus: (status: string, progress?: number) => Promise<void>;
 	next: (data: any) => void;
 	finish: (message: string, video?: { path: string; type: FileType.Preview | FileType.Actual }, timeline?: EnrichedTimelineSegment[], options?: { version?: number; shouldVersion?: boolean, resultType?: PipelineResultType, files?: Array<{ url: string, type: FileType }> }) => Promise<void>;
 	fail: (error: string) => Promise<void>;

@@ -42,6 +42,16 @@ describe('explainTranscriptError', () => {
 		expect(explainTranscriptError('429 RESOURCE_EXHAUSTED quota', 'x')).toMatch(/quota/)
 	})
 
+	it('says plainly when the prepaid credits are gone, not "wait and retry"', () => {
+		const raw = '{"error":{"code":402,"message":"Your prepayment credits are depleted. Please go to AI Studio at https://ai.studio/projects to manage your project and billing.","status":"RESOURCE_EXHAUSTED"}}'
+		const msg = explainTranscriptError(raw, 'gemini-3.5-transcribe')
+		expect(msg).toMatch(/prepaid credits are depleted/)
+		expect(msg).toContain('AI Studio')
+		expect(msg).not.toMatch(/quota|Wait and retry/)
+		// A genuine rate limit keeps its own wording.
+		expect(explainTranscriptError('429 RESOURCE_EXHAUSTED quota', 'x')).toMatch(/quota/)
+	})
+
 	it('passes anything else through', () => {
 		expect(explainTranscriptError('socket hang up')).toBe('Transcription failed: socket hang up')
 	})

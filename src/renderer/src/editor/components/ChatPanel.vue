@@ -22,8 +22,15 @@
 						Preparing your media…
 					</p>
 					<p class="text-[11px] text-zinc-400 leading-relaxed">
-						Chat unlocks once the footage is broken into pieces you can edit.
+						Chat unlocks once the transcript is ready and the footage is broken into pieces.
+						The proxy and thumbnails can keep building while you talk.
 					</p>
+					<button v-if="store.assets.some((a) => (a.metadata?.duration || 0) > 0)"
+						class="text-[11px] font-semibold text-primary hover:underline"
+						data-testid="chat-without-transcript"
+						@click="store.chatBeforeTranscript = true">
+						Start without waiting for the transcript
+					</button>
 				</template>
 				<template v-else>
 					<p class="text-xs font-bold text-zinc-600 dark:text-zinc-300">Import media to start</p>

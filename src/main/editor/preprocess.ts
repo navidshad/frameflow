@@ -2,7 +2,8 @@ import fs from 'fs'
 import path from 'path'
 import { setMaxListeners } from 'events'
 import { v4 as uuidv4 } from 'uuid'
-import type { Clip, DescriptionHealth, MediaAsset, SilenceRegion, TranscriptHealth, TranscriptTiming } from '@shared/types'
+import type { Clip, DescriptionHealth, MediaAsset, PrepLane, PrepLaneRecord, SilenceRegion, TranscriptHealth, TranscriptTiming } from '@shared/types'
+import { PREP_LANES, hdrOriginalNeedsProxy, laneOfSteps, laneRecord, summarizeLanes } from '@shared/mediaPrep'
 import { analyzeTranscriptHealth } from '@shared/transcript-health'
 import { srtToSeconds } from '@shared/timeline'
 import { MIN_DESCRIBABLE_DURATION } from '../gemini/scene-descriptions'
@@ -13,7 +14,9 @@ import * as ffmpegAdapter from '../ffmpeg'
 import { tagProxyForMonitor } from '../ffmpeg/proxyTags'
 import { SceneDetector, type Scene } from '../scenedetect'
 import * as extraction from '../pipeline/phases/extraction'
-import { ASSET_DIRS } from '../constants/paths'
+import { ASSET_DIRS, THREAD_DIRS } from '../constants/paths'
+import { createSlotPool, type SlotOptions } from '../concurrency'
+import { MAX_HARDWARE_PROXIES } from '../ffmpeg/proxyArgs'
 import { explainTranscriptError } from '../gemini/transcript-errors'
 import { settingsManager } from '../settings'
 import { getAssetDir, patchAsset, patchAssetPreprocessing } from './assets'
@@ -36,14 +39,23 @@ export type PreprocessStep =
 	'proxy' | 'scenes' | 'thumbnails' | 'descriptions' | 'audio' | 'transcript' | 'filmstrip' | 'segment'
 	| 'retranscribe'
 
-// Transcript runs UP FRONT (before scenes) so pieces derive from real speech
-// segments; scene detection stays as the fallback piece source for videos
-// with no usable transcript and for explicit sensitivity re-runs.
+// A video imports as TWO LANES that run side by side (see shared/mediaPrep.ts):
 //
-// The filmstrip comes right after the proxy: it needs only a picture, so the
-// timeline shows real frames while the long steps (a transcript of a 90-minute
-// file) are still running, or if they never finish.
-export const DEFAULT_STEPS: PreprocessStep[] = ['proxy', 'filmstrip', 'audio', 'transcript', 'scenes', 'thumbnails']
+//   words    audio from the ORIGINAL (seconds, not after the proxy), then the
+//            transcript, which also makes the pieces. The AI needs only this.
+//   picture  the 480p proxy, the filmstrip from it, scene detection, then the
+//            thumbnails.
+//
+// The lanes meet in one place: pieces. A piece comes from the transcript (words
+// lane) or, for a video with no speech, from scene detection (picture lane), so
+// the picture lane waits for the words lane before it derives pieces and cuts
+// thumbnails. Thumbnails thereby wait for BOTH a source of frames (the proxy)
+// and the pieces. The filmstrip comes right after the proxy: it needs only a
+// picture, so the timeline shows real frames while a long transcript runs.
+const WORDS_STEPS: PreprocessStep[] = ['audio', 'transcript']
+const PICTURE_STEPS: PreprocessStep[] = ['proxy', 'filmstrip', 'scenes', 'thumbnails']
+const LANE_STEPS: Record<PrepLane, PreprocessStep[]> = { words: WORDS_STEPS, picture: PICTURE_STEPS }
+export const DEFAULT_STEPS: PreprocessStep[] = [...WORDS_STEPS, ...PICTURE_STEPS]
 
 // Audio-only assets have no picture: skip proxy/scenes/thumbnails/filmstrip.
 // Pieces come from a LOCAL, energy-based segmentation (silence split + interval
@@ -60,37 +72,36 @@ const AUDIO_STEPS: PreprocessStep[] = ['segment']
 // A filmstrip is a picture aid: failing it must not fail the import either.
 const SOFT_FAIL_STEPS: PreprocessStep[] = ['audio', 'transcript', 'descriptions', 'filmstrip']
 
-// ===== Concurrency cap (K=3) for ffmpeg-heavy work =====
+// ===== Concurrency cap (K=3) for ffmpeg-heavy work, shared by BOTH lanes of every asset =====
 const MAX_CONCURRENT_HEAVY = 3
-let heavyRunning = 0
-const heavyQueue: Array<() => void> = []
+const heavyPool = createSlotPool(MAX_CONCURRENT_HEAVY)
 
-async function withHeavySlot<T>(fn: () => Promise<T>): Promise<T> {
-	if (heavyRunning >= MAX_CONCURRENT_HEAVY) {
-		await new Promise<void>((resolve) => heavyQueue.push(resolve))
-	}
-	heavyRunning++
-	try {
-		return await fn()
-	} finally {
-		heavyRunning--
-		const next = heavyQueue.shift()
-		if (next) next()
-	}
+function withHeavySlot<T>(fn: () => Promise<T>, options?: SlotOptions): Promise<T> {
+	return heavyPool.run(fn, options)
 }
 
+// Proxies are the long jobs. Two at once is the most the video chip helps
+// (measured: a third adds nothing), and capping them leaves a slot for the
+// quick jobs, so one file's audio never queues behind another file's proxy.
+const PROXY_GROUP = { name: 'proxy', max: MAX_HARDWARE_PROXIES }
+
 // ===== Abort registry =====
-const abortControllers = new Map<string, AbortController>()
+//
+// One entry per asset with work in flight: one controller shared by its lanes
+// (removing the asset stops both) and the lanes still running. A lane's promise
+// resolves when the lane has ended, however it ended: the other lane waits on it.
+interface LiveRun {
+	controller: AbortController
+	lanes: Map<PrepLane, Promise<void>>
+}
+const liveRuns = new Map<string, LiveRun>()
 
 const abortKey = (threadId: string, assetId: string) => `${threadId}:${assetId}`
 
 export function abortAssetPreprocessing(threadId: string, assetId: string): void {
 	const key = abortKey(threadId, assetId)
-	const controller = abortControllers.get(key)
-	if (controller) {
-		controller.abort()
-		abortControllers.delete(key)
-	}
+	liveRuns.get(key)?.controller.abort()
+	liveRuns.delete(key)
 	filmstripJobs.get(key)?.abort()
 	filmstripJobs.delete(key)
 }
@@ -98,8 +109,14 @@ export function abortAssetPreprocessing(threadId: string, assetId: string): void
 /** Filmstrip-only side jobs (the timeline asking for a strip), apart from the chain. */
 const filmstripJobs = new Map<string, AbortController>()
 
+/** The lanes of this asset that have work running right now. */
+export function preparingLanes(threadId: string, assetId: string): PrepLane[] {
+	const run = liveRuns.get(abortKey(threadId, assetId))
+	return run ? PREP_LANES.filter((l) => run.lanes.has(l)) : []
+}
+
 export function isAssetPreprocessing(threadId: string, assetId: string): boolean {
-	return abortControllers.has(abortKey(threadId, assetId))
+	return preparingLanes(threadId, assetId).length > 0
 }
 
 // ===== Helpers =====
@@ -186,8 +203,8 @@ function createAssetContext(
 		context: '',
 		baseTimeline: undefined,
 		intentResult: undefined,
-		updateStatus: async (status: string) => {
-			const progress = progressFromStatus(status)
+		updateStatus: async (status: string, explicitProgress?: number) => {
+			const progress = explicitProgress ?? progressFromStatus(status)
 			await setTask(threadId, assetId, step, {
 				state: 'running',
 				status,
@@ -271,7 +288,9 @@ async function runProxyStep(threadId: string, assetId: string, signal: AbortSign
 				(percent) => setTask(threadId, assetId, 'proxy', { state: 'running', progress: percent }),
 				signal,
 				{ sourceFps: asset.metadata?.fps }
-			)
+			),
+			// An HDR clip is wrong in the monitor until its proxy exists (see hdrOriginalNeedsProxy): it goes first.
+			{ group: PROXY_GROUP, first: hdrOriginalNeedsProxy(asset.metadata) }
 		)
 	}
 
@@ -285,7 +304,9 @@ async function runScenesStep(
 	threadId: string,
 	assetId: string,
 	signal: AbortSignal,
-	sensitivity?: number
+	sensitivity?: number,
+	/** Resolves when the words lane is done, so scenes never make pieces before a transcript could. */
+	piecesSettled?: () => Promise<void>
 ) {
 	const asset = getAsset(threadId, assetId)!
 	const forceRerun = sensitivity !== undefined
@@ -318,9 +339,12 @@ async function runScenesStep(
 	fs.writeFileSync(sceneTimesPath, JSON.stringify(scenes, null, 2))
 	await patchAssetPreprocessing(threadId, assetId, { sceneTimesPath })
 
-	// Pieces come from the TRANSCRIPT when one was derived earlier in the
-	// chain; scenes only produce pieces as the fallback (no transcript) or on
-	// an explicit sensitivity re-run (the user asked for scene pieces).
+	// Pieces come from the TRANSCRIPT when the words lane derived them; scenes
+	// only produce pieces as the fallback (no transcript) or on an explicit
+	// sensitivity re-run (the user asked for scene pieces). The words lane runs
+	// at the same time, so wait for it before deciding there are none.
+	await piecesSettled?.()
+	if (signal.aborted) throw new Error('Aborted')
 	const hasClips = (getAsset(threadId, assetId)?.clips || []).length > 0
 	if (forceRerun || !hasClips) {
 		await deriveClips(threadId, assetId, scenes)
@@ -752,6 +776,12 @@ async function recordDescriptionHealth(
 	return health
 }
 
+/**
+ * The words, pulled from the ORIGINAL: mono, 16 kHz, about 48 kbps. The proxy
+ * is not needed (it used to be the source, which made the transcript wait for
+ * the longest step of all), and the original is what the sync and speaker
+ * passes read, so every time in the project is on one clock.
+ */
 async function runAudioStep(threadId: string, assetId: string, signal: AbortSignal) {
 	const asset = getAsset(threadId, assetId)!
 	if (exists(asset.preprocessing.audioPath)) {
@@ -759,13 +789,21 @@ async function runAudioStep(threadId: string, assetId: string, signal: AbortSign
 		return
 	}
 
-	await setTask(threadId, assetId, 'audio', { state: 'running', status: 'Extracting audio…' })
+	await setTask(threadId, assetId, 'audio', { state: 'running', status: 'Extracting audio…', progress: 0 })
+	const reportAudio = makeProgressReporter(threadId, assetId, 'audio')
 
-	// Reuse the existing extraction phase VERBATIM through an asset-scoped context.
-	const context = createAssetContext(threadId, assetId, 'audio', signal)
-	await withHeavySlot(async () => { await extraction.convertToAudio({}, context) })
+	const thread = threadManager.getThread(threadId)!
+	const audioDir = path.join(getAssetDir(thread, assetId), THREAD_DIRS.AUDIO)
+	if (!fs.existsSync(audioDir)) fs.mkdirSync(audioDir, { recursive: true })
+
+	// First in line: a few seconds of work that everything in the words lane waits on.
+	const audioPath = await withHeavySlot(
+		() => ffmpegAdapter.toLeanAudio(asset.originalPath, audioDir, (p) => reportAudio(p, `Extracting audio… ${p}%`), signal),
+		{ first: true }
+	)
 
 	if (signal.aborted) throw new Error('Aborted')
+	await patchAssetPreprocessing(threadId, assetId, { audioPath })
 	await setTask(threadId, assetId, 'audio', { state: 'completed', progress: 100 })
 }
 
@@ -1031,14 +1069,133 @@ async function mergeTranscriptIntoClips(threadId: string, assetId: string) {
 
 // ===== Orchestrator =====
 
+/**
+ * Record where one lane stands, and the summary the rest of the app reads
+ * (`preprocessState`), in ONE write so they never disagree.
+ */
+async function setLane(threadId: string, assetId: string, lane: PrepLane, record: PrepLaneRecord) {
+	await patchAsset(threadId, assetId, (current) => {
+		// Media imported before the lanes existed has one state for both: carry it over for the lane that is not ours.
+		const base: Partial<Record<PrepLane, PrepLaneRecord>> = current.prepLanes ?? {
+			words: laneRecord(current, 'words'),
+			picture: laneRecord(current, 'picture')
+		}
+		const prepLanes = { ...base, [lane]: record }
+		const summary = summarizeLanes(prepLanes)
+		return { prepLanes, preprocessState: summary.state, preprocessError: summary.error }
+	})
+}
+
+/** One step, with the soft-failure rules: audio and transcript never brick an import. */
+async function runOneStep(
+	threadId: string,
+	assetId: string,
+	step: PreprocessStep,
+	signal: AbortSignal,
+	options: { sensitivity?: number; explicit: boolean; piecesSettled?: () => Promise<void> }
+): Promise<void> {
+	try {
+		switch (step) {
+			case 'proxy': await runProxyStep(threadId, assetId, signal); break
+			case 'scenes': await runScenesStep(threadId, assetId, signal, options.sensitivity, options.piecesSettled); break
+			case 'thumbnails': await runThumbnailsStep(threadId, assetId, signal); break
+			case 'descriptions': await runDescriptionsStep(threadId, assetId, signal); break
+			case 'audio': await runAudioStep(threadId, assetId, signal); break
+			case 'transcript': await runTranscriptStep(threadId, assetId, signal, options.explicit); break
+			// Explicitly requested repair — surfaces its errors, never soft-fails.
+			case 'retranscribe': await runRetranscribeStep(threadId, assetId, signal); break
+			case 'filmstrip': await runFilmstripStep(threadId, assetId, signal); break
+			case 'segment': await runSegmentStep(threadId, assetId, signal); break
+		}
+	} catch (stepError: any) {
+		// Audio/transcript are best-effort in the default chain: a missing
+		// Gemini key or quota error falls back to scene pieces instead of
+		// bricking the import. Everything else still hard-fails.
+		if (signal.aborted || !SOFT_FAIL_STEPS.includes(step)) {
+			stepError.preprocessStep = step
+			throw stepError
+		}
+		const message = stepError?.message || `${step} failed`
+		console.warn(`[editor] ${step} failed for asset ${assetId} — continuing without it:`, message)
+		if (step === 'transcript' || step === 'audio') {
+			// Shown in the Inspector and to agents — a log line alone left the
+			// media looking untranscribed with no reason given.
+			const reason = explainTranscriptError(message, stepError?.model || settingsManager.getModelSettings().selection['raw-transcript'])
+			await setTask(threadId, assetId, step, { state: 'error', error: reason })
+			// A clip with no audio track has nothing to transcribe — not a failure to show.
+			if (getAsset(threadId, assetId)?.metadata?.hasAudio !== false) {
+				await patchAsset(threadId, assetId, { transcriptError: reason })
+			}
+		} else {
+			await setTask(threadId, assetId, step, { state: 'error', error: message })
+		}
+	}
+}
+
+/**
+ * Run one lane (or one explicitly named chain, which occupies the lane its
+ * steps belong to) to its end. Never throws: a lane that fails records the
+ * error on itself and leaves the other lane running.
+ */
+async function runLane(
+	threadId: string,
+	assetId: string,
+	lane: PrepLane,
+	steps: PreprocessStep[],
+	run: LiveRun,
+	options: { sensitivity?: number; explicit: boolean; tracked: boolean }
+): Promise<void> {
+	const { signal } = run.controller
+	// The picture lane meets the words lane at the pieces.
+	const piecesSettled = lane === 'picture' ? () => run.lanes.get('words') ?? Promise.resolve() : undefined
+	let currentStep: PreprocessStep | null = null
+	try {
+		// A video with no sound has nothing for the words lane to do.
+		const silent = getAsset(threadId, assetId)?.metadata?.hasAudio === false
+		for (const step of steps) {
+			if (signal.aborted) throw new Error('Aborted')
+			currentStep = step
+			if (lane === 'words' && silent && (step === 'audio' || step === 'transcript')) {
+				await setTask(threadId, assetId, step, { state: 'completed', progress: 100, status: 'No audio track' })
+				continue
+			}
+			await runOneStep(threadId, assetId, step, signal, { ...options, piecesSettled })
+		}
+
+		// An audio asset with no transcript (no Gemini key / quota) derives zero
+		// pieces from the chain above — synthesize a single whole-file clip so it
+		// is always placeable on the audio track.
+		await ensureAudioHasClip(threadId, assetId)
+
+		if (signal.aborted) return
+		if (options.tracked) await setLane(threadId, assetId, lane, { state: 'completed' })
+		else await patchAsset(threadId, assetId, { preprocessState: 'completed' })
+	} catch (error: any) {
+		if (signal.aborted) {
+			// Asset removed or run cancelled — leave whatever state the removal left
+			console.log(`[editor] Preprocessing aborted for asset ${assetId}`)
+			return
+		}
+		const failedStep: PreprocessStep | null = error?.preprocessStep ?? currentStep
+		const raw = error?.message || 'Preprocessing failed'
+		const message = failedStep === 'retranscribe'
+			? explainTranscriptError(raw, error?.model || settingsManager.getModelSettings().selection['corrected-transcript'])
+			: raw
+		console.error(`[editor] Preprocessing failed for asset ${assetId} (${lane} lane, step: ${failedStep}):`, error)
+		// Mark the failed step's task and the lane errored; the other lane is unaffected.
+		if (failedStep) await setTask(threadId, assetId, failedStep, { state: 'error', error: message })
+		if (options.tracked) await setLane(threadId, assetId, lane, { state: 'error', error: message })
+		else await patchAsset(threadId, assetId, { preprocessState: 'error', preprocessError: message })
+	}
+}
+
 export async function preprocessMediaAsset(
 	threadId: string,
 	assetId: string,
-	options?: { steps?: PreprocessStep[]; sensitivity?: number }
+	options?: { steps?: PreprocessStep[]; sensitivity?: number; lane?: PrepLane }
 ): Promise<void> {
 	const asset = getAsset(threadId, assetId)
 	if (!asset) return
-	if (isAssetPreprocessing(threadId, assetId)) return // already running
 	// Sound has no picture to strip. A filmstrip asked for an audio asset is a
 	// no-op, and one that failed before (it used to mark the whole asset as
 	// failed, synthesised sounds included) is cleared.
@@ -1073,98 +1230,73 @@ export async function preprocessMediaAsset(
 	}
 
 	// "Explicit" = the caller named the steps (Transcribe/Describe buttons,
-	// repair flows). The default chain is a resume, so steps whose work already
+	// repair flows). The default run is a resume, so steps whose work already
 	// exists skip themselves rather than re-billing for it.
 	const explicitSteps = !!options?.steps?.length
-	const steps = explicitSteps
-		? options!.steps!
-		: asset.kind === 'audio' ? AUDIO_STEPS : DEFAULT_STEPS
-	const controller = new AbortController()
-	// Every ffmpeg call (one per scene thumbnail) attaches an abort listener to
-	// this shared signal — lift Node's default cap of 10 to avoid leak warnings.
-	setMaxListeners(0, controller.signal)
-	abortControllers.set(abortKey(threadId, assetId), controller)
-	const { signal } = controller
+	const key = abortKey(threadId, assetId)
 
-	await patchAsset(threadId, assetId, { preprocessState: 'running', preprocessError: undefined })
+	// What runs: each entry is a lane and the steps it takes. A named chain
+	// occupies the one lane its steps belong to; the default run of a video is
+	// both lanes (or just `options.lane`), skipping any that is live or done.
+	const plan: Array<{ lane: PrepLane; steps: PreprocessStep[] }> = []
+	if (explicitSteps) {
+		plan.push({ lane: laneOfSteps(options!.steps!), steps: options!.steps! })
+	} else if (asset.kind === 'audio') {
+		plan.push({ lane: 'picture', steps: AUDIO_STEPS })
+	} else {
+		for (const lane of options?.lane ? [options.lane] : PREP_LANES) {
+			if (preparingLanes(threadId, assetId).includes(lane)) continue
+			if (laneRecord(asset, lane)?.state === 'completed') continue
+			plan.push({ lane, steps: LANE_STEPS[lane] })
+		}
+	}
+	const live = preparingLanes(threadId, assetId)
+	const toRun = plan.filter((p) => !live.includes(p.lane))
+	if (toRun.length === 0) return // already running (or nothing left to do)
+
+	let run = liveRuns.get(key)
+	if (!run) {
+		const controller = new AbortController()
+		// Every ffmpeg call (one per scene thumbnail) attaches an abort listener to
+		// this shared signal — lift Node's default cap of 10 to avoid leak warnings.
+		setMaxListeners(0, controller.signal)
+		run = { controller, lanes: new Map() }
+		liveRuns.set(key, run)
+	}
+	const thisRun = run
+	// Sound keeps one state of its own; only a video has two lanes to tell apart.
+	const tracked = asset.kind !== 'audio'
+
+	// Register every lane before any of them awaits, so the picture lane can find the words lane to wait for.
+	const release: Array<() => void> = []
+	const ended = toRun.map((_, i) => new Promise<void>((resolve) => { release[i] = resolve }))
+	toRun.forEach((p, i) => thisRun.lanes.set(p.lane, ended[i]))
 
 	// Pre-register every step as pending so the UI shows the full checklist
 	// immediately and each bar visibly transitions pending -> running -> done.
-	for (const step of steps) {
-		await setTask(threadId, assetId, step, { state: 'pending', progress: 0, status: undefined, error: undefined })
+	for (const p of toRun) {
+		if (tracked) await setLane(threadId, assetId, p.lane, { state: 'running' })
+		for (const step of p.steps) {
+			await setTask(threadId, assetId, step, { state: 'pending', progress: 0, status: undefined, error: undefined })
+		}
+	}
+	if (!tracked) await patchAsset(threadId, assetId, { preprocessState: 'running', preprocessError: undefined })
+
+	// A sensitivity re-run must re-detect scenes even if outputs exist
+	if (options?.sensitivity !== undefined) {
+		await patchAssetPreprocessing(threadId, assetId, { sceneTimesPath: undefined })
 	}
 
-	let currentStep: PreprocessStep | null = null
-	try {
-		// A sensitivity re-run must re-detect scenes even if outputs exist
-		if (options?.sensitivity !== undefined) {
-			await patchAssetPreprocessing(threadId, assetId, { sceneTimesPath: undefined })
+	await Promise.all(toRun.map(async (p, i) => {
+		try {
+			await runLane(threadId, assetId, p.lane, p.steps, thisRun, {
+				sensitivity: options?.sensitivity, explicit: explicitSteps, tracked
+			})
+		} finally {
+			// Take the lane off the books first, then let anything waiting on it go.
+			if (thisRun.lanes.get(p.lane) === ended[i]) thisRun.lanes.delete(p.lane)
+			if (thisRun.lanes.size === 0 && liveRuns.get(key) === thisRun) liveRuns.delete(key)
+			release[i]()
 		}
-
-		for (const step of steps) {
-			if (signal.aborted) throw new Error('Aborted')
-			currentStep = step
-			try {
-				switch (step) {
-					case 'proxy': await runProxyStep(threadId, assetId, signal); break
-					case 'scenes': await runScenesStep(threadId, assetId, signal, options?.sensitivity); break
-					case 'thumbnails': await runThumbnailsStep(threadId, assetId, signal); break
-					case 'descriptions': await runDescriptionsStep(threadId, assetId, signal); break
-					case 'audio': await runAudioStep(threadId, assetId, signal); break
-					case 'transcript': await runTranscriptStep(threadId, assetId, signal, explicitSteps); break
-				// Explicitly requested repair — surfaces its errors, never soft-fails.
-				case 'retranscribe': await runRetranscribeStep(threadId, assetId, signal); break
-					case 'filmstrip': await runFilmstripStep(threadId, assetId, signal); break
-					case 'segment': await runSegmentStep(threadId, assetId, signal); break
-				}
-			} catch (stepError: any) {
-				// Audio/transcript are best-effort in the default chain: a missing
-				// Gemini key or quota error falls back to scene pieces instead of
-				// bricking the import. Everything else still hard-fails.
-				if (signal.aborted || !SOFT_FAIL_STEPS.includes(step)) throw stepError
-				const message = stepError?.message || `${step} failed`
-				console.warn(`[editor] ${step} failed for asset ${assetId} — continuing without it:`, message)
-				if (step === 'transcript' || step === 'audio') {
-					// Shown in the Inspector and to agents — a log line alone left the
-					// media looking untranscribed with no reason given.
-					const reason = explainTranscriptError(message, stepError?.model || settingsManager.getModelSettings().selection['raw-transcript'])
-					await setTask(threadId, assetId, step, { state: 'error', error: reason })
-					// A clip with no audio track has nothing to transcribe — not a failure to show.
-					if (getAsset(threadId, assetId)?.metadata?.hasAudio !== false) {
-						await patchAsset(threadId, assetId, { transcriptError: reason })
-					}
-				} else {
-					await setTask(threadId, assetId, step, { state: 'error', error: message })
-				}
-			}
-		}
-
-		// An audio asset with no transcript (no Gemini key / quota) derives zero
-		// pieces from the chain above — synthesize a single whole-file clip so it
-		// is always placeable on the audio track.
-		await ensureAudioHasClip(threadId, assetId)
-
-		await patchAsset(threadId, assetId, { preprocessState: 'completed' })
-	} catch (error: any) {
-		if (signal.aborted) {
-			// Asset removed or run cancelled — leave whatever state the removal left
-			console.log(`[editor] Preprocessing aborted for asset ${assetId}`)
-			return
-		}
-		const raw = error?.message || 'Preprocessing failed'
-		const message = currentStep === 'retranscribe'
-			? explainTranscriptError(raw, error?.model || settingsManager.getModelSettings().selection['corrected-transcript'])
-			: raw
-		console.error(`[editor] Preprocessing failed for asset ${assetId} (step: ${currentStep}):`, error)
-		// Mark the failed step's task and the asset errored; other assets are unaffected.
-		if (currentStep) {
-			await setTask(threadId, assetId, currentStep, { state: 'error', error: message })
-		}
-		await patchAsset(threadId, assetId, {
-			preprocessState: 'error',
-			preprocessError: message
-		})
-	} finally {
-		abortControllers.delete(abortKey(threadId, assetId))
-	}
+	}))
 }

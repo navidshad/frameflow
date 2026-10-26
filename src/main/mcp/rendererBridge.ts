@@ -24,7 +24,7 @@ import fs from 'node:fs'
 import { join } from 'node:path'
 import { tmpdir } from 'node:os'
 import { detectSilence } from '../ffmpeg'
-import { isAssetPreprocessing } from '../editor/preprocess'
+import { isAssetPreprocessing, preparingLanes } from '../editor/preprocess'
 import { importMediaFromFile, importMediaFromUrl } from '../editor/importMedia'
 import { computeContentEnd } from '../../shared/timeline'
 
@@ -250,11 +250,16 @@ export const rendererBridge: EditorBridge = {
 		return isAssetPreprocessing(project.threadId, assetId)
 	},
 
+	preparingLanes(project, assetId) {
+		return preparingLanes(project.threadId, assetId)
+	},
+
 	async findSilences(project, assetId, options) {
 		const asset = project.doc.media.find((a) => a.id === assetId)
 		if (!asset) throw new ToolError(`No media ${assetId} in this project.`)
 		if (asset.metadata && asset.metadata.hasAudio === false) return []
-		const regions = await detectSilence(asset.proxyPath || asset.originalPath, options)
+		// The original, the clock the transcript is on (the proxy's encode can shift sound).
+		const regions = await detectSilence(fs.existsSync(asset.originalPath) ? asset.originalPath : (asset.proxyPath || asset.originalPath), options)
 		return regions.map((r) => ({ start: r.start, end: r.end }))
 	},
 

@@ -580,12 +580,13 @@ app.whenReady().then(() => {
 	// are tagged now, before the monitor plays them (a few seconds on the first open only).
 	ipcMain.handle('ensure-proxy-tags', async (_event, threadId: string) => editorPreprocess.ensureProxyTags(String(threadId)))
 
-	ipcMain.handle('preprocess-media', async (_event, { threadId, assetId, steps, sensitivity }: {
-		threadId: string, assetId: string, steps?: string[], sensitivity?: number
+	ipcMain.handle('preprocess-media', async (_event, { threadId, assetId, steps, sensitivity, lane }: {
+		threadId: string, assetId: string, steps?: string[], sensitivity?: number, lane?: 'words' | 'picture'
 	}) => {
 		editorPreprocess.preprocessMediaAsset(threadId, assetId, {
 			steps: steps as any,
-			sensitivity
+			sensitivity,
+			lane
 		}).catch((error) => {
 			console.error(`[editor] preprocess retry failed for ${assetId}:`, error)
 		})
@@ -662,7 +663,8 @@ app.whenReady().then(() => {
 		const asset = threadManager.getThread(threadId)?.editor?.media.find((a) => a.id === assetId)
 		if (!asset) throw new Error('Asset not found')
 		if (asset.metadata && asset.metadata.hasAudio === false) return []
-		const source = asset.proxyPath || asset.originalPath
+		// The sound is read from the original, the clock the transcript is on (the proxy's encode can shift it).
+		const source = fs.existsSync(asset.originalPath) ? asset.originalPath : (asset.proxyPath || asset.originalPath)
 		let lastPercent = -1
 		return await detectSilence(source, { noiseDb, minDurationSec }, undefined, (percent) => {
 			if (percent - lastPercent < 2 && percent !== 100) return
