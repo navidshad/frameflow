@@ -259,7 +259,7 @@ const sameEffects = (a: TimelineItem['effects'], b: TimelineItem['effects']): bo
 	if (left.length !== right.length) return false
 	return left.every((effect, i) => {
 		const other = right[i]
-		if (effect.id !== other.id || effect.kind !== other.kind) return false
+		if (effect.id !== other.id || effect.kind !== other.kind || !!effect.disabled !== !!other.disabled) return false
 		const keys = new Set([...Object.keys(effect.params ?? {}), ...Object.keys(other.params ?? {})])
 		return [...keys].every((key) => effect.params?.[key] === other.params?.[key])
 	})

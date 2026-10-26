@@ -465,6 +465,29 @@ describe('applyTimelineDiff — media that left the project', () => {
 	})
 })
 
+describe('switching an effect off', () => {
+	// The Inspector's eye button: it must register as an edit, or it is invisible to undo and to revisions.
+	const withEffects = (disabled?: boolean) => {
+		const [item] = items([[0, 10]], 'v1', 'a')
+		return { tracks: [track('v1')], timeline: [{ ...item, effects: [{ id: 'w', kind: 'warmth', params: { kelvin: 9500 }, ...(disabled ? { disabled } : {}) }] }] }
+	}
+
+	it('is a change, and undo turns it back on', () => {
+		const on = withEffects(), off = withEffects(true)
+		const { forward, inverse } = diffTimelines(on, off)!
+		expect(forward.updateItems![0].effects![0]).toMatchObject({ id: 'w', disabled: true, params: { kelvin: 9500 } })
+		const doc = JSON.parse(JSON.stringify(off))
+		applyTimelineDiff(doc, inverse, [asset('a')])
+		expect(doc.timeline[0].effects[0].disabled).toBeUndefined()
+		expect(doc.timeline[0].effects[0].params).toEqual({ kelvin: 9500 })
+	})
+
+	it('is not a change when nothing differs', () => {
+		expect(diffTimelines(withEffects(), withEffects())).toBeNull()
+		expect(diffTimelines(withEffects(true), withEffects(true))).toBeNull()
+	})
+})
+
 describe('findOverlaps', () => {
 	it('reports the offending pair', () => {
 		expect(findOverlaps({ tracks: [track('v1')], timeline: items([[0, 10], [5, 10]]) }))

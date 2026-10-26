@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import {
 	allEffects, defaultParams, effectChain, effectCss, effectDef, effectGroups, kelvinGains,
-	hasRenderableEffects, isEffectKind, previewFidelity, registerEffects, type EffectDef
+	hasRenderableEffects, isEffectKind, previewFidelity, registerEffects, type AppliedEffect, type EffectDef
 } from './effects'
 
 const applied = (kind: string, params?: Record<string, number | string>) =>
@@ -139,6 +139,29 @@ describe('the monitor’s approximation', () => {
 			{ id: 'a', kind: 'saturation', params: { amount: 0 } },
 			{ id: 'b', kind: 'contrast', params: { amount: 2 } }
 		])).toBe('saturate(0) contrast(2)')
+	})
+})
+
+describe('a switched-off effect', () => {
+	const list: AppliedEffect[] = [
+		{ id: 'c', kind: 'contrast', params: { amount: 1.24 } },
+		{ id: 'w', kind: 'warmth', params: { kelvin: 9500 }, disabled: true },
+		{ id: 'h', kind: 'hue', params: { degrees: -10 } }
+	]
+
+	it('is skipped by the export and by the monitor alike', () => {
+		expect(effectChain(list, 'video')).toEqual(['eq=contrast=1.24', 'hue=h=-10'])
+		const css = effectCss(list)
+		expect(css).toBe('contrast(1.24) hue-rotate(-10deg)')
+		expect(css).not.toContain('svg') // no warmth matrix
+		// On again, with its settings kept, it is back in the same place.
+		const on: AppliedEffect[] = list.map(({ disabled: _off, ...e }) => e)
+		expect(effectChain(on, 'video')).toHaveLength(3)
+		expect(effectChain(on, 'video')[1]).toContain('colortemperature=temperature=9500')
+	})
+
+	it('can leave a clip with nothing to render, so it is back on the fast path', () => {
+		expect(hasRenderableEffects([{ id: 'w', kind: 'warmth', params: { kelvin: 9500 }, disabled: true }])).toBe(false)
 	})
 })
 

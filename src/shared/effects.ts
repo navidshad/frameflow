@@ -322,6 +322,8 @@ export interface AppliedEffect {
 	id: string
 	kind: string
 	params?: EffectParams
+	/** Switched off (compare with and without): skipped everywhere, settings kept. */
+	disabled?: boolean
 }
 
 /**
@@ -334,6 +336,7 @@ export function effectChain(effects: AppliedEffect[] | undefined, stream: Effect
 	if (!effects?.length) return []
 	const out: string[] = []
 	for (const applied of effects) {
+		if (applied.disabled) continue
 		const def = registry.get(applied.kind)
 		if (!def || def.stream !== stream) continue
 		const fragment = def.build(applied.params ?? {})
@@ -347,6 +350,7 @@ export function effectCss(effects: AppliedEffect[] | undefined): string {
 	if (!effects?.length) return ''
 	const parts: string[] = []
 	for (const applied of effects) {
+		if (applied.disabled) continue
 		const def = registry.get(applied.kind)
 		if (!def || def.stream !== 'video' || !def.css) continue
 		const fragment = def.css(applied.params ?? {})

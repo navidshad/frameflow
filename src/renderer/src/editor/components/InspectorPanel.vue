@@ -408,11 +408,24 @@
 							Drag one from the Effects tab onto this clip.
 						</p>
 						<div v-for="(effect, index) in itemEffects" :key="effect.id"
-							class="mb-1.5 rounded-lg border border-zinc-200 dark:border-zinc-700/70 p-2">
+							class="mb-1.5 rounded-lg border border-zinc-200 dark:border-zinc-700/70 p-2"
+							:class="effect.disabled ? 'border-dashed' : ''">
 							<div class="flex items-center gap-1">
-								<span class="flex-1 text-[10px] font-semibold text-zinc-700 dark:text-zinc-200 truncate">
+								<!-- On/off: see the clip with and without this effect. Settings are kept. -->
+								<button class="w-5 h-5 rounded transition"
+									:class="effect.disabled ? 'text-zinc-400 hover:text-primary' : 'text-primary hover:text-zinc-400'"
+									:title="effect.disabled ? 'Turn this effect on' : 'Turn this effect off to compare'"
+									:aria-label="`${effect.disabled ? 'Turn on' : 'Turn off'} ${defFor(effect.kind)?.label || effect.kind}`"
+									:aria-pressed="!effect.disabled"
+									@click="editorStore.toggleEffect(timelineItem!.id, effect.id)">
+									<span class="iconify w-3.5 h-3.5 block mx-auto"
+										:class="effect.disabled ? 'tabler--eye-off' : 'tabler--eye'"></span>
+								</button>
+								<span class="flex-1 text-[10px] font-semibold truncate"
+									:class="effect.disabled ? 'text-zinc-400 dark:text-zinc-500 line-through' : 'text-zinc-700 dark:text-zinc-200'">
 									{{ defFor(effect.kind)?.label || effect.kind }}
 								</span>
+
 								<span v-if="defFor(effect.kind) && previewFidelity(defFor(effect.kind)!) === 'export-only'"
 									class="shrink-0 px-1 py-px rounded text-[8px] font-mono uppercase tracking-wider
 									       text-amber-600 dark:text-amber-400 bg-amber-500/10"
@@ -435,7 +448,7 @@
 								</button>
 							</div>
 							<template v-for="param in defFor(effect.kind)?.params || []" :key="param.key">
-								<div v-if="param.kind === 'number'" class="mt-1.5">
+								<div v-if="param.kind === 'number'" class="mt-1.5" :class="effect.disabled ? 'opacity-40' : ''">
 									<div class="flex items-baseline justify-between">
 										<span class="text-[9px] uppercase tracking-widest text-zinc-500">{{ param.label }}</span>
 										<span class="font-mono text-[9px] text-primary">

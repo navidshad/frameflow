@@ -2509,6 +2509,25 @@ export const useEditorStore = defineStore('editor', () => {
 		commitStep({ before, label: 'Adjust effect' })
 	}
 
+	/**
+	 * Switch one effect off or on, keeping its settings: the way to see a clip with
+	 * and without it. Off means off everywhere (monitor and export), so what you
+	 * compare is what you would get.
+	 */
+	const toggleEffect = (itemId: string, effectId: string) => {
+		const item = doc.value?.timeline.find((i) => i.id === itemId)
+		const effect = item?.effects?.find((e) => e.id === effectId)
+		if (!item || !effect) return
+		const before = snapshotState()
+		const turnOff = !effect.disabled
+		item.effects = item.effects!.map((e) => {
+			if (e.id !== effectId) return e
+			const { disabled: _was, ...rest } = e
+			return turnOff ? { ...rest, disabled: true } : rest
+		})
+		commitStep({ before, label: `${effectDef(effect.kind)?.label ?? 'Effect'} ${turnOff ? 'off' : 'on'}` })
+	}
+
 	/** Reorder within the chain. A filter chain is not commutative, so this is
 	 *  a real edit rather than a cosmetic one. */
 	const moveEffect = (itemId: string, effectId: string, delta: number) => {
@@ -4316,6 +4335,7 @@ export const useEditorStore = defineStore('editor', () => {
 		addEffect,
 		removeEffect,
 		setEffectParam,
+		toggleEffect,
 		moveEffect,
 		setSequenceFrame,
 		clearSequenceFrame,
