@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import {
-	allEffects, defaultParams, effectChain, effectCss, effectDef, effectGroups,
+	allEffects, defaultParams, effectChain, effectCss, effectDef, effectGroups, kelvinGains,
 	hasRenderableEffects, isEffectKind, previewFidelity, registerEffects, type EffectDef
 } from './effects'
 
@@ -108,7 +108,24 @@ describe('the monitor’s approximation', () => {
 	it('says nothing for effects it cannot approximate', () => {
 		expect(effectCss(applied('gamma', { amount: 2 }))).toBe('')
 		expect(effectCss(applied('look-vintage'))).toBe('')
-		expect(effectCss(applied('warmth', { kelvin: 3000 }))).toBe('')
+	})
+
+	it('shows warmth as the same per-channel gain ffmpeg applies', () => {
+		expect(effectCss(applied('warmth', { kelvin: 6500 }))).toBe('')
+		const css = effectCss(applied('warmth', { kelvin: 9000 }))
+		expect(css.startsWith('url("data:image/svg+xml,')).toBe(true)
+		const svg = decodeURIComponent(css.slice('url("data:image/svg+xml,'.length, css.lastIndexOf('#w')))
+		// Linear-light interpolation would make the monitor darker than the export.
+		expect(svg).toContain("color-interpolation-filters='sRGB'")
+		expect(svg).toContain("values='0.8219 0 0 0 0 0 0.874 0 0 0 0 0 1 0 0 0 0 0 1 0'")
+		expect(previewFidelity(effectDef('warmth')!)).toBe('approximate')
+	})
+
+	it('cools above 6500 K and warms below it', () => {
+		const [r9, , b9] = kelvinGains(9000)
+		expect(r9).toBeLessThan(b9)
+		const [r3, , b3] = kelvinGains(3000)
+		expect(r3).toBeGreaterThan(b3)
 	})
 
 	it('composes, in the same order', () => {

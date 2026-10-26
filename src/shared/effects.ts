@@ -103,6 +103,39 @@ const adjust = (
 	...(css ? { css: (p: EffectParams) => css(num(p, param)) } : {})
 })
 
+/**
+ * The gain ffmpeg's `colortemperature` puts on red, green and blue, from its
+ * blackbody fit (libavfilter/vf_colortemperature.c, `kelvin2rgb`). With the
+ * filter's defaults (mix 1, no lightness preservation) that gain is all it
+ * does to a pixel, so the monitor can copy it exactly.
+ */
+export function kelvinGains(kelvin: number): [number, number, number] {
+	const k = kelvin / 100
+	let r: number, g: number
+	if (k <= 66) {
+		r = 1
+		g = 0.39008157876901960784 * Math.log(k) - 0.63184144378862745098
+	} else {
+		const t = Math.max(k - 60, 0)
+		r = 1.29293618606274509804 * Math.pow(t, -0.1332047592)
+		g = 1.12989086089529411765 * Math.pow(t, -0.0755148492)
+	}
+	const b = k >= 66 ? 1 : k <= 19 ? 0 : 0.54320678911019607843 * Math.log(k - 10) - 1.19625408914
+	return [clamp(r, 0, 1), clamp(g, 0, 1), clamp(b, 0, 1)]
+}
+
+/**
+ * CSS has no colour temperature, but an SVG colour matrix is a per-channel
+ * gain, which is exactly what ffmpeg does. `sRGB` interpolation matters: SVG
+ * filters work in linear light by default, ffmpeg works on the stored values.
+ */
+function warmthCss(kelvin: number): string {
+	const [r, g, b] = kelvinGains(kelvin).map((v) => Number(v.toFixed(4)))
+	const svg = "<svg xmlns='http://www.w3.org/2000/svg'><filter id='w' color-interpolation-filters='sRGB'>" +
+		`<feColorMatrix type='matrix' values='${r} 0 0 0 0 0 ${g} 0 0 0 0 0 ${b} 0 0 0 0 0 1 0'/></filter></svg>`
+	return `url("data:image/svg+xml,${encodeURIComponent(svg)}#w")`
+}
+
 const ADJUST: EffectDef[] = [
 	adjust('exposure', 'Exposure', 'Lifts or drops the whole picture.',
 		number('amount', 'Amount', -0.5, 0.5, 0.01, 0),
@@ -129,7 +162,8 @@ const ADJUST: EffectDef[] = [
 
 	adjust('warmth', 'Warmth', 'Cools toward blue or warms toward orange.',
 		number('kelvin', 'Temperature', 2000, 12000, 100, 6500, 'K'),
-		(v) => (v === 6500 ? '' : `colortemperature=temperature=${fmt(v)}`)),
+		(v) => (v === 6500 ? '' : `colortemperature=temperature=${fmt(v)}`),
+		(v) => (v === 6500 ? '' : warmthCss(v))),
 
 	adjust('hue', 'Hue', 'Rotates every colour around the wheel.',
 		number('degrees', 'Rotation', -180, 180, 1, 0, '\u00b0'),
