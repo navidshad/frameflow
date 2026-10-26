@@ -1,5 +1,5 @@
 <template>
-	<div v-if="result"
+	<div v-if="result && needsAttention"
 		class="rounded-xl bg-primary/5 dark:bg-primary/10 p-3 animate-fade-in-up">
 		<!-- Header -->
 		<div class="flex items-center justify-between gap-3 mb-2">
@@ -118,6 +118,17 @@ const result = computed(() => store.lastResult)
 const turn = computed(() =>
 	store.doc?.turns.find((t) => t.id === result.value?.turnId) || null
 )
+
+/**
+ * The card repeats the assistant's message and the revision chip already in the
+ * chat, so it only appears when something needs the user: changes that could
+ * not be applied, a note or a retry, or a cut that came out short.
+ */
+const needsAttention = computed(() => !!(
+	result.value?.droppedOps.length ||
+	turn.value?.notes?.length ||
+	turn.value?.build?.shortfall
+))
 
 const persona = computed(() => {
 	const id = turn.value?.personaId
