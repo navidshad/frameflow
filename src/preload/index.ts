@@ -182,6 +182,11 @@ const api = {
 		ipcRenderer.invoke('show-confirmation', options),
 	saveVideo: (sourcePath: string) => ipcRenderer.invoke('save-video', sourcePath),
 	openThreadDir: (threadId: string) => ipcRenderer.invoke('open-thread-dir', threadId),
+	listEditorExports: (threadId: string) => ipcRenderer.invoke('list-editor-exports', threadId),
+	revealEditorExport: (threadId: string, filePath: string) =>
+		ipcRenderer.invoke('reveal-editor-export', { threadId, filePath }),
+	openEditorExport: (threadId: string, filePath: string) =>
+		ipcRenderer.invoke('open-editor-export', { threadId, filePath }),
 	getVideoMetadata: (filePath: string) => ipcRenderer.invoke('get-video-metadata', filePath),
 	showOpenDialog: (options: any) => ipcRenderer.invoke('show-open-dialog', options),
 	upscaleImage: (data: { threadId: string, messageId: string, imagePath: string, upscaleFactor: string }) => 

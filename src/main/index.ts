@@ -35,6 +35,7 @@ import * as editorPrompt from './editor/prompt'
 import * as editorPreview from './editor/preview'
 import * as editorRender from './editor/render'
 import * as editorCaptions from './editor/captions'
+import { listExportFiles, resolveExportPath } from './editor/exports'
 import { loadPacks, packManifests } from './editor/packs'
 import * as editorRevisions from './editor/revisions'
 import { BUILTIN_PERSONAS } from './constants/personas'
@@ -888,6 +889,29 @@ app.whenReady().then(() => {
 			return true
 		}
 		return false
+	})
+
+	// Finished exports of a project. Reveal/open take a path from the renderer, so
+	// each one is re-checked against the thread's exports folder before acting.
+	ipcMain.handle('list-editor-exports', (_event, threadId: string) => {
+		const thread = threadManager.getThread(threadId)
+		return thread?.tempDir ? listExportFiles(thread.tempDir) : []
+	})
+
+	ipcMain.handle('reveal-editor-export', (_event, { threadId, filePath }: { threadId: string; filePath: string }) => {
+		const thread = threadManager.getThread(threadId)
+		const target = thread?.tempDir ? resolveExportPath(thread.tempDir, filePath) : null
+		if (!target) return false
+		shell.showItemInFolder(target)
+		return true
+	})
+
+	ipcMain.handle('open-editor-export', async (_event, { threadId, filePath }: { threadId: string; filePath: string }) => {
+		const thread = threadManager.getThread(threadId)
+		const target = thread?.tempDir ? resolveExportPath(thread.tempDir, filePath) : null
+		if (!target) return false
+		// openPath resolves to an error string, or '' on success.
+		return (await shell.openPath(target)) === ''
 	})
 
 	ipcMain.handle('add-message', async (_event, { threadId, message }) => {

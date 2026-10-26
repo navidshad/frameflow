@@ -1235,3 +1235,13 @@ export interface ModelSettings {
 	pricing: Record<string, ModelPricing>
 	selection: ModelSelection
 }
+/** A finished export on disk (see main/editor/exports.ts). */
+export interface EditorExportFile {
+	name: string
+	/** Absolute path, inside the project's exports folder. */
+	path: string
+	/** Bytes. */
+	size: number
+	/** Last-modified, ms since epoch. */
+	modifiedAt: number
+}
