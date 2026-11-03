@@ -1,6 +1,6 @@
   # 🌊 FrameFlow
 
-<img src="./docs/screenshots/03_timeline.jpg" width="100%" alt="The FrameFlow timeline editor: media panel, source monitor, inspector, multi-track timeline, and an AI chat column showing revisions" />
+<img src="./docs/screenshots/motion-layer-selected.png" width="100%" alt="The FrameFlow editor: side rail, program monitor with a motion lower third selected, chat, inspector, and a timeline with a pink motion track above the video track" />
 
 ---
 
@@ -30,7 +30,18 @@ A real multi-track timeline with an AI editor sitting next to it.
   any edge it got wrong instead of re-prompting.
 - **Branchable history**: every AI turn becomes a revision you can switch to or branch
   from, viewable as a list or a graph.
-- **Manual tools too**: split, ripple-delete, retime, markers, chapters, silence finder.
+- **Manual tools too**: split, ripple-delete, retime, markers, chapters, silence finder,
+  transitions, effects you can switch on and off to compare, and edit-on-canvas handles
+  (move, scale, rotate) in the monitor.
+- **Motion graphics**: lower thirds, titles and custom HTML/SVG layers on their own **M1 track**,
+  with a Motion library, per-layer settings, and keyframe lanes (see below).
+- **Sound**: waveforms, audio clip inspector, track roles, and a Sound tab with synthesised
+  effects you can drop on the timeline.
+- **Multicam**: sync cameras by sound, find who is speaking when, and cut between angles
+  with the number keys. See [docs/multicam.md](docs/multicam.md).
+- **Fast import**: the transcript starts from the original audio at once, while the proxy is
+  built beside it. You can edit before everything is ready. See [docs/import-lanes.md](docs/import-lanes.md).
+- **Exports tab**: every finished export is listed per project, to reveal or open.
 
 ### 2. 📸 Video → Thumbnail
 Generate a cover image from footage.
@@ -48,14 +59,32 @@ Branching exploration for still images.
 
 ---
 
-## 🤖 In progress: AI agents and motion graphics
+## 🤖 AI agents and motion graphics
 
-FrameFlow is gaining three abilities: an **MCP server**, so agents like Claude Code and
-Codex can read and edit your open project; an **HTML motion layer** (templates, custom
-HTML and keyframes); and your **own AI CLI as the editing engine**.
+**Your own AI, driving the editor.** FrameFlow runs a local **MCP server** (off by default,
+`127.0.0.1` only, bearer token) so agents such as Claude Code and Codex can read and edit your
+open project. An agent's work lands as one **round**: a revision you can undo or branch from,
+with the conversation in the chat and its changes outlined on the timeline. Turn it on under
+**Settings → Agent access**.
 
-- **Design (the UI to build, exactly as drawn):** https://claude.ai/artifact/CWdPbiqvmizwszhTXgpKb5
-- **Plan, decisions and stages:** [docs/agent-and-motion.md](docs/agent-and-motion.md)
+**Built-in CLI engine.** Pick Claude Code as the editing engine from the chat box's engine chip
+(**Settings → Video editing**). It edits through FrameFlow's own MCP tools; each turn shows its steps.
+
+<div align="center">
+  <img src="./docs/screenshots/settings-ai-engine.png" width="80%" alt="Settings: the AI engine card" />
+</div>
+
+**HTML motion layer.** A motion layer is an HTML page drawn as a pure function of time, so
+preview and export match frame for frame. Start from a template, or write custom HTML with a
+code view, automatic checks and "save as template". Text in Persian and Arabic works (Vazirmatn is bundled).
+
+<div align="center">
+  <img src="./docs/screenshots/keyframe-lanes-motion-path.png" width="100%" alt="Keyframe lanes expanded under a motion layer on the timeline" />
+</div>
+
+Plan and decisions: [docs/agent-and-motion.md](docs/agent-and-motion.md).
+
+---
 
 ## 🧩 Supported Inputs
 
@@ -74,12 +103,15 @@ FrameFlow handles a wide range of media formats and sources:
 FrameFlow isn't just a tool; it's an iterative workspace:
 
 - **Timeline Editor**: Multi-track editing with a program monitor, filmstrip/context views,
-  clip tray, and an AI prompt bar with swappable editor personas.
+  a left side rail (Media, Motion, Sound and more), an Inspect tab, full-height chat, and an
+  AI prompt bar with swappable editor personas.
+- **First-run setup & Settings**: a first-launch wizard, a two-road Home, and a seven-section
+  Settings page (General, Connections, Video editing, Image editing, Audio, Agent access, Usage and pricing).
 - **Vue Flow Graph Interface**: Branch image generations — and browse your edit history as
   a revision tree — visually.
 - **Live Metrics**: Monitor AI token usage and processing costs in real-time.
 - **Zero-Config Preprocessing**: Automatic scene detection and transcript extraction.
-- **Ambient Design**: A sleek, dark-mode-first interface with glassmorphism and smooth animations.
+- **Flat, dark-mode-first design**: flat surfaces, one dialog style, and a light theme.
 
 ---
 
