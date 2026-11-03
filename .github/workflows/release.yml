@@ -171,3 +171,38 @@ jobs:
             dist/*.deb
             dist/*.yml
             dist/*.blockmap
+
+  # Runs only when EVERY build leg succeeded (`needs` is all-or-nothing), so a
+  # broken platform leaves a draft behind instead of a half-populated public
+  # release. electron-builder's GitHub publisher creates releases as drafts;
+  # this is the step that writes the notes (with their screenshots) and makes
+  # the release public.
+  publish:
+    name: Publish release
+    needs: build
+    if: startsWith(github.ref, 'refs/tags/v')
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          # The fallback notes read the commit log back to the previous tag.
+          fetch-depth: 0
+
+      - name: Set up Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 24
+
+      - name: Write release notes
+        run: node scripts/release-notes.mjs "$GITHUB_REF_NAME" > "$RUNNER_TEMP/notes.md"
+
+      - name: Publish
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          gh release edit "$GITHUB_REF_NAME" \
+            --notes-file "$RUNNER_TEMP/notes.md" \
+            --draft=false --latest

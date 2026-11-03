@@ -18,6 +18,25 @@ to the GitHub release. The workflow refuses to run if the tag and the
 `package.json` version disagree, because a mismatch produces a release whose
 files are named for a different version.
 
+### Release notes and screenshots
+
+After all four builds succeed, a final `publish` job writes the release notes and
+makes the release public (electron-builder only creates drafts). If a leg fails
+the draft stays unpublished.
+
+For a release that changes the UI, **before tagging**:
+
+```bash
+node scripts/release-notes.mjs v1.2.0 --scaffold   # drafts docs/releases/v1.2.0.md from the commits
+npm run start:debug &                               # then capture each changed screen:
+node scripts/drive.mjs shot docs/releases/v1.2.0/<name>.png
+```
+
+Edit the markdown, reference the images relatively, commit, then tag. The
+workflow rewrites the image paths to URLs pinned to the tag, so the pictures
+must be committed first. With no `docs/releases/<tag>.md` the notes fall back to
+the commit log, grouped by conventional-commit prefix.
+
 To exercise the build **without** spending a version number, run the workflow
 manually from the Actions tab. A manual run builds everything and uploads the
 artefacts to the run, but publishes nothing.
