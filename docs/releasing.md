@@ -12,15 +12,15 @@ Releases are tag-triggered. Bump the version and push the tag:
 npm version patch && git push --follow-tags
 ```
 
-`.github/workflows/release.yml` picks the tag up and builds four artefacts in
-parallel — macOS arm64, macOS x64, Windows x64, Linux x64 — then attaches them
+`.github/workflows/release.yml` picks the tag up and builds three artefacts in
+parallel — macOS arm64, Windows x64, Linux x64 — then attaches them
 to the GitHub release. The workflow refuses to run if the tag and the
 `package.json` version disagree, because a mismatch produces a release whose
 files are named for a different version.
 
 ### Release notes and screenshots
 
-After all four builds succeed, a final `publish` job writes the release notes and
+After all three builds succeed, a final `publish` job writes the release notes and
 makes the release public (electron-builder only creates drafts). If a leg fails
 the draft stays unpublished.
 
@@ -40,6 +40,20 @@ the commit log, grouped by conventional-commit prefix.
 To exercise the build **without** spending a version number, run the workflow
 manually from the Actions tab. A manual run builds everything and uploads the
 artefacts to the run, but publishes nothing.
+
+### Intel Macs
+
+There is no Intel (x64) macOS installer. It was dropped from the matrix to keep
+releases faster, since it needs its own notarisation round. Anyone who needs it
+can build it themselves; the README shows how. To bring it back, add this entry
+under `matrix.include` in `release.yml`:
+
+```yaml
+- name: macOS x64
+  os: macos-latest
+  arch: x64
+  args: --mac --x64
+```
 
 ---
 
