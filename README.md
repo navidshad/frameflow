@@ -94,6 +94,29 @@ FrameFlow isn't just a tool; it's an iterative workspace:
 
 ---
 
+## ⬇️ Downloads
+
+Installers are on the [**Releases**](https://github.com/navidshad/frameflow/releases) page:
+
+| Platform | File |
+| :--- | :--- |
+| 🍎 **macOS** (Apple Silicon) | `.dmg` — signed and notarised |
+| 🪟 **Windows** (x64) | `.exe` — not signed yet, SmartScreen will warn |
+| 🐧 **Linux** (x64) | `.AppImage` or `.deb` |
+
+**Intel Mac?** There is no prebuilt installer, but you can build one yourself.
+On an Intel Mac, or on Apple Silicon (it cross-builds), from a clone of this repo:
+
+```bash
+npm_config_arch=x64 npm ci
+npm run build && npx electron-builder --mac --x64
+```
+
+The installer lands in `dist/`. Without a Developer ID certificate it is
+unsigned, so macOS will ask you to right-click → Open the first time.
+
+---
+
 ## 📸 Interface Preview
 
 **Starting a project** — one composer. Say what you want, attach files, go.

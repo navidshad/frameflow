@@ -35,10 +35,6 @@ jobs:
             os: macos-latest
             arch: arm64
             args: --mac --arm64
-          - name: macOS x64
-            os: macos-latest
-            arch: x64
-            args: --mac --x64
           - name: Windows x64
             os: windows-latest
             arch: x64
@@ -73,8 +69,8 @@ jobs:
 
       # npm_config_arch is what makes cross-arch builds honest: the postinstall
       # (scripts/fetch-ffmpeg.mjs) fetches ONE ffmpeg/ffprobe pair and picks the
-      # target from this. The macOS x64 leg runs on an arm64 runner, so without
-      # it the x64 app would ship an arm64 ffmpeg that cannot execute.
+      # target from this, so each leg bundles the ffmpeg that matches what it
+      # builds. (There is no Intel Mac leg: see "Intel Macs" in docs/releasing.md.)
       - name: Install dependencies
         shell: bash
         env:
