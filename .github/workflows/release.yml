@@ -108,17 +108,26 @@ jobs:
           APPLE_API_ISSUER: ${{ secrets.APPLE_API_ISSUER }}
         run: |
           if [ -n "$MAC_CSC_LINK" ]; then
-            # Heredoc form: a base64 .p12 may be wrapped across lines, which
-            # the plain KEY=value form cannot carry.
-            {
-              echo "CSC_LINK<<__CSC_EOF__"
-              echo "$MAC_CSC_LINK"
-              echo "__CSC_EOF__"
-              echo "CSC_KEY_PASSWORD<<__PW_EOF__"
-              echo "$MAC_CSC_KEY_PASSWORD"
-              echo "__PW_EOF__"
-            } >> "$GITHUB_ENV"
-            echo "Signing certificate staged."
+            # Our own keychain, not electron-builder's CSC_LINK path. That path
+            # makes a temp keychain with a random password, then calls
+            # `set-key-partition-list -k <the .p12 password>` against it, which
+            # fails with "passphrase is not correct" on current macOS runners.
+            # Owning the keychain means we know its password. electron-builder
+            # then finds the identity by auto-discovery, with CSC_LINK unset.
+            KEYCHAIN="$RUNNER_TEMP/build.keychain-db"
+            KEYCHAIN_PASSWORD="$(openssl rand -base64 24)"
+            echo "$MAC_CSC_LINK" | base64 --decode > "$RUNNER_TEMP/cert.p12"
+            security create-keychain -p "$KEYCHAIN_PASSWORD" "$KEYCHAIN"
+            security set-keychain-settings -lut 21600 "$KEYCHAIN"
+            security unlock-keychain -p "$KEYCHAIN_PASSWORD" "$KEYCHAIN"
+            security import "$RUNNER_TEMP/cert.p12" -k "$KEYCHAIN" \
+              -P "$MAC_CSC_KEY_PASSWORD" -T /usr/bin/codesign -T /usr/bin/productbuild
+            security set-key-partition-list -S apple-tool:,apple: -s \
+              -k "$KEYCHAIN_PASSWORD" "$KEYCHAIN" > /dev/null
+            security list-keychains -d user -s "$KEYCHAIN" $(security list-keychains -d user | tr -d '"')
+            rm -f "$RUNNER_TEMP/cert.p12"
+            security find-identity -v -p codesigning "$KEYCHAIN"
+            echo "Signing certificate installed in a build keychain."
           else
             # Stops electron-builder hunting for an identity in an empty keychain.
             echo "CSC_IDENTITY_AUTO_DISCOVERY=false" >> "$GITHUB_ENV"
@@ -171,3 +180,38 @@ jobs:
             dist/*.deb
             dist/*.yml
             dist/*.blockmap
+
+  # Runs only when EVERY build leg succeeded (`needs` is all-or-nothing), so a
+  # broken platform leaves a draft behind instead of a half-populated public
+  # release. electron-builder's GitHub publisher creates releases as drafts;
+  # this is the step that writes the notes (with their screenshots) and makes
+  # the release public.
+  publish:
+    name: Publish release
+    needs: build
+    if: startsWith(github.ref, 'refs/tags/v')
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          # The fallback notes read the commit log back to the previous tag.
+          fetch-depth: 0
+
+      - name: Set up Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 24
+
+      - name: Write release notes
+        run: node scripts/release-notes.mjs "$GITHUB_REF_NAME" > "$RUNNER_TEMP/notes.md"
+
+      - name: Publish
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          gh release edit "$GITHUB_REF_NAME" \
+            --notes-file "$RUNNER_TEMP/notes.md" \
+            --draft=false --latest
