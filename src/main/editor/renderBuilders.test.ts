@@ -50,7 +50,9 @@ const graphOf = (region: CutRegion | OverlapRegion) => {
 describe('buildRegionGraph — cut regions', () => {
 	it('normalizes the top layer and maps it as the picture', () => {
 		const g = graphOf(cut({ videoLayers: [slice()] }))
-		expect(g.video).toBe('[v]')
+		// The picture leaves the graph stamped BT.709 SDR (see colorPolicy.ts).
+		expect(g.video).toBe('[vsdr]')
+		expect(g.text).toContain('[v]setparams=colorspace=bt709:color_primaries=bt709:color_trc=bt709:range=tv[vsdr]')
 		expect(g.text).toContain('scale=1920:1080:force_original_aspect_ratio=decrease')
 		expect(g.text).toContain('fps=30')
 		expect(g.inputs[0]).toEqual({ path: '/tmp/a.mp4', options: ['-ss', '0.000', '-t', '2.000'] })

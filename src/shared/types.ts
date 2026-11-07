@@ -38,6 +38,8 @@ export interface VideoMetadata {
 	 */
 	colorTransfer?: string
 	colorPrimaries?: string
+	/** The matrix the picture is coded in (`bt2020nc`, `bt709`). Absent on files probed before this was recorded. */
+	colorSpace?: string
 	/** ffprobe's pixel format of the picture (`yuv420p10le`); 4:2:2 and 4:4:4 do not play natively. */
 	pixFmt?: string
 }

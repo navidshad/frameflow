@@ -7,6 +7,7 @@ import { keyframeExpression } from '@shared/keyframes'
 import { hasKey, keyFilter } from '@shared/keying'
 import { generatorFilter } from '@shared/generators'
 import type { MotionKit } from '@shared/motion'
+import { GENERATED_TO_BT709, RGB_TO_BT709, SDR_TAG_FILTER, sourceColorFilter, type SourceColor } from './colorPolicy'
 
 /**
  * Handler-based filter builders (PRD §7 — "Render engine is handler-based").
@@ -42,6 +43,12 @@ export interface SourceSlice {
 	motion?: { width: number; height: number; fps: number }
 	/** The project kit a motion slice's page uses, composed into it (and into `srcPath`'s hash). */
 	motionKit?: MotionKit
+	/**
+	 * How the footage's picture is coloured (from its original's probe), so the
+	 * chain can bring it to BT.709 SDR whatever the file's own tags say. Absent
+	 * for a motion layer or a generated one, which have their own steps.
+	 */
+	color?: SourceColor
 	in: number                  // source seconds mapped to this region
 	out: number
 	/**
@@ -479,6 +486,19 @@ function adelay(seconds: number): string {
 	return ms > 0 ? `adelay=${ms}|${ms}` : ''
 }
 
+/**
+ * The step that puts a slice's pixels in BT.709 SDR, or '' when they already are.
+ *  - footage: HDR is tone-mapped, another matrix is converted (`sourceColorFilter`);
+ *  - a motion layer: RGB, so the matrix is named where it becomes YUV;
+ *  - a generated colour: a lavfi source is YUV coded as BT.601 (the SMPTE bars
+ *    are already BT.709 and are left alone).
+ */
+function sliceColorStep(slice: SourceSlice, withAlpha: boolean): string {
+	if (slice.motion) return `${RGB_TO_BT709},format=${withAlpha ? 'yuva420p' : 'yuv420p'}`
+	if (slice.lavfi) return slice.srcPath.startsWith('smptehdbars') ? '' : GENERATED_TO_BT709
+	return sourceColorFilter(slice.color)
+}
+
 /** One video slice → a labelled stream of exactly `regionDur`. */
 function videoStream(
 	slice: SourceSlice, plan: RegionPlan, regionDur: number, idx: number, label: string,
@@ -499,6 +519,10 @@ function videoStream(
 	const keyed = hasKey(slice.item.key)
 	const withAlpha = alpha || keyed
 	const chain = [
+		// Colour first, on the source's own pixels, so everything after it (the
+		// grade, the key, the scale, an overlay) works in the one space the
+		// export is tagged as. See colorPolicy.ts.
+		sliceColorStep(slice, withAlpha),
 		// A generated layer's own grain or shimmer, before anything else acts on it.
 		slice.item.generator ? generatorFilter(slice.item.generator) : '',
 		...buildChain(videoBuilders, { slice, plan }),
@@ -564,6 +588,13 @@ const silence = (dur: string): GraphInput =>
  * bystanders mixed on top afterwards.
  */
 export function buildRegionGraph(region: Region, plan: RegionPlan): RegionGraph {
+	const graph = buildUntaggedRegionGraph(region, plan)
+	// Every region file says BT.709 SDR, because every slice in it was brought
+	// there: the join keeps the FIRST region's header for the whole file.
+	return { ...graph, filters: [...graph.filters, `${graph.video}${SDR_TAG_FILTER}[vsdr]`], video: '[vsdr]' }
+}
+
+function buildUntaggedRegionGraph(region: Region, plan: RegionPlan): RegionGraph {
 	const regionDur = region.duration
 	const dur = t3(regionDur)
 	const inputs: GraphInput[] = []

@@ -35,6 +35,7 @@ import {
 } from './renderBuilders'
 import { regionTimeoutMs, runCommand } from './ffmpegRun'
 import { mapPool } from './pool'
+import { colorAction, type SourceColor } from './colorPolicy'
 import {
 	RenderTracker, estimateBurnSec, estimateDeliverySec, estimateJoinSec, estimateLoudnessSec,
 	estimateMotionSec, estimateRegionsSec, type StepPlan
@@ -352,7 +353,7 @@ export function computeRegions(
 		}
 		const asset = assetById.get(item.sourceAssetId)
 		if (!asset) throw new Error(`Missing media asset for clip "${item.label || item.id}".`)
-		return { ...common, srcPath: srcFor(asset) }
+		return { ...common, srcPath: srcFor(asset), color: colorOfAsset(asset) }
 	}
 
 	/** One side of a transition, extended into its handle and frozen past it. */
@@ -370,7 +371,7 @@ export function computeRegions(
 		if (!asset) throw new Error(`Missing media asset for clip "${item.label || item.id}".`)
 		const speed = item.speed || 1
 		const slice: SourceSlice = {
-			srcPath: srcFor(asset), in: side.in, out: side.out,
+			srcPath: srcFor(asset), color: colorOfAsset(asset), in: side.in, out: side.out,
 			offset: 0, duration,
 			freezeHead: side.freeze && side.in <= item.in + TIME_EPS ? side.freeze : 0,
 			freezeTail: side.freeze && side.out >= item.out - TIME_EPS ? side.freeze : 0,
@@ -542,6 +543,16 @@ function validateWindows(
 			throw new Error(`Two transitions on track "${name}" overlap each other.`)
 		}
 	}
+}
+
+/**
+ * How an asset's picture is coloured, from its original's probe. Always the
+ * ORIGINAL's: a proxy is re-tagged for the browser (ffmpeg/proxyTags.ts) and its
+ * own tags no longer say what its pixels are.
+ */
+export const colorOfAsset = (asset: Pick<MediaAsset, 'metadata'>): SourceColor | undefined => {
+	const m = asset.metadata
+	return m ? { transfer: m.colorTransfer, primaries: m.colorPrimaries, matrix: m.colorSpace } : undefined
 }
 
 // ===== Fast path =====
@@ -873,6 +884,8 @@ export function startEditorRender(options: {
 				&& (!fromProxy || !!fastAsset?.proxyPath)
 				&& fastPathMatchesFrame(fastSource, plan, fromProxy)
 				&& isFastPathEligible(items, videoTrack, hasAudioItems)
+				// assembleVideo converts no colour: it serves only footage that is already BT.709 SDR.
+				&& colorAction(fastAsset ? colorOfAsset(fastAsset) : undefined) === 'none'
 
 			// ---- The steps, and what each is expected to take ----
 			const frame = { width: plan.width, height: plan.height }
