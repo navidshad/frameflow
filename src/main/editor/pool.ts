@@ -45,3 +45,19 @@ export async function mapPool<T>(
 	if (signal.aborted) throw new Error('aborted')
 	return results
 }
+
+/**
+ * Wait for `promise`, but stop waiting the moment `signal` aborts. The work
+ * itself is left running: it may belong to someone else. An export that joins
+ * a motion clip the background pre-render is already drawing is the case: its
+ * Cancel must not wait for that clip, nor stop it.
+ */
+export function abortable<T>(promise: Promise<T>, signal?: AbortSignal): Promise<T> {
+	if (!signal) return promise
+	if (signal.aborted) return Promise.reject(new Error('aborted'))
+	return new Promise<T>((resolve, reject) => {
+		const onAbort = () => reject(new Error('aborted'))
+		signal.addEventListener('abort', onAbort, { once: true })
+		promise.then(resolve, reject).finally(() => signal.removeEventListener('abort', onAbort))
+	})
+}

@@ -86,7 +86,8 @@ export async function prerenderMotion(
 		if (generations.get(threadId) !== generation) return progress(true)
 		if (hasActiveRender()) return finish() // the export draws what is left
 		try {
-			await ensureMotionClip(job, { idleRatio: IDLE_RATIO })
+			// Resting is for the editor's sake; an export that joins this clip is waiting on it.
+			await ensureMotionClip(job, { idleRatio: () => (hasActiveRender() ? 0 : IDLE_RATIO) })
 		} catch (error) {
 			// One layer that cannot be drawn stays the export's to report, with its name.
 			console.warn('[motion-prerender]', error instanceof Error ? error.message : error)

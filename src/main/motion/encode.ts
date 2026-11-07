@@ -82,7 +82,7 @@ export async function encodeFrames(options: {
 	 * Drawing a 4K frame holds the main process for most of its time, so work
 	 * nobody is waiting on lets the rest of the app breathe between frames.
 	 */
-	idleRatio?: number
+	idleRatio?: number | (() => number)
 }): Promise<void> {
 	const { frame, count, next, outputPath, signal, onProgress, idleRatio = 0 } = options
 	const expected = frame.width * frame.height * 4
@@ -122,7 +122,9 @@ export async function encodeFrames(options: {
 				})
 			}
 			onProgress?.(k + 1, count)
-			if (idleRatio > 0) await new Promise((r) => setTimeout(r, (Date.now() - frameStart) * idleRatio))
+			// Read each frame: an export that joins this clip ends the resting.
+			const rest = typeof idleRatio === 'function' ? idleRatio() : idleRatio
+			if (rest > 0) await new Promise((r) => setTimeout(r, (Date.now() - frameStart) * rest))
 		}
 		child.stdin.end()
 		const code = await exited

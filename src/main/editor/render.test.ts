@@ -573,3 +573,27 @@ describe('motion layers draw at no more than MOTION_MAX_FPS', () => {
 		expect(motionConcurrency([job(3840, 2160)])).toBe(2)
 	})
 })
+
+describe('a resolution choice', () => {
+	const uhd = (): EditorDocument => doc({
+		media: [{ ...asset('a'), metadata: { duration: 1000, width: 3840, height: 2160, fps: 60, hasAudio: true } as MediaAsset['metadata'] }],
+		timeline: [item(0, { in: 0, out: 10 })]
+	})
+
+	it('scales the frame to that many lines and leaves the frame rate alone', () => {
+		const p = computeRegions(uhd(), 'original', {}, { frameHeight: 1080 })
+		expect([p.width, p.height, p.fps]).toEqual([1920, 1080, 60])
+		const q = computeRegions(uhd(), 'original', {}, { frameHeight: 720 })
+		expect([q.width, q.height]).toEqual([1280, 720])
+	})
+
+	it('never makes a frame larger than the project', () => {
+		const p = computeRegions(doc({ timeline: [item(0, { in: 0, out: 10 })] }), 'original', {}, { frameHeight: 2160 })
+		expect([p.width, p.height]).toEqual([1920, 1080])
+	})
+
+	it('is no longer the fast path\'s frame, so a smaller export takes the region path', () => {
+		const p = computeRegions(uhd(), 'original', {}, { frameHeight: 1080 })
+		expect(fastPathMatchesFrame({ width: 3840, height: 2160 }, p)).toBe(false)
+	})
+})

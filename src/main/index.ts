@@ -755,12 +755,12 @@ app.whenReady().then(() => {
 
 	// Export / render (M4): fast path via assembleVideo, region path via
 	// segment-then-concat; progress streams over editor-render-progress.
-	ipcMain.handle('export-editor-timeline', (_event, { threadId, quality, doc, format }: {
-		threadId: string, quality: 'original' | 'preview', doc?: EditorDocument, format?: DeliveryFormat
+	ipcMain.handle('export-editor-timeline', (_event, { threadId, quality, doc, format, height }: {
+		threadId: string, quality: 'original' | 'preview', doc?: EditorDocument, format?: DeliveryFormat, height?: number
 	}) => {
 		// `doc` is the renderer's in-memory timeline snapshot at click time —
 		// the render is detached from the live document and never persists it.
-		return editorRender.startEditorRender({ threadId, quality, doc, format })
+		return editorRender.startEditorRender({ threadId, quality, doc, format, height })
 	})
 
 	// Draw the project's motion layers in the background so an export finds them

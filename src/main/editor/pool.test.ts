@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { mapPool } from './pool'
+import { abortable, mapPool } from './pool'
 
 const never = () => new AbortController().signal
 const tick = (ms = 1) => new Promise((resolve) => setTimeout(resolve, ms))
@@ -60,5 +60,30 @@ describe('mapPool', () => {
 		}), controller.signal)
 		controller.abort()
 		await expect(run).rejects.toThrow('aborted')
+	})
+})
+
+describe('abortable', () => {
+	it('gives the result when nothing aborts', async () => {
+		expect(await abortable(Promise.resolve(7), new AbortController().signal)).toBe(7)
+		expect(await abortable(Promise.resolve(8))).toBe(8)
+	})
+
+	it('stops waiting at once on abort, though the work goes on', async () => {
+		const controller = new AbortController()
+		let finished = false
+		const work = new Promise<void>((resolve) => setTimeout(() => { finished = true; resolve() }, 30))
+		const waiting = abortable(work, controller.signal)
+		controller.abort()
+		await expect(waiting).rejects.toThrow('aborted')
+		expect(finished).toBe(false) // it was not stopped, only no longer waited for
+		await work
+		expect(finished).toBe(true)
+	})
+
+	it('rejects straight away if already aborted', async () => {
+		const controller = new AbortController()
+		controller.abort()
+		await expect(abortable(new Promise(() => {}), controller.signal)).rejects.toThrow('aborted')
 	})
 })

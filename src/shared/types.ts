@@ -1156,6 +1156,15 @@ export type DeliveryFormat = 'h264' | 'prores'
 
 export type RenderPhase = 'rendering' | 'stitching' | 'done' | 'error'
 
+/** One step of an export, as the dialog lists it. */
+export interface RenderStepInfo {
+	id: string
+	label: string
+	state: 'pending' | 'active' | 'done'
+	/** What the step is on: "13 of 46 layers". */
+	detail?: string
+}
+
 export interface EditorRenderProgress {
 	threadId: string
 	renderId: string
@@ -1163,6 +1172,11 @@ export interface EditorRenderProgress {
 	phase: RenderPhase
 	outputPath?: string
 	error?: string
+	/** The steps of this export, in order, and where each stands. */
+	steps?: RenderStepInfo[]
+	/** Seconds left, estimated before a step starts and measured while it runs. */
+	etaSec?: number | null
+	elapsedSec?: number
 }
 
 export interface TimelineSegment {

@@ -66,7 +66,7 @@
 			:title="exporting ? 'Export the timeline' : lockedBy ? `${lockedBy} is working on this project over MCP: export when its round ends` : canExport ? 'Export the timeline' : 'Add clips to the timeline first'"
 			@click="$emit('export')">
 			<span v-if="!exporting" class="iconify w-3.5 h-3.5" :class="lockedBy ? 'tabler--lock' : 'tabler--file-export'"></span>
-			{{ exporting ? `Exporting ${percent}%` : 'Export' }}
+			{{ exporting ? (editorStore.cancelling ? 'Stopping…' : `Exporting ${percent}%${etaShort}`) : 'Export' }}
 		</button>
 	</header>
 </template>
@@ -102,6 +102,12 @@ const editorStore = useEditorStore()
 const motionDrawing = computed(() => {
 	const p = editorStore.motionPrerender
 	return p && p.running && p.threadId === editorStore.threadId ? p : null
+})
+/** " · 14 min" beside the percent, once there is an estimate worth showing. */
+const etaShort = computed(() => {
+	const sec = editorStore.renderState?.etaSec
+	if (sec == null || sec < 10) return ''
+	return sec < 90 ? ` · ${Math.round(sec / 5) * 5} s` : sec < 5400 ? ` · ${Math.round(sec / 60)} min` : ` · ${(sec / 3600).toFixed(1)} h`
 })
 const emit = defineEmits<{
 	(e: 'back'): void

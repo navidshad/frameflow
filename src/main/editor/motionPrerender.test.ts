@@ -68,8 +68,12 @@ describe('prerenderMotion', () => {
 
 	it('rests between frames so the editor stays responsive', async () => {
 		await prerenderMotion({ threadId: 't', doc: doc(['Ada']) }, { report: () => {} })
-		expect(ensureMotionClip.mock.calls[0][1]).toMatchObject({ idleRatio: IDLE_RATIO })
+		const rest = ensureMotionClip.mock.calls[0][1].idleRatio as () => number
+		expect(rest()).toBe(IDLE_RATIO)
 		expect(IDLE_RATIO).toBeGreaterThan(0)
+		// ...until an export is waiting on the clip, which then runs at full speed.
+		exporting = true
+		expect(rest()).toBe(0)
 	})
 
 	it('skips a clip that is already on disk, and reports how many are ready', async () => {
