@@ -24,6 +24,8 @@ import { dependencyManager } from './dependencies/manager'
 import { checkYtDlpFreshness } from './dependencies/ytdlp-updater'
 import * as editorAssets from './editor/assets'
 import { importMediaFromFile, importMediaFromUrl } from './editor/importMedia'
+import { expandMediaPaths } from './editor/expandMedia'
+import { dialogExtensions } from '@shared/mediaFiles'
 import { getAudioAnalysis } from './editor/audioAnalysis'
 import { ensureSoundAsset, previewSound } from './editor/synth'
 import { isSoundKind } from '../shared/synth'
@@ -528,12 +530,43 @@ app.whenReady().then(() => {
 	})
 
 	// Import a local file as a MediaAsset and start per-asset preprocessing.
-	ipcMain.handle('add-media-asset', async (_event, { threadId, filePath, name }: {
-		threadId: string, filePath: string, name?: string
+	ipcMain.handle('add-media-asset', async (_event, { threadId, filePath, name, discardUnreadable }: {
+		threadId: string, filePath: string, name?: string, discardUnreadable?: boolean
 	}) => {
 		// Reference the user's own file where it lives; move a file the app just
 		// downloaded (see importMediaFromFile).
-		return await importMediaFromFile(threadId, filePath, name)
+		return await importMediaFromFile(threadId, filePath, name, { discardUnreadable })
+	})
+
+	// The "add media" picker: several files at once, and folders. macOS can
+	// choose files and folders in one panel; Windows and Linux cannot, so they
+	// get a files panel and a separate folder panel. Returns what was chosen as
+	// it is; `expand-media-paths` turns it into the files to import.
+	ipcMain.handle('pick-media', async (_event, { folders }: { folders?: boolean } = {}) => {
+		const media = dialogExtensions()
+		const properties: Electron.OpenDialogOptions['properties'] = folders
+			? ['openDirectory', 'multiSelections']
+			: process.platform === 'darwin' ? ['openFile', 'openDirectory', 'multiSelections'] : ['openFile', 'multiSelections']
+		const result = await dialog.showOpenDialog({
+			defaultPath: lastBrowsedDir,
+			title: folders ? 'Add a folder of media' : 'Add media',
+			properties,
+			// A filter greys out the files it does not match; folders stay choosable.
+			...(folders ? {} : { filters: [
+				{ name: 'Media', extensions: media },
+				{ name: 'Videos', extensions: dialogExtensions('video') },
+				{ name: 'Audio', extensions: dialogExtensions('audio') }
+			] })
+		})
+		if (result.canceled || result.filePaths.length === 0) return []
+		rememberBrowsedDir(result.filePaths[0])
+		return result.filePaths
+	})
+
+	// What a selection (files, folders, a drop) comes to: the media files in it,
+	// in import order, and what was left out.
+	ipcMain.handle('expand-media-paths', async (_event, { paths }: { paths: string[] }) => {
+		return await expandMediaPaths(Array.isArray(paths) ? paths.filter((p) => typeof p === 'string' && p) : [])
 	})
 
 	// Import from URL/YouTube: download straight into the asset's source dir,
