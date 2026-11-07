@@ -136,9 +136,6 @@
 			</template>
 		</div>
 
-		<!-- Latest applied result actions (Back to parent, etc.) -->
-		<AiResultCard v-if="store.lastResult" class="shrink-0 mx-2 mb-2 max-h-[60%] overflow-y-auto custom-scrollbar" />
-
 		<!-- Input, pinned — the border-t is the only frame around it -->
 		<div class="shrink-0 border-t border-zinc-200/60 dark:border-zinc-800 px-3 pt-2 pb-2.5">
 			<PromptBar />
@@ -151,7 +148,6 @@ import { computed, nextTick, ref, watch } from 'vue'
 import type { PromptTurn } from '@shared/types'
 import { useEditorStore } from '../../stores/editorStore'
 import PromptBar from './PromptBar.vue'
-import AiResultCard from './AiResultCard.vue'
 import EngineSteps from './EngineSteps.vue'
 import RetryButton from './RetryButton.vue'
 import McpRoundCard from './McpRoundCard.vue'
