@@ -29,7 +29,7 @@ const layer = (id: string, word: string, kit?: string): TimelineItem => {
 const makeDoc = (timeline: TimelineItem[], kits: MotionKit[] = [KIT]): EditorDocument => ({
 	schemaVersion: 2, media: [], tracks: [track], timeline, motionKits: kits,
 	timelineMeta: { fps: 30, width: 1920, height: 1080, duration: 0 },
-	activePersonaId: 'p', turns: [], historyRef: { currentStepId: '', stepCount: 0 }
+	turns: [], historyRef: { currentStepId: '', stepCount: 0 }
 })
 /** The document after a diff, as the editor applies it. */
 const applied = (doc: EditorDocument, ops: EditorOps) => {

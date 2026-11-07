@@ -21,7 +21,7 @@ export function soundGuideText(): string {
 	const roles = TRACK_ROLES.map((r) => `- ${r.id}: ${r.description}${r.offsetLU ? ` About ${Math.abs(r.offsetLU)} LU under the voice.` : ''}`).join('\n')
 	return `SOUND GUIDE
 
-You cannot hear, so read numbers: render_sound gives a sound's length, peak and loudness and a spectrogram picture; analyze_audio gives how each role sits in the mix. Use them, and keep to the rules below.
+You cannot hear, so read numbers: render_sound gives a sound's length, peak and loudness and a spectrogram picture; analyze_audio gives how each role sits in the mix; inspect_audio does what render_sound does for ANY audio (a song, a recording, the sound of a video) and adds its tempo, tonal balance, quiet spans and section changes. Use them, and keep to the rules below.
 
 WHAT THE SYNTH IS
 Every sound is a recipe (a sound, a take, a pitch, a level, an amount of air, a seed) that FrameFlow renders with ffmpeg: offline, free, the same sound on every computer. Nothing is spent and nothing is downloaded. A recipe is not a file you can edit sample by sample: change the numbers and it renders again.
@@ -57,5 +57,6 @@ HOW
 2. suggest_cues: the moments on the timeline that want a sound, each with a suggested sound. Skip the ones you do not want.
 3. apply_ops with addSounds: one entry per sound, each with follow {item, at} so it lands on its moment and stays there if the clip moves. Use setSounds to change a sound (kind, pitch, levelDb, seed) or its moment; setTrackRoles for roles.
 4. render_sound a recipe BEFORE adding it if you are unsure; analyze_audio AFTER, and fix what it warns about. render_frame as usual for the picture.
+   Music you did not make: inspect_audio it first. Its tempo and bars say where a cut or a sound lands on the beat; its sections say where the track changes (a drop, a breakdown) and so where a picture cut or a motion card belongs; its quiet spans and balance say whether voice-over will fit over it.
 5. revert_to_version if it is wrong. Inside a round all your apply_ops are one revision the user can undo.`
 }

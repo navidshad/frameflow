@@ -10,6 +10,7 @@ import { writeQueue } from './writeQueue'
 import { isCaptureWindow } from '../motion/capture'
 import { threadManager } from '../threads'
 import { analyzeAudioFile, getAudioAnalysis, spectrogramBase64 } from '../editor/audioAnalysis'
+import { inspectAudioFile } from '../editor/audioInspect'
 import { ensureSoundAsset, ensureSoundFile, soundDirFor } from '../editor/synth'
 import { getAssetDir } from '../editor/assets'
 import { normaliseRecipe } from '../../shared/synth'
@@ -368,6 +369,17 @@ export const rendererBridge: EditorBridge = {
 		return out
 	}
 	,
+
+	async inspectAudio(project, req) {
+		const thread = threadManager.getThread(project.threadId)
+		const asset = thread?.editor?.media.find((a) => a.id === req.assetId)
+		if (!thread || !asset) throw new ToolError(`No media ${req.assetId} in this project.`)
+		try {
+			return await inspectAudioFile(asset.originalPath, { fromSec: req.fromSec, toSec: req.toSec, durationSec: asset.metadata?.duration })
+		} catch (error: any) {
+			throw new ToolError(`Could not read the sound of ${asset.name}: ${error?.message || error}`)
+		}
+	},
 
 	audioStatus() {
 		return { connected: connectedProviders(), spend: settingsManager.getAudioSettings().spend }

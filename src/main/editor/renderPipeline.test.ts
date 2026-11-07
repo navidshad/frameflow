@@ -123,7 +123,6 @@ const document = (transition?: { kind: string; duration: number }): EditorDocume
 		clip({ id: 'B', sourceAssetId: 'sb', timelineStart: 2, in: 1, out: 3 })
 	],
 	timelineMeta: { fps: 30, width: 320, height: 180, duration: 0 },
-	activePersonaId: 'podcast-editor',
 	turns: [],
 	historyRef: { currentStepId: 'step-0', stepCount: 0 }
 })

@@ -24,9 +24,16 @@
 
 				<span class="text-zinc-300 dark:text-zinc-700 text-[9px]">·</span>
 
-				<PersonaPicker />
-
-				<span class="text-zinc-300 dark:text-zinc-700 text-[9px]">·</span>
+				<!-- The CLI agent remembers this chat; this makes its next message a clean start. -->
+				<template v-if="conversation">
+					<button class="shrink-0 flex items-center gap-1 px-1 py-0.5 rounded-md text-zinc-500 hover:text-primary transition"
+						title="The agent remembers this chat. Start a new conversation: it forgets what was said, the project stays as it is."
+						data-testid="new-conversation" @click="store.resetEngineConversation()">
+						<span class="iconify tabler--message-plus w-2.5 h-2.5"></span>
+						<span class="text-[9px] font-bold uppercase tracking-widest">New conversation</span>
+					</button>
+					<span class="text-zinc-300 dark:text-zinc-700 text-[9px]">·</span>
+				</template>
 
 				<!-- Scope: text-level control — owns the flexible space so it
 				     truncates with clearance before the send button -->
@@ -81,7 +88,7 @@
 		<div v-else-if="store.promptRunning" class="mt-1.5 flex items-center gap-2 px-2">
 			<div class="w-3 h-3 rounded-full border-2 border-primary border-t-transparent animate-spin"></div>
 			<span class="text-[10px] font-medium text-zinc-500">
-				{{ engine.isCli ? engine.current.label : store.activePersona?.name || 'AI' }} is working on your edit…
+				{{ engine.isCli ? engine.current.label : 'AI' }} is working on your edit…
 			</span>
 		</div>
 	</div>
@@ -90,10 +97,10 @@
 <script setup lang="ts">
 import { computed, nextTick, onMounted, onUnmounted, ref, watch } from 'vue'
 import { useEditorStore } from '../../stores/editorStore'
-import PersonaPicker from './PersonaPicker.vue'
 import EngineChip from './EngineChip.vue'
 import { useEngineStore } from '../../stores/engineStore'
 import { useAgentStore } from '../../stores/agentStore'
+import { isCliEngine, resumableSessionId } from '@shared/engines'
 
 const store = useEditorStore()
 const engine = useEngineStore()
@@ -124,7 +131,13 @@ const placeholder = computed(() => {
 	if (store.isEmpty && !store.hasLayers) return 'Import media to start…'
 	if (!store.canPrompt && store.mediaProcessing) return 'Preparing media…'
 	if (!store.canPrompt) return 'Media not ready yet…'
-	return `Message ${store.activePersona?.name || 'your editor'}…`
+	return `Message ${engine.current.label}…`
+})
+
+/** A CLI agent is selected and has a conversation with this project that the next message would continue. */
+const conversation = computed(() => {
+	const id = engine.settings.engine
+	return isCliEngine(id) && !store.promptRunning && !!resumableSessionId(store.doc?.turns, id)
 })
 
 const canSend = computed(() => text.value.trim().length > 0 && !inputDisabled.value)

@@ -38,7 +38,7 @@ const item = (over: Partial<TimelineItem> = {}): TimelineItem => ({
 const doc = (over: Partial<EditorDocument>): EditorDocument => ({
 	schemaVersion: 1, media: [], tracks: [vtrack], timeline: [item()],
 	timelineMeta: { fps: 30, width: 1920, height: 1080, duration: 0 },
-	activePersonaId: 'podcast-editor', turns: [],
+	turns: [],
 	historyRef: { currentStepId: 'step-0', stepCount: 0 }, ...over
 })
 

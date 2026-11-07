@@ -110,8 +110,6 @@ const api = {
 		ipcRenderer.on('editor-silence-progress', listener)
 		return () => ipcRenderer.removeListener('editor-silence-progress', listener)
 	},
-	getPersonas: () => ipcRenderer.invoke('get-personas'),
-	setPersonas: (personas: any[]) => ipcRenderer.invoke('set-personas', personas),
 	// `doc` = in-memory timeline snapshot at click time (render detaches from the live doc)
 	exportEditorTimeline: (data: {
 		threadId: string, quality: 'original' | 'preview', doc?: unknown, format?: 'h264' | 'prores'
@@ -132,10 +130,12 @@ const api = {
 		ipcRenderer.on('editor-render-progress', listener)
 		return () => ipcRenderer.removeListener('editor-render-progress', listener)
 	},
-	runEditorPrompt: (data: { threadId: string, personaId: string, prompt: string, baseStepId: string, selectedItemIds: string[], playheadSec: number, widen?: string, engine?: string }) =>
+	runEditorPrompt: (data: { threadId: string, prompt: string, baseStepId: string, selectedItemIds: string[], playheadSec: number, widen?: string, engine?: string }) =>
 		ipcRenderer.invoke('run-editor-prompt', data),
 	abortEditorPrompt: (data: { threadId: string, turnId: string }) =>
 		ipcRenderer.invoke('abort-editor-prompt', data),
+	resetEngineConversation: (data: { threadId: string }) =>
+		ipcRenderer.invoke('reset-engine-conversation', data),
 	updateEditorTurn: (data: { threadId: string, turnId: string, patch: { resultStepId?: string, revisionId?: string } }) =>
 		ipcRenderer.invoke('update-editor-turn', data),
 	onEditorTurnUpdate: (callback: (data: any) => void) => {

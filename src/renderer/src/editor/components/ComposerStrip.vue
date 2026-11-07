@@ -27,6 +27,7 @@
 import { computed } from 'vue'
 import { useEditorStore } from '../../stores/editorStore'
 import EngineChip from './EngineChip.vue'
+import { useEngineStore } from '../../stores/engineStore'
 import { useAgentStore } from '../../stores/agentStore'
 
 /**
@@ -38,6 +39,7 @@ defineProps<{ badge?: boolean; foldedForRoom?: boolean }>()
 defineEmits<{ (e: 'open'): void }>()
 
 const store = useEditorStore()
+const engine = useEngineStore()
 
 const text = computed({
 	get: () => store.promptDraft,
@@ -53,7 +55,7 @@ const placeholder = computed(() => {
 	if (store.isEmpty && !store.hasLayers) return 'Import media to start…'
 	if (!store.canPrompt && store.mediaProcessing) return 'Preparing media…'
 	if (!store.canPrompt) return 'Media not ready yet…'
-	return `Message ${store.activePersona?.name || 'your editor'}…`
+	return `Message ${engine.current.label}…`
 })
 
 const submit = () => {

@@ -54,6 +54,7 @@ export interface EngineRunOptions {
 	prompt: string
 	systemPrompt: string
 	model?: string
+	effort?: string
 	maxSteps: number
 	bridge: EditorBridge
 	/** The chat turn: apply_ops links its revisions to it. */
@@ -65,8 +66,16 @@ export interface EngineRunOptions {
 	onActivity?: (activity: AgentActivity) => void
 	/** Whole-run cap. Default 20 minutes. */
 	timeoutMs?: number
-	/** Tests: run in this folder and leave it, to check nothing was written. */
+	/**
+	 * Run in this folder and leave it. A run that keeps its conversation needs
+	 * one that stays the same between turns (the CLI files it by folder); tests
+	 * use it to check nothing was written.
+	 */
 	workDir?: string
+	/** Leave the conversation on disk so the next turn can resume it. */
+	keepSession?: boolean
+	/** Continue the conversation a previous run reported. */
+	resumeSessionId?: string
 	/** Read per call, so flipping the setting mid-turn takes effect. Default: no HTML pages. */
 	permissions?: () => AgentPermissions
 	/** Draws a page in the hidden window: the engine's pages get the same check as everyone's. */
@@ -82,6 +91,8 @@ export interface EngineRunResult {
 	note?: string | null
 	steps: EngineStep[]
 	model?: string
+	/** The CLI's id for the conversation this run was in, when it reported one. */
+	sessionId?: string
 	commits: CommitRecord[]
 	/** The revision the run left current: its last edit, or a later revert_to_version. */
 	finalRevisionId?: string
@@ -150,6 +161,8 @@ export async function runEngineTurn(options: EngineRunOptions): Promise<EngineRu
 		probeMotion: options.probeMotion,
 		version: options.version,
 		engineTurnId: options.turnId,
+		// The engine's system prompt already carries the baseline: sending it again would double it.
+		instructions: null,
 		maxToolCalls: options.maxSteps,
 		onEvent: (event) => {
 			if (event.type !== 'activity') return
@@ -183,6 +196,9 @@ export async function runEngineTurn(options: EngineRunOptions): Promise<EngineRu
 			systemPrompt: options.systemPrompt,
 			mcpUrl: `http://127.0.0.1:${port}/mcp`,
 			model: options.model,
+			effort: options.effort,
+			keepSession: options.keepSession,
+			resumeSessionId: options.resumeSessionId,
 			workDir,
 			pathSep: sep === '\\' ? '\\' : '/'
 		})
@@ -238,7 +254,7 @@ export async function runEngineTurn(options: EngineRunOptions): Promise<EngineRu
 		tracker.settle(stopReason === 'abort' ? 'Stopped' : 'Did not finish')
 		options.onSteps?.(tracker.steps.map((s) => ({ ...s })), tracker.model)
 
-		const base = { steps: tracker.steps, model: tracker.model, commits, finalRevisionId, exitCode, stderr: tail(stderr) }
+		const base = { steps: tracker.steps, model: tracker.model, sessionId: tracker.sessionId, commits, finalRevisionId, exitCode, stderr: tail(stderr) }
 		if (stopReason === 'abort') return { ...base, ok: false, cancelled: true, answer: tracker.answer, error: 'Cancelled' }
 		if (stopReason === 'restricted') {
 			return { ...base, ok: false, cancelled: false, answer: '', error: `Stopped: ${restrictedDetail} Nothing outside FrameFlow’s tools may run.` }

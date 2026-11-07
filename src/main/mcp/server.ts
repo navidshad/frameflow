@@ -56,6 +56,11 @@ export interface AgentServerOptions {
 	 * apply_ops links each revision it makes to that turn.
 	 */
 	engineTurnId?: string
+	/**
+	 * The `instructions` sent at initialize. Absent: the outside agents' text.
+	 * null: none, for a client that already has the same baseline in its prompt.
+	 */
+	instructions?: string | null
 	/** Tool calls allowed across all sessions; later calls are refused with a "wrap up" note. */
 	maxToolCalls?: number
 	/** Draws a custom page in the hidden window, for the check every written page gets. */
@@ -274,9 +279,11 @@ export class AgentServer {
 	// ===== Sessions =====
 
 	private async openSession(): Promise<StreamableHTTPServerTransport> {
+		// undefined: the outside agents' text. null: none (the engine's baseline is in its system prompt).
+		const instructions = this.options.instructions === undefined ? SERVER_INSTRUCTIONS : this.options.instructions
 		const server = new Server(
 			{ name: AGENT_SERVER_NAME, title: 'FrameFlow', version: this.options.version },
-			{ capabilities: { tools: {} }, instructions: SERVER_INSTRUCTIONS }
+			{ capabilities: { tools: {} }, ...(instructions ? { instructions } : {}) }
 		)
 		const transport: StreamableHTTPServerTransport = new StreamableHTTPServerTransport({
 			sessionIdGenerator: () => randomUUID(),

@@ -65,7 +65,7 @@ describe('renderExactFrame burnText', () => {
 		doc = {
 			schemaVersion: 1, media: [asset], tracks: [vtrack, ttrack], timeline: [clip, title],
 			timelineMeta: { fps: 30, width: 320, height: 180, duration: 4 },
-			activePersonaId: 'podcast-editor', turns: [], historyRef: { currentStepId: 's', stepCount: 0 }
+			turns: [], historyRef: { currentStepId: 's', stepCount: 0 }
 		}
 		;({ renderExactFrame } = await import('./preview'))
 	}, 60_000)

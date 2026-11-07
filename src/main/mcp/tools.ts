@@ -23,6 +23,7 @@ import { peaksForRange } from '@shared/audio'
 import { TIMELINE_DIFF_SCHEMA_VERSION } from '@shared/timeline'
 import { MOTION_TEMPLATES, userMotionTemplates } from '@shared/motionTemplates'
 import { motionGuideText } from '@shared/motionGuide'
+import { outsideAgentInstructions } from '@shared/baseline'
 import { soundGuideText } from '@shared/soundGuide'
 import { estimateMix } from '@shared/mix'
 import { cueLead, describeCue, suggestCues } from '@shared/sound'
@@ -653,7 +654,7 @@ const getSoundGuide: ToolDef = {
 	description:
 		'How to use sound well. Every sound the synth makes with its length, level and lead; the roles and where each ' +
 		'sits against the voice; the one rule about key; how to choose; and the loop to follow. You cannot hear: this ' +
-		'and render_sound / analyze_audio are how you work by numbers. Read it before your first apply_ops with addSounds.',
+		'and render_sound / analyze_audio / inspect_audio are how you work by numbers. Read it before your first apply_ops with addSounds.',
 	inputSchema: { type: 'object', properties: {}, additionalProperties: false },
 	async run() {
 		return { content: [{ type: 'text', text: soundGuideText() }], feed: { detail: 'read the sound guide' } }
@@ -893,6 +894,85 @@ const analyzeAudio: ToolDef = {
 	}
 }
 
+const inspectAudioTool: ToolDef = {
+	name: 'inspect_audio',
+	permission: 'read',
+	description:
+		'Listen to any sound without hearing it: music, a voice, a recording, or the audio inside a video. Give an asset ' +
+		'(id or file name) or a timeline clip (`item`: the part of its source that clip plays). Returns a spectrogram picture ' +
+		'(time left to right in seconds, pitch bottom to top on a log scale from 20 Hz, colour = loudness in dBFS: beats show ' +
+		'as vertical stripes, a drop or a new instrument as a change in the texture, silence as black) and numbers: loudness ' +
+		'(LUFS, range, true peak), how loud it is through time (`energy`), quiet spans, the tonal balance (low <250 Hz, mid, ' +
+		'high >2 kHz, brightness), tempo with a confidence when there is a steady pulse, a section map (where the level or ' +
+		'tone changes), and plain-language `hints` about what it probably is. Use it to guess what is happening in a file ' +
+		'before you cut it, to find where a track changes (cut music on its sections and bars), to tell speech from music from ' +
+		'noise, or to choose where a music bed should start. The hints are rules over the numbers, so the picture decides. ' +
+		'fromSec/toSec are SOURCE seconds: look at a stretch closely, or page through a long file. Costs nothing and changes ' +
+		'nothing; a few seconds for a song, longer for hours of audio.',
+	inputSchema: {
+		type: 'object',
+		properties: {
+			asset: { type: 'string', description: 'Media id or file name' },
+			item: { type: 'string', description: '…or a timeline clip id: inspects the part of its source it plays' },
+			fromSec: { type: 'number', minimum: 0, description: 'Start, in SOURCE seconds. Default: the start (of the clip, with item).' },
+			toSec: { type: 'number', minimum: 0, description: 'End, in SOURCE seconds. Default: the end (of the clip, with item).' }
+		},
+		additionalProperties: false
+	},
+	title: (args) => `inspect_audio ${args.asset || args.item || ''}`.trim(),
+	async run(args, ctx) {
+		const project = await requireProject(ctx)
+		let asset: MediaAsset
+		let fromSec: number | undefined = typeof args.fromSec === 'number' ? args.fromSec : undefined
+		let toSec: number | undefined = typeof args.toSec === 'number' ? args.toSec : undefined
+		if (args.item) {
+			const item = project.doc.timeline.find((i) => i.id === args.item)
+			const source = item?.sourceAssetId && project.doc.media.find((a) => a.id === item.sourceAssetId)
+			if (!item || !source) throw new ToolError(`No clip ${args.item} with a source. Read get_timeline for ids.`)
+			asset = source
+			// The clip's own trim is the default; fromSec/toSec narrow it within SOURCE time.
+			fromSec = fromSec ?? item.in
+			toSec = toSec ?? item.out
+		} else if (args.asset) {
+			asset = resolveAsset(project.doc.media, args.asset)
+		} else {
+			throw new ToolError('Name an asset (id or file name) or a timeline clip (item). get_media lists the media.')
+		}
+		if (asset.kind === 'image') throw new ToolError(`${asset.name} is a picture: it has no sound.`)
+		if (asset.metadata?.hasAudio === false) throw new ToolError(`${asset.name} has no audio track.`)
+		if (fromSec !== undefined && toSec !== undefined && toSec <= fromSec) throw new ToolError('toSec must be after fromSec.')
+
+		const result = await ctx.bridge.inspectAudio(project, { assetId: asset.id, fromSec, toSec })
+		if (!result.hasAudio || !result.summary) throw new ToolError(`${asset.name} has no audio track.`)
+		const { summary } = result
+		const sourceLen = asset.metadata?.duration
+		const body = {
+			source: asset.name,
+			asset: asset.id,
+			range: { fromSec: r3(result.fromSec), toSec: r3(result.toSec), ofSec: sourceLen ? r3(sourceLen) : undefined, ...(args.item ? { fromClip: args.item } : {}) },
+			loudness: {
+				lufs: result.loudness.lufs === null ? null : r3(result.loudness.lufs),
+				lra: result.loudness.lra === null ? null : r3(result.loudness.lra),
+				truePeakDb: result.loudness.truePeakDb === null ? null : r3(result.loudness.truePeakDb)
+			},
+			...summary,
+			picture: `The image is the spectrogram of source ${r3(result.fromSec)}–${r3(result.toSec)} s: its time labels count seconds from the left edge, so add ${r3(result.fromSec)} to read source time. Frequency is a log axis from 20 Hz; colour is dBFS (scale on the right).`,
+			notes: result.notes.length ? result.notes : undefined
+		}
+		const content: ToolContent[] = [json(body)]
+		if (result.spectrogram) content.push({ type: 'image', data: result.spectrogram, mimeType: 'image/png' })
+		const lufs = result.loudness.lufs
+		return {
+			content,
+			feed: {
+				detail: `${clock(result.fromSec)}–${clock(result.toSec)}${lufs === null ? '' : ` · ${r3(lufs)} LUFS`}${summary.tempo ? ` · ${summary.tempo.bpm} BPM` : ''}`,
+				quote: summary.hints[0],
+				thumbnail: result.spectrogram ? `data:image/png;base64,${result.spectrogram}` : undefined
+			}
+		}
+	}
+}
+
 /** Project settings outside the timeline that only agents set through ops. */
 const PROJECT_OPS_SCHEMA = {
 	splitAt: {
@@ -976,7 +1056,6 @@ const applyOps: ToolDef = {
 		const droppedOps = [...vetted.dropped, ...mapped.droppedOps]
 		const turn: PromptTurn = {
 			id: turnId,
-			personaId: project.doc.activePersonaId,
 			prompt: `${ctx.clientName} edited over MCP`,
 			baseStepId: project.doc.historyRef?.currentStepId || '',
 			status: 'completed',
@@ -1662,7 +1741,6 @@ async function commitAgentEdit(
 ) {
 	const turn: PromptTurn = {
 		id: randomUUID(),
-		personaId: project.doc.activePersonaId,
 		prompt: edit.prompt,
 		baseStepId: project.doc.historyRef?.currentStepId || '',
 		status: 'completed',
@@ -2179,24 +2257,13 @@ function bestSamples(turns: Array<{ start: number; end: number; confidence: numb
 export const TOOLS: ToolDef[] = [
 	beginRound, endRound, listProjects, createProject, openProject, importMedia, waitTool,
 	getProject, getTimeline, getMedia, inspectMedia, findSilences, searchMomentsTool, renderFrame, renderFrames, getMotionGuide, getMotionKit,
-	getSoundGuide, listSounds, suggestCuesTool, renderSoundTool, analyzeAudio, generateAudioTool,
+	getSoundGuide, listSounds, suggestCuesTool, renderSoundTool, analyzeAudio, inspectAudioTool, generateAudioTool,
 	applyOps, revertToVersion, exportTool, inspectExport,
 	findCameraGroups, makeMulticam, getMulticam, getAngles, findSpeakers, getSpeakers
 ]
 
-export const SERVER_INSTRUCTIONS =
-	'FrameFlow is a video editor running on this computer; these tools act on the project the user has ' +
-	'open in it, live. One agent works on a project at a time: begin_round with your goal before you work ' +
-	'(the user then sees you working and their chat is locked) and end_round with a summary when the piece ' +
-	'of work is done. No project open: list_projects / open_project / create_project, then import_media and ' +
-	'wait {for: "media"}. A good loop: get_project → get_timeline and get_media (or search_moments) to find ' +
-	'material → apply_ops to edit (get_motion_guide first if you will write an HTML motion page) → ' +
-	'render_frame to look at the result → revert_to_version if it is ' +
-	'wrong. For sound: get_sound_guide, then suggest_cues → apply_ops addSounds (with follow) → analyze_audio; ' +
-	'you cannot hear, so work by the numbers and the spectrogram render_sound gives. Spoken words or a sound the palette cannot make: generate_audio (costs money, capped) then apply_ops placeAudio. Inside a round all your apply_ops are one revision the user can see and undo; the user may edit at the same time, ' +
-	'so read the timeline again before each edit instead of relying on an old read. To deliver: export, wait {for: "export"}, ' +
-	'then inspect_export to look at the file frame by frame. Several cameras of one moment (a podcast): ' +
-	'find_camera_groups → make_multicam (syncs them by sound and places them) → get_multicam for the one shared ' +
-	'transcript → find_speakers (once: who speaks when, so every transcript line has a speaker; give the number of people) → ' +
-	'get_speakers (frames per voice) → apply_ops setSpeaker to name them → get_angles to compare every angle of a stretch ' +
-	'→ apply_ops switchAngles to cut; the sound never moves. Never choose angles from the loudest microphone: use the speakers.'
+/**
+ * What outside agents read when they connect. The text lives in @shared/baseline
+ * so FrameFlow's own engine starts from the same one.
+ */
+export const SERVER_INSTRUCTIONS = outsideAgentInstructions()

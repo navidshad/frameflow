@@ -38,7 +38,6 @@ import * as editorCaptions from './editor/captions'
 import { listExportFiles, resolveExportPath } from './editor/exports'
 import { loadPacks, packManifests } from './editor/packs'
 import * as editorRevisions from './editor/revisions'
-import { BUILTIN_PERSONAS } from './constants/personas'
 import { v4 as uuidv4 } from 'uuid'
 import { THREAD_DIRS } from './constants/paths'
 import { GEMINI_MODEL_3_6_FLASH, MODEL_METADATA } from './constants/gemini'
@@ -54,7 +53,7 @@ import { normalizeEngineSettings } from '@shared/engines'
 import { execFile } from 'child_process'
 import { getFFmpegBinaryPath } from './ffmpeg'
 import { initMotionIpc } from './motion/ipc'
-import { abortEngineTurn, cliEngineSelected, initEngines, runCliEditorPrompt } from './engine'
+import { abortEngineTurn, cliEngineSelected, initEngines, resetEngineConversation, runCliEditorPrompt } from './engine'
 
 const activePipelines = new Map<string, Pipeline>()
 
@@ -434,16 +433,6 @@ app.whenReady().then(() => {
 		return MODEL_METADATA
 	})
 
-	// Editor personas: built-ins (code) merged with the user's global library
-	ipcMain.handle('get-personas', () => {
-		return [...BUILTIN_PERSONAS, ...settingsManager.getPersonas()]
-	})
-
-	ipcMain.handle('set-personas', (_event, personas: any[]) => {
-		const saved = settingsManager.setPersonas(personas)
-		return [...BUILTIN_PERSONAS, ...saved]
-	})
-
 	// Thread Management
 	ipcMain.handle('create-thread', async (_event, { videoPath, videoName, imagePaths, type }) => {
 		const newThread = await threadManager.createThread(videoPath, videoName, imagePaths, type)
@@ -469,7 +458,7 @@ app.whenReady().then(() => {
 
 	// Autosave of RENDERER-OWNED editor fields only. Main owns preprocessing-derived
 	// asset state (preprocessing/proxyPath/metadata/preprocessState/clips content);
-	// the renderer owns selection, clip-selected flags, tracks, timeline, meta, personas.
+	// the renderer owns selection, clip-selected flags, tracks, timeline, meta.
 	// This ownership split is what prevents autosave/thread-updated echo clobbering.
 	ipcMain.handle('save-editor-doc', async (_event, { threadId, patch }: {
 		threadId: string
@@ -478,8 +467,6 @@ app.whenReady().then(() => {
 			timeline?: any[]
 			timelineMeta?: any
 			selection?: any
-			activePersonaId?: string
-			customPersonas?: any[]
 			clipSelections?: Record<string, boolean>
 			historyRef?: any
 			markers?: any[]
@@ -512,8 +499,6 @@ app.whenReady().then(() => {
 			}
 			if (patch.timelineMeta) editor.timelineMeta = patch.timelineMeta
 			if (patch.selection) editor.selection = patch.selection
-			if (patch.activePersonaId !== undefined) editor.activePersonaId = patch.activePersonaId
-			if (patch.customPersonas) editor.customPersonas = patch.customPersonas
 			// historyRef travels WITH the doc so the undo pointer and the timeline
 			// state land in one atomic write (crash-consistent by construction).
 			if (patch.historyRef) editor.historyRef = patch.historyRef
@@ -729,7 +714,7 @@ app.whenReady().then(() => {
 	// AI prompt turns (M3): one structured call per turn, streamed via
 	// editor-turn-update; the base doc is never mutated until user accept.
 	ipcMain.handle('run-editor-prompt', (_event, options: {
-		threadId: string, personaId: string, prompt: string, baseStepId: string,
+		threadId: string, prompt: string, baseStepId: string,
 		selectedItemIds: string[], playheadSec: number, widen?: 'chapter' | 'full', engine?: CliEngineId
 	}) => {
 		// One agent per project: an outside agent's open round holds it.
@@ -745,6 +730,8 @@ app.whenReady().then(() => {
 		if (!abortEngineTurn(turnId)) editorPrompt.abortEditorPrompt(turnId)
 		return true
 	})
+
+	ipcMain.handle('reset-engine-conversation', (_event, { threadId }: { threadId: string }) => resetEngineConversation(threadId))
 
 	// Renderer stamps the applied history step / revision back onto the turn.
 	ipcMain.handle('update-editor-turn', async (_event, { threadId, turnId, patch }: {

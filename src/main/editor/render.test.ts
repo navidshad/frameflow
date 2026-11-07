@@ -38,7 +38,6 @@ const doc = (over: Partial<EditorDocument> = {}): EditorDocument => ({
 	tracks: over.tracks ?? [track('v1')],
 	timeline: over.timeline ?? [],
 	timelineMeta: { fps: 30, width: 1920, height: 1080, duration: 0 },
-	activePersonaId: 'podcast-editor',
 	turns: [],
 	historyRef: { currentStepId: 'step-0', stepCount: 0 },
 	...over

@@ -2,13 +2,12 @@ import { hasPromptableContent } from '@shared/tracks'
 import { BrowserWindow } from 'electron'
 import { transcriptsForDoc } from './captions'
 import { v4 as uuidv4 } from 'uuid'
-import type { EditorDocument, EditorOps, EditorPersona, PromptTurn, Thread, UsageRecord } from '@shared/types'
+import type { EditorDocument, EditorOps, PromptTurn, Thread, UsageRecord } from '@shared/types'
 import { applyTimelineDiff, computeContentEnd, itemDuration } from '@shared/timeline'
 import { threadManager } from '../threads'
 import { settingsManager } from '../settings'
 import { GeminiAdapter } from '../gemini/adapter'
 import { GEMINI_MODEL_3_FLASH_PREVIEW } from '../constants/gemini'
-import { BUILTIN_PERSONAS, DEFAULT_PERSONA_ID } from '../constants/personas'
 import { buildPromptContext } from './context'
 import { vetHtmlOps } from './vetHtml'
 import { probeMotionPage } from '../motion/probe'
@@ -19,7 +18,7 @@ import {
 
 /**
  * AI prompt orchestrator for the timeline editor (PRD §5.7).
- * One structured Gemini call per turn: persona systemPrompt + fixed editor
+ * One structured Gemini call per turn: the shared overview + fixed editor
  * contract + windowed context -> EditorOps -> TimelineDiff (opsToDiff).
  * Streams turn state over the dedicated `editor-turn-update` event.
  * The base document is NEVER mutated here — the renderer applies the diff
@@ -82,15 +81,6 @@ export async function persistTurn(threadId: string, turn: PromptTurn): Promise<v
 	})
 }
 
-export function resolvePersona(doc: EditorDocument, personaId: string): EditorPersona {
-	return (
-		doc.customPersonas?.find((p) => p.id === personaId) ||
-		settingsManager.getPersonas().find((p) => p.id === personaId) ||
-		BUILTIN_PERSONAS.find((p) => p.id === personaId) ||
-		BUILTIN_PERSONAS.find((p) => p.id === DEFAULT_PERSONA_ID)!
-	)
-}
-
 export function abortEditorPrompt(turnId: string): void {
 	const controller = turnControllers.get(turnId)
 	if (controller) {
@@ -105,19 +95,17 @@ export function abortEditorPrompt(turnId: string): void {
  */
 export function runEditorPrompt(options: {
 	threadId: string
-	personaId: string
 	prompt: string
 	baseStepId: string
 	selectedItemIds: string[]
 	playheadSec: number
 	widen?: 'chapter' | 'full'
 }): { turnId: string } {
-	const { threadId, personaId, prompt, baseStepId } = options
+	const { threadId, prompt, baseStepId } = options
 	const turnId = uuidv4()
 
 	const turn: PromptTurn = {
 		id: turnId,
-		personaId,
 		prompt,
 		baseStepId,
 		status: 'running',
@@ -141,7 +129,6 @@ export function runEditorPrompt(options: {
 			await persistTurn(threadId, turn)
 			emitTurnUpdate({ threadId, turn })
 
-			const persona = resolvePersona(doc, personaId)
 			// Read once and reused by both passes: it costs one file per asset and
 			// only the cutaway shortlist consumes it.
 			const transcripts = transcriptsForDoc(doc)
@@ -213,7 +200,7 @@ export function runEditorPrompt(options: {
 					modelName,
 					context.contextText,
 					editorOpsSchema(hasItems, true),
-					composeSystemInstruction(persona, stats, 'survey'),
+					composeSystemInstruction(stats, 'survey'),
 					controller.signal,
 					undefined,
 					surveyCallConfig
@@ -236,7 +223,7 @@ export function runEditorPrompt(options: {
 						modelName,
 						detailContext.contextText,
 						editorOpsSchema(hasItems, false),
-						composeSystemInstruction(persona, stats, 'detail'),
+						composeSystemInstruction(stats, 'detail'),
 						controller.signal,
 						undefined,
 						surveyCallConfig
@@ -256,7 +243,7 @@ export function runEditorPrompt(options: {
 					modelName,
 					context.contextText,
 					editorOpsSchema(hasItems),
-					composeSystemInstruction(persona, stats),
+					composeSystemInstruction(stats),
 					controller.signal,
 					undefined,
 					fullCallConfig

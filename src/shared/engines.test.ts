@@ -2,10 +2,11 @@ import { describe, expect, it } from 'vitest'
 import { readFileSync } from 'node:fs'
 import { resolve } from 'node:path'
 import {
-	agentFocus, buildCommand, buildEngineSystemPrompt, buildEngineUserPrompt, displayPath, editTime,
-	engineChipLabel, engineFailureNote, geminiTextModels, engineRetry, isFrameflowTool, lineSplitter, normalizeEngineSettings, normalizeToolName, parseClaudeAuth,
+	agentFocus, buildCommand, CLI_EFFORTS, engineEfforts, STEPS_DEFAULT, STEPS_MAX, buildEngineSystemPrompt, buildEngineUserPrompt, displayPath, editTime,
+	engineChipLabel, engineFailureNote, geminiTextModels, engineRetry, latestEngineTurn, resumableSessionId, shouldRestartFresh, isFrameflowTool, lineSplitter, normalizeEngineSettings, normalizeToolName, parseClaudeAuth,
 	parseStreamLine, parseVersion, readableError, StepTracker, stepTitle, TOKEN_ENV, unexpectedTools, type CliEngineId
 } from './engines'
+import { FRAMEFLOW_BASELINE } from './baseline'
 import type { PromptTurn } from './types'
 
 const fixture = (name: string) => readFileSync(resolve(__dirname, '../main/engine/fixtures', name), 'utf-8')
@@ -126,11 +127,36 @@ describe('errors', () => {
 
 describe('settings', () => {
 	it('clamps and fills', () => {
-		expect(normalizeEngineSettings(undefined)).toEqual({ engine: 'gemini-api', models: {}, maxSteps: 20 })
-		expect(normalizeEngineSettings({ engine: 'claude-code', maxSteps: 900, models: { 'claude-code': ' opus ' } }))
-			.toEqual({ engine: 'claude-code', models: { 'claude-code': 'opus' }, maxSteps: 50 })
-		expect(normalizeEngineSettings({ engine: 'claude-code', models: { 'claude-code': '' } }).models).toEqual({})
+		expect(normalizeEngineSettings(undefined)).toEqual({
+			engine: 'gemini-api', models: { 'claude-code': 'claude-opus-5-5' }, efforts: { 'claude-code': 'medium' }, maxSteps: STEPS_DEFAULT
+		})
+		expect(normalizeEngineSettings({ engine: 'claude-code', maxSteps: 9000, models: { 'claude-code': ' opus ' } }))
+			.toEqual({ engine: 'claude-code', models: { 'claude-code': 'claude-opus-5-5' }, efforts: { 'claude-code': 'medium' }, maxSteps: STEPS_MAX })
+		// A model id the list does not know is kept as typed.
+		expect(normalizeEngineSettings({ engine: 'claude-code', models: { 'claude-code': 'claude-opus-4-1' } }).models)
+			.toEqual({ 'claude-code': 'claude-opus-4-1' })
+		// Nothing chosen is the default model, never "no model".
+		expect(normalizeEngineSettings({ engine: 'claude-code', models: { 'claude-code': '' } }).models).toEqual({ 'claude-code': 'claude-opus-5-5' })
 		expect(normalizeEngineSettings({ engine: 'nope' as any }).engine).toBe('gemini-api')
+	})
+
+	it('keeps an effort the CLI lists and replaces one it does not with the default', () => {
+		expect(normalizeEngineSettings({ engine: 'claude-code', efforts: { 'claude-code': ' xhigh ' } }).efforts).toEqual({ 'claude-code': 'xhigh' })
+		expect(normalizeEngineSettings({ engine: 'claude-code', efforts: { 'claude-code': 'ludicrous' } }).efforts).toEqual({ 'claude-code': 'medium' })
+		expect(normalizeEngineSettings({ engine: 'claude-code', efforts: { 'claude-code': '' } }).efforts).toEqual({ 'claude-code': 'medium' })
+	})
+
+	it('reads the old default of 20 steps as never changed', () => {
+		// Settings files saved the old default as if the user had chosen it.
+		expect(normalizeEngineSettings({ maxSteps: 20 }).maxSteps).toBe(STEPS_DEFAULT)
+		expect(normalizeEngineSettings({ maxSteps: 21 }).maxSteps).toBe(21)
+		expect(STEPS_DEFAULT).toBeGreaterThan(20)
+	})
+
+	it('effort choices belong to the engine: Claude Code has them, Gemini API does not', () => {
+		expect(engineEfforts('claude-code')).toEqual(CLI_EFFORTS['claude-code'])
+		expect(engineEfforts('claude-code').map((o) => o.value)).toEqual(['low', 'medium', 'high', 'xhigh', 'max'])
+		expect(engineEfforts('gemini-api')).toEqual([])
 	})
 })
 
@@ -147,9 +173,17 @@ describe('command lines', () => {
 		expect(a[a.indexOf('--allowedTools') + 1]).toBe('mcp__frameflow')
 		expect(a[a.indexOf('--system-prompt') + 1]).toBe('SYS')
 		expect(a.slice(-2)).toEqual(['--model', 'opus'])
+		expect(a).not.toContain('--effort')
 		const config = JSON.parse(spec.files[0].content)
 		expect(config.mcpServers.frameflow).toEqual({ type: 'http', url: base.mcpUrl, headers: { Authorization: `Bearer \${${TOKEN_ENV}}` } })
 		expect(JSON.stringify(spec)).not.toMatch(/ff_/)
+	})
+
+	it('Claude Code: passes --effort only when one is chosen', () => {
+		const a = buildCommand({ ...base, engine: 'claude-code', model: 'opus', effort: 'high' }).args
+		expect(a[a.indexOf('--effort') + 1]).toBe('high')
+		expect(a[a.indexOf('--model') + 1]).toBe('opus')
+		expect(buildCommand({ ...base, engine: 'claude-code', effort: '  ' }).args).not.toContain('--effort')
 	})
 
 	it('Windows paths', () => {
@@ -159,15 +193,18 @@ describe('command lines', () => {
 })
 
 describe('prompts', () => {
-	it('system prompt carries the persona and the step budget', () => {
-		const text = buildEngineSystemPrompt({ persona: { name: 'Podcast editor', systemPrompt: 'Keep it tight.' }, maxSteps: 12, engineLabel: 'Claude Code' })
+	it('system prompt carries the baseline and the step budget, and no opinion of its own', () => {
+		const text = buildEngineSystemPrompt({ maxSteps: 12, engineLabel: 'Claude Code' })
 		expect(text).toMatch(/at most 12 tool calls/)
-		expect(text).toMatch(/Keep it tight\.$/)
+		expect(text).toContain(FRAMEFLOW_BASELINE)
+		expect(text).not.toMatch(/persona|prefer a few|focused calls/i)
+		// Rounds are for outside agents: telling the engine to begin one only errors.
+		expect(text).not.toMatch(/begin_round/)
 	})
 
 	it('sends an agent to the motion guide before it writes a page, and knows the tool is FrameFlow’s', () => {
-		const text = buildEngineSystemPrompt({ persona: { name: 'p', systemPrompt: 'x' }, maxSteps: 5, engineLabel: 'Claude Code' })
-		expect(text).toMatch(/call get_motion_guide/)
+		const text = buildEngineSystemPrompt({ maxSteps: 5, engineLabel: 'Claude Code' })
+		expect(text).toMatch(/get_motion_guide first if you will write an HTML motion page/)
 		expect(isFrameflowTool('get_motion_guide', null)).toBe(true)
 	})
 
@@ -181,7 +218,7 @@ describe('prompts', () => {
 describe('Retry on a failed engine run', () => {
 	const request = { selectedItemIds: ['clip-1', 'clip-2'], playheadSec: 12.5, widen: 'full' as const }
 	const turn = (patch: Partial<PromptTurn> = {}, end: 'failed' | 'cancelled' | 'none' = 'failed'): PromptTurn => ({
-		id: 't1', personaId: 'p', prompt: 'tighten the intro', baseStepId: 's', status: 'error', createdAt: 100,
+		id: 't1', prompt: 'tighten the intro', baseStepId: 's', status: 'error', createdAt: 100,
 		engine: { id: 'claude-code', label: 'Claude Code', steps: [], request, end: end === 'none' ? undefined : end },
 		...patch
 	})
@@ -223,11 +260,13 @@ describe('Retry on a failed engine run', () => {
 })
 
 describe('engine chip', () => {
-	const base = { engine: 'claude-code' as const, models: {}, maxSteps: 20 }
+	const base = { engine: 'claude-code' as const, models: {}, efforts: {}, maxSteps: 20 }
 
 	it('names the CLI model, or just the CLI when it uses its own', () => {
-		expect(engineChipLabel({ ...base, models: { 'claude-code': 'opus' } })).toBe('Claude Code · Opus')
+		expect(engineChipLabel({ ...base, models: { 'claude-code': 'claude-opus-5-5' } })).toBe('Claude Code · Opus 5.5')
 		expect(engineChipLabel(base)).toBe('Claude Code')
+		expect(engineChipLabel({ ...base, models: { 'claude-code': 'claude-opus-5-5' }, efforts: { 'claude-code': 'xhigh' } })).toBe('Claude Code · Opus 5.5 · Extra high')
+		expect(engineChipLabel({ ...base, efforts: { 'claude-code': 'high' } })).toBe('Claude Code · High')
 		expect(engineChipLabel({ ...base, models: { 'claude-code': 'claude-x-9' } })).toBe('Claude Code · claude-x-9')
 	})
 
@@ -251,5 +290,67 @@ describe('geminiTextModels', () => {
 			{ value: 'b-flash', label: 'b-flash', inputPerM: 0.3 },
 			{ value: 'a-pro', label: 'A Pro', inputPerM: 1.25 }
 		])
+	})
+})
+
+describe('reusing the CLI conversation', () => {
+	const base = { prompt: 'Make it shorter', systemPrompt: 'SYS', mcpUrl: 'http://127.0.0.1:5555/mcp', workDir: '/tmp/run' }
+	const chat = (id: string, createdAt: number, sessionId?: string, extra: Partial<PromptTurn> = {}): PromptTurn => ({
+		id, prompt: 'p', baseStepId: 'b', status: 'completed', createdAt,
+		engine: { id: 'claude-code', label: 'Claude Code', steps: [], sessionId }, ...extra
+	}) as PromptTurn
+
+	it('reads the conversation id from the CLI start line', () => {
+		expect(track('claude-code', fixture('claude.stream.jsonl')).sessionId).toBeTruthy()
+	})
+
+	it('leaves nothing on disk unless the run asks to keep its conversation', () => {
+		expect(buildCommand({ ...base, engine: 'claude-code' }).args).toContain('--no-session-persistence')
+		const kept = buildCommand({ ...base, engine: 'claude-code', keepSession: true }).args
+		expect(kept).not.toContain('--no-session-persistence')
+		expect(kept).not.toContain('--resume')
+	})
+
+	it('resumes the given conversation, which also keeps it', () => {
+		const a = buildCommand({ ...base, engine: 'claude-code', resumeSessionId: 'abc-123' }).args
+		expect(a[a.indexOf('--resume') + 1]).toBe('abc-123')
+		expect(a).not.toContain('--no-session-persistence')
+	})
+
+	it('continues the conversation the newest chat turn was part of', () => {
+		const turns = [
+			chat('old', 1, 'first'), chat('new', 5, 'second'),
+			// An edit the engine made belongs to its chat turn and is not a conversation of its own.
+			chat('edit', 12, 'edit-session', { agent: { engineTurnId: 'new' } as any })
+		]
+		expect(resumableSessionId(turns, 'claude-code')).toBe('second')
+		expect(resumableSessionId([], 'claude-code')).toBeUndefined()
+		expect(resumableSessionId(undefined, 'claude-code')).toBeUndefined()
+		// The asking run's own turn is not the one before it.
+		expect(resumableSessionId([...turns, chat('now', 20, undefined)], 'claude-code', 'now')).toBe('second')
+	})
+
+	it('"New conversation" clears the newest turn\'s id, and nothing reaches back to an older one', () => {
+		const turns = [chat('old', 1, 'first'), chat('new', 5, undefined)]
+		expect(resumableSessionId(turns, 'claude-code')).toBeUndefined()
+		expect(latestEngineTurn(turns, 'claude-code')?.id).toBe('new')
+		// Another engine's turns are not this engine's conversation.
+		expect(latestEngineTurn([{ ...chat('g', 9, 'x'), engine: undefined } as PromptTurn], 'claude-code')).toBeUndefined()
+	})
+
+	it('tells a continued conversation the project may have changed', () => {
+		const input = { prompt: 'Shorter', playheadSec: 3, selectedItemIds: [] }
+		expect(buildEngineUserPrompt(input)).not.toMatch(/may have changed/)
+		expect(buildEngineUserPrompt({ ...input, resuming: true })).toMatch(/may have changed/)
+	})
+
+	it('starts fresh once when a resume dies before doing anything, but not for a sign-in or a stop', () => {
+		const dead = { ok: false, cancelled: false, note: null, steps: [], commits: [] }
+		expect(shouldRestartFresh(true, dead)).toBe(true)
+		expect(shouldRestartFresh(false, dead)).toBe(false)
+		expect(shouldRestartFresh(true, { ...dead, note: 'Sign in again' })).toBe(false)
+		expect(shouldRestartFresh(true, { ...dead, cancelled: true })).toBe(false)
+		expect(shouldRestartFresh(true, { ...dead, steps: [{}] })).toBe(false)
+		expect(shouldRestartFresh(true, { ...dead, ok: true })).toBe(false)
 	})
 })

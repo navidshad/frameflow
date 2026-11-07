@@ -104,6 +104,7 @@ Over MCP an agent has, all read-only except `apply_ops`:
 | `suggest_cues` | The moments that want a sound, each with a suggested sound, the `follow` to pass back, and whether it is taken. |
 | `render_sound` | A recipe (or a placed sound) measured: length, peak, loudness, and a spectrogram image. Changes nothing. |
 | `analyze_audio` | Per-role loudness and peaks, per-clip estimates, and warnings in words. Estimated from measured sources and gains; it says what it leaves out. |
+| `inspect_audio` | Any audio (an asset, a clip's part of its source, a stretch by `fromSec`/`toSec`, a video's sound) as a legended spectrogram plus numbers: loudness, energy through time, quiet spans, low/mid/high balance, tempo with confidence, a section map, and plain hints ("steady pulse near 96 BPM", "most likely speech"). Measured, not heard: the picture is the ground truth. Changes nothing. |
 | `apply_ops` | Gains `addSounds`, `setSounds` and `setTrackRoles`. Making or changing a sound needs the **Make sounds with the built-in synth** permission (on by default; free and offline). |
 
 ## Providers: generated voice, effects and music (built)

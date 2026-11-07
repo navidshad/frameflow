@@ -218,8 +218,6 @@ export interface EditorDocument {
 	tracks: Track[]             // lane definitions
 	timeline: TimelineItem[]    // placements across tracks — the live EDL
 	timelineMeta: TimelineMeta
-	activePersonaId: string
-	customPersonas?: EditorPersona[]  // project-local personas
 	turns: PromptTurn[]         // prompt-request log (no snapshots)
 	historyRef: EditorHistoryRef      // pointer into the sidecar history file
 	selection?: { clipIds?: string[]; itemIds?: string[] }
@@ -652,50 +650,6 @@ export interface TextOverlaySpec {
 	bold?: boolean
 }
 
-export interface EditorPersona {
-	id: string
-	name: string
-	icon: string                // emoji or Tabler icon id
-	description: string
-	systemPrompt: string        // the whole backing for v1
-	builtin: boolean            // seeded personas can't be deleted, only cloned
-	tone?: string
-	/**
-	 * Style only. `mode` and `targetDurationSec` used to live here and forced the
-	 * output runtime; both are gone — length now comes from the user's request
-	 * (see outputLengthLines in editor/ops.ts). `aspectRatio` went with them: no
-	 * op could act on it and render.ts derives resolution from source metadata,
-	 * so it only ever told the model something untrue.
-	 */
-	defaults?: { pacing?: 'tight' | 'balanced' | 'relaxed' }
-	featureSets?: FeatureSetRef[]  // deferred; always [] in v1
-	/**
-	 * The look this voice edits in — vocabulary, not rules.
-	 *
-	 * A persona already carries judgement about WHAT to cut; this carries what
-	 * the result should look and sound like, so the two travel together instead
-	 * of the user re-describing a house style in every prompt. Everything in
-	 * the catalogues stays available: these are preferences the model is told
-	 * about, not a whitelist it is confined to.
-	 */
-	style?: PersonaStyle
-}
-
-export interface PersonaStyle {
-	/** Transition kinds this voice reaches for first. */
-	transitions?: string[]
-	/** Effect kinds that make up its look. */
-	looks?: string[]
-	/** Whether it captions by default — short-form does, a lecture does not. */
-	captions?: boolean
-	/** Whether it normalises the mix. True for anything meant to be posted. */
-	loudness?: boolean
-	/** One line the system instruction quotes, in the persona's own voice. */
-	note?: string
-}
-
-export interface FeatureSetRef { id: string; name: string } // stub
-
 export interface EditorHistoryRef {
 	currentStepId: string       // undo/redo pointer (persisted with the doc → undo survives restart)
 	stepCount: number
@@ -766,9 +720,8 @@ export interface EditorRevision {
 	parentId: string | null     // null only for the root 'init' revision
 	seq: number                 // sidecar revisionCounter; displayed "V{seq}"
 	origin: RevisionOrigin
-	label: string               // persona name / user label / 'Original' / 'Auto checkpoint'
+	label: string               // engine or agent name / user label / 'Original' / 'Auto checkpoint'
 	turnId?: string             // origin === 'ai'
-	personaId?: string          // origin === 'ai' — drives the list-item icon
 	snapshot: RevisionSnapshot
 	createdAt: number
 }
@@ -818,6 +771,8 @@ export interface PromptTurnEngine {
 	label: string
 	/** The model the CLI reported, when it did. */
 	model?: string
+	/** The CLI's own id for the conversation this run was part of: the next run resumes it. */
+	sessionId?: string
 	steps: Array<{
 		id: string
 		tool: string
@@ -845,7 +800,6 @@ export interface PromptTurnEngine {
 
 export interface PromptTurn {
 	id: string
-	personaId: string
 	prompt: string
 	baseStepId: string
 	resultStepId?: string
@@ -879,7 +833,7 @@ export interface PromptTurn {
 	notes?: string[]            // non-failures worth telling the user (clamped ranges, …)
 	/**
 	 * How long the result actually came out. Computed for EVERY turn with a diff,
-	 * not just build-from-scratch ones: with no persona-set target the only way to
+	 * not just build-from-scratch ones: with no stated target the only way to
 	 * tell a deliberate 30-second cut from an accidental one is what the model
 	 * said it was aiming for.
 	 */

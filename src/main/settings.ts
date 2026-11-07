@@ -3,7 +3,7 @@ import { join } from 'path'
 import { existsSync, mkdirSync, readFileSync, renameSync, writeFileSync, realpathSync } from 'fs'
 import os from 'os'
 import { randomBytes } from 'crypto'
-import { EditorPersona, ModelSettings } from '../shared/types'
+import { ModelSettings } from '../shared/types'
 import { normalizePermissions, TOKEN_PREFIX, type AgentPermissions } from '../shared/agent'
 import type { AgentRecentSession } from '../shared/agentFeed'
 import { normalizeEngineSettings, type EngineSettings } from '../shared/engines'
@@ -11,15 +11,12 @@ import { normalizeAudioSettings, type AudioProviderSettings } from '../shared/au
 import { isSetupComplete } from '../shared/setup'
 import { DEFAULT_MODEL_SETTINGS } from './constants/gemini'
 import { mergeModelSettings } from './modelSettings'
-import { BUILTIN_PERSONAS } from './constants/personas'
 
 interface Settings {
 	tempDir: string
 	/** In memory only. On disk it is `geminiApiKeyEnc`. */
 	geminiApiKey?: string
 	modelSettings?: ModelSettings
-	/** User-defined editor personas ONLY — built-ins are merged at read time. */
-	personas?: EditorPersona[]
 	/** MCP agent access. Off unless the user turns it on in Settings. */
 	agentAccess?: AgentAccessSettings
 	/** In memory only. On disk it is `agentTokenEnc`, encrypted like the API key. */
@@ -140,7 +137,6 @@ class SettingsManager {
 					tempDir: parsed.tempDir || this.defaultTempDir,
 					geminiApiKey: decryptKey(parsed),
 					modelSettings: this.mergeModelSettings(parsed.modelSettings || DEFAULT_MODEL_SETTINGS),
-					personas: Array.isArray(parsed.personas) ? parsed.personas : [],
 					agentAccess: normalizeAgentAccess(parsed.agentAccess),
 					agentToken: decryptKey({ geminiApiKeyEnc: parsed.agentTokenEnc, geminiApiKey: parsed.agentToken }),
 					engine: normalizeEngineSettings(parsed.engine),
@@ -292,24 +288,6 @@ class SettingsManager {
 		return DEFAULT_MODEL_SETTINGS
 	}
 
-	/** User-defined personas only (built-ins live in constants/personas.ts). */
-	getPersonas(): EditorPersona[] {
-		return this.settings.personas || []
-	}
-
-	/**
-	 * Persists user personas. Built-in entries and any entry whose id collides
-	 * with a built-in are filtered out — built-ins are code, not data.
-	 */
-	setPersonas(personas: EditorPersona[]): EditorPersona[] {
-		const builtinIds = new Set(BUILTIN_PERSONAS.map((p) => p.id))
-		this.settings.personas = (personas || []).filter(
-			(p) => !p.builtin && !builtinIds.has(p.id)
-		)
-		this.saveSettings()
-		return this.settings.personas
-	}
-
 	// ===== Agent access (MCP) =====
 
 	getAgentAccess(): AgentAccessSettings {
@@ -392,7 +370,9 @@ class SettingsManager {
 	updateEngineSettings(patch: Partial<EngineSettings>): EngineSettings {
 		const current = this.getEngineSettings()
 		this.settings.engine = normalizeEngineSettings({
-			...current, ...patch, models: { ...current.models, ...(patch.models || {}) }
+			...current, ...patch,
+			models: { ...current.models, ...(patch.models || {}) },
+			efforts: { ...current.efforts, ...(patch.efforts || {}) }
 		})
 		this.saveSettings()
 		return this.settings.engine

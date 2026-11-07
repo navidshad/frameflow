@@ -222,7 +222,7 @@ describe.skipIf(!canOpenWindows)('a motion layer through the export graph', () =
 			lowerThird({ timelineStart: 1, out: 3, duration: 3 })
 		],
 		timelineMeta: { fps: 30, width: W, height: H, duration: 4, frameChosen: true },
-		activePersonaId: 'p', turns: [], historyRef: { currentStepId: null as any, stepCount: 0 }
+		turns: [], historyRef: { currentStepId: null as any, stepCount: 0 }
 	})
 
 	it('composites the page over the layer below, at the right moment', async () => {

@@ -1,13 +1,15 @@
+import { mkdirSync } from 'node:fs'
+import path from 'node:path'
 import { app, BrowserWindow, ipcMain } from 'electron'
 import { v4 as uuidv4 } from 'uuid'
 import {
-	buildEngineSystemPrompt, buildEngineUserPrompt, CLI_ENGINE_IDS, ENGINES, isCliEngine,
+	buildEngineSystemPrompt, buildEngineUserPrompt, CLI_ENGINE_IDS, ENGINES, isCliEngine, latestEngineTurn, resumableSessionId, shouldRestartFresh,
 	type CliEngineId, type EngineDetection, type EngineSettings
 } from '@shared/engines'
 import type { PromptTurn, PromptTurnEngine } from '@shared/types'
 import { settingsManager } from '../settings'
 import { threadManager } from '../threads'
-import { emitTurnUpdate, persistTurn, resolvePersona } from '../editor/prompt'
+import { emitTurnUpdate, persistTurn } from '../editor/prompt'
 import { rendererBridge, switchRevisionFor } from '../mcp/rendererBridge'
 import { detectCli, locate, recordRunFailure } from './detect'
 import { enginePermissions, runEngineTurn } from './runner'
@@ -71,10 +73,39 @@ function detectAll(): Promise<EngineDetection[]> {
 
 const controllers = new Map<string, AbortController>()
 
+/**
+ * The folder a project's CLI conversation runs in. The CLI files a conversation
+ * by the folder it ran in, so resuming one needs the same folder every turn:
+ * one per project, kept between runs. It holds only the MCP config, which names
+ * the token by variable and never contains it.
+ */
+function sessionDir(threadId: string): string {
+	const dir = path.join(app.getPath('userData'), 'engine-sessions', threadId)
+	mkdirSync(dir, { recursive: true, mode: 0o700 })
+	return dir
+}
+
 export function abortEngineTurn(turnId: string): boolean {
 	const controller = controllers.get(turnId)
 	if (!controller) return false
 	controller.abort()
+	return true
+}
+
+/**
+ * "New conversation": the next run starts a fresh CLI conversation. The newest
+ * chat turn decides which one continues, so clearing its id is the whole reset.
+ * The project, its revisions and the chat stay as they are.
+ */
+export async function resetEngineConversation(threadId: string): Promise<boolean> {
+	const id = settingsManager.getEngineSettings().engine
+	if (!isCliEngine(id)) return false
+	const thread = threadManager.getThread(threadId)
+	const turn = latestEngineTurn(thread?.editor?.turns, id)
+	if (!turn?.engine?.sessionId) return false
+	const cleared: PromptTurn = { ...turn, engine: { ...turn.engine, sessionId: undefined } }
+	await persistTurn(threadId, cleared)
+	emitTurnUpdate({ threadId, turn: cleared })
 	return true
 }
 
@@ -84,7 +115,6 @@ export function cliEngineSelected(): boolean {
 
 export function runCliEditorPrompt(options: {
 	threadId: string
-	personaId: string
 	prompt: string
 	baseStepId: string
 	selectedItemIds: string[]
@@ -103,7 +133,6 @@ export function runCliEditorPrompt(options: {
 	}
 	const turn: PromptTurn = {
 		id: turnId,
-		personaId: options.personaId,
 		prompt: options.prompt,
 		baseStepId: options.baseStepId,
 		status: 'running',
@@ -125,16 +154,24 @@ export function runCliEditorPrompt(options: {
 			const located = await locate(id)
 			if (!located) throw new Error(`${label} is not installed, or FrameFlow cannot find it. Pick another engine, or install it and press Detect again in Settings.`)
 
-			const persona = resolvePersona(thread.editor, options.personaId)
 			// Empty means the CLI's own default: no model flag at all.
 			const model = settings.models[id] || undefined
+			// Same for effort: unset passes no flag.
+			const effort = settings.efforts[id] || undefined
 			let latest: PromptTurn = turn
-			const result = await runEngineTurn({
+			// The project's earlier conversation with this CLI, so a follow-up has its memory.
+			const resumeId = resumableSessionId(thread.editor.turns, id, turnId)
+			const workDir = sessionDir(threadId)
+			const run = (resumeSessionId?: string) => runEngineTurn({
 				engine: id,
 				located,
-				prompt: buildEngineUserPrompt(options),
-				systemPrompt: buildEngineSystemPrompt({ persona, maxSteps: settings.maxSteps, engineLabel: label }),
+				prompt: buildEngineUserPrompt({ ...options, resuming: !!resumeSessionId }),
+				systemPrompt: buildEngineSystemPrompt({ maxSteps: settings.maxSteps, engineLabel: label }),
 				model,
+				effort,
+				workDir,
+				keepSession: true,
+				resumeSessionId,
 				maxSteps: settings.maxSteps,
 				// The user's "Write custom HTML motion layers" switch, read per call.
 				permissions: () => enginePermissions(settingsManager.getAgentAccess().permissions.html),
@@ -150,6 +187,13 @@ export function runCliEditorPrompt(options: {
 				// The monitor and media list follow what the engine looks at.
 				onActivity: (activity) => broadcast('engine-activity', { ...activity, turnId })
 			})
+			let result = await run(resumeId)
+			let continued = resumeId
+			// The CLI may no longer hold that conversation: start a new one rather than fail.
+			if (shouldRestartFresh(!!resumeId, result)) {
+				result = await run(undefined)
+				continued = undefined
+			}
 
 			if (result.note) recordRunFailure(id, result.note)
 			else if (result.ok) recordRunFailure(id, null)
@@ -161,6 +205,7 @@ export function runCliEditorPrompt(options: {
 				...engine,
 				steps: result.steps,
 				model: result.model,
+				sessionId: result.sessionId ?? continued,
 				revisionIds: commits.map((c) => c.revisionId),
 				finalRevisionId: result.finalRevisionId,
 				parentRevisionId: commits[0]?.parentRevisionId ?? null,
