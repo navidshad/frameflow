@@ -62,8 +62,10 @@ const api = {
 		ipcRenderer.invoke('rename-editor-project', data),
 	saveEditorDoc: (data: { threadId: string, patch: any }) =>
 		ipcRenderer.invoke('save-editor-doc', data),
-	addMediaAsset: (data: { threadId: string, filePath: string, name?: string }) =>
+	addMediaAsset: (data: { threadId: string, filePath: string, name?: string, discardUnreadable?: boolean }) =>
 		ipcRenderer.invoke('add-media-asset', data),
+	pickMedia: (options?: { folders?: boolean }) => ipcRenderer.invoke('pick-media', options ?? {}),
+	expandMediaPaths: (paths: string[]) => ipcRenderer.invoke('expand-media-paths', { paths }),
 	importMediaUrl: (data: { threadId: string, url: string, resolution?: string }) =>
 		ipcRenderer.invoke('import-media-url', data),
 	removeMediaAsset: (data: { threadId: string, assetId: string }) =>

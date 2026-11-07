@@ -2,7 +2,7 @@
 	<!-- One surface. No cards, no ambient blobs: zones are split by a hairline and
 	     the picture stage is a step darker. The chat column runs the full height of
 	     the window; the timeline sits beside it, never under it. -->
-	<div class="h-full w-full flex bg-ground overflow-hidden relative">
+	<div class="h-full w-full flex bg-ground overflow-hidden relative" v-on="fileDrop.handlers">
 		<div class="flex-1 min-w-0 flex flex-col">
 			<EditorTopBar :title="editorStore.thread?.title || 'Untitled Project'" :total-cost="totalCost"
 				:show-export="!editorStore.loading && !notFound"
@@ -69,6 +69,14 @@
 			<ExportDialog v-model="showExport" @show-exports="showExportsTab" />
 			<ShortcutsOverlay />
 		</template>
+
+		<!-- Files or folders dragged in from the OS: they go to the Media panel. -->
+		<div v-if="fileDrop.over.value" data-testid="file-drop-overlay"
+			class="absolute inset-0 z-50 pointer-events-none flex items-center justify-center bg-primary/10 backdrop-blur-[1px] border-2 border-dashed border-primary/60 rounded-lg m-2">
+			<div class="px-5 py-3 rounded-xl bg-white/90 dark:bg-zinc-900/90 shadow-lg text-sm font-bold text-primary">
+				Drop to add to Media
+			</div>
+		</div>
 	</div>
 </template>
 
@@ -92,6 +100,7 @@ import AgentBanner from './components/AgentBanner.vue'
 import AgentWorkingStrip from './components/AgentWorkingStrip.vue'
 import AgentWorkingScrim from './components/AgentWorkingScrim.vue'
 import { CHAT, LEFT, TIMELINE, resolveEditorLayout } from './layout'
+import { useFileDrop } from './composables/useFileDrop'
 
 const route = useRoute()
 const router = useRouter()
@@ -100,6 +109,15 @@ const agentStore = useAgentStore()
 const keyframeLanes = useKeyframeLanesStore()
 
 const notFound = ref(false)
+
+// Dropped files and folders join the project's media; the Media tab opens so
+// the progress and the closing report are in view.
+const fileDrop = useFileDrop((paths) => {
+	leftOpen.value = true
+	leftTab.value = 'media'
+	setLeftMode('library')
+	void editorStore.importPaths(paths)
+}, () => !editorStore.loading && !notFound.value && !editorStore.agentHolds)
 const showExport = ref(false)
 // An agent that begins a round takes the project: an open Export dialog closes.
 watch(() => editorStore.agentHolds, (held) => { if (held) showExport.value = false })

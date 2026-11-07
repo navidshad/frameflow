@@ -24,6 +24,8 @@ import { dependencyManager } from './dependencies/manager'
 import { checkYtDlpFreshness } from './dependencies/ytdlp-updater'
 import * as editorAssets from './editor/assets'
 import { importMediaFromFile, importMediaFromUrl } from './editor/importMedia'
+import { expandMediaPaths } from './editor/expandMedia'
+import { dialogExtensions } from '@shared/mediaFiles'
 import { getAudioAnalysis } from './editor/audioAnalysis'
 import { ensureSoundAsset, previewSound } from './editor/synth'
 import { isSoundKind } from '../shared/synth'
@@ -31,7 +33,6 @@ import { estimateUsd, generateForProject, providerStatuses, voicesFor } from './
 import { normalizeAudioSettings, isProviderId, type GenerateRequest } from '../shared/audioProviders'
 import * as editorPreprocess from './editor/preprocess'
 import * as editorHistory from './editor/history'
-import * as editorPrompt from './editor/prompt'
 import * as editorPreview from './editor/preview'
 import * as editorRender from './editor/render'
 import { prerenderMotion } from './editor/motionPrerender'
@@ -46,7 +47,7 @@ import { electronApp, optimizer, is } from '@electron-toolkit/utils'
 import { registerMediaProtocol } from './media-protocol'
 import { initAgentAccess } from './mcp'
 import { agentHolding } from './mcp/roundStore'
-import { isCliEngine, type CliEngineId } from '@shared/engines'
+import type { EngineId } from '@shared/engines'
 import { checkProjectsFolder, nestProjectsFolder, suggestProjectsFolder } from './setup/folder'
 import { testGeminiKey } from './setup/geminiKey'
 import { buildChecks } from '../shared/setup'
@@ -54,7 +55,7 @@ import { normalizeEngineSettings } from '@shared/engines'
 import { execFile } from 'child_process'
 import { getFFmpegBinaryPath } from './ffmpeg'
 import { initMotionIpc } from './motion/ipc'
-import { abortEngineTurn, cliEngineSelected, initEngines, resetEngineConversation, runCliEditorPrompt } from './engine'
+import { abortEngineTurn, initEngines, resetEngineConversation, runEnginePrompt } from './engine'
 
 const activePipelines = new Map<string, Pipeline>()
 
@@ -530,12 +531,43 @@ app.whenReady().then(() => {
 	})
 
 	// Import a local file as a MediaAsset and start per-asset preprocessing.
-	ipcMain.handle('add-media-asset', async (_event, { threadId, filePath, name }: {
-		threadId: string, filePath: string, name?: string
+	ipcMain.handle('add-media-asset', async (_event, { threadId, filePath, name, discardUnreadable }: {
+		threadId: string, filePath: string, name?: string, discardUnreadable?: boolean
 	}) => {
 		// Reference the user's own file where it lives; move a file the app just
 		// downloaded (see importMediaFromFile).
-		return await importMediaFromFile(threadId, filePath, name)
+		return await importMediaFromFile(threadId, filePath, name, { discardUnreadable })
+	})
+
+	// The "add media" picker: several files at once, and folders. macOS can
+	// choose files and folders in one panel; Windows and Linux cannot, so they
+	// get a files panel and a separate folder panel. Returns what was chosen as
+	// it is; `expand-media-paths` turns it into the files to import.
+	ipcMain.handle('pick-media', async (_event, { folders }: { folders?: boolean } = {}) => {
+		const media = dialogExtensions()
+		const properties: Electron.OpenDialogOptions['properties'] = folders
+			? ['openDirectory', 'multiSelections']
+			: process.platform === 'darwin' ? ['openFile', 'openDirectory', 'multiSelections'] : ['openFile', 'multiSelections']
+		const result = await dialog.showOpenDialog({
+			defaultPath: lastBrowsedDir,
+			title: folders ? 'Add a folder of media' : 'Add media',
+			properties,
+			// A filter greys out the files it does not match; folders stay choosable.
+			...(folders ? {} : { filters: [
+				{ name: 'Media', extensions: media },
+				{ name: 'Videos', extensions: dialogExtensions('video') },
+				{ name: 'Audio', extensions: dialogExtensions('audio') }
+			] })
+		})
+		if (result.canceled || result.filePaths.length === 0) return []
+		rememberBrowsedDir(result.filePaths[0])
+		return result.filePaths
+	})
+
+	// What a selection (files, folders, a drop) comes to: the media files in it,
+	// in import order, and what was left out.
+	ipcMain.handle('expand-media-paths', async (_event, { paths }: { paths: string[] }) => {
+		return await expandMediaPaths(Array.isArray(paths) ? paths.filter((p) => typeof p === 'string' && p) : [])
 	})
 
 	// Import from URL/YouTube: download straight into the asset's source dir,
@@ -712,23 +744,23 @@ app.whenReady().then(() => {
 		}
 	})
 
-	// AI prompt turns (M3): one structured call per turn, streamed via
-	// editor-turn-update; the base doc is never mutated until user accept.
+	// AI prompt turns: the selected engine runs an agent loop over FrameFlow's own
+	// MCP tools (a CLI spawned for the turn, or the loop inside FrameFlow), streamed
+	// via editor-turn-update. Its edits are revisions already.
 	ipcMain.handle('run-editor-prompt', (_event, options: {
 		threadId: string, prompt: string, baseStepId: string,
-		selectedItemIds: string[], playheadSec: number, widen?: 'chapter' | 'full', engine?: CliEngineId
+		selectedItemIds: string[], playheadSec: number, widen?: 'chapter' | 'full', engine?: EngineId
 	}) => {
 		// One agent per project: an outside agent's open round holds it.
 		const holder = agentHolding(options.threadId)
 		if (holder) throw new Error(holder)
-		// The engine picked in Settings or the chat's engine chip: a CLI runs
-		// agentically through FrameFlow's MCP tools, Gemini API as before.
-		// Retry names its engine, so a switch since the failure does not move it.
-		return isCliEngine(options.engine) || cliEngineSelected() ? runCliEditorPrompt(options) : editorPrompt.runEditorPrompt(options)
+		// The engine picked in Settings or the chat's engine chip. Retry names its
+		// engine, so a switch since the failure does not move it.
+		return runEnginePrompt(options)
 	})
 
 	ipcMain.handle('abort-editor-prompt', (_event, { turnId }: { threadId: string, turnId: string }) => {
-		if (!abortEngineTurn(turnId)) editorPrompt.abortEditorPrompt(turnId)
+		abortEngineTurn(turnId)
 		return true
 	})
 

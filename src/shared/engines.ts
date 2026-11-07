@@ -1,6 +1,7 @@
 import { clock } from './agentFeed'
 import { opKeys } from './agent'
 import { FRAMEFLOW_BASELINE } from './baseline'
+import { WORKING_CHECKLIST } from './turnReview'
 import type { PromptTurn } from './types'
 
 /**
@@ -21,6 +22,16 @@ export type CliEngineId = Exclude<EngineId, 'gemini-api'>
 
 export const ENGINE_IDS: EngineId[] = ['claude-code', 'gemini-api']
 export const CLI_ENGINE_IDS: CliEngineId[] = ['claude-code']
+
+/**
+ * An engine whose loop runs inside FrameFlow: any model with tool calling,
+ * driven over the same MCP tools a CLI gets. Gemini first; OpenRouter models
+ * later plug in as another id with a provider and a model list.
+ */
+export type LoopEngineId = Exclude<EngineId, CliEngineId>
+export const LOOP_ENGINE_IDS: LoopEngineId[] = ['gemini-api']
+export const isLoopEngine = (id: EngineId | string | undefined): id is LoopEngineId =>
+	id === 'gemini-api'
 
 export const isCliEngine = (id: EngineId | string | undefined): id is CliEngineId =>
 	id === 'claude-code'
@@ -45,7 +56,7 @@ export const ENGINES: Record<EngineId, EngineMeta> = {
 	},
 	'gemini-api': {
 		id: 'gemini-api', label: 'Gemini API',
-		blurb: 'One reply per turn. Costs show in the project header.',
+		blurb: 'Edits in many steps through FrameFlow\u2019s own tools, and looks at frames. Costs show in the project header.',
 		footer: 'Gemini API'
 	}
 }
@@ -276,7 +287,7 @@ export function engineFailureNote(id: CliEngineId, output: string): string | nul
 // ===== Retry =====
 
 export interface EngineRetry {
-	engine: CliEngineId
+	engine: EngineId
 	prompt: string
 	selectedItemIds: string[]
 	playheadSec: number
@@ -305,7 +316,7 @@ export function engineRetry(turn: PromptTurn | null | undefined, turns: PromptTu
  * its chat turn, so only chat turns count. `exceptTurnId` leaves out the run
  * that is asking.
  */
-export function latestEngineTurn(turns: PromptTurn[] | undefined, engine: CliEngineId, exceptTurnId?: string): PromptTurn | undefined {
+export function latestEngineTurn(turns: PromptTurn[] | undefined, engine: EngineId, exceptTurnId?: string): PromptTurn | undefined {
 	let latest: PromptTurn | undefined
 	for (const turn of turns || []) {
 		if (turn.id === exceptTurnId || turn.agent?.engineTurnId || turn.engine?.id !== engine) continue
@@ -315,11 +326,11 @@ export function latestEngineTurn(turns: PromptTurn[] | undefined, engine: CliEng
 }
 
 /**
- * The CLI conversation the next run continues: the one the newest chat turn of
- * this engine was part of. That turn decides, so clearing its id (the user's
+ * The conversation the next run continues (a CLI's own, or the one FrameFlow's
+ * loop keeps for a model): the one the newest chat turn of this engine was part of. That turn decides, so clearing its id (the user's
  * "New conversation") starts a fresh one instead of reaching back to an older turn's.
  */
-export function resumableSessionId(turns: PromptTurn[] | undefined, engine: CliEngineId, exceptTurnId?: string): string | undefined {
+export function resumableSessionId(turns: PromptTurn[] | undefined, engine: EngineId, exceptTurnId?: string): string | undefined {
 	return latestEngineTurn(turns, engine, exceptTurnId)?.engine?.sessionId
 }
 
@@ -359,6 +370,22 @@ export interface EngineStep {
 }
 
 export const MCP_SERVER_KEY = 'frameflow'
+
+/** The planning tool the loop adds beside FrameFlow's own; it lives in the loop, not on the MCP server. */
+export const PLAN_TOOL = 'update_plan'
+/** The step the chat shows when FrameFlow hands the agent its review (see shared/turnReview). */
+export const REVIEW_STEP = 'review'
+export type PlanStatus = 'pending' | 'in_progress' | 'completed'
+export interface PlanItem { step: string; status: PlanStatus }
+
+/** "plan · 2/4 · Trim the cold open": where the agent is in its own plan. */
+export function planTitle(args: Record<string, unknown>): string {
+	const items = Array.isArray(args.items) ? (args.items as Partial<PlanItem>[]) : []
+	if (!items.length) return 'plan'
+	const done = items.filter((i) => i.status === 'completed').length
+	const doing = items.find((i) => i.status === 'in_progress') ?? items.find((i) => i.status !== 'completed')
+	return `plan · ${done}/${items.length}${doing?.step ? ` · ${String(doing.step).slice(0, 60)}` : ''}`
+}
 
 /**
  * Each CLI names an MCP tool its own way: Claude Code `mcp__frameflow__get_project`.
@@ -400,6 +427,8 @@ function opSummary(args: Record<string, unknown>): string {
 export function stepTitle(tool: string, args: Record<string, unknown> = {}, foreign = false): string {
 	if (foreign) return `${tool} — not allowed`
 	switch (tool) {
+		case PLAN_TOOL: return planTitle(args)
+		case REVIEW_STEP: return Number(args.round) > 1 ? 'review again · measured, checklist' : 'review · measured, checklist'
 		case 'search_moments': return `search_moments “${String(args.query ?? '').slice(0, 60)}”`
 		case 'get_media': {
 			const from = num(args.fromSec), to = num(args.toSec)
@@ -642,6 +671,12 @@ export function unexpectedTools(tools: string[] | undefined): string[] {
 export interface EnginePromptInput {
 	maxSteps: number
 	engineLabel: string
+	/** The loop gives the model a local planning tool; a CLI has none. */
+	planTool?: boolean
+	/** The model is billed by the token and the loop re-sends the conversation each step. */
+	metered?: boolean
+	/** The loop holds the agent to a review after it edits: say so, with the steps it checks. */
+	checklist?: boolean
 }
 
 /**
@@ -657,6 +692,13 @@ export function buildEngineSystemPrompt(input: EnginePromptInput): string {
 		FRAMEFLOW_BASELINE,
 		'',
 		`You have at most ${input.maxSteps} tool calls for this turn. If the user asked a question rather than for an edit, answer it without editing.`,
+		...(input.metered
+			? ['Every tool call sends this whole conversation to the model again, so read only what the request needs, ask for a range rather than everything, and do not read again what you already have unless you have changed it since. Older results are cleared from the conversation to save space: call the tool again if you need one back.']
+			: []),
+		...(input.checklist ? [WORKING_CHECKLIST] : []),
+		...(input.planTool
+			? ['For a request with several parts, write the steps down with update_plan first and keep it current as you go: mark a step in_progress when you start it and completed when it is done. It changes nothing in the project and does not count as a tool call.']
+			: []),
 		'When you are done, reply in two or three plain sentences: what you changed and where (with times), or the answer. That reply is shown to the user in the chat. No markdown headings, no lists of tool calls.'
 	].join('\n')
 }

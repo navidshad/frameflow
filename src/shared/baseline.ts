@@ -7,13 +7,12 @@
  * stand here. A persona's opinions biased the agent, and the same agent driven
  * from Claude Desktop, which only ever saw the text below, edited better.)
  *
- * Three readers:
+ * Two readers:
  *   - outside MCP agents get it as the server's `instructions`, plus the round
  *     protocol (outsideAgentInstructions);
- *   - FrameFlow's own CLI engine gets it in its system prompt, plus the rules of
- *     its sandbox (buildEngineSystemPrompt in ./engines);
- *   - the Gemini API path has no tools, so it gets the overview only
- *     (FRAMEFLOW_OVERVIEW), ahead of its own edit contract.
+ *   - FrameFlow's own engines, a CLI or the loop that runs Gemini, get it in
+ *     their system prompt, plus the rules of their sandbox
+ *     (buildEngineSystemPrompt in ./engines). The same tools, the same text.
  */
 
 /** What FrameFlow is and what each thing in a project is. Tool-agnostic. */

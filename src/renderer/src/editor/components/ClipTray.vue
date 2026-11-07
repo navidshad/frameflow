@@ -1,5 +1,6 @@
 <template>
-	<div class="border-t border-zinc-200 dark:border-zinc-800 px-3 py-2.5">
+	<!-- Capped (and scrolling) so a short window keeps most of the left column for the media list above -->
+	<div class="border-t border-zinc-200 dark:border-zinc-800 px-3 py-2.5 max-h-[36%] min-h-[5.5rem] overflow-y-auto custom-scrollbar">
 		<div class="flex items-center justify-between mb-2">
 			<span class="text-[10px] font-bold uppercase tracking-widest text-zinc-500">
 				Pieces

@@ -42,6 +42,8 @@ import { sequenceFrame as resolveSequenceFrame } from '@shared/framing'
 import { childrenByParent, collectSubtree, hasBranch, summarizeRevision, withoutProbeStamps } from '@shared/revision-tree'
 import { agentChangeBadges, type AgentApplyOutcome } from '@shared/agentFeed'
 import { toMediaUrl } from '@shared/media-url'
+import { baseName, importInOrder, reportOf, type BatchReport, type BulkImport } from '@shared/importBatch'
+import type { ExpandedMedia } from '@shared/mediaFiles'
 import { roleSpec, type AudioAnalysis, type TrackRole } from '@shared/audio'
 import { applySoundBindings, boundStart, freeSoundTrack, suggestCues, type SoundCue } from '@shared/sound'
 import { recipeKey, soundLead, soundLength, type SoundRecipe } from '@shared/synth'
@@ -229,16 +231,26 @@ export const useEditorStore = defineStore('editor', () => {
 	// Words lane first (audio, transcript), then the picture lane: the two run side by side.
 	const STEP_ORDER = ['audio', 'transcript', 'retranscribe', 'proxy', 'filmstrip', 'scenes', 'thumbnails', 'descriptions']
 
-	const assetTasks = (assetId: string): BackgroundTask[] => {
-		const prefix = `${assetId}:`
-		return Object.entries(backgroundTasks.value)
-			.filter(([id]) => id.startsWith(prefix))
-			.map(([, task]) => task)
-			.sort((a, b) => {
-				const stepOf = (t: BackgroundTask) => STEP_ORDER.indexOf(t.id.split(':')[1] || '')
-				return stepOf(a) - stepOf(b)
-			})
-	}
+	// Every asset row asks for its own tasks on every task update. Scanning the
+	// whole task table per row made a 60-file import quadratic and froze the
+	// panel; grouped once per change, each row's answer is a lookup.
+	const tasksByAsset = computed(() => {
+		const groups = new Map<string, BackgroundTask[]>()
+		for (const [id, task] of Object.entries(backgroundTasks.value)) {
+			const cut = id.indexOf(':')
+			if (cut < 0) continue
+			const assetId = id.slice(0, cut)
+			const list = groups.get(assetId)
+			if (list) list.push(task)
+			else groups.set(assetId, [task])
+		}
+		const stepOf = (t: BackgroundTask) => STEP_ORDER.indexOf(t.id.split(':')[1] || '')
+		for (const list of groups.values()) list.sort((a, b) => stepOf(a) - stepOf(b))
+		return groups
+	})
+
+	const NO_TASKS: BackgroundTask[] = []
+	const assetTasks = (assetId: string): BackgroundTask[] => tasksByAsset.value.get(assetId) ?? NO_TASKS
 
 	const assetProgress = (assetId: string): { step: string; percent: number } | null => {
 		const running = assetTasks(assetId).find((t) => t.state === 'running')
@@ -1482,19 +1494,75 @@ export const useEditorStore = defineStore('editor', () => {
 		seedSequenceFrame(doc.value.media[index === -1 ? doc.value.media.length - 1 : index])
 	}
 
-	const addLocalMedia = async () => {
-		if (!threadId.value) return
-		const result = await api.selectVideo()
-		if (!result?.path) return
-		const asset: MediaAsset | null = await api.addMediaAsset({
-			threadId: threadId.value,
-			filePath: result.path,
-			name: result.name
-		})
-		if (asset) {
-			upsertAsset(asset)
-			selectedAssetId.value = asset.id
+	/**
+	 * Local media: the picker (several files, a folder, both) and a drop all end
+	 * in `importPaths`. It expands folders in main, then imports file by file so
+	 * the Media panel can show how far it is, one bad file is listed instead of
+	 * stopping the rest, and assets land in the order of the list. Batches run
+	 * one at a time: a second drop waits for the first.
+	 */
+	const bulkImport = ref<BulkImport | null>(null)
+	let importQueue: Promise<unknown> = Promise.resolve()
+	let stopRequested = false
+	let dismissTimer: ReturnType<typeof setTimeout> | undefined
+
+	const dismissBulkImport = () => {
+		clearTimeout(dismissTimer)
+		if (bulkImport.value?.phase === 'done') bulkImport.value = null
+	}
+	const stopBulkImport = () => { stopRequested = true }
+
+	const runImport = async (paths: string[]): Promise<BatchReport | null> => {
+		const id = threadId.value
+		if (!id || !paths.length) return null
+		clearTimeout(dismissTimer)
+		stopRequested = false
+		bulkImport.value = { phase: 'scanning', progress: null, report: null }
+		let expanded: ExpandedMedia
+		try {
+			expanded = await api.expandMediaPaths(paths)
+		} catch (error) {
+			console.error('[editorStore] reading the selection failed:', error)
+			expanded = { files: [], skipped: paths.map((path) => ({ path, reason: 'unreadable' as const })), truncated: false }
 		}
+		const several = expanded.files.length > 1
+		let firstId: string | null = null
+		const result = await importInOrder(expanded.files, async (file) => {
+			const asset: MediaAsset | null = await api.addMediaAsset({
+				threadId: id, filePath: file, name: baseName(file), discardUnreadable: several
+			})
+			if (asset) {
+				upsertAsset(asset)
+				firstId ??= asset.id
+			}
+			return asset
+		}, {
+			onProgress: (progress) => { bulkImport.value = { phase: 'importing', progress, report: null } },
+			shouldStop: () => stopRequested
+		})
+		if (firstId) selectedAssetId.value = firstId
+		const report = reportOf(expanded, result)
+		const quiet = expanded.files.length === 1 && !report.failed.length && !report.skipped.length
+		if (quiet) {
+			bulkImport.value = null
+		} else {
+			bulkImport.value = { phase: 'done', progress: null, report }
+			// A clean batch says so and goes; one with something to read stays until dismissed.
+			if (!report.failed.length) dismissTimer = setTimeout(dismissBulkImport, 8000)
+		}
+		return report
+	}
+
+	const importPaths = (paths: string[]): Promise<BatchReport | null> => {
+		const next = importQueue.then(() => runImport(paths))
+		importQueue = next.catch(() => null)
+		return next
+	}
+
+	const addLocalMedia = async (options: { folders?: boolean } = {}) => {
+		if (!threadId.value) return
+		const paths: string[] = await api.pickMedia(options)
+		if (paths?.length) await importPaths(paths)
 	}
 
 	const importUrl = async (url: string, resolution?: string) => {
@@ -4295,6 +4363,10 @@ export const useEditorStore = defineStore('editor', () => {
 		// actions
 		loadProject,
 		addLocalMedia,
+		importPaths,
+		bulkImport,
+		dismissBulkImport,
+		stopBulkImport,
 		importUrl,
 		removeAsset,
 		retryAsset,

@@ -4,15 +4,16 @@ import { app, BrowserWindow, ipcMain } from 'electron'
 import { v4 as uuidv4 } from 'uuid'
 import {
 	buildEngineSystemPrompt, buildEngineUserPrompt, CLI_ENGINE_IDS, ENGINES, isCliEngine, latestEngineTurn, resumableSessionId, shouldRestartFresh,
-	type CliEngineId, type EngineDetection, type EngineSettings
+	type EngineDetection, type EngineId, type EngineSettings
 } from '@shared/engines'
-import type { PromptTurn, PromptTurnEngine } from '@shared/types'
+import type { PromptTurn, PromptTurnEngine, Usage, UsageRecord } from '@shared/types'
 import { settingsManager } from '../settings'
 import { threadManager } from '../threads'
 import { emitTurnUpdate, persistTurn } from '../editor/prompt'
 import { rendererBridge, switchRevisionFor } from '../mcp/rendererBridge'
 import { detectCli, locate, recordRunFailure } from './detect'
-import { enginePermissions, runEngineTurn } from './runner'
+import { enginePermissions, runEngineTurn, type EngineRunResult } from './runner'
+import { runLoopEngineTurn } from './loopEngine'
 import { probeMotionPage } from '../motion/probe'
 import { hasPromptableContent } from '@shared/tracks'
 
@@ -93,13 +94,13 @@ export function abortEngineTurn(turnId: string): boolean {
 }
 
 /**
- * "New conversation": the next run starts a fresh CLI conversation. The newest
+ * "New conversation": the next run starts a fresh conversation, a CLI's or the
+ * loop's own. The newest
  * chat turn decides which one continues, so clearing its id is the whole reset.
  * The project, its revisions and the chat stay as they are.
  */
 export async function resetEngineConversation(threadId: string): Promise<boolean> {
 	const id = settingsManager.getEngineSettings().engine
-	if (!isCliEngine(id)) return false
 	const thread = threadManager.getThread(threadId)
 	const turn = latestEngineTurn(thread?.editor?.turns, id)
 	if (!turn?.engine?.sessionId) return false
@@ -109,11 +110,11 @@ export async function resetEngineConversation(threadId: string): Promise<boolean
 	return true
 }
 
-export function cliEngineSelected(): boolean {
-	return isCliEngine(settingsManager.getEngineSettings().engine)
-}
-
-export function runCliEditorPrompt(options: {
+/**
+ * A chat turn run by the selected engine: a CLI spawned against FrameFlow's MCP
+ * server, or the loop running inside FrameFlow against the same server.
+ */
+export function runEnginePrompt(options: {
 	threadId: string
 	prompt: string
 	baseStepId: string
@@ -121,10 +122,10 @@ export function runCliEditorPrompt(options: {
 	playheadSec: number
 	widen?: 'chapter' | 'full'
 	/** Retry names the engine the failed run used, whatever is selected now. */
-	engine?: CliEngineId
+	engine?: EngineId
 }): { turnId: string } {
 	const settings = settingsManager.getEngineSettings()
-	const id = options.engine ?? settings.engine as CliEngineId
+	const id: EngineId = options.engine ?? settings.engine
 	const label = ENGINES[id].label
 	const turnId = uuidv4()
 	const engine: PromptTurnEngine = {
@@ -151,53 +152,79 @@ export function runCliEditorPrompt(options: {
 			await persistTurn(threadId, turn)
 			emitTurnUpdate({ threadId, turn })
 
-			const located = await locate(id)
-			if (!located) throw new Error(`${label} is not installed, or FrameFlow cannot find it. Pick another engine, or install it and press Detect again in Settings.`)
-
-			// Empty means the CLI's own default: no model flag at all.
-			const model = settings.models[id] || undefined
-			// Same for effort: unset passes no flag.
-			const effort = settings.efforts[id] || undefined
 			let latest: PromptTurn = turn
-			// The project's earlier conversation with this CLI, so a follow-up has its memory.
+			const onSteps = (steps: PromptTurnEngine['steps'], reported?: string) => {
+				latest = { ...latest, engine: { ...engine, steps, model: reported } }
+				emitTurnUpdate({ threadId, turn: latest })
+			}
+			// The monitor and media list follow what the engine looks at.
+			const onActivity = (activity: Parameters<typeof broadcast>[1]) => broadcast('engine-activity', { ...(activity as object), turnId })
+			// The project's earlier conversation with this engine, so a follow-up has its memory.
 			const resumeId = resumableSessionId(thread.editor.turns, id, turnId)
-			const workDir = sessionDir(threadId)
-			const run = (resumeSessionId?: string) => runEngineTurn({
-				engine: id,
-				located,
-				prompt: buildEngineUserPrompt({ ...options, resuming: !!resumeSessionId }),
-				systemPrompt: buildEngineSystemPrompt({ maxSteps: settings.maxSteps, engineLabel: label }),
-				model,
-				effort,
-				workDir,
-				keepSession: true,
-				resumeSessionId,
-				maxSteps: settings.maxSteps,
-				// The user's "Write custom HTML motion layers" switch, read per call.
-				permissions: () => enginePermissions(settingsManager.getAgentAccess().permissions.html),
-				probeMotion: probeMotionPage,
-				bridge: { ...rendererBridge, switchRevision: (revisionId) => switchRevisionFor(revisionId, turnId) },
-				turnId,
-				version: app.getVersion(),
-				signal: controller.signal,
-				onSteps: (steps, reported) => {
-					latest = { ...latest, engine: { ...engine, steps, model: reported } }
-					emitTurnUpdate({ threadId, turn: latest })
-				},
-				// The monitor and media list follow what the engine looks at.
-				onActivity: (activity) => broadcast('engine-activity', { ...activity, turnId })
-			})
-			let result = await run(resumeId)
-			let continued = resumeId
-			// The CLI may no longer hold that conversation: start a new one rather than fail.
-			if (shouldRestartFresh(!!resumeId, result)) {
-				result = await run(undefined)
-				continued = undefined
+			const dir = sessionDir(threadId)
+
+			let result: EngineRunResult
+			let continued: string | undefined
+			let spend: { usage: Usage; records: UsageRecord[] } | undefined
+
+			if (isCliEngine(id)) {
+				const located = await locate(id)
+				if (!located) throw new Error(`${label} is not installed, or FrameFlow cannot find it. Pick another engine, or install it and press Detect again in Settings.`)
+
+				// Empty means the CLI's own default: no model flag at all.
+				const model = settings.models[id] || undefined
+				// Same for effort: unset passes no flag.
+				const effort = settings.efforts[id] || undefined
+				const run = (resumeSessionId?: string) => runEngineTurn({
+					engine: id,
+					located,
+					prompt: buildEngineUserPrompt({ ...options, resuming: !!resumeSessionId }),
+					systemPrompt: buildEngineSystemPrompt({ maxSteps: settings.maxSteps, engineLabel: label }),
+					model,
+					effort,
+					workDir: dir,
+					keepSession: true,
+					resumeSessionId,
+					maxSteps: settings.maxSteps,
+					// The user's "Write custom HTML motion layers" switch, read per call.
+					permissions: () => enginePermissions(settingsManager.getAgentAccess().permissions.html),
+					probeMotion: probeMotionPage,
+					bridge: { ...rendererBridge, switchRevision: (revisionId) => switchRevisionFor(revisionId, turnId) },
+					turnId,
+					version: app.getVersion(),
+					signal: controller.signal,
+					onSteps,
+					onActivity
+				})
+				let cli = await run(resumeId)
+				continued = resumeId
+				// The CLI may no longer hold that conversation: start a new one rather than fail.
+				if (shouldRestartFresh(!!resumeId, cli)) {
+					cli = await run(undefined)
+					continued = undefined
+				}
+				result = cli
+				continued = cli.sessionId ?? continued
+
+				if (cli.note) recordRunFailure(id, cli.note)
+				else if (cli.ok) recordRunFailure(id, null)
+				if (cli.note) void detectAll()
+			} else {
+				const looped = await runLoopEngineTurn({
+					id, turnId, prompt: options.prompt, playheadSec: options.playheadSec, selectedItemIds: options.selectedItemIds,
+					widen: options.widen, maxSteps: settings.maxSteps, resumeId, dir, signal: controller.signal, onSteps, onActivity
+				})
+				result = looped.result
+				continued = looped.sessionId
+				spend = { usage: looped.result.usage, records: looped.records }
 			}
 
-			if (result.note) recordRunFailure(id, result.note)
-			else if (result.ok) recordRunFailure(id, null)
-			if (result.note) void detectAll()
+			// Spend is recorded for every model call, even one that failed or was stopped.
+			if (spend?.records.length) {
+				const records = spend.records.map((r) => ({ ...r, timestamp: Date.now() }))
+				void threadManager.updateThreadWith(threadId, (t) => ({ usageHistory: [...(t.usageHistory || []), ...records] }))
+			}
+			const cost = spend ? spend.records.reduce((sum, r) => sum + r.cost, 0) : undefined
 
 			const commits = result.commits
 			const last = commits[commits.length - 1]
@@ -205,7 +232,7 @@ export function runCliEditorPrompt(options: {
 				...engine,
 				steps: result.steps,
 				model: result.model,
-				sessionId: result.sessionId ?? continued,
+				sessionId: continued,
 				revisionIds: commits.map((c) => c.revisionId),
 				finalRevisionId: result.finalRevisionId,
 				parentRevisionId: commits[0]?.parentRevisionId ?? null,
@@ -221,12 +248,14 @@ export function runCliEditorPrompt(options: {
 			// Edits that landed stay landed: a run stopped half way still shows them.
 			if (!result.ok && !commits.length) {
 				const end = result.cancelled ? 'cancelled' : 'failed'
-				const failed: PromptTurn = { ...turn, status: 'error', error: result.error || `${label} failed`, engine: { ...finalEngine, end } }
+				const failed: PromptTurn = { ...turn, status: 'error', error: result.error || `${label} failed`, engine: { ...finalEngine, end }, usage: spend?.usage, cost }
 				await persistTurn(threadId, failed)
 				emitTurnUpdate({ threadId, turn: failed })
 				return
 			}
-			const notes = result.ok ? undefined : [result.cancelled ? 'Stopped before it finished.' : result.error || `${label} did not finish.`]
+			const loopNotes = (result as { notes?: string[] }).notes ?? []
+			const ended = result.ok ? [] : [result.cancelled ? 'Stopped before it finished.' : result.error || `${label} did not finish.`]
+			const notes = [...ended, ...loopNotes].length ? [...ended, ...loopNotes] : undefined
 			const completed: PromptTurn = {
 				...turn,
 				status: 'completed',
@@ -234,7 +263,9 @@ export function runCliEditorPrompt(options: {
 				revisionId: result.finalRevisionId ?? last?.revisionId,
 				rationale: commits.length ? result.answer || undefined : undefined,
 				answer: commits.length ? undefined : result.answer || `${label} finished without changing anything.`,
-				notes
+				notes,
+				usage: spend?.usage,
+				cost
 			}
 			await persistTurn(threadId, completed)
 			emitTurnUpdate({ threadId, turn: completed })
