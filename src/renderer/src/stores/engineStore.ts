@@ -1,7 +1,7 @@
 import { defineStore } from 'pinia'
 import { computed, ref } from 'vue'
 import {
-	asSetIn, CLI_MODELS, DEFAULT_ENGINE_SETTINGS, ENGINE_IDS, ENGINES, engineChipLabel, geminiTextModels, isCliEngine,
+	CLI_MODELS, DEFAULT_ENGINE_SETTINGS, ENGINE_IDS, ENGINES, engineChipLabel, geminiTextModels, isCliEngine,
 	type GeminiTextModel,
 	type EngineDetection, type EngineId, type EngineSettings, type ModelOption
 } from '@shared/engines'
@@ -49,7 +49,7 @@ export const useEngineStore = defineStore('engine', () => {
 		const id = settings.value.engine
 		if (!isCliEngine(id)) return []
 		const reported = detectionFor(id)?.models || []
-		const options = [{ value: '', label: asSetIn(id) }, ...(reported.length ? reported : CLI_MODELS[id])]
+		const options = [...(reported.length ? reported : CLI_MODELS[id])]
 		const chosen = settings.value.models[id]
 		if (chosen && !options.some((o) => o.value === chosen)) options.push({ value: chosen, label: chosen })
 		return options

@@ -52,6 +52,11 @@ export const ENGINES: Record<EngineId, EngineMeta> = {
 
 // ===== Settings =====
 
+/** What a CLI runs until the user picks otherwise: the model and effort, by value. */
+export const CLI_DEFAULTS: Record<CliEngineId, { model: string; effort: string }> = {
+	'claude-code': { model: 'claude-opus-5-5', effort: 'medium' }
+}
+
 export const STEPS_MIN = 1
 // A real edit is dozens of calls (read, cut, look, fix, motion layers, sound).
 // 20 ran out mid-edit: past the limit the server refuses calls and tells the
@@ -63,32 +68,36 @@ const STEPS_LEGACY_DEFAULT = 20
 
 export interface EngineSettings {
 	engine: EngineId
-	/** Per CLI; empty means "as set in the CLI". */
+	/** Per CLI: the model it runs. Always set; a CLI the user never configured gets CLI_DEFAULTS. */
 	models: Partial<Record<CliEngineId, string>>
-	/** Per CLI: how hard it thinks. Empty means "as set in the CLI" (no effort flag). */
+	/** Per CLI: how hard it thinks. Always set, the same way. */
 	efforts: Partial<Record<CliEngineId, string>>
 	/** Tool calls a CLI engine may make in one turn. */
 	maxSteps: number
 }
 
 /** Today's engine stays the default: nothing changes until the user picks a CLI. */
-export const DEFAULT_ENGINE_SETTINGS: EngineSettings = { engine: 'gemini-api', models: {}, efforts: {}, maxSteps: STEPS_DEFAULT }
+export const DEFAULT_ENGINE_SETTINGS: EngineSettings = {
+	engine: 'gemini-api',
+	models: Object.fromEntries(CLI_ENGINE_IDS.map((id) => [id, CLI_DEFAULTS[id].model])),
+	efforts: Object.fromEntries(CLI_ENGINE_IDS.map((id) => [id, CLI_DEFAULTS[id].effort])),
+	maxSteps: STEPS_DEFAULT
+}
 
 export function normalizeEngineSettings(raw: Partial<EngineSettings> | undefined | null): EngineSettings {
 	const engine = ENGINE_IDS.includes(raw?.engine as EngineId) ? raw!.engine! : DEFAULT_ENGINE_SETTINGS.engine
 	const models: EngineSettings['models'] = {}
 	for (const id of CLI_ENGINE_IDS) {
 		const value = raw?.models?.[id]
-		if (typeof value === 'string' && value.trim()) {
-			const model = value.trim()
-			models[id] = LEGACY_MODEL_ALIASES[id][model.toLowerCase()] ?? model
-		}
+		const model = typeof value === 'string' ? value.trim() : ''
+		// Nothing chosen (or "as set in the CLI", which older versions offered) is the default model.
+		models[id] = model ? LEGACY_MODEL_ALIASES[id][model.toLowerCase()] ?? model : CLI_DEFAULTS[id].model
 	}
 	// An effort the CLI does not know would fail every run, so only listed ones stay.
 	const efforts: EngineSettings['efforts'] = {}
 	for (const id of CLI_ENGINE_IDS) {
-		const value = raw?.efforts?.[id]
-		if (typeof value === 'string' && CLI_EFFORTS[id].some((o) => o.value === value.trim())) efforts[id] = value.trim()
+		const value = typeof raw?.efforts?.[id] === 'string' ? raw!.efforts![id]!.trim() : ''
+		efforts[id] = CLI_EFFORTS[id].some((o) => o.value === value) ? value : CLI_DEFAULTS[id].effort
 	}
 	const steps = Math.round(Number(raw?.maxSteps))
 	const maxSteps = Number.isFinite(steps) && steps !== STEPS_LEGACY_DEFAULT ? Math.min(STEPS_MAX, Math.max(STEPS_MIN, steps)) : STEPS_DEFAULT
@@ -138,9 +147,6 @@ export const CLI_EFFORTS: Record<CliEngineId, ModelOption[]> = {
 
 /** What the composer can pick for an engine; Gemini API has a model only. */
 export const engineEfforts = (id: EngineId): ModelOption[] => (isCliEngine(id) ? CLI_EFFORTS[id] : [])
-
-/** The default option, which passes no model flag: the CLI uses the model it is set to. */
-export const asSetIn = (_id: CliEngineId) => 'Default'
 
 export interface GeminiTextModel { value: string; label: string; inputPerM: number }
 

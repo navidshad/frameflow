@@ -71,7 +71,7 @@
 import { computed, nextTick, onMounted, onUnmounted, ref } from 'vue'
 import { useRouter } from 'vue-router'
 import {
-	asSetIn, CLI_EFFORTS, CLI_ENGINE_IDS, CLI_MODELS, ENGINES, engineRunnable, isCliEngine, STATUS_LABEL,
+	CLI_EFFORTS, CLI_ENGINE_IDS, CLI_MODELS, ENGINES, engineRunnable, isCliEngine, STATUS_LABEL,
 	type CliEngineId, type EngineId
 } from '@shared/engines'
 import { useEngineStore } from '../../stores/engineStore'
@@ -107,13 +107,13 @@ const cliGroup = (id: CliEngineId): Group => {
 	const current = engine.settings.engine
 	const model = engine.settings.models[id] || ''
 	const effort = engine.settings.efforts[id] || ''
-	const models = [{ value: '', label: asSetIn(id) }, ...CLI_MODELS[id]]
+	const models = [...CLI_MODELS[id]]
 	if (model && !models.some((o) => o.value === model)) models.push({ value: model, label: model })
 	const ok = runnable(id)
 	return {
 		id, runnable: ok, note: ok ? 'your plan' : reason(id),
 		items: models.map((o) => ({ ...o, checked: current === id && model === o.value })),
-		efforts: [{ value: '', label: 'Default' }, ...CLI_EFFORTS[id]].map((o) => ({ ...o, checked: current === id && effort === o.value }))
+		efforts: CLI_EFFORTS[id].map((o) => ({ ...o, checked: current === id && effort === o.value }))
 	}
 }
 

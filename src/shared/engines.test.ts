@@ -127,20 +127,23 @@ describe('errors', () => {
 
 describe('settings', () => {
 	it('clamps and fills', () => {
-		expect(normalizeEngineSettings(undefined)).toEqual({ engine: 'gemini-api', models: {}, efforts: {}, maxSteps: STEPS_DEFAULT })
+		expect(normalizeEngineSettings(undefined)).toEqual({
+			engine: 'gemini-api', models: { 'claude-code': 'claude-opus-5-5' }, efforts: { 'claude-code': 'medium' }, maxSteps: STEPS_DEFAULT
+		})
 		expect(normalizeEngineSettings({ engine: 'claude-code', maxSteps: 9000, models: { 'claude-code': ' opus ' } }))
-			.toEqual({ engine: 'claude-code', models: { 'claude-code': 'claude-opus-5-5' }, efforts: {}, maxSteps: STEPS_MAX })
+			.toEqual({ engine: 'claude-code', models: { 'claude-code': 'claude-opus-5-5' }, efforts: { 'claude-code': 'medium' }, maxSteps: STEPS_MAX })
 		// A model id the list does not know is kept as typed.
 		expect(normalizeEngineSettings({ engine: 'claude-code', models: { 'claude-code': 'claude-opus-4-1' } }).models)
 			.toEqual({ 'claude-code': 'claude-opus-4-1' })
-		expect(normalizeEngineSettings({ engine: 'claude-code', models: { 'claude-code': '' } }).models).toEqual({})
+		// Nothing chosen is the default model, never "no model".
+		expect(normalizeEngineSettings({ engine: 'claude-code', models: { 'claude-code': '' } }).models).toEqual({ 'claude-code': 'claude-opus-5-5' })
 		expect(normalizeEngineSettings({ engine: 'nope' as any }).engine).toBe('gemini-api')
 	})
 
-	it('keeps an effort the CLI lists and drops one it does not', () => {
+	it('keeps an effort the CLI lists and replaces one it does not with the default', () => {
 		expect(normalizeEngineSettings({ engine: 'claude-code', efforts: { 'claude-code': ' xhigh ' } }).efforts).toEqual({ 'claude-code': 'xhigh' })
-		expect(normalizeEngineSettings({ engine: 'claude-code', efforts: { 'claude-code': 'ludicrous' } }).efforts).toEqual({})
-		expect(normalizeEngineSettings({ engine: 'claude-code', efforts: { 'claude-code': '' } }).efforts).toEqual({})
+		expect(normalizeEngineSettings({ engine: 'claude-code', efforts: { 'claude-code': 'ludicrous' } }).efforts).toEqual({ 'claude-code': 'medium' })
+		expect(normalizeEngineSettings({ engine: 'claude-code', efforts: { 'claude-code': '' } }).efforts).toEqual({ 'claude-code': 'medium' })
 	})
 
 	it('reads the old default of 20 steps as never changed', () => {
