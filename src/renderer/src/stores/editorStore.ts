@@ -3847,6 +3847,30 @@ export const useEditorStore = defineStore('editor', () => {
 		}
 	}
 
+	// ===== Motion pre-render =====
+	// Drawing the motion layers is the longest part of a full-quality export and
+	// needs nobody waiting, so once the project has been left alone for a while
+	// the main process draws whatever an export would still need. What it draws
+	// is exactly what the export would, so the export skips it.
+	const motionPrerender = ref<{ threadId: string; done: number; total: number; running: boolean } | null>(null)
+	const PRERENDER_IDLE_MS = 20_000
+	let prerenderTimer: ReturnType<typeof setTimeout> | undefined
+	const schedulePrerender = () => {
+		clearTimeout(prerenderTimer)
+		const tid = threadId.value
+		if (!tid || !doc.value || !api.prerenderMotion) return
+		if (!doc.value.timeline.some((i) => i.motion)) return
+		prerenderTimer = setTimeout(() => {
+			if (threadId.value !== tid || !doc.value || isRendering.value) return
+			void api.prerenderMotion({ threadId: tid, doc: JSON.parse(JSON.stringify(doc.value)) })
+		}, PRERENDER_IDLE_MS)
+	}
+	// Every committed edit, undo, redo and revision switch moves the step; opening a project does too.
+	watch(() => [threadId.value, doc.value?.historyRef?.currentStepId], schedulePrerender)
+	api.onMotionPrerenderProgress?.((progress: { threadId: string; done: number; total: number; running: boolean }) => {
+		motionPrerender.value = progress
+	})
+
 	const abortExport = async () => {
 		if (!renderState.value?.renderId) return
 		await api.abortEditorRender({ renderId: renderState.value.renderId })
@@ -4459,6 +4483,7 @@ export const useEditorStore = defineStore('editor', () => {
 		exportWarnings,
 		startExport,
 		abortExport,
-		clearRenderState
+		clearRenderState,
+		motionPrerender
 	}
 })

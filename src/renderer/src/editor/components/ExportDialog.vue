@@ -16,6 +16,8 @@
 				Rendered one after another — two at once finishes later than two in a row.
 			</p>
 
+			<p v-if="motionNote" class="mt-3 text-[10px] text-zinc-500 leading-snug">{{ motionNote }}</p>
+
 			<div v-if="store.exportWarnings.length" class="mt-3 strip strip-warn !block !py-2 space-y-1">
 				<p v-for="warning in store.exportWarnings" :key="warning.id"
 					class="text-[11px] leading-snug text-amber-600 dark:text-amber-400">
@@ -122,6 +124,15 @@ const FORMATS: { value: DeliveryFormat; label: string; description: string }[] =
 ]
 
 const state = computed(() => store.renderState)
+// What the background pre-render has done, so a long first export is not a surprise.
+const motionNote = computed(() => {
+	const p = store.motionPrerender
+	if (!p || p.threadId !== store.threadId || p.total === 0 || quality.value !== 'original') return ''
+	if (p.done >= p.total) return `All ${p.total} motion layers are drawn and ready.`
+	return p.running
+		? `${p.done} of ${p.total} motion layers are drawn so far, in the background. An export started now draws the rest itself, so it takes longer.`
+		: `${p.done} of ${p.total} motion layers are drawn. The export draws the rest.`
+})
 const isCanceled = computed(() => state.value?.error === 'aborted')
 const title = computed(() => {
 	if (!state.value) return 'Export video'

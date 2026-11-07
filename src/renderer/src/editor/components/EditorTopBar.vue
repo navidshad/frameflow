@@ -44,6 +44,17 @@
 			</button>
 		</SlimTooltip>
 
+		<!-- The background pre-render of motion layers, so the long part of an export is
+		     visibly being done before the button is pressed. -->
+		<SlimTooltip v-if="showExport && motionDrawing && !exporting"
+			:text="`Drawing motion layers in the background so Export is faster: ${motionDrawing.done} of ${motionDrawing.total} ready`"
+			placement="bottom">
+			<span class="h-[22px] px-2 rounded-md bg-zinc-100 dark:bg-zinc-800 text-[10px] font-semibold text-zinc-500 dark:text-zinc-400 flex items-center gap-1.5 tabular-nums">
+				<span class="w-2.5 h-2.5 rounded-full border-2 border-primary border-t-transparent animate-spin"></span>
+				Motion {{ motionDrawing.done }}/{{ motionDrawing.total }}
+			</span>
+		</SlimTooltip>
+
 		<button v-if="showExport"
 			class="h-[26px] px-3.5 rounded-md text-xs font-semibold flex items-center gap-1.5 transition active:scale-95"
 			:class="exporting
@@ -61,11 +72,12 @@
 </template>
 
 <script setup lang="ts">
-import { nextTick, ref } from 'vue'
+import { computed, nextTick, ref } from 'vue'
 import { useRouter } from 'vue-router'
 import SlimTooltip from '../../components/SlimTooltip.vue'
 import GlobalRenderPill from '../../components/GlobalRenderPill.vue'
 import { useAgentStore } from '../../stores/agentStore'
+import { useEditorStore } from '../../stores/editorStore'
 import { useTheme } from '../../composables/useTheme'
 
 /**
@@ -85,6 +97,12 @@ const props = defineProps<{
 	/** An MCP agent holding the project: the button says why it is off. */
 	lockedBy?: string | null
 }>()
+const editorStore = useEditorStore()
+/** The pre-render of this project's motion layers, while it is drawing. */
+const motionDrawing = computed(() => {
+	const p = editorStore.motionPrerender
+	return p && p.running && p.threadId === editorStore.threadId ? p : null
+})
 const emit = defineEmits<{
 	(e: 'back'): void
 	(e: 'rename', value: string): void

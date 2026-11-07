@@ -77,8 +77,14 @@ export async function encodeFrames(options: {
 	outputPath: string
 	signal?: AbortSignal
 	onProgress?: (done: number, total: number) => void
+	/**
+	 * Rest this fraction of each frame's time before the next: 1 is half speed.
+	 * Drawing a 4K frame holds the main process for most of its time, so work
+	 * nobody is waiting on lets the rest of the app breathe between frames.
+	 */
+	idleRatio?: number
 }): Promise<void> {
-	const { frame, count, next, outputPath, signal, onProgress } = options
+	const { frame, count, next, outputPath, signal, onProgress, idleRatio = 0 } = options
 	const expected = frame.width * frame.height * 4
 	const partial = outputPath.replace(/\.mov$/, PARTIAL_SUFFIX)
 	const child = spawn(getFFmpegBinaryPath(), ffmpegArgs(frame, partial), { stdio: ['pipe', 'ignore', 'pipe'] })
@@ -101,6 +107,7 @@ export async function encodeFrames(options: {
 		pending = count > 0 ? next(0) : null
 		for (let k = 0; k < count; k++) {
 			if (signal?.aborted) throw new Error('aborted')
+			const frameStart = Date.now()
 			const buffer = await pending!
 			pending = k + 1 < count ? next(k + 1) : null
 			if (buffer.length !== expected) {
@@ -115,6 +122,7 @@ export async function encodeFrames(options: {
 				})
 			}
 			onProgress?.(k + 1, count)
+			if (idleRatio > 0) await new Promise((r) => setTimeout(r, (Date.now() - frameStart) * idleRatio))
 		}
 		child.stdin.end()
 		const code = await exited

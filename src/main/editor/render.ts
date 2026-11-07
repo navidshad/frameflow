@@ -715,6 +715,23 @@ function emitRenderProgress(payload: EditorRenderProgress) {
 	})
 }
 
+/**
+ * The plan an export of `doc` renders from. ONE place builds it, because the
+ * background motion pre-render must name exactly the clips the export will ask
+ * for: a clip is found by a hash of its size, rate and content, so a plan built
+ * even slightly differently would draw files nothing ever reads.
+ */
+export function planForRender(doc: EditorDocument, quality: ExportQuality, tempDir: string): RegionPlan {
+	return computeRegions(doc, quality, transcriptsForDoc(doc), {
+		motionDir: motionCacheDir(tempDir),
+		frameGrid: true,
+		proxyFrame: quality === 'preview'
+	})
+}
+
+/** Whether any export is running: the background pre-render stands aside for it. */
+export const hasActiveRender = (): boolean => activeRenders.size > 0
+
 export function abortEditorRender(renderId: string): void {
 	activeRenders.get(renderId)?.controller.abort()
 }
@@ -755,11 +772,7 @@ export function startEditorRender(options: {
 	// immediately instead of producing a ghost render) ----
 	// The transcript sharpens ducking from whole-clip to phrase-level; reading it
 	// here costs one file per asset and nothing when no bed exists.
-	const plan = computeRegions(doc, quality, transcriptsForDoc(doc), {
-		motionDir: motionCacheDir(thread.tempDir),
-		frameGrid: true,
-		proxyFrame: quality === 'preview'
-	})
+	const plan = planForRender(doc, quality, thread.tempDir)
 	// `allSlices` is exhaustive over region kinds, so a slice can never escape this
 	// check by living in a field the pre-flight forgot — which would turn a clean
 	// synchronous rejection into a failure halfway through a long render. Motion

@@ -27,7 +27,7 @@ export interface MotionJob {
 /** Render one clip to `outputPath`. Exported for the Electron-run test. */
 export async function renderMotionClip(
 	job: MotionJob,
-	options: { signal?: AbortSignal; onProgress?: (done: number, total: number) => void } = {}
+	options: { signal?: AbortSignal; onProgress?: (done: number, total: number) => void; idleRatio?: number } = {}
 ): Promise<void> {
 	const { item, frame, outputPath } = job
 	const plan = motionFramePlan(item, frame.fps)
@@ -40,7 +40,8 @@ export async function renderMotionClip(
 			next: (k) => capture.frame(plan[k]),
 			outputPath,
 			signal: options.signal,
-			onProgress: options.onProgress
+			onProgress: options.onProgress,
+			idleRatio: options.idleRatio
 		})
 	} finally {
 		capture.close()
@@ -106,7 +107,7 @@ function sweepStills(dir: string): void {
 /** Render the clip unless an identical one is already on disk. */
 export async function ensureMotionClip(
 	job: MotionJob,
-	options: { signal?: AbortSignal; onProgress?: (done: number, total: number) => void } = {}
+	options: { signal?: AbortSignal; onProgress?: (done: number, total: number) => void; idleRatio?: number } = {}
 ): Promise<string> {
 	if (fs.existsSync(job.outputPath)) return job.outputPath
 	const running = inFlight.get(job.outputPath)
