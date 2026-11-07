@@ -108,7 +108,7 @@ describe('AgentServer over Streamable HTTP', () => {
 			'begin_round', 'end_round', 'list_projects', 'create_project', 'open_project', 'import_media', 'wait',
 			'get_project', 'get_timeline', 'get_media', 'inspect_media', 'find_silences', 'search_moments', 'render_frame', 'render_frames',
 			'get_motion_guide', 'get_motion_kit',
-			'get_sound_guide', 'list_sounds', 'suggest_cues', 'render_sound', 'analyze_audio', 'generate_audio',
+			'get_sound_guide', 'list_sounds', 'suggest_cues', 'render_sound', 'analyze_audio', 'inspect_audio', 'generate_audio',
 			'apply_ops', 'revert_to_version', 'export', 'inspect_export',
 			'find_camera_groups', 'make_multicam', 'get_multicam', 'get_angles', 'find_speakers', 'get_speakers'
 		])
@@ -506,6 +506,67 @@ describe('AgentServer over Streamable HTTP', () => {
 		expect(report.roles.map((r: any) => r.role).sort()).toEqual(['music', 'voice'])
 		expect(report.warnings.join(' ')).toMatch(/Music sits only/)
 		expect(report.caveats.length).toBeGreaterThan(0)
+	})
+
+	describe('inspect_audio', () => {
+		const call = async (args: Record<string, unknown>) => {
+			const client = await connect()
+			return await client.callTool({ name: 'inspect_audio', arguments: args }) as any
+		}
+
+		it('returns the numbers and the spectrogram for an asset, by id or file name', async () => {
+			const result = await call({ asset: 'team' })
+			expect(result.isError).toBeFalsy()
+			expect(result.content.some((c: any) => c.type === 'image' && c.mimeType === 'image/png')).toBe(true)
+			const report = text(result)
+			expect(report.source).toBe('greeting_team.mp4')
+			expect(report.range).toMatchObject({ fromSec: 0, toSec: 30, ofSec: 30 })
+			expect(report.loudness).toEqual({ lufs: -16, lra: 4, truePeakDb: -2 })
+			expect(report.tempo.bpm).toBe(120)
+			expect(report.sections).toHaveLength(1)
+			expect(report.hints[0]).toMatch(/steady pulse/)
+			// The picture's own time labels start at 0: the answer says how to read source time.
+			expect(report.picture).toMatch(/add 0/)
+			expect(editor.inspections).toEqual([{ assetId: 'team', fromSec: undefined, toSec: undefined }])
+
+			await call({ asset: 'greeting_team.mp4' })
+			expect(editor.inspections.at(-1)?.assetId).toBe('team')
+		})
+
+		it('reads a clip as the part of its source it plays, and lets fromSec/toSec narrow that', async () => {
+			editor.doc.timeline[0] = { ...editor.doc.timeline[0], in: 5, out: 25 }
+			const whole = text(await call({ item: 'i1' }))
+			expect(editor.inspections.at(-1)).toEqual({ assetId: 'team', fromSec: 5, toSec: 25 })
+			expect(whole.range).toMatchObject({ fromSec: 5, toSec: 25, fromClip: 'i1' })
+			expect(whole.picture).toMatch(/add 5/)
+
+			await call({ item: 'i1', fromSec: 10, toSec: 12 })
+			expect(editor.inspections.at(-1)).toEqual({ assetId: 'team', fromSec: 10, toSec: 12 })
+		})
+
+		it('says what is wrong instead of guessing', async () => {
+			expect((await call({})).isError).toBe(true)
+			const missing = await call({ asset: 'nope' })
+			expect(missing.isError).toBe(true)
+			expect(missing.content[0].text).toMatch(/No media/)
+			expect((await call({ item: 'nope' })).isError).toBe(true)
+			const backwards = await call({ asset: 'team', fromSec: 9, toSec: 3 })
+			expect(backwards.isError).toBe(true)
+			expect(backwards.content[0].text).toMatch(/after fromSec/)
+			expect(editor.inspections).toEqual([])
+		})
+
+		it('refuses a picture and a video with no audio track', async () => {
+			editor.doc.media.push({ id: 'pic', kind: 'image', name: 'logo.png', originalPath: '/tmp/logo.png', preprocessing: {}, clips: [], createdAt: 0, metadata: {} as any })
+			editor.doc.media.push({ id: 'mute', kind: 'video', name: 'mute.mp4', originalPath: '/tmp/mute.mp4', preprocessing: {}, clips: [], createdAt: 0, metadata: { duration: 5, hasAudio: false } as any })
+			const picture = await call({ asset: 'pic' })
+			expect(picture.isError).toBe(true)
+			expect(picture.content[0].text).toMatch(/no sound/)
+			const mute = await call({ asset: 'mute' })
+			expect(mute.isError).toBe(true)
+			expect(mute.content[0].text).toMatch(/no audio track/)
+			expect(editor.inspections).toEqual([])
+		})
 	})
 
 	it('gates making sounds on its own permission, and says where to turn it on', async () => {

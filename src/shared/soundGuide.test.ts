@@ -17,7 +17,7 @@ describe('the sound guide', () => {
 	})
 
 	it('names the tools an agent should use, in order', () => {
-		for (const tool of ['suggest_cues', 'apply_ops', 'addSounds', 'follow', 'render_sound', 'analyze_audio', 'revert_to_version']) {
+		for (const tool of ['suggest_cues', 'apply_ops', 'addSounds', 'follow', 'render_sound', 'analyze_audio', 'inspect_audio', 'revert_to_version']) {
 			expect(text, tool).toContain(tool)
 		}
 		expect(text.indexOf('suggest_cues')).toBeLessThan(text.indexOf('apply_ops with addSounds'))

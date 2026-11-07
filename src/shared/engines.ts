@@ -284,7 +284,7 @@ export function normalizeToolName(name: string, server?: string | null): { tool:
 
 const FRAMEFLOW_TOOLS = new Set([
 	'get_project', 'get_timeline', 'get_media', 'search_moments', 'render_frame', 'get_motion_guide', 'get_motion_kit', 'apply_ops',
-	'get_sound_guide', 'list_sounds', 'suggest_cues', 'render_sound', 'analyze_audio',
+	'get_sound_guide', 'list_sounds', 'suggest_cues', 'render_sound', 'analyze_audio', 'inspect_audio',
 	'revert_to_version', 'export'
 ])
 
@@ -564,7 +564,7 @@ export function buildEngineSystemPrompt(input: EnginePromptInput): string {
 		'- Edit with apply_ops. Each call is one revision the user can undo, so prefer a few focused calls. Always give a short rationale.',
 		'- Look at your result with render_frame before you finish, and fix it (or revert_to_version) if it is wrong.',
 		'- Before you write a custom HTML motion page (apply_ops with html), call get_motion_guide and follow it.',
-		'- For sound effects or a music bed, call get_sound_guide first. You cannot hear: use suggest_cues, apply_ops addSounds (with follow), render_sound and analyze_audio, and work by their numbers. Spoken words or a sound the palette cannot make: generate_audio (costs money, capped; only if list_sounds says it is allowed), then apply_ops placeAudio.',
+		'- For sound effects or a music bed, call get_sound_guide first. You cannot hear: use suggest_cues, apply_ops addSounds (with follow), render_sound and analyze_audio, and work by their numbers; inspect_audio shows you any music or recording (spectrogram, tempo, sections), so use it before you cut to or over a song. Spoken words or a sound the palette cannot make: generate_audio (costs money, capped; only if list_sounds says it is allowed), then apply_ops placeAudio.',
 		'- Timeline times (timelineStart, atSec, removeRanges) are TIMELINE seconds; in/out are SOURCE seconds.',
 		'- Never call export: the user exports.',
 		`- You have at most ${input.maxSteps} tool calls for this turn.`,
