@@ -53,7 +53,7 @@ import { normalizeEngineSettings } from '@shared/engines'
 import { execFile } from 'child_process'
 import { getFFmpegBinaryPath } from './ffmpeg'
 import { initMotionIpc } from './motion/ipc'
-import { abortEngineTurn, cliEngineSelected, initEngines, runCliEditorPrompt } from './engine'
+import { abortEngineTurn, cliEngineSelected, initEngines, resetEngineConversation, runCliEditorPrompt } from './engine'
 
 const activePipelines = new Map<string, Pipeline>()
 
@@ -730,6 +730,8 @@ app.whenReady().then(() => {
 		if (!abortEngineTurn(turnId)) editorPrompt.abortEditorPrompt(turnId)
 		return true
 	})
+
+	ipcMain.handle('reset-engine-conversation', (_event, { threadId }: { threadId: string }) => resetEngineConversation(threadId))
 
 	// Renderer stamps the applied history step / revision back onto the turn.
 	ipcMain.handle('update-editor-turn', async (_event, { threadId, turnId, patch }: {

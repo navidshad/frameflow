@@ -3747,6 +3747,12 @@ export const useEditorStore = defineStore('editor', () => {
 		await api.abortEditorPrompt({ threadId: threadId.value, turnId: activeTurnId.value })
 	}
 
+	/** The CLI agent forgets the chat so far: its next message starts a new conversation. */
+	const resetEngineConversation = async () => {
+		if (!threadId.value) return
+		await api.resetEngineConversation({ threadId: threadId.value })
+	}
+
 	/**
 	 * Validates a proposal diff against the CURRENT doc by dry-running it on a
 	 * copy; returns the applied copy + human-readable pruned-op notes.
@@ -4421,6 +4427,7 @@ export const useEditorStore = defineStore('editor', () => {
 		retryFor,
 		retryTurn,
 		abortPrompt,
+		resetEngineConversation,
 		dismissAnswer,
 		// revisions
 		revisions,

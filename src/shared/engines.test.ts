@@ -3,7 +3,7 @@ import { readFileSync } from 'node:fs'
 import { resolve } from 'node:path'
 import {
 	agentFocus, buildCommand, CLI_EFFORTS, engineEfforts, STEPS_DEFAULT, STEPS_MAX, buildEngineSystemPrompt, buildEngineUserPrompt, displayPath, editTime,
-	engineChipLabel, engineFailureNote, geminiTextModels, engineRetry, resumableSessionId, shouldRestartFresh, isFrameflowTool, lineSplitter, normalizeEngineSettings, normalizeToolName, parseClaudeAuth,
+	engineChipLabel, engineFailureNote, geminiTextModels, engineRetry, latestEngineTurn, resumableSessionId, shouldRestartFresh, isFrameflowTool, lineSplitter, normalizeEngineSettings, normalizeToolName, parseClaudeAuth,
 	parseStreamLine, parseVersion, readableError, StepTracker, stepTitle, TOKEN_ENV, unexpectedTools, type CliEngineId
 } from './engines'
 import { FRAMEFLOW_BASELINE } from './baseline'
@@ -317,15 +317,25 @@ describe('reusing the CLI conversation', () => {
 		expect(a).not.toContain('--no-session-persistence')
 	})
 
-	it('continues the newest chat turn that reported a conversation', () => {
+	it('continues the conversation the newest chat turn was part of', () => {
 		const turns = [
-			chat('old', 1, 'first'), chat('new', 5, 'second'), chat('none', 9, undefined),
+			chat('old', 1, 'first'), chat('new', 5, 'second'),
 			// An edit the engine made belongs to its chat turn and is not a conversation of its own.
 			chat('edit', 12, 'edit-session', { agent: { engineTurnId: 'new' } as any })
 		]
 		expect(resumableSessionId(turns, 'claude-code')).toBe('second')
 		expect(resumableSessionId([], 'claude-code')).toBeUndefined()
 		expect(resumableSessionId(undefined, 'claude-code')).toBeUndefined()
+		// The asking run's own turn is not the one before it.
+		expect(resumableSessionId([...turns, chat('now', 20, undefined)], 'claude-code', 'now')).toBe('second')
+	})
+
+	it('"New conversation" clears the newest turn\'s id, and nothing reaches back to an older one', () => {
+		const turns = [chat('old', 1, 'first'), chat('new', 5, undefined)]
+		expect(resumableSessionId(turns, 'claude-code')).toBeUndefined()
+		expect(latestEngineTurn(turns, 'claude-code')?.id).toBe('new')
+		// Another engine's turns are not this engine's conversation.
+		expect(latestEngineTurn([{ ...chat('g', 9, 'x'), engine: undefined } as PromptTurn], 'claude-code')).toBeUndefined()
 	})
 
 	it('tells a continued conversation the project may have changed', () => {

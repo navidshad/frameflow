@@ -301,17 +301,26 @@ export function engineRetry(turn: PromptTurn | null | undefined, turns: PromptTu
 }
 
 /**
- * The CLI conversation the next run continues: the newest chat turn of this
- * engine that reported one. A CLI run's edits are agent turns inside its chat
- * turn, so only chat turns count.
+ * The newest chat turn this engine ran. A CLI run's edits are agent turns inside
+ * its chat turn, so only chat turns count. `exceptTurnId` leaves out the run
+ * that is asking.
  */
-export function resumableSessionId(turns: PromptTurn[] | undefined, engine: CliEngineId): string | undefined {
+export function latestEngineTurn(turns: PromptTurn[] | undefined, engine: CliEngineId, exceptTurnId?: string): PromptTurn | undefined {
 	let latest: PromptTurn | undefined
 	for (const turn of turns || []) {
-		if (turn.agent?.engineTurnId || turn.engine?.id !== engine || !turn.engine.sessionId) continue
+		if (turn.id === exceptTurnId || turn.agent?.engineTurnId || turn.engine?.id !== engine) continue
 		if (!latest || turn.createdAt >= latest.createdAt) latest = turn
 	}
-	return latest?.engine?.sessionId
+	return latest
+}
+
+/**
+ * The CLI conversation the next run continues: the one the newest chat turn of
+ * this engine was part of. That turn decides, so clearing its id (the user's
+ * "New conversation") starts a fresh one instead of reaching back to an older turn's.
+ */
+export function resumableSessionId(turns: PromptTurn[] | undefined, engine: CliEngineId, exceptTurnId?: string): string | undefined {
+	return latestEngineTurn(turns, engine, exceptTurnId)?.engine?.sessionId
 }
 
 /**

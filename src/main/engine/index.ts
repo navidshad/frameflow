@@ -3,7 +3,7 @@ import path from 'node:path'
 import { app, BrowserWindow, ipcMain } from 'electron'
 import { v4 as uuidv4 } from 'uuid'
 import {
-	buildEngineSystemPrompt, buildEngineUserPrompt, CLI_ENGINE_IDS, ENGINES, isCliEngine, resumableSessionId, shouldRestartFresh,
+	buildEngineSystemPrompt, buildEngineUserPrompt, CLI_ENGINE_IDS, ENGINES, isCliEngine, latestEngineTurn, resumableSessionId, shouldRestartFresh,
 	type CliEngineId, type EngineDetection, type EngineSettings
 } from '@shared/engines'
 import type { PromptTurn, PromptTurnEngine } from '@shared/types'
@@ -92,6 +92,23 @@ export function abortEngineTurn(turnId: string): boolean {
 	return true
 }
 
+/**
+ * "New conversation": the next run starts a fresh CLI conversation. The newest
+ * chat turn decides which one continues, so clearing its id is the whole reset.
+ * The project, its revisions and the chat stay as they are.
+ */
+export async function resetEngineConversation(threadId: string): Promise<boolean> {
+	const id = settingsManager.getEngineSettings().engine
+	if (!isCliEngine(id)) return false
+	const thread = threadManager.getThread(threadId)
+	const turn = latestEngineTurn(thread?.editor?.turns, id)
+	if (!turn?.engine?.sessionId) return false
+	const cleared: PromptTurn = { ...turn, engine: { ...turn.engine, sessionId: undefined } }
+	await persistTurn(threadId, cleared)
+	emitTurnUpdate({ threadId, turn: cleared })
+	return true
+}
+
 export function cliEngineSelected(): boolean {
 	return isCliEngine(settingsManager.getEngineSettings().engine)
 }
@@ -143,7 +160,7 @@ export function runCliEditorPrompt(options: {
 			const effort = settings.efforts[id] || undefined
 			let latest: PromptTurn = turn
 			// The project's earlier conversation with this CLI, so a follow-up has its memory.
-			const resumeId = resumableSessionId(thread.editor.turns, id)
+			const resumeId = resumableSessionId(thread.editor.turns, id, turnId)
 			const workDir = sessionDir(threadId)
 			const run = (resumeSessionId?: string) => runEngineTurn({
 				engine: id,

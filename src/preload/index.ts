@@ -134,6 +134,8 @@ const api = {
 		ipcRenderer.invoke('run-editor-prompt', data),
 	abortEditorPrompt: (data: { threadId: string, turnId: string }) =>
 		ipcRenderer.invoke('abort-editor-prompt', data),
+	resetEngineConversation: (data: { threadId: string }) =>
+		ipcRenderer.invoke('reset-engine-conversation', data),
 	updateEditorTurn: (data: { threadId: string, turnId: string, patch: { resultStepId?: string, revisionId?: string } }) =>
 		ipcRenderer.invoke('update-editor-turn', data),
 	onEditorTurnUpdate: (callback: (data: any) => void) => {
