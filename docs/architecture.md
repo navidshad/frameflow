@@ -70,8 +70,9 @@ against a private per-turn MCP server, or Gemini, run by a loop inside FrameFlow
 same server as an MCP client. Both get the same tools, permissions and step budget
 (`src/main/engine/turnSession.ts`), and their edits arrive through `apply_ops`
 (`src/main/editor/ops.ts`, ops mapped to a `TimelineDiff`), so each turn is already
-a branchable revision. The loop keeps a plan, clears old tool results to keep its
-context small, and saves its conversation per project so a follow-up has the
+a branchable revision. The loop keeps a plan, holds the agent to a review after it edits (FrameFlow
+measures the timeline itself and sends back a checklist), clears old tool results
+to keep its context small, and saves its conversation per project so a follow-up has the
 earlier messages; the chat's New conversation button forgets it. Why that library
 and not Deep Agents or an in-house loop: `docs/agent-loop-decision.md`. Output
 length comes from the user's request. There are no editing presets: every agent

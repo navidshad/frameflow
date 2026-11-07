@@ -253,7 +253,9 @@ export function runEnginePrompt(options: {
 				emitTurnUpdate({ threadId, turn: failed })
 				return
 			}
-			const notes = result.ok ? undefined : [result.cancelled ? 'Stopped before it finished.' : result.error || `${label} did not finish.`]
+			const loopNotes = (result as { notes?: string[] }).notes ?? []
+			const ended = result.ok ? [] : [result.cancelled ? 'Stopped before it finished.' : result.error || `${label} did not finish.`]
+			const notes = [...ended, ...loopNotes].length ? [...ended, ...loopNotes] : undefined
 			const completed: PromptTurn = {
 				...turn,
 				status: 'completed',

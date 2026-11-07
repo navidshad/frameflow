@@ -76,8 +76,10 @@ export async function runLoopEngineTurn(args: LoopTurnArgs): Promise<LoopTurnOut
 		prompt: buildEngineUserPrompt({
 			prompt: args.prompt, playheadSec: args.playheadSec, selectedItemIds: args.selectedItemIds, widen: args.widen, resuming: resumed
 		}),
-		systemPrompt: buildEngineSystemPrompt({ maxSteps: args.maxSteps, engineLabel: label, planTool: true, metered: true }),
+		systemPrompt: buildEngineSystemPrompt({ maxSteps: args.maxSteps, engineLabel: label, planTool: true, metered: true, checklist: true }),
 		history,
+		request: args.prompt,
+		reviews: 2,
 		maxSteps: args.maxSteps,
 		bridge: { ...rendererBridge, switchRevision: (revisionId) => switchRevisionFor(revisionId, args.turnId) },
 		turnId: args.turnId,

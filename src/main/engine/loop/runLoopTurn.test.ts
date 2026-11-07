@@ -183,4 +183,62 @@ describe('runLoopTurn', () => {
 		expect(r.steps[0].status).toBe('error')
 		expect(editor.exports).toBe(0)
 	})
+
+	describe('the review after an edit', () => {
+		const cut = calls({ name: 'apply_ops', args: { rationale: 'Cut the pause', removeRanges: [{ fromSec: 10, toSec: 12.4 }] } })
+		const lastPrompt = (model: any, call: number) => {
+			const messages = model.doGenerateCalls[call].prompt as any[]
+			const last = messages[messages.length - 1]
+			return (Array.isArray(last.content) ? last.content.map((p: any) => p.text ?? '').join('') : String(last.content))
+		}
+
+		it('does not take "done" after an edit: it measures, sends the checklist, and the answer comes after', async () => {
+			const model = scripted([cut, says('Cut the pause.'), calls({ name: 'render_frames', args: { times: [9.8, 10.2] } }), says('Removed 2.4 s at 0:10; checked the join.')])
+			const r = await run(model, { reviews: 2, request: 'Tighten it' }).result
+			expect(r.ok).toBe(true)
+			// The model was handed what FrameFlow measured: 30 s to 27.6 s, and the new join at 0:10.
+			const review = lastPrompt(model, 2)
+			expect(review).toMatch(/\[FrameFlow review\]/)
+			expect(review).toContain('0:30.0 before this turn, 0:27.6 now (−2.4 s)')
+			expect(review).toContain('0:10.0')
+			expect(review).toContain('"Tighten it"')
+			expect(review).toContain('You have not looked at a frame since your last edit.')
+			expect(r.answer).toBe('Removed 2.4 s at 0:10; checked the join.')
+			expect(r.steps.map((s) => s.tool)).toEqual(['apply_ops', 'review', 'render_frames'])
+			expect(r.steps[1].title).toBe('review · measured, checklist')
+			expect(r.notes).toBeUndefined()
+			// The review is part of the conversation the next turn resumes from.
+			expect(JSON.stringify(r.messages)).toContain('[FrameFlow review]')
+		})
+
+		it('asks once more when the agent still has not looked, then says so on the card', async () => {
+			const model = scripted([cut, says('Done.')])
+			const r = await run(model, { reviews: 2 }).result
+			expect(r.ok).toBe(true)
+			expect(r.steps.map((s) => s.tool)).toEqual(['apply_ops', 'review', 'review'])
+			expect(r.steps[2].title).toBe('review again · measured, checklist')
+			expect(r.notes).toEqual(['It did not look at a frame after its last edit.'])
+		})
+
+		it('stops after one review when the agent looked and changed nothing more', async () => {
+			const model = scripted([cut, calls({ name: 'render_frame', args: { timeSec: 10 } }), says('Done.'), says('Checked, all good.')])
+			const r = await run(model, { reviews: 2 }).result
+			expect(r.steps.filter((s) => s.tool === 'review')).toHaveLength(1)
+			expect(r.answer).toBe('Checked, all good.')
+		})
+
+		it('is not held for a question, which edits nothing', async () => {
+			const model = scripted([calls({ name: 'get_project' }), says('It is 30 seconds long.')])
+			const r = await run(model, { reviews: 2 }).result
+			expect(r.steps.map((s) => s.tool)).toEqual(['get_project'])
+		})
+
+		it('cannot review with no calls left, and says so', async () => {
+			const model = scripted([cut, says('Done.')])
+			const r = await run(model, { reviews: 2, maxSteps: 1 }).result
+			expect(r.steps.map((s) => s.tool)).toEqual(['apply_ops'])
+			expect(r.notes).toEqual(['No tool calls were left to check the result.', 'It did not look at a frame after its last edit.'])
+		})
+	})
 })
+

@@ -116,11 +116,45 @@ everything; cached prompt tokens are billed at a tenth, as Google publishes; and
 the round tools (`begin_round`, `end_round`) are no longer offered to an engine,
 which had called one and been told it was not for it.
 
-Honest read of the comparison: Gemini is faster and cheaper and made a sensible
+Honest read of the comparison: Gemini was faster and cheaper and made a sensible
 edit, but it did not check its work and over-reported what it removed. Claude
 edited more carefully (it rejoined split motion cards, left pauses under timed
-graphics alone and said why) and verified with frames. Some of that is the model.
-Some may be the shared baseline, which no longer says to look at the result
-before finishing; a weaker model may need that said. That line would change what
-every agent is told, Claude Desktop included, so it is left as a decision for the
-owner rather than added here.
+graphics alone and said why) and verified with frames.
+
+## Closing the gap: the review
+
+Telling a model to check its work is easy to skip. So the loop does not take the
+agent's "done" after an edit as the end of the turn (`shared/turnReview.ts`,
+`runLoopTurn`):
+
+1. **A working checklist in the loop's prompt**: read, plan with the last step
+   "Check the result", edit, look at frames on both sides of each change, fix,
+   answer with measured numbers. Loop engines only; the shared baseline and so
+   Claude Desktop are unchanged.
+2. **A review FrameFlow measures itself.** When the agent stops after editing,
+   the loop compares the timeline before and after the turn and sends back what
+   it found: the real change in length, the new joins (the places to look), motion
+   layers a cut left in pieces, slivers of footage too short to see, and whether
+   it has looked at a frame since its last edit. Then the checklist again, with
+   the user's request quoted, and the instruction to answer with those numbers.
+   A second review follows only if it edited again or still had not looked.
+3. **The card says what was skipped**: a turn that never looked at a frame after
+   its last edit, or ran out of calls before the review, says so beside the answer.
+
+Two runs of the same request with the review, Gemini 3 Flash Preview:
+
+| | Review run 1 | Review run 2 | Before the review | Claude Code |
+| --- | --- | --- | --- | --- |
+| Time | 353 s | 395 s | 83 s | 322 s |
+| Model calls | 17 | 18 | 11 | not reported |
+| Cost | $0.28 | $0.26 | $0.15 | your plan |
+| Planned | yes | yes | yes | no |
+| Looked at frames | 4 renders | 4 renders | none | 3 renders |
+| Rejoined motion layers split by its cuts | yes, 7 | yes | no | yes |
+| Said vs measured | 13.0 s, 8:02.1; measured 8:02.1 | 8.4 s, 8:06.7; measured 8:06.7 | 15.8 s; measured 8.5 s | 3.4 s; measured 3.4 s |
+
+The review costs about 1.8 times the tokens and as long as Claude takes, and in
+return the agent looks at its work, fixes what its cuts broke, and reports what
+is true. It still cuts harder than Claude did (8 to 13 s against 3.4 s, where
+Claude left pauses under timed graphics alone on purpose); whether a cut runs
+through a word cannot be judged from pictures, and was not checked here.

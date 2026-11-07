@@ -1,6 +1,7 @@
 import { createMCPClient } from '@ai-sdk/mcp'
 import { isStepCount, ToolLoopAgent, type LanguageModel, type ModelMessage } from 'ai'
-import { ENGINES, MCP_SERVER_KEY, PLAN_TOOL, StepTracker, type EngineId, type EngineStep } from '@shared/engines'
+import { ENGINES, MCP_SERVER_KEY, PLAN_TOOL, REVIEW_STEP, StepTracker, type EngineId, type EngineStep } from '@shared/engines'
+import { reviewFacts, reviewMessage } from '@shared/turnReview'
 import type { AgentActivity } from '@shared/agentFeed'
 import type { AgentPermissions } from '@shared/agent'
 import type { Usage } from '@shared/types'
@@ -53,13 +54,27 @@ export interface LoopRunOptions {
 	onUsage?: (usage: Usage) => void
 	/** Whole-run cap. Default 20 minutes. */
 	timeoutMs?: number
+	/** The user's own words, which the review quotes back. Default: the prompt. */
+	request?: string
+	/**
+	 * Reviews FrameFlow holds the agent to after it edits (see shared/turnReview):
+	 * the first always, a further one only when the work changed after the last or
+	 * it still had not looked at a frame. 0 turns the review off.
+	 */
+	reviews?: number
 }
 
 export interface LoopRunResult extends EngineRunResult {
 	/** The whole conversation after this turn, to save for the next. Unchanged when the turn did not finish. */
 	messages: ModelMessage[]
 	usage: Usage
+	/** What the turn card should say beside the answer: a check the agent skipped. */
+	notes?: string[]
 }
+
+/** The tools that change the timeline, and the ones that look at it. */
+const EDIT_TOOLS = new Set(['apply_ops', 'revert_to_version'])
+const LOOK_TOOLS = new Set(['render_frame', 'render_frames'])
 
 const NO_USAGE: Usage = { promptTokens: 0, candidatesTokens: 0, thinkingTokens: 0, totalTokens: 0 }
 
@@ -103,6 +118,10 @@ export async function runLoopTurn(options: LoopRunOptions): Promise<LoopRunResul
 	let finished = false
 	// FrameFlow's own tool calls so far. The plan is the agent's, not the budget's.
 	let calls = 0
+	// Order of the last edit and the last look, to tell whether the agent saw what it did.
+	let order = 0, lastEdit = 0, lastLook = 0
+	const lookedSinceEdit = () => lastLook > lastEdit
+	const notes: string[] = []
 	let mcp: Awaited<ReturnType<typeof createMCPClient>> | null = null
 
 	try {
@@ -128,6 +147,9 @@ export async function runLoopTurn(options: LoopRunOptions): Promise<LoopRunResul
 				},
 				onToolExecutionStart: ({ toolCall }) => {
 					if (toolCall.toolName !== PLAN_TOOL) calls++
+					order++
+					if (EDIT_TOOLS.has(toolCall.toolName)) lastEdit = order
+					if (LOOK_TOOLS.has(toolCall.toolName)) lastLook = order
 					tracker.apply({
 						type: 'tool-start', callId: toolCall.toolCallId, tool: toolCall.toolName, server: MCP_SERVER_KEY,
 						args: (toolCall.input ?? {}) as Record<string, unknown>
@@ -149,10 +171,53 @@ export async function runLoopTurn(options: LoopRunOptions): Promise<LoopRunResul
 					if (step.text) tracker.apply({ type: 'text', text: step.text })
 				}
 			})
-			const result = await agent.generate({ messages: [...options.history, userMessage], abortSignal: abort.signal })
+			// What the timeline was, for the review to measure against.
+			const before = (options.reviews ?? 0) > 0 ? (await options.bridge.getLiveProject().catch(() => null))?.doc : undefined
+
+			let result = await agent.generate({ messages: [...options.history, userMessage], abortSignal: abort.signal })
 			// Every step's messages, not only the last: this is what the next turn resumes from.
 			produced = result.responseMessages as ModelMessage[]
-			tracker.apply({ type: 'done', ok: true, text: result.text })
+			let answer = result.text
+
+			// The review: the agent's "done" after editing is not the end. FrameFlow measures the
+			// timeline, hands back what it found with a checklist, and the agent works through it.
+			let round = 0
+			let editsReviewed = -1
+			while (
+				before && round < (options.reviews ?? 0) && !stopReason && session.commits.length &&
+				(round === 0 || session.commits.length > editsReviewed || !lookedSinceEdit())
+			) {
+				if (calls >= options.maxSteps) {
+					notes.push('No tool calls were left to check the result.')
+					break
+				}
+				const after = (await options.bridge.getLiveProject().catch(() => null))?.doc
+				if (!after) break
+				round++
+				editsReviewed = session.commits.length
+				const review: ModelMessage = {
+					role: 'user',
+					content: reviewMessage({
+						request: options.request ?? options.prompt,
+						facts: reviewFacts(before, after),
+						revisions: session.commits.map((c) => `V${c.revisionSeq}`),
+						lookedSinceEdit: lookedSinceEdit(),
+						round
+					})
+				}
+				const callId = `${REVIEW_STEP}-${round}`
+				tracker.apply({ type: 'tool-start', callId, tool: REVIEW_STEP, server: MCP_SERVER_KEY, args: { round } })
+				tracker.apply({ type: 'tool-end', callId, ok: true })
+				emit()
+				result = await agent.generate({ messages: [...options.history, userMessage, ...produced, review], abortSignal: abort.signal })
+				produced = [...produced, review, ...(result.responseMessages as ModelMessage[])]
+				// A review that ends in tool calls alone keeps the answer it had.
+				if (result.text.trim()) answer = result.text
+			}
+			if (session.commits.length && before && (options.reviews ?? 0) > 0 && !lookedSinceEdit()) {
+				notes.push('It did not look at a frame after its last edit.')
+			}
+			tracker.apply({ type: 'done', ok: true, text: answer })
 			finished = true
 		}
 	} catch (error) {
@@ -182,5 +247,8 @@ export async function runLoopTurn(options: LoopRunOptions): Promise<LoopRunResul
 		const f = loopFailure(failure, label, options.modelName)
 		return { ...base, ok: false, cancelled: false, answer: tracker.answer, note: f.note, error: f.error }
 	}
-	return { ...base, ok: true, cancelled: false, answer: tracker.answer, note: null, messages: [...options.history, userMessage, ...produced] }
+	return {
+		...base, ok: true, cancelled: false, answer: tracker.answer, note: null,
+		messages: [...options.history, userMessage, ...produced], notes: notes.length ? notes : undefined
+	}
 }

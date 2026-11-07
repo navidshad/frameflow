@@ -1,6 +1,7 @@
 import { clock } from './agentFeed'
 import { opKeys } from './agent'
 import { FRAMEFLOW_BASELINE } from './baseline'
+import { WORKING_CHECKLIST } from './turnReview'
 import type { PromptTurn } from './types'
 
 /**
@@ -372,6 +373,8 @@ export const MCP_SERVER_KEY = 'frameflow'
 
 /** The planning tool the loop adds beside FrameFlow's own; it lives in the loop, not on the MCP server. */
 export const PLAN_TOOL = 'update_plan'
+/** The step the chat shows when FrameFlow hands the agent its review (see shared/turnReview). */
+export const REVIEW_STEP = 'review'
 export type PlanStatus = 'pending' | 'in_progress' | 'completed'
 export interface PlanItem { step: string; status: PlanStatus }
 
@@ -425,6 +428,7 @@ export function stepTitle(tool: string, args: Record<string, unknown> = {}, fore
 	if (foreign) return `${tool} — not allowed`
 	switch (tool) {
 		case PLAN_TOOL: return planTitle(args)
+		case REVIEW_STEP: return Number(args.round) > 1 ? 'review again · measured, checklist' : 'review · measured, checklist'
 		case 'search_moments': return `search_moments “${String(args.query ?? '').slice(0, 60)}”`
 		case 'get_media': {
 			const from = num(args.fromSec), to = num(args.toSec)
@@ -671,6 +675,8 @@ export interface EnginePromptInput {
 	planTool?: boolean
 	/** The model is billed by the token and the loop re-sends the conversation each step. */
 	metered?: boolean
+	/** The loop holds the agent to a review after it edits: say so, with the steps it checks. */
+	checklist?: boolean
 }
 
 /**
@@ -689,6 +695,7 @@ export function buildEngineSystemPrompt(input: EnginePromptInput): string {
 		...(input.metered
 			? ['Every tool call sends this whole conversation to the model again, so read only what the request needs, ask for a range rather than everything, and do not read again what you already have unless you have changed it since. Older results are cleared from the conversation to save space: call the tool again if you need one back.']
 			: []),
+		...(input.checklist ? [WORKING_CHECKLIST] : []),
 		...(input.planTool
 			? ['For a request with several parts, write the steps down with update_plan first and keep it current as you go: mark a step in_progress when you start it and completed when it is done. It changes nothing in the project and does not count as a tool call.']
 			: []),
