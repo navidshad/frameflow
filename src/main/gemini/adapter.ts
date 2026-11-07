@@ -453,7 +453,7 @@ export class GeminiAdapter {
 
 		const body = {
 			model: modelName,
-			input: [{ type: 'audio', uri: fileUri, mime_type: 'audio/mp3' }],
+			input: [{ type: 'audio', uri: fileUri, mime_type: 'audio/mpeg' }],
 			generation_config: { transcription_config: transcriptionConfig }
 		};
 
