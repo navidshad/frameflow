@@ -79,7 +79,10 @@ export function normalizeEngineSettings(raw: Partial<EngineSettings> | undefined
 	const models: EngineSettings['models'] = {}
 	for (const id of CLI_ENGINE_IDS) {
 		const value = raw?.models?.[id]
-		if (typeof value === 'string' && value.trim()) models[id] = value.trim()
+		if (typeof value === 'string' && value.trim()) {
+			const model = value.trim()
+			models[id] = LEGACY_MODEL_ALIASES[id][model.toLowerCase()] ?? model
+		}
 	}
 	// An effort the CLI does not know would fail every run, so only listed ones stay.
 	const efforts: EngineSettings['efforts'] = {}
@@ -95,17 +98,28 @@ export function normalizeEngineSettings(raw: Partial<EngineSettings> | undefined
 export interface ModelOption { value: string; label: string }
 
 /**
- * Models each CLI accepts by name. Claude Code takes aliases that follow the
- * latest model. A CLI that reports its own catalogue at run time can fill
+ * Models each CLI accepts by name: the newest of each family, by full model id,
+ * so the label says which version runs. Move these up when a new one ships.
+ * A CLI that reports its own catalogue at run time can fill
  * `EngineDetection.models` instead.
  */
 export const CLI_MODELS: Record<CliEngineId, ModelOption[]> = {
 	'claude-code': [
-		{ value: 'fable', label: 'Fable' },
-		{ value: 'opus', label: 'Opus' },
-		{ value: 'sonnet', label: 'Sonnet' },
-		{ value: 'haiku', label: 'Haiku' }
+		{ value: 'claude-fable-5-1', label: 'Fable 5.1' },
+		{ value: 'claude-opus-5-5', label: 'Opus 5.5' },
+		{ value: 'claude-sonnet-5-5', label: 'Sonnet 5.5' },
+		{ value: 'claude-haiku-5-5', label: 'Haiku 5.5' }
 	],
+}
+
+/**
+ * Short aliases an earlier version saved ("opus"), read as the model they meant
+ * then: the newest of that family, which is what an alias follows.
+ */
+const LEGACY_MODEL_ALIASES: Record<CliEngineId, Record<string, string>> = {
+	'claude-code': {
+		fable: 'claude-fable-5-1', opus: 'claude-opus-5-5', sonnet: 'claude-sonnet-5-5', haiku: 'claude-haiku-5-5'
+	}
 }
 
 /**
@@ -125,8 +139,8 @@ export const CLI_EFFORTS: Record<CliEngineId, ModelOption[]> = {
 /** What the composer can pick for an engine; Gemini API has a model only. */
 export const engineEfforts = (id: EngineId): ModelOption[] => (isCliEngine(id) ? CLI_EFFORTS[id] : [])
 
-/** The default option, which passes no model flag: the CLI uses its own setting. */
-export const asSetIn = (id: CliEngineId) => `As set in ${ENGINES[id].label}`
+/** The default option, which passes no model flag: the CLI uses the model it is set to. */
+export const asSetIn = (_id: CliEngineId) => 'Default'
 
 export interface GeminiTextModel { value: string; label: string; inputPerM: number }
 

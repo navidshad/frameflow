@@ -129,7 +129,10 @@ describe('settings', () => {
 	it('clamps and fills', () => {
 		expect(normalizeEngineSettings(undefined)).toEqual({ engine: 'gemini-api', models: {}, efforts: {}, maxSteps: STEPS_DEFAULT })
 		expect(normalizeEngineSettings({ engine: 'claude-code', maxSteps: 9000, models: { 'claude-code': ' opus ' } }))
-			.toEqual({ engine: 'claude-code', models: { 'claude-code': 'opus' }, efforts: {}, maxSteps: STEPS_MAX })
+			.toEqual({ engine: 'claude-code', models: { 'claude-code': 'claude-opus-5-5' }, efforts: {}, maxSteps: STEPS_MAX })
+		// A model id the list does not know is kept as typed.
+		expect(normalizeEngineSettings({ engine: 'claude-code', models: { 'claude-code': 'claude-opus-4-1' } }).models)
+			.toEqual({ 'claude-code': 'claude-opus-4-1' })
 		expect(normalizeEngineSettings({ engine: 'claude-code', models: { 'claude-code': '' } }).models).toEqual({})
 		expect(normalizeEngineSettings({ engine: 'nope' as any }).engine).toBe('gemini-api')
 	})
@@ -257,9 +260,9 @@ describe('engine chip', () => {
 	const base = { engine: 'claude-code' as const, models: {}, efforts: {}, maxSteps: 20 }
 
 	it('names the CLI model, or just the CLI when it uses its own', () => {
-		expect(engineChipLabel({ ...base, models: { 'claude-code': 'opus' } })).toBe('Claude Code · Opus')
+		expect(engineChipLabel({ ...base, models: { 'claude-code': 'claude-opus-5-5' } })).toBe('Claude Code · Opus 5.5')
 		expect(engineChipLabel(base)).toBe('Claude Code')
-		expect(engineChipLabel({ ...base, models: { 'claude-code': 'opus' }, efforts: { 'claude-code': 'xhigh' } })).toBe('Claude Code · Opus · Extra high')
+		expect(engineChipLabel({ ...base, models: { 'claude-code': 'claude-opus-5-5' }, efforts: { 'claude-code': 'xhigh' } })).toBe('Claude Code · Opus 5.5 · Extra high')
 		expect(engineChipLabel({ ...base, efforts: { 'claude-code': 'high' } })).toBe('Claude Code · High')
 		expect(engineChipLabel({ ...base, models: { 'claude-code': 'claude-x-9' } })).toBe('Claude Code · claude-x-9')
 	})
