@@ -37,7 +37,7 @@ function makeDoc(extra: Partial<EditorDocument> = {}): EditorDocument {
 	return {
 		schemaVersion: 1, media: [video], tracks: [track('m1', 'video', 'M1'), track('v1', 'video', 'V1'), track('a1', 'audio', 'A1', 'voice')],
 		timeline: [lowerThird, clip], timelineMeta: { fps: 30, width: 1920, height: 1080, duration: 0 },
-		activePersonaId: 'podcast-editor', turns: [], historyRef: { currentStepId: 's0', stepCount: 0 }, ...extra
+		turns: [], historyRef: { currentStepId: 's0', stepCount: 0 }, ...extra
 	} as EditorDocument
 }
 

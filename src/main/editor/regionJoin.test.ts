@@ -176,7 +176,6 @@ describe('export length with many motion layers — against the real ffmpeg', ()
 				...layers
 			],
 			timelineMeta: { fps: FPS, width: 320, height: 180, duration: 0 },
-			activePersonaId: 'podcast-editor',
 			turns: [],
 			historyRef: { currentStepId: 'step-0', stepCount: 0 }
 		}

@@ -60,7 +60,7 @@ async function turn(mode: 'html' | 'template', htmlAllowed: boolean, probeMotion
 		engine: 'claude-code',
 		located: { id: 'claude-code', path: cli, env: { ...process.env, SDK_DIR: root + SDK, FAKE_MODE: mode } },
 		prompt: 'Add a motion graphic.',
-		systemPrompt: buildEngineSystemPrompt({ persona: { name: 'Editor', systemPrompt: 'Be brief.' }, maxSteps: 12, engineLabel: ENGINES['claude-code'].label }),
+		systemPrompt: buildEngineSystemPrompt({ maxSteps: 12, engineLabel: ENGINES['claude-code'].label }),
 		maxSteps: 12,
 		bridge: editor,
 		turnId: 'turn-html',

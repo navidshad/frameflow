@@ -162,7 +162,7 @@ describe('renderExactFrame with a motion layer — against the real ffmpeg', () 
 				layer()
 			],
 			timelineMeta: { fps: 30, width: 320, height: 180, duration: 4 },
-			activePersonaId: 'podcast-editor', turns: [], historyRef: { currentStepId: 's', stepCount: 0 }
+			turns: [], historyRef: { currentStepId: 's', stepCount: 0 }
 		}
 		;({ renderExactFrame } = await import('./preview'))
 		const { computeRegions } = await import('./render')

@@ -1,5 +1,6 @@
 import { clock } from './agentFeed'
 import { opKeys } from './agent'
+import { FRAMEFLOW_BASELINE } from './baseline'
 import type { PromptTurn } from './types'
 
 /**
@@ -52,19 +53,26 @@ export const ENGINES: Record<EngineId, EngineMeta> = {
 // ===== Settings =====
 
 export const STEPS_MIN = 1
-export const STEPS_MAX = 50
-export const STEPS_DEFAULT = 20
+// A real edit is dozens of calls (read, cut, look, fix, motion layers, sound).
+// 20 ran out mid-edit: past the limit the server refuses calls and tells the
+// agent to wrap up, where Claude Desktop over MCP has no limit at all.
+export const STEPS_MAX = 300
+export const STEPS_DEFAULT = 80
+/** The old default. Settings files saved it as if chosen, so it reads as "never changed". */
+const STEPS_LEGACY_DEFAULT = 20
 
 export interface EngineSettings {
 	engine: EngineId
 	/** Per CLI; empty means "as set in the CLI". */
 	models: Partial<Record<CliEngineId, string>>
+	/** Per CLI: how hard it thinks. Empty means "as set in the CLI" (no effort flag). */
+	efforts: Partial<Record<CliEngineId, string>>
 	/** Tool calls a CLI engine may make in one turn. */
 	maxSteps: number
 }
 
 /** Today's engine stays the default: nothing changes until the user picks a CLI. */
-export const DEFAULT_ENGINE_SETTINGS: EngineSettings = { engine: 'gemini-api', models: {}, maxSteps: STEPS_DEFAULT }
+export const DEFAULT_ENGINE_SETTINGS: EngineSettings = { engine: 'gemini-api', models: {}, efforts: {}, maxSteps: STEPS_DEFAULT }
 
 export function normalizeEngineSettings(raw: Partial<EngineSettings> | undefined | null): EngineSettings {
 	const engine = ENGINE_IDS.includes(raw?.engine as EngineId) ? raw!.engine! : DEFAULT_ENGINE_SETTINGS.engine
@@ -73,9 +81,15 @@ export function normalizeEngineSettings(raw: Partial<EngineSettings> | undefined
 		const value = raw?.models?.[id]
 		if (typeof value === 'string' && value.trim()) models[id] = value.trim()
 	}
+	// An effort the CLI does not know would fail every run, so only listed ones stay.
+	const efforts: EngineSettings['efforts'] = {}
+	for (const id of CLI_ENGINE_IDS) {
+		const value = raw?.efforts?.[id]
+		if (typeof value === 'string' && CLI_EFFORTS[id].some((o) => o.value === value.trim())) efforts[id] = value.trim()
+	}
 	const steps = Math.round(Number(raw?.maxSteps))
-	const maxSteps = Number.isFinite(steps) ? Math.min(STEPS_MAX, Math.max(STEPS_MIN, steps)) : STEPS_DEFAULT
-	return { engine, models, maxSteps }
+	const maxSteps = Number.isFinite(steps) && steps !== STEPS_LEGACY_DEFAULT ? Math.min(STEPS_MAX, Math.max(STEPS_MIN, steps)) : STEPS_DEFAULT
+	return { engine, models, efforts, maxSteps }
 }
 
 export interface ModelOption { value: string; label: string }
@@ -93,6 +107,23 @@ export const CLI_MODELS: Record<CliEngineId, ModelOption[]> = {
 		{ value: 'haiku', label: 'Haiku' }
 	],
 }
+
+/**
+ * How hard each CLI can be told to think, by the value its own flag takes. An
+ * engine with no entry here has no effort control. Claude Code: `--effort`.
+ */
+export const CLI_EFFORTS: Record<CliEngineId, ModelOption[]> = {
+	'claude-code': [
+		{ value: 'low', label: 'Low' },
+		{ value: 'medium', label: 'Medium' },
+		{ value: 'high', label: 'High' },
+		{ value: 'xhigh', label: 'Extra high' },
+		{ value: 'max', label: 'Max' }
+	]
+}
+
+/** What the composer can pick for an engine; Gemini API has a model only. */
+export const engineEfforts = (id: EngineId): ModelOption[] => (isCliEngine(id) ? CLI_EFFORTS[id] : [])
 
 /** The default option, which passes no model flag: the CLI uses its own setting. */
 export const asSetIn = (id: CliEngineId) => `As set in ${ENGINES[id].label}`
@@ -121,17 +152,20 @@ export function geminiTextModels(
 	return models.sort((a, b) => rank(a.value) - rank(b.value) || a.inputPerM - b.inputPerM)
 }
 
-/** The chip's text: "Claude Code · Opus", "Gemini API · 3 Flash Preview", or just the engine. */
+/** The chip's text: "Claude Code · Opus · High", "Gemini API · 3 Flash Preview", or just the engine. */
 export function engineChipLabel(settings: EngineSettings, geminiModelLabel?: string): string {
 	const label = ENGINES[settings.engine].label
 	let model: string | undefined
+	let effort: string | undefined
 	if (isCliEngine(settings.engine)) {
 		const value = settings.models[settings.engine]
 		model = value ? (CLI_MODELS[settings.engine].find((m) => m.value === value)?.label ?? value) : undefined
+		const level = settings.efforts[settings.engine]
+		effort = level ? (CLI_EFFORTS[settings.engine].find((o) => o.value === level)?.label ?? level) : undefined
 	} else {
 		model = geminiModelLabel?.replace(/^Gemini\s+/i, '')
 	}
-	return model ? `${label} · ${model}` : label
+	return [label, model, effort].filter(Boolean).join(' · ')
 }
 
 /**
@@ -548,32 +582,24 @@ export function unexpectedTools(tools: string[] | undefined): string[] {
 // ===== Prompts =====
 
 export interface EnginePromptInput {
-	/** The persona's own instructions. */
-	persona: { name: string; systemPrompt: string }
 	maxSteps: number
 	engineLabel: string
 }
 
+/**
+ * The engine's system prompt: the baseline every agent shares, then only what
+ * this sandbox needs on top. Nothing here has an opinion about the edit: the
+ * user's message is the brief.
+ */
 export function buildEngineSystemPrompt(input: EnginePromptInput): string {
 	return [
 		`You are the video editor inside FrameFlow, working for the user through FrameFlow's own tools (the "frameflow" MCP server). You are running as ${input.engineLabel}.`,
-		'You have no shell, no file access and no web access in this session — only FrameFlow\'s tools. Do not try anything else.',
+		'You have no shell, no file access and no web access in this session: only FrameFlow\'s tools. Exporting is the user\'s: you cannot export.',
 		'',
-		'How to work:',
-		'- Start with get_project, then read what you need: get_timeline, get_media, search_moments.',
-		'- Edit with apply_ops. Each call is one revision the user can undo, so prefer a few focused calls. Always give a short rationale.',
-		'- Look at your result with render_frame before you finish, and fix it (or revert_to_version) if it is wrong.',
-		'- Before you write a custom HTML motion page (apply_ops with html), call get_motion_guide and follow it.',
-		'- For sound effects or a music bed, call get_sound_guide first. You cannot hear: use suggest_cues, apply_ops addSounds (with follow), render_sound and analyze_audio, and work by their numbers. Spoken words or a sound the palette cannot make: generate_audio (costs money, capped; only if list_sounds says it is allowed), then apply_ops placeAudio.',
-		'- Timeline times (timelineStart, atSec, removeRanges) are TIMELINE seconds; in/out are SOURCE seconds.',
-		'- Never call export: the user exports.',
-		`- You have at most ${input.maxSteps} tool calls for this turn.`,
-		'- If the user asked a question rather than for an edit, answer it without editing.',
+		FRAMEFLOW_BASELINE,
 		'',
-		'When you are done, reply in two or three plain sentences: what you changed and where (with times), or the answer. That reply is shown to the user as your rationale. No markdown headings, no lists of tool calls.',
-		'',
-		`The user's editor persona is "${input.persona.name}". Follow its instructions:`,
-		input.persona.systemPrompt.trim()
+		`You have at most ${input.maxSteps} tool calls for this turn. If the user asked a question rather than for an edit, answer it without editing.`,
+		'When you are done, reply in two or three plain sentences: what you changed and where (with times), or the answer. That reply is shown to the user in the chat. No markdown headings, no lists of tool calls.'
 	].join('\n')
 }
 
@@ -608,6 +634,8 @@ export interface CommandInput {
 	systemPrompt: string
 	mcpUrl: string
 	model?: string
+	/** Empty = the CLI's own default: no effort flag. */
+	effort?: string
 	/** An empty scratch directory: the CLI's cwd, and where its config files go. */
 	workDir: string
 	pathSep?: '/' | '\\'
@@ -626,6 +654,7 @@ const join = (dir: string, name: string, sep: '/' | '\\' = '/') => `${dir.replac
 export function buildCommand(input: CommandInput): CommandSpec {
 	const sep = input.pathSep || '/'
 	const model = input.model?.trim()
+	const effort = input.effort?.trim()
 	switch (input.engine) {
 		case 'claude-code': {
 			const mcpConfig = {
@@ -649,6 +678,7 @@ export function buildCommand(input: CommandInput): CommandSpec {
 					// User settings only (their model and sign-in); never a project's.
 					'--setting-sources', 'user',
 					'--system-prompt', input.systemPrompt,
+					...(effort ? ['--effort', effort] : []),
 					...(model ? ['--model', model] : [])
 				]
 			}

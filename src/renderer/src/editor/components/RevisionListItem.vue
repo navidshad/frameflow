@@ -19,8 +19,7 @@
 		<!-- V pill + origin icon -->
 		<span class="text-[10px] font-bold text-primary font-mono shrink-0">V{{ revision.seq }}</span>
 		<span class="shrink-0 leading-none" :title="origin.title">
-			<span v-if="origin.icon" class="iconify w-3 h-3" :class="[origin.icon, origin.iconClass]"></span>
-			<span v-else class="text-xs">{{ personaIcon }}</span>
+			<span class="iconify w-3 h-3" :class="[origin.icon, origin.iconClass]"></span>
 		</span>
 
 		<!-- Label + time -->
@@ -54,6 +53,6 @@ const props = defineProps<{
 
 const {
 	isCurrent, isDirtyHere, disabled, canDelete,
-	thumbs, time, origin, personaIcon, title, switchTo, remove
+	thumbs, time, origin, title, switchTo, remove
 } = useRevisionCard(toRef(props, 'revision'), { thumbCount: 1 })
 </script>

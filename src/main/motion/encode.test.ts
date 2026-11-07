@@ -94,7 +94,7 @@ describe('motion slices in the region plan', () => {
 			motion
 		],
 		timelineMeta: { fps: 30, width: 640, height: 360, duration: 5, frameChosen: true },
-		activePersonaId: 'p', turns: [], historyRef: { currentStepId: null as any, stepCount: 0 }
+		turns: [], historyRef: { currentStepId: null as any, stepCount: 0 }
 	}
 
 	it('keys the clip by content for the plan’s frame, and plays it in clip seconds', () => {

@@ -65,8 +65,11 @@ exists), and the AI unlocks when the words lane is done, not the whole import.
 See `docs/import-lanes.md` for how it works and what was measured.
 The AI path is `src/main/editor/prompt.ts`: one Gemini call per turn producing
 **ops** (`src/main/editor/ops.ts`) which map to a `TimelineDiff` the renderer
-applies. Output length comes from the user's request — personas describe style
-only. Each turn becomes a branchable revision.
+applies. Output length comes from the user's request. There are no editing
+presets: every agent (the Gemini call, FrameFlow's own Claude Code engine, and
+outside MCP clients) starts from the one baseline in `src/shared/baseline.ts`,
+which says what each thing in a project is and what the tools can do, and nothing
+about style. Each turn becomes a branchable revision.
 
 **The transcript step** (`src/main/gemini/utils.ts` `extractTranscript`, driven by
 `extraction.extractRawTranscript`). The audio is cut at pauses into windows
@@ -133,6 +136,6 @@ human editor changing only the clips you pointed at. Every turn becomes a
 revision you can switch back to or branch from.
 
 ### How does the AI know how long the output should be?
-From your request, and only from your request. Personas describe a *style*, not
-a length. The model states the runtime it inferred, and the result card reports
-what actually came out so you can see whether it read you correctly.
+From your request, and only from your request. The model states the runtime it
+inferred, and the turn in the chat reports what actually came out so you can see
+whether it read you correctly.

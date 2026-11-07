@@ -23,6 +23,7 @@ import { peaksForRange } from '@shared/audio'
 import { TIMELINE_DIFF_SCHEMA_VERSION } from '@shared/timeline'
 import { MOTION_TEMPLATES, userMotionTemplates } from '@shared/motionTemplates'
 import { motionGuideText } from '@shared/motionGuide'
+import { outsideAgentInstructions } from '@shared/baseline'
 import { soundGuideText } from '@shared/soundGuide'
 import { estimateMix } from '@shared/mix'
 import { cueLead, describeCue, suggestCues } from '@shared/sound'
@@ -976,7 +977,6 @@ const applyOps: ToolDef = {
 		const droppedOps = [...vetted.dropped, ...mapped.droppedOps]
 		const turn: PromptTurn = {
 			id: turnId,
-			personaId: project.doc.activePersonaId,
 			prompt: `${ctx.clientName} edited over MCP`,
 			baseStepId: project.doc.historyRef?.currentStepId || '',
 			status: 'completed',
@@ -1662,7 +1662,6 @@ async function commitAgentEdit(
 ) {
 	const turn: PromptTurn = {
 		id: randomUUID(),
-		personaId: project.doc.activePersonaId,
 		prompt: edit.prompt,
 		baseStepId: project.doc.historyRef?.currentStepId || '',
 		status: 'completed',
@@ -2184,19 +2183,8 @@ export const TOOLS: ToolDef[] = [
 	findCameraGroups, makeMulticam, getMulticam, getAngles, findSpeakers, getSpeakers
 ]
 
-export const SERVER_INSTRUCTIONS =
-	'FrameFlow is a video editor running on this computer; these tools act on the project the user has ' +
-	'open in it, live. One agent works on a project at a time: begin_round with your goal before you work ' +
-	'(the user then sees you working and their chat is locked) and end_round with a summary when the piece ' +
-	'of work is done. No project open: list_projects / open_project / create_project, then import_media and ' +
-	'wait {for: "media"}. A good loop: get_project → get_timeline and get_media (or search_moments) to find ' +
-	'material → apply_ops to edit (get_motion_guide first if you will write an HTML motion page) → ' +
-	'render_frame to look at the result → revert_to_version if it is ' +
-	'wrong. For sound: get_sound_guide, then suggest_cues → apply_ops addSounds (with follow) → analyze_audio; ' +
-	'you cannot hear, so work by the numbers and the spectrogram render_sound gives. Spoken words or a sound the palette cannot make: generate_audio (costs money, capped) then apply_ops placeAudio. Inside a round all your apply_ops are one revision the user can see and undo; the user may edit at the same time, ' +
-	'so read the timeline again before each edit instead of relying on an old read. To deliver: export, wait {for: "export"}, ' +
-	'then inspect_export to look at the file frame by frame. Several cameras of one moment (a podcast): ' +
-	'find_camera_groups → make_multicam (syncs them by sound and places them) → get_multicam for the one shared ' +
-	'transcript → find_speakers (once: who speaks when, so every transcript line has a speaker; give the number of people) → ' +
-	'get_speakers (frames per voice) → apply_ops setSpeaker to name them → get_angles to compare every angle of a stretch ' +
-	'→ apply_ops switchAngles to cut; the sound never moves. Never choose angles from the loudest microphone: use the speakers.'
+/**
+ * What outside agents read when they connect. The text lives in @shared/baseline
+ * so FrameFlow's own engine starts from the same one.
+ */
+export const SERVER_INSTRUCTIONS = outsideAgentInstructions()

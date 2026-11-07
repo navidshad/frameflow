@@ -41,7 +41,7 @@ function makeDoc(assets: MediaAsset[]): EditorDocument {
 	return {
 		schemaVersion: 1, media: assets, tracks: [track], timeline: [],
 		timelineMeta: { fps: 30, width: 1920, height: 1080, duration: 0 },
-		activePersonaId: 'podcast-editor', turns: [],
+		turns: [],
 		historyRef: { currentStepId: 'step-0', stepCount: 0 }
 	}
 }

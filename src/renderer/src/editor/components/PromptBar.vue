@@ -24,10 +24,6 @@
 
 				<span class="text-zinc-300 dark:text-zinc-700 text-[9px]">·</span>
 
-				<PersonaPicker />
-
-				<span class="text-zinc-300 dark:text-zinc-700 text-[9px]">·</span>
-
 				<!-- Scope: text-level control — owns the flexible space so it
 				     truncates with clearance before the send button -->
 				<div class="relative flex-1 min-w-0" ref="scopeRef">
@@ -81,7 +77,7 @@
 		<div v-else-if="store.promptRunning" class="mt-1.5 flex items-center gap-2 px-2">
 			<div class="w-3 h-3 rounded-full border-2 border-primary border-t-transparent animate-spin"></div>
 			<span class="text-[10px] font-medium text-zinc-500">
-				{{ engine.isCli ? engine.current.label : store.activePersona?.name || 'AI' }} is working on your edit…
+				{{ engine.isCli ? engine.current.label : 'AI' }} is working on your edit…
 			</span>
 		</div>
 	</div>
@@ -90,7 +86,6 @@
 <script setup lang="ts">
 import { computed, nextTick, onMounted, onUnmounted, ref, watch } from 'vue'
 import { useEditorStore } from '../../stores/editorStore'
-import PersonaPicker from './PersonaPicker.vue'
 import EngineChip from './EngineChip.vue'
 import { useEngineStore } from '../../stores/engineStore'
 import { useAgentStore } from '../../stores/agentStore'
@@ -124,7 +119,7 @@ const placeholder = computed(() => {
 	if (store.isEmpty && !store.hasLayers) return 'Import media to start…'
 	if (!store.canPrompt && store.mediaProcessing) return 'Preparing media…'
 	if (!store.canPrompt) return 'Media not ready yet…'
-	return `Message ${store.activePersona?.name || 'your editor'}…`
+	return `Message ${engine.current.label}…`
 })
 
 const canSend = computed(() => text.value.trim().length > 0 && !inputDisabled.value)
