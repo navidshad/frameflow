@@ -1748,6 +1748,10 @@ export const useEditorStore = defineStore('editor', () => {
 
 	const selectItems = (ids: string[]) => {
 		selectedItemIds.value = [...ids]
+		// Picking a clip leaves the seam: the inspector shows a seam before any
+		// item, so a seam left selected would hide the clip just picked. An empty
+		// list is selectSeam's own clear and must not undo the seam it just set.
+		if (ids.length) selectedSeamId.value = null
 		syncSelectionIntoDoc()
 	}
 
@@ -1755,6 +1759,7 @@ export const useEditorStore = defineStore('editor', () => {
 		selectedItemIds.value = selectedItemIds.value.includes(id)
 			? selectedItemIds.value.filter((x) => x !== id)
 			: [...selectedItemIds.value, id]
+		if (selectedItemIds.value.length) selectedSeamId.value = null
 		syncSelectionIntoDoc()
 	}
 
