@@ -771,6 +771,8 @@ export interface PromptTurnEngine {
 	label: string
 	/** The model the CLI reported, when it did. */
 	model?: string
+	/** The CLI's own id for the conversation this run was part of: the next run resumes it. */
+	sessionId?: string
 	steps: Array<{
 		id: string
 		tool: string

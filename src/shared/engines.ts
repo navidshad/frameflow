@@ -300,6 +300,32 @@ export function engineRetry(turn: PromptTurn | null | undefined, turns: PromptTu
 	return { engine: engine.id, prompt: turn.prompt, ...engine.request }
 }
 
+/**
+ * The CLI conversation the next run continues: the newest chat turn of this
+ * engine that reported one. A CLI run's edits are agent turns inside its chat
+ * turn, so only chat turns count.
+ */
+export function resumableSessionId(turns: PromptTurn[] | undefined, engine: CliEngineId): string | undefined {
+	let latest: PromptTurn | undefined
+	for (const turn of turns || []) {
+		if (turn.agent?.engineTurnId || turn.engine?.id !== engine || !turn.engine.sessionId) continue
+		if (!latest || turn.createdAt >= latest.createdAt) latest = turn
+	}
+	return latest?.engine?.sessionId
+}
+
+/**
+ * A resumed run that died before doing anything (the CLI no longer has that
+ * conversation, or it cannot be continued) is worth one fresh start. A sign-in
+ * failure is not: it would fail the same way again.
+ */
+export function shouldRestartFresh(
+	resumed: boolean,
+	result: { ok: boolean; cancelled: boolean; note?: string | null; steps: unknown[]; commits: unknown[] }
+): boolean {
+	return resumed && !result.ok && !result.cancelled && !result.note && !result.steps.length && !result.commits.length
+}
+
 // ===== The common step model =====
 
 export type EngineEvent =
@@ -523,6 +549,8 @@ export function lineSplitter(onLine: (line: string) => void) {
 export class StepTracker {
 	steps: EngineStep[] = []
 	model?: string
+	/** The CLI's own id for this conversation, from its start line. */
+	sessionId?: string
 	initTools?: string[]
 	errors: string[] = []
 	done?: { ok: boolean; error?: string }
@@ -534,6 +562,7 @@ export class StepTracker {
 			case 'init':
 				this.model = event.model ?? this.model
 				this.initTools = event.tools ?? this.initTools
+				this.sessionId = event.sessionId ?? this.sessionId
 				return false
 			case 'tool-start': {
 				const foreign = !isFrameflowTool(event.tool, event.server)
@@ -630,6 +659,8 @@ export interface EngineUserPromptInput {
 	selectedItemIds: string[]
 	/** The scope chip's choice. */
 	widen?: 'chapter' | 'full'
+	/** This continues the CLI's earlier conversation about the project. */
+	resuming?: boolean
 }
 
 export function buildEngineUserPrompt(input: EngineUserPromptInput): string {
@@ -640,7 +671,9 @@ export function buildEngineUserPrompt(input: EngineUserPromptInput): string {
 			: input.selectedItemIds.length
 				? `Scope: the selected timeline item${input.selectedItemIds.length === 1 ? '' : 's'} (${input.selectedItemIds.join(', ')}). Change only ${input.selectedItemIds.length === 1 ? 'it' : 'them'} unless the request needs more.`
 				: 'Scope: whatever the request needs.'
-	return `${input.prompt.trim()}\n\n---\nPlayhead: ${clock(input.playheadSec)}. ${scope}`
+	// A continued conversation remembers what it saw, and the user may have edited since.
+	const changed = input.resuming ? ' The project may have changed since your last message (the user can edit too), so read what you need again before relying on it.' : ''
+	return `${input.prompt.trim()}\n\n---\nPlayhead: ${clock(input.playheadSec)}. ${scope}${changed}`
 }
 
 // ===== Command lines =====
@@ -654,9 +687,19 @@ export interface CommandInput {
 	systemPrompt: string
 	mcpUrl: string
 	model?: string
-	/** Empty = the CLI's own default: no effort flag. */
+	/** Empty = no effort flag. */
 	effort?: string
-	/** An empty scratch directory: the CLI's cwd, and where its config files go. */
+	/**
+	 * Keep this conversation on disk so a later turn can continue it. Without
+	 * it the run leaves nothing behind, which is what a one-off run wants.
+	 */
+	keepSession?: boolean
+	/** Continue this earlier conversation (the CLI's own id, from a previous run). */
+	resumeSessionId?: string
+	/**
+	 * The CLI's cwd, and where its config files go. The CLI files a conversation
+	 * under this folder, so resuming one needs the same folder as the run that began it.
+	 */
 	workDir: string
 	pathSep?: '/' | '\\'
 }
@@ -693,7 +736,8 @@ export function buildCommand(input: CommandInput): CommandSpec {
 					'--tools', '',
 					'--allowedTools', `mcp__${MCP_SERVER_KEY}`,
 					'--permission-mode', 'dontAsk',
-					'--no-session-persistence',
+					...(input.keepSession || input.resumeSessionId ? [] : ['--no-session-persistence']),
+					...(input.resumeSessionId ? ['--resume', input.resumeSessionId] : []),
 					'--disable-slash-commands',
 					// User settings only (their model and sign-in); never a project's.
 					'--setting-sources', 'user',

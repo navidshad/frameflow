@@ -3,7 +3,7 @@ import { readFileSync } from 'node:fs'
 import { resolve } from 'node:path'
 import {
 	agentFocus, buildCommand, CLI_EFFORTS, engineEfforts, STEPS_DEFAULT, STEPS_MAX, buildEngineSystemPrompt, buildEngineUserPrompt, displayPath, editTime,
-	engineChipLabel, engineFailureNote, geminiTextModels, engineRetry, isFrameflowTool, lineSplitter, normalizeEngineSettings, normalizeToolName, parseClaudeAuth,
+	engineChipLabel, engineFailureNote, geminiTextModels, engineRetry, resumableSessionId, shouldRestartFresh, isFrameflowTool, lineSplitter, normalizeEngineSettings, normalizeToolName, parseClaudeAuth,
 	parseStreamLine, parseVersion, readableError, StepTracker, stepTitle, TOKEN_ENV, unexpectedTools, type CliEngineId
 } from './engines'
 import { FRAMEFLOW_BASELINE } from './baseline'
@@ -290,5 +290,57 @@ describe('geminiTextModels', () => {
 			{ value: 'b-flash', label: 'b-flash', inputPerM: 0.3 },
 			{ value: 'a-pro', label: 'A Pro', inputPerM: 1.25 }
 		])
+	})
+})
+
+describe('reusing the CLI conversation', () => {
+	const base = { prompt: 'Make it shorter', systemPrompt: 'SYS', mcpUrl: 'http://127.0.0.1:5555/mcp', workDir: '/tmp/run' }
+	const chat = (id: string, createdAt: number, sessionId?: string, extra: Partial<PromptTurn> = {}): PromptTurn => ({
+		id, prompt: 'p', baseStepId: 'b', status: 'completed', createdAt,
+		engine: { id: 'claude-code', label: 'Claude Code', steps: [], sessionId }, ...extra
+	}) as PromptTurn
+
+	it('reads the conversation id from the CLI start line', () => {
+		expect(track('claude-code', fixture('claude.stream.jsonl')).sessionId).toBeTruthy()
+	})
+
+	it('leaves nothing on disk unless the run asks to keep its conversation', () => {
+		expect(buildCommand({ ...base, engine: 'claude-code' }).args).toContain('--no-session-persistence')
+		const kept = buildCommand({ ...base, engine: 'claude-code', keepSession: true }).args
+		expect(kept).not.toContain('--no-session-persistence')
+		expect(kept).not.toContain('--resume')
+	})
+
+	it('resumes the given conversation, which also keeps it', () => {
+		const a = buildCommand({ ...base, engine: 'claude-code', resumeSessionId: 'abc-123' }).args
+		expect(a[a.indexOf('--resume') + 1]).toBe('abc-123')
+		expect(a).not.toContain('--no-session-persistence')
+	})
+
+	it('continues the newest chat turn that reported a conversation', () => {
+		const turns = [
+			chat('old', 1, 'first'), chat('new', 5, 'second'), chat('none', 9, undefined),
+			// An edit the engine made belongs to its chat turn and is not a conversation of its own.
+			chat('edit', 12, 'edit-session', { agent: { engineTurnId: 'new' } as any })
+		]
+		expect(resumableSessionId(turns, 'claude-code')).toBe('second')
+		expect(resumableSessionId([], 'claude-code')).toBeUndefined()
+		expect(resumableSessionId(undefined, 'claude-code')).toBeUndefined()
+	})
+
+	it('tells a continued conversation the project may have changed', () => {
+		const input = { prompt: 'Shorter', playheadSec: 3, selectedItemIds: [] }
+		expect(buildEngineUserPrompt(input)).not.toMatch(/may have changed/)
+		expect(buildEngineUserPrompt({ ...input, resuming: true })).toMatch(/may have changed/)
+	})
+
+	it('starts fresh once when a resume dies before doing anything, but not for a sign-in or a stop', () => {
+		const dead = { ok: false, cancelled: false, note: null, steps: [], commits: [] }
+		expect(shouldRestartFresh(true, dead)).toBe(true)
+		expect(shouldRestartFresh(false, dead)).toBe(false)
+		expect(shouldRestartFresh(true, { ...dead, note: 'Sign in again' })).toBe(false)
+		expect(shouldRestartFresh(true, { ...dead, cancelled: true })).toBe(false)
+		expect(shouldRestartFresh(true, { ...dead, steps: [{}] })).toBe(false)
+		expect(shouldRestartFresh(true, { ...dead, ok: true })).toBe(false)
 	})
 })
