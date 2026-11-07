@@ -4,6 +4,7 @@ import type { TimelineItem } from '@shared/types'
 import { composeMotionPage, motionFramePlan, motionFrameState, type MotionKit } from '@shared/motion'
 import { openMotionCapture } from './capture'
 import { encodeFrames, PARTIAL_SUFFIX } from './encode'
+import { mapPool } from '../editor/pool'
 
 /**
  * Motion layers for the export: render each clip once, by content hash, to an
@@ -136,16 +137,23 @@ export async function ensureMotionJobs(
 ): Promise<void> {
 	const unique = [...new Map(jobs.map((j) => [j.outputPath, j])).values()]
 		.filter((j) => !fs.existsSync(j.outputPath))
-	const total = unique.reduce((sum, j) => sum + motionFramePlan(j.item, j.frame.fps).length, 0) || 1
-	let done = 0
-	for (const job of unique) {
-		if (options.signal?.aborted) throw new Error('aborted')
-		const before = done
-		await ensureMotionClip(job, {
-			signal: options.signal,
-			onProgress: (k) => options.onProgress?.((before + k) / total)
+	const frames = unique.map((j) => motionFramePlan(j.item, j.frame.fps).length)
+	const total = frames.reduce((sum, n) => sum + n, 0) || 1
+	const done = unique.map(() => 0)
+	const report = () => options.onProgress?.(done.reduce((sum, n) => sum + n, 0) / total)
+	// Each clip draws in its own hidden window and pipes to its own ffmpeg, and a
+	// frame spends most of its time waiting on the window's screenshot, not on a
+	// core — a 4K60 export of 28 layers sat at about 20% CPU one clip at a time.
+	await mapPool(unique.length, MOTION_CONCURRENCY, async (i, signal) => {
+		await ensureMotionClip(unique[i], {
+			signal,
+			onProgress: (k) => { done[i] = k; report() }
 		})
-		done = before + motionFramePlan(job.item, job.frame.fps).length
-	}
+		done[i] = frames[i]
+		report()
+	}, options.signal ?? new AbortController().signal)
 	options.onProgress?.(1)
 }
+
+/** Motion clips drawn at once. */
+export const MOTION_CONCURRENCY = 4

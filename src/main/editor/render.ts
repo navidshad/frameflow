@@ -35,6 +35,7 @@ import {
 } from './renderBuilders'
 import { regionTimeoutMs, runCommand } from './ffmpegRun'
 import { mapPool } from './pool'
+import { PROXY_MAX_FPS } from '../ffmpeg/proxyArgs'
 import { concatLists, exactTailFilters, regionAudioOpts, regionSpans, snapItemToFrames, type RegionSpan } from './regionJoin'
 
 export { atempoChain } from './renderBuilders'
@@ -136,7 +137,8 @@ export function computeRegions(
 		/**
 		 * Render at the proxy's size (480 lines) instead of the sequence's. A fast
 		 * preview export reads 480p proxies, so a 4K frame would only upscale them
-		 * and spend the whole encode on pixels that carry nothing.
+		 * and spend the whole encode on pixels that carry nothing. The frame rate
+		 * is capped the same way, at the proxies' own.
 		 */
 		proxyFrame?: boolean
 	} = {}
@@ -204,9 +206,13 @@ export function computeRegions(
 		usedVideoAssets.map((a) => a.metadata ?? {})
 	)
 	const { width, height } = options.proxyFrame ? proxyFrameFor(fullFrame) : fullFrame
-	const fps = Math.min(60, Math.max(10,
+	const sourceFps = Math.min(60, Math.max(10,
 		usedVideoAssets.reduce((max, a) => Math.max(max, a.metadata?.fps || 0), 0) || 30
 	))
+	// The proxies are made at no more than PROXY_MAX_FPS, so a faster preview
+	// would draw every frame twice: the motion layers alone are captured one
+	// window screenshot per frame, and 4K60 footage doubled that for nothing.
+	const fps = options.proxyFrame ? Math.min(sourceFps, PROXY_MAX_FPS) : sourceFps
 
 	if (options.frameGrid) {
 		// Order-preserving, so items that did not overlap still do not.

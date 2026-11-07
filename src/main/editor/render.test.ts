@@ -508,6 +508,18 @@ describe('the fast preview frame', () => {
 		expect([full.width, full.height]).toEqual([1920, 1080])
 	})
 
+	it('is drawn at the proxies\' frame rate, not the footage\'s', () => {
+		// Proxies are made at no more than 30 fps; a 60 fps preview would draw
+		// each frame twice, and every motion layer is captured frame by frame.
+		const sixty = doc({
+			media: [{ ...asset('a'), metadata: { duration: 1000, width: 3840, height: 2160, fps: 60, hasAudio: true } as MediaAsset['metadata'] }],
+			timeline: [item(0, { in: 0, out: 10 })]
+		})
+		expect(computeRegions(sixty, 'preview', {}, { proxyFrame: true }).fps).toBe(30)
+		expect(computeRegions(sixty, 'original').fps).toBe(60)
+		expect(computeRegions(sixty, 'preview').fps).toBe(60)
+	})
+
 	it('lets the fast path serve a preview from the proxy, whose frame is that size', () => {
 		const source = { width: 3840, height: 2160 }
 		expect(fastPathMatchesFrame(source, { width: 854, height: 480 }, true)).toBe(true)
