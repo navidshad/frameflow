@@ -3,6 +3,7 @@ import { buildCameraGroup } from '../multicam/group'
 import { applyTimelineDiff, repairOverlapsReporting } from '@shared/timeline'
 import type { TranscriptEntry } from '@shared/captions'
 import type { AudioAnalysis } from '@shared/audio'
+import type { AudioInspection } from '@shared/audioFeatures'
 import { normaliseRecipe, presetOf, recipeKey, soundLength, type SoundRecipe } from '@shared/synth'
 import type { AudioProvenance, GenerateRequest, ProviderId, SpendPolicy } from '@shared/audioProviders'
 import type {
@@ -266,6 +267,33 @@ export class FakeEditor implements EditorBridge {
 				lufs: sound ? sound.levelDb - 12 : -16, truePeakDb: sound ? sound.levelDb : -3, lra: null
 			}]
 		}))
+	}
+
+	/** Every inspection asked of the fake, for tests. */
+	inspections: Array<{ assetId: string; fromSec?: number; toSec?: number }> = []
+
+	async inspectAudio(_project: LiveProject, req: { assetId: string; fromSec?: number; toSec?: number }): Promise<AudioInspection> {
+		this.inspections.push(req)
+		const asset = this.doc.media.find((a) => a.id === req.assetId)
+		if (!asset) throw new Error('No such media')
+		const fromSec = req.fromSec ?? 0
+		const toSec = req.toSec ?? (asset.metadata?.duration ?? 10)
+		const length = toSec - fromSec
+		return {
+			hasAudio: asset.metadata?.hasAudio !== false, fromSec, toSec,
+			loudness: { lufs: -16, lra: 4, truePeakDb: -2 },
+			summary: {
+				durationSec: length,
+				energy: { stepSec: length / 4, db: [-20, -18, -12, -22] },
+				dynamics: { loudDb: -10, typicalDb: -16, quietDb: -26, rangeDb: 16 },
+				quiet: { thresholdDb: -40, totalSec: 0, sharePct: 0, spans: [], spansTotal: 0 },
+				balance: { lowPct: 30, midPct: 50, highPct: 20, centroidHz: 1200, tone: 'balanced' },
+				tempo: { bpm: 120, confidence: 0.5, measuredSec: length },
+				sections: [{ startSec: fromSec, endSec: toSec, level: 'medium', meanDb: -16, centroidHz: 1200, lowPct: 30, highPct: 20, character: 'mid-focused' }],
+				hints: ['A steady pulse near 120 BPM (confidence 0.5): rhythmic music.']
+			},
+			spectrogram: PIXEL, notes: []
+		}
 	}
 
 	/** Providers the fake pretends are connected; the cap an agent may spend. */

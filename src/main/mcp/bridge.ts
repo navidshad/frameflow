@@ -1,5 +1,6 @@
 import type { EditorDocument, EditorRevision, MediaAsset, PromptTurn } from '@shared/types'
 import type { AudioAnalysis } from '@shared/audio'
+import type { AudioInspection } from '@shared/audioFeatures'
 import type { SoundRecipe } from '@shared/synth'
 import type { TranscriptEntry } from '@shared/captions'
 import type { AgentApplyOutcome } from '@shared/agentFeed'
@@ -168,6 +169,8 @@ export interface EditorBridge {
 	inspectSound(project: LiveProject, target: { recipe: SoundRecipe } | { assetId: string }): Promise<SoundReport>
 	/** Waveform and loudness of media, measured once and cached. */
 	audioAnalyses(project: LiveProject, assetIds: string[]): Promise<Record<string, AudioAnalysis>>
+	/** How a source sounds, as a spectrogram and numbers: for the whole asset or a range of its SOURCE seconds. Works on a video's sound too. */
+	inspectAudio(project: LiveProject, req: { assetId: string; fromSec?: number; toSec?: number }): Promise<AudioInspection>
 	/** Which audio providers are connected, and what an agent may spend on them. */
 	audioStatus(): { connected: ProviderId[]; spend: SpendPolicy }
 	/** What a request would cost in USD before it is made; null when the provider bills in credits. */
