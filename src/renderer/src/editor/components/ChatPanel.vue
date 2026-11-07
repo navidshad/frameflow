@@ -172,7 +172,12 @@ const turns = computed<PromptTurn[]>(() =>
 const entries = computed(() => chatEntries(turns.value, agent.rounds))
 const turnOf = (entry: ChatEntry<PromptTurn>): PromptTurn => (entry as Extract<ChatEntry<PromptTurn>, { kind: 'turn' }>).turn
 
-const engineFooter = (turn: PromptTurn) => (turn.engine ? ENGINES[turn.engine.id]?.footer || turn.engine.label : '')
+// A CLI runs on the user's own plan; a model billed by the token says what the turn cost.
+const engineFooter = (turn: PromptTurn) => {
+	if (!turn.engine) return ''
+	const footer = ENGINES[turn.engine.id]?.footer || turn.engine.label
+	return turn.cost ? footer + ' · $' + turn.cost.toFixed(4) : footer
+}
 
 const revisionSeq = (turn: PromptTurn) => {
 	if (!turn.revisionId) return null

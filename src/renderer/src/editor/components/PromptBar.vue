@@ -100,7 +100,7 @@ import { useEditorStore } from '../../stores/editorStore'
 import EngineChip from './EngineChip.vue'
 import { useEngineStore } from '../../stores/engineStore'
 import { useAgentStore } from '../../stores/agentStore'
-import { isCliEngine, resumableSessionId } from '@shared/engines'
+import { resumableSessionId } from '@shared/engines'
 
 const store = useEditorStore()
 const engine = useEngineStore()
@@ -134,10 +134,10 @@ const placeholder = computed(() => {
 	return `Message ${engine.current.label}…`
 })
 
-/** A CLI agent is selected and has a conversation with this project that the next message would continue. */
+/** The selected agent has a conversation with this project that the next message would continue. */
 const conversation = computed(() => {
 	const id = engine.settings.engine
-	return isCliEngine(id) && !store.promptRunning && !!resumableSessionId(store.doc?.turns, id)
+	return !store.promptRunning && !!resumableSessionId(store.doc?.turns, id)
 })
 
 const canSend = computed(() => text.value.trim().length > 0 && !inputDisabled.value)

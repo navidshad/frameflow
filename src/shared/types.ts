@@ -63,6 +63,8 @@ export interface Usage {
 	candidatesTokens: number;
 	thinkingTokens?: number;
 	totalTokens: number;
+	/** Of promptTokens, the ones the provider served from its cache, billed at a fraction. */
+	cachedTokens?: number;
 }
 
 export interface UsageRecord {
@@ -767,7 +769,7 @@ export interface EditorRevisionsFile {
 }
 
 export interface PromptTurnEngine {
-	id: 'claude-code'
+	id: 'claude-code' | 'gemini-api'
 	label: string
 	/** The model the CLI reported, when it did. */
 	model?: string

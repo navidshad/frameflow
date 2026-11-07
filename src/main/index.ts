@@ -31,7 +31,6 @@ import { estimateUsd, generateForProject, providerStatuses, voicesFor } from './
 import { normalizeAudioSettings, isProviderId, type GenerateRequest } from '../shared/audioProviders'
 import * as editorPreprocess from './editor/preprocess'
 import * as editorHistory from './editor/history'
-import * as editorPrompt from './editor/prompt'
 import * as editorPreview from './editor/preview'
 import * as editorRender from './editor/render'
 import * as editorCaptions from './editor/captions'
@@ -45,7 +44,7 @@ import { electronApp, optimizer, is } from '@electron-toolkit/utils'
 import { registerMediaProtocol } from './media-protocol'
 import { initAgentAccess } from './mcp'
 import { agentHolding } from './mcp/roundStore'
-import { isCliEngine, type CliEngineId } from '@shared/engines'
+import type { EngineId } from '@shared/engines'
 import { checkProjectsFolder, nestProjectsFolder, suggestProjectsFolder } from './setup/folder'
 import { testGeminiKey } from './setup/geminiKey'
 import { buildChecks } from '../shared/setup'
@@ -53,7 +52,7 @@ import { normalizeEngineSettings } from '@shared/engines'
 import { execFile } from 'child_process'
 import { getFFmpegBinaryPath } from './ffmpeg'
 import { initMotionIpc } from './motion/ipc'
-import { abortEngineTurn, cliEngineSelected, initEngines, resetEngineConversation, runCliEditorPrompt } from './engine'
+import { abortEngineTurn, initEngines, resetEngineConversation, runEnginePrompt } from './engine'
 
 const activePipelines = new Map<string, Pipeline>()
 
@@ -711,23 +710,23 @@ app.whenReady().then(() => {
 		}
 	})
 
-	// AI prompt turns (M3): one structured call per turn, streamed via
-	// editor-turn-update; the base doc is never mutated until user accept.
+	// AI prompt turns: the selected engine runs an agent loop over FrameFlow's own
+	// MCP tools (a CLI spawned for the turn, or the loop inside FrameFlow), streamed
+	// via editor-turn-update. Its edits are revisions already.
 	ipcMain.handle('run-editor-prompt', (_event, options: {
 		threadId: string, prompt: string, baseStepId: string,
-		selectedItemIds: string[], playheadSec: number, widen?: 'chapter' | 'full', engine?: CliEngineId
+		selectedItemIds: string[], playheadSec: number, widen?: 'chapter' | 'full', engine?: EngineId
 	}) => {
 		// One agent per project: an outside agent's open round holds it.
 		const holder = agentHolding(options.threadId)
 		if (holder) throw new Error(holder)
-		// The engine picked in Settings or the chat's engine chip: a CLI runs
-		// agentically through FrameFlow's MCP tools, Gemini API as before.
-		// Retry names its engine, so a switch since the failure does not move it.
-		return isCliEngine(options.engine) || cliEngineSelected() ? runCliEditorPrompt(options) : editorPrompt.runEditorPrompt(options)
+		// The engine picked in Settings or the chat's engine chip. Retry names its
+		// engine, so a switch since the failure does not move it.
+		return runEnginePrompt(options)
 	})
 
 	ipcMain.handle('abort-editor-prompt', (_event, { turnId }: { threadId: string, turnId: string }) => {
-		if (!abortEngineTurn(turnId)) editorPrompt.abortEditorPrompt(turnId)
+		abortEngineTurn(turnId)
 		return true
 	})
 

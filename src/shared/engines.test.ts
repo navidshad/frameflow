@@ -3,7 +3,7 @@ import { readFileSync } from 'node:fs'
 import { resolve } from 'node:path'
 import {
 	agentFocus, buildCommand, CLI_EFFORTS, engineEfforts, STEPS_DEFAULT, STEPS_MAX, buildEngineSystemPrompt, buildEngineUserPrompt, displayPath, editTime,
-	engineChipLabel, engineFailureNote, geminiTextModels, engineRetry, latestEngineTurn, resumableSessionId, shouldRestartFresh, isFrameflowTool, lineSplitter, normalizeEngineSettings, normalizeToolName, parseClaudeAuth,
+	engineChipLabel, engineFailureNote, geminiTextModels, engineRetry, isCliEngine, isLoopEngine, latestEngineTurn, resumableSessionId, shouldRestartFresh, isFrameflowTool, lineSplitter, normalizeEngineSettings, normalizeToolName, parseClaudeAuth,
 	parseStreamLine, parseVersion, readableError, StepTracker, stepTitle, TOKEN_ENV, unexpectedTools, type CliEngineId
 } from './engines'
 import { FRAMEFLOW_BASELINE } from './baseline'
@@ -352,5 +352,37 @@ describe('reusing the CLI conversation', () => {
 		expect(shouldRestartFresh(true, { ...dead, cancelled: true })).toBe(false)
 		expect(shouldRestartFresh(true, { ...dead, steps: [{}] })).toBe(false)
 		expect(shouldRestartFresh(true, { ...dead, ok: true })).toBe(false)
+	})
+})
+
+describe('the loop engine\u2019s prompt', () => {
+	it('adds the plan and cost lines only for an engine that runs the loop', () => {
+		const cli = buildEngineSystemPrompt({ maxSteps: 20, engineLabel: 'Claude Code' })
+		const loop = buildEngineSystemPrompt({ maxSteps: 20, engineLabel: 'Gemini API', planTool: true, metered: true })
+		expect(cli).not.toMatch(/update_plan|sends this whole conversation/)
+		expect(loop).toMatch(/update_plan/)
+		expect(loop).toMatch(/sends this whole conversation/)
+		// Same baseline either way.
+		expect(loop).toContain(FRAMEFLOW_BASELINE)
+	})
+
+	it('titles the plan step with where the agent is in it', () => {
+		expect(stepTitle('update_plan', { items: [{ step: 'Cut the pauses', status: 'in_progress' }, { step: 'Check', status: 'pending' }] })).toBe('plan · 0/2 · Cut the pauses')
+		expect(stepTitle('update_plan', { items: [{ step: 'Cut', status: 'completed' }, { step: 'Check', status: 'in_progress' }] })).toBe('plan · 1/2 · Check')
+		expect(stepTitle('update_plan', {})).toBe('plan')
+	})
+
+	it('knows which engines run in FrameFlow and which are CLIs', () => {
+		expect(isLoopEngine('gemini-api')).toBe(true)
+		expect(isLoopEngine('claude-code')).toBe(false)
+		expect(isCliEngine('gemini-api')).toBe(false)
+	})
+
+	it('finds and resumes a conversation for either kind of engine', () => {
+		const turn = (id: string, engine: 'claude-code' | 'gemini-api', createdAt: number, sessionId?: string) =>
+			({ id, prompt: 'p', baseStepId: 'b', status: 'completed', createdAt, engine: { id: engine, label: engine, steps: [], sessionId } }) as any
+		const turns = [turn('a', 'gemini-api', 1, 'g1'), turn('b', 'claude-code', 2, 'c1'), turn('c', 'gemini-api', 3, 'g2')]
+		expect(resumableSessionId(turns, 'gemini-api')).toBe('g2')
+		expect(resumableSessionId(turns, 'claude-code')).toBe('c1')
 	})
 })

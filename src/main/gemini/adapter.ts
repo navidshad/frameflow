@@ -1,5 +1,6 @@
 import { GoogleGenAI, type GenerateContentParameters } from '@google/genai';
 import { Usage, UsageRecord, UpscaleFactor } from '../../shared/types';
+import { billablePromptTokens } from '../../shared/usage';
 import { settingsManager } from '../settings';
 import * as fs from 'fs';
 import * as path from 'path';
@@ -942,6 +943,9 @@ export class GeminiAdapter {
 				outputCost += pricing.output.image * Math.max(1, imageCount);
 			}
 		}
+
+		// Prompt tokens the provider served from its cache bill at a fraction (see shared/usage).
+		if (usage.promptTokens > 0) inputCost *= billablePromptTokens(usage) / usage.promptTokens;
 
 		return inputCost + outputCost;
 	}
