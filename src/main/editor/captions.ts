@@ -65,6 +65,23 @@ export function cuesForDoc(doc: EditorDocument, frame: { width: number; height: 
 }
 
 /**
+ * The video encoder for the burn pass. This pass re-encodes the whole finished
+ * file, so on a long 4K project it was the slowest step of the export.
+ *
+ * Measured on an M1 Pro, 10 s of 4K30 with a subtitle track:
+ *   x264 medium crf 18       6.0 s, 36 MB   (what this used to run)
+ *   x264 veryfast crf 18     2.9 s, 33 MB   (this)
+ *   x264 ultrafast crf 18    1.4 s, 96 MB   (3x the file: not worth it)
+ *   VideoToolbox, 25 Mb/s    5.8 s, 30 MB   (no faster than medium: the subtitle
+ *                                            filter and the 4K decode set the
+ *                                            pace, not the encoder)
+ * So the hardware encoder is the wrong tool here, and `veryfast` halves the time
+ * at the same size and quality class.
+ */
+export const burnVideoOpts = (): string[] =>
+	['-c:v', 'libx264', '-preset', 'veryfast', '-crf', '18', '-pix_fmt', 'yuv420p']
+
+/**
  * Burn `cues` into `sourcePath`, returning the path of the captioned file.
  *
  * Re-encodes: this is the one step that cannot be a stream copy, since it is
@@ -94,8 +111,7 @@ export async function burnCaptions(options: {
 		// the user's home directory used to be enough to fail the whole export.
 		.videoFilters(`subtitles=filename=${escapeSubtitlesPath(assPath)}`)
 		.outputOptions([
-			'-c:v', 'libx264', '-preset', 'medium', '-crf', '18',
-			'-pix_fmt', 'yuv420p',
+			...burnVideoOpts(),
 			// The mix is already final — re-encoding it would only lose a
 			// generation of quality for nothing.
 			'-c:a', 'copy',

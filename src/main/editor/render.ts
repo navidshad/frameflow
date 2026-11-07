@@ -34,6 +34,7 @@ import {
 	type Region, type RegionPlan, type SourceSlice
 } from './renderBuilders'
 import { regionTimeoutMs, runCommand } from './ffmpegRun'
+import { mapPool } from './pool'
 import { concatLists, exactTailFilters, regionAudioOpts, regionSpans, snapItemToFrames, type RegionSpan } from './regionJoin'
 
 export { atempoChain } from './renderBuilders'
@@ -59,6 +60,16 @@ export { runCommand } from './ffmpegRun'
  */
 
 const IS_MAC = process.platform === 'darwin'
+
+/**
+ * Regions rendered at once. Measured on an M1 Pro with 4K to 1080p hardware
+ * encodes: 1 region 4.9 s, 3 at once 5.3 s (where 3 in a row takes 14.7 s),
+ * and from 4 up each region still costs 1.7 s, so three is where it stops
+ * gaining. (The 2 in docs/import-speed-investigation.md is for proxies, which
+ * decode on the same chip.) The software encoder already spreads one encode over
+ * every core, so a second would only make both slower.
+ */
+export const regionConcurrency = (): number => (IS_MAC ? 3 : 1)
 /**
  * Boundaries closer together than this are the SAME boundary. Used to collapse
  * near-coincident cuts so the walker never emits a sliver region — which it used
@@ -82,6 +93,19 @@ function sliceSource(item: TimelineItem, t0: number, t1: number): { in: number; 
 		in: item.in + (t0 - item.timelineStart) * speed,
 		out: item.in + (t1 - item.timelineStart) * speed
 	}
+}
+
+/** How many lines the proxies have: `scale=-2:480` in proxyArgs.ts. */
+export const PROXY_LINES = 480
+
+/**
+ * The frame at the proxies' size: 480 lines, the width following the aspect and
+ * kept even, as `scale=-2:480` makes it. A frame already that small stays.
+ */
+export function proxyFrameFor(frame: { width: number; height: number }): { width: number; height: number } {
+	if (frame.height <= PROXY_LINES) return { width: frame.width, height: frame.height }
+	const width = Math.max(2, Math.round((frame.width * PROXY_LINES) / frame.height / 2) * 2)
+	return { width, height: PROXY_LINES }
 }
 
 export function computeRegions(
@@ -109,6 +133,12 @@ export function computeRegions(
 		 * plays up to a frame early.
 		 */
 		frameGrid?: boolean
+		/**
+		 * Render at the proxy's size (480 lines) instead of the sequence's. A fast
+		 * preview export reads 480p proxies, so a 4K frame would only upscale them
+		 * and spend the whole encode on pixels that carry nothing.
+		 */
+		proxyFrame?: boolean
 	} = {}
 ): RegionPlan {
 	// Video tracks TOP-most first (highest order wins visually); [0] of a
@@ -169,10 +199,11 @@ export function computeRegions(
 	// The SEQUENCE decides its own shape when the project has chosen one — that is
 	// what makes a 9:16 export from 16:9 footage possible at all. The monitor
 	// resolves the frame through the same function.
-	const { width, height } = sequenceFrame(
+	const fullFrame = sequenceFrame(
 		doc.timelineMeta,
 		usedVideoAssets.map((a) => a.metadata ?? {})
 	)
+	const { width, height } = options.proxyFrame ? proxyFrameFor(fullFrame) : fullFrame
 	const fps = Math.min(60, Math.max(10,
 		usedVideoAssets.reduce((max, a) => Math.max(max, a.metadata?.fps || 0), 0) || 30
 	))
@@ -497,8 +528,14 @@ function validateWindows(
  */
 export const fastPathMatchesFrame = (
 	source: FrameSource | undefined,
-	plan: { width: number; height: number }
-): boolean => !!source && source.width === plan.width && source.height === plan.height
+	plan: { width: number; height: number },
+	/** The export reads the 480p proxy, so its output is the proxy's frame. */
+	fromProxy = false
+): boolean => {
+	if (!source?.width || !source.height) return false
+	const frame = fromProxy ? proxyFrameFor({ width: source.width, height: source.height }) : source
+	return frame.width === plan.width && frame.height === plan.height
+}
 
 export function isFastPathEligible(items: TimelineItem[], track: Track, hasAudioItems = false): boolean {
 	if (items.length === 0) return false
@@ -702,7 +739,8 @@ export function startEditorRender(options: {
 	// here costs one file per asset and nothing when no bed exists.
 	const plan = computeRegions(doc, quality, transcriptsForDoc(doc), {
 		motionDir: motionCacheDir(thread.tempDir),
-		frameGrid: true
+		frameGrid: true,
+		proxyFrame: quality === 'preview'
 	})
 	// `allSlices` is exhaustive over region kinds, so a slice can never escape this
 	// check by living in a field the pre-flight forgot — which would turn a clean
@@ -775,12 +813,17 @@ export function startEditorRender(options: {
 				(i) => videoTrackIds.has(i.trackId) && i.trackId !== videoTrack?.id && isCompositedItem(i)
 			)
 
-			const fastSource = doc.media.find((a) => a.id === items[0]?.sourceAssetId)?.metadata
+			const fastAsset = doc.media.find((a) => a.id === items[0]?.sourceAssetId)
+			const fastSource = fastAsset?.metadata
+			// A preview reads the proxy, whose frame is the 480-line one; with no
+			// proxy yet it would read the original, which is never that size.
+			const fromProxy = quality === 'preview'
 
 			// `!plan.hasOverlap` reads the walker's OWN output, so a future source of
 			// transitions the predicate does not know about still cannot slip through.
 			if (videoTrack && !hasOtherVideoItems && !plan.hasOverlap
-				&& fastPathMatchesFrame(fastSource, plan)
+				&& (!fromProxy || !!fastAsset?.proxyPath)
+				&& fastPathMatchesFrame(fastSource, plan, fromProxy)
 				&& isFastPathEligible(items, videoTrack, hasAudioItems)) {
 				// ---- Fast path: single-source trim+concat via assembleVideo ----
 				// computeRegions' orphan pre-flight already ran, so this resolves —
@@ -808,27 +851,28 @@ export function startEditorRender(options: {
 			} else {
 				// ---- Region path: segment-then-concat ----
 				const total = plan.regions.reduce((sum, r) => sum + r.duration, 0) || 1
-				let doneWeight = 0
-				let lastEmit = -1
-				const regionFiles: string[] = []
 				const spans = regionSpans(plan.regions.map((r) => r.duration), plan.fps)
-
-				for (let i = 0; i < plan.regions.length; i++) {
-					if (signal.aborted) throw new Error('aborted')
-					const region = plan.regions[i]
-					const weight = region.duration / total
-					const onRegionProgress = (pct: number) => {
-						const overall = motionWeight + (doneWeight + weight * (pct / 100)) * (96 - motionWeight)
-						if (overall - lastEmit >= 1) {
-							lastEmit = overall
-							progress(overall, 'rendering')
-						}
+				// Each region reports its own percent; the bar is their duration-weighted sum.
+				const percents = plan.regions.map(() => 0)
+				let lastEmit = -1
+				const emitOverall = () => {
+					const done = plan.regions.reduce((sum, r, i) => sum + (r.duration / total) * (percents[i] / 100), 0)
+					const overall = motionWeight + done * (96 - motionWeight)
+					if (overall - lastEmit >= 1) {
+						lastEmit = overall
+						progress(overall, 'rendering')
 					}
-					const file = await renderRegion(region, i, plan, spans[i], workDir, signal, onRegionProgress)
-					regionFiles.push(file)
-					doneWeight += weight
-					progress(motionWeight + doneWeight * (96 - motionWeight), 'rendering')
 				}
+
+				const regionFiles = await mapPool(plan.regions.length, regionConcurrency(), async (i, regionSignal) => {
+					const file = await renderRegion(plan.regions[i], i, plan, spans[i], workDir, regionSignal, (pct) => {
+						percents[i] = pct
+						emitOverall()
+					})
+					percents[i] = 100
+					emitOverall()
+					return file
+				}, signal)
 
 				progress(96, 'stitching')
 				try {

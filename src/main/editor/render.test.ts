@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import type { EditorDocument, MediaAsset, TimelineItem, Track } from '@shared/types'
 import { DEFAULT_TRANSITION_SEC } from '@shared/transitionPlan'
-import { computeRegions, fastPathMatchesFrame, isFastPathEligible } from './render'
+import { computeRegions, fastPathMatchesFrame, isFastPathEligible, proxyFrameFor, regionConcurrency } from './render'
 import { allSlices, type OverlapRegion, type RegionPlan } from './renderBuilders'
 
 // ===== Fixtures =====
@@ -482,5 +482,40 @@ describe('fastPathMatchesFrame', () => {
 	it('declines a source whose shape is unknown', () => {
 		expect(fastPathMatchesFrame(undefined, frame)).toBe(false)
 		expect(fastPathMatchesFrame({}, frame)).toBe(false)
+	})
+})
+
+describe('the fast preview frame', () => {
+	// A preview export reads 480p proxies. Rendering at the sequence's 4K would
+	// upscale them and spend the encode on pixels with nothing in them.
+	it('is 480 lines high with the width following the aspect, even', () => {
+		expect(proxyFrameFor({ width: 3840, height: 2160 })).toEqual({ width: 854, height: 480 })
+		expect(proxyFrameFor({ width: 1920, height: 1080 })).toEqual({ width: 854, height: 480 })
+		expect(proxyFrameFor({ width: 1080, height: 1920 })).toEqual({ width: 270, height: 480 })
+		expect(proxyFrameFor({ width: 1080, height: 1080 })).toEqual({ width: 480, height: 480 })
+	})
+
+	it('never makes a frame larger', () => {
+		expect(proxyFrameFor({ width: 640, height: 360 })).toEqual({ width: 640, height: 360 })
+	})
+
+	const one = doc({ timeline: [item(0, { in: 0, out: 10 })] })
+
+	it('is what the plan renders at when asked, and the full frame otherwise', () => {
+		const small = computeRegions(one, 'preview', {}, { proxyFrame: true })
+		expect([small.width, small.height]).toEqual([854, 480])
+		const full = computeRegions(one, 'preview')
+		expect([full.width, full.height]).toEqual([1920, 1080])
+	})
+
+	it('lets the fast path serve a preview from the proxy, whose frame is that size', () => {
+		const source = { width: 3840, height: 2160 }
+		expect(fastPathMatchesFrame(source, { width: 854, height: 480 }, true)).toBe(true)
+		expect(fastPathMatchesFrame(source, { width: 854, height: 480 })).toBe(false)
+		expect(fastPathMatchesFrame(source, { width: 3840, height: 2160 }, true)).toBe(false)
+	})
+
+	it('renders regions in parallel only where the hardware encoder can take them', () => {
+		expect(regionConcurrency()).toBe(process.platform === 'darwin' ? 3 : 1)
 	})
 })
