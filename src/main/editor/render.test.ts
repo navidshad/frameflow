@@ -3,6 +3,9 @@ import type { EditorDocument, MediaAsset, TimelineItem, Track } from '@shared/ty
 import { DEFAULT_TRANSITION_SEC } from '@shared/transitionPlan'
 import { computeRegions, fastPathMatchesFrame, isFastPathEligible, proxyFrameFor, regionConcurrency } from './render'
 import { allSlices, type OverlapRegion, type RegionPlan } from './renderBuilders'
+import { MOTION_MAX_FPS } from './render'
+import { motionConcurrency } from '../motion'
+import { stillFrameRange, rebasedSlice } from './exactMotion'
 
 // ===== Fixtures =====
 
@@ -529,5 +532,44 @@ describe('the fast preview frame', () => {
 
 	it('renders regions in parallel only where the hardware encoder can take them', () => {
 		expect(regionConcurrency()).toBe(process.platform === 'darwin' ? 3 : 1)
+	})
+})
+
+describe('motion layers draw at no more than MOTION_MAX_FPS', () => {
+	const sixty = (): EditorDocument => doc({
+		media: [{ ...asset('a'), metadata: { duration: 1000, width: 3840, height: 2160, fps: 60, hasAudio: true } as MediaAsset['metadata'] }],
+		tracks: [track('v1'), track('v2', { order: 1 })],
+		timeline: [
+			item(0, { in: 0, out: 10 }),
+			item(2, { id: 'title', trackId: 'v2', sourceAssetId: '', in: 0, out: 4, duration: 4, motion: { template: 'lower-third' } })
+		]
+	})
+	const motionSlice = (p: RegionPlan) => p.regions.flatMap(allSlices).find((s) => s.motion)!
+
+	it('a 60 fps sequence draws its motion at 30, and keeps the sequence at 60', () => {
+		const p = computeRegions(sixty(), 'original')
+		expect(p.fps).toBe(60)
+		expect(motionSlice(p).motion!.fps).toBe(MOTION_MAX_FPS)
+	})
+
+	it('leaves a sequence already at or below the cap as it was', () => {
+		const slow = sixty()
+		slow.media[0].metadata = { ...slow.media[0].metadata, fps: 24 } as MediaAsset['metadata']
+		expect(motionSlice(computeRegions(slow, 'original')).motion!.fps).toBe(24)
+	})
+
+	it('the exact frame counts the clip\'s frames at the clip\'s own rate', () => {
+		// A still at 2.0 s into the clip is frame 60 of a 30 fps clip, not of a 60 fps one.
+		const slice = { ...motionSlice(computeRegions(sixty(), 'original')), in: 2, out: 2 + 1 / 60 }
+		const range = stillFrameRange(slice, slice.motion!.fps)
+		expect(range.first).toBe(59)
+		expect(rebasedSlice(slice, range.first, slice.motion!.fps, '/s.mov').in).toBeCloseTo(2 - 59 / 30, 6)
+	})
+
+	it('draws fewer at once when the frame is big, where the main thread is the limit', () => {
+		const job = (w: number, h: number) => ({ item: {} as any, frame: { width: w, height: h, fps: 30 }, outputPath: '/x.mov' })
+		expect(motionConcurrency([job(854, 480)])).toBe(4)
+		expect(motionConcurrency([job(1920, 1080)])).toBe(4)
+		expect(motionConcurrency([job(3840, 2160)])).toBe(2)
 	})
 })

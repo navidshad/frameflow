@@ -96,6 +96,15 @@ function sliceSource(item: TimelineItem, t0: number, t1: number): { in: number; 
 	}
 }
 
+/**
+ * The most frames per second a motion layer is drawn at. Measured on an M1 Pro,
+ * a 4K frame takes about 140 ms to draw and read back (the 90 ms of it is the
+ * pixel copy, on the main thread), so a 4K60 project with 373 s of motion layers
+ * was 22,400 frames, about an hour. Motion graphics are made at 24-30 fps almost
+ * everywhere; at 60 fps they only repeat each frame once.
+ */
+export const MOTION_MAX_FPS = 30
+
 /** How many lines the proxies have: `scale=-2:480` in proxyArgs.ts. */
 export const PROXY_LINES = 480
 
@@ -308,7 +317,10 @@ export function computeRegions(
 		// the document's `in`.
 		if (item.motion) {
 			const clip: TimelineItem = { ...item, in: 0, out: item.duration, speed: 1 }
-			const frame = { width, height, fps }
+			// Drawn at its own, lower rate: every frame is a window screenshot, and
+			// the layer's chain below conforms it to the sequence's rate by
+			// repeating frames (`vnorm`'s `fps=`), so a 60 fps sequence costs half.
+			const frame = { width, height, fps: Math.min(fps, MOTION_MAX_FPS) }
 			const kit = motionKitFor(item.motion, doc.motionKits)
 			return {
 				...common,

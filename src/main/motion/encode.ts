@@ -94,10 +94,15 @@ export async function encodeFrames(options: {
 	const onAbort = () => child.kill('SIGKILL')
 	signal?.addEventListener('abort', onAbort)
 
+	let pending: Promise<Buffer> | null = null
 	try {
+		// Capture frame k+1 while frame k is converted and written: the capture
+		// is mostly waiting on the page and the GPU, the write on ffmpeg's pipe.
+		pending = count > 0 ? next(0) : null
 		for (let k = 0; k < count; k++) {
 			if (signal?.aborted) throw new Error('aborted')
-			const buffer = await next(k)
+			const buffer = await pending!
+			pending = k + 1 < count ? next(k + 1) : null
 			if (buffer.length !== expected) {
 				throw new Error(`Motion frame ${k} is ${buffer.length} bytes; expected ${expected} (${frame.width}×${frame.height}).`)
 			}
@@ -117,6 +122,8 @@ export async function encodeFrames(options: {
 		if (code !== 0) throw new Error(`Motion encode failed (ffmpeg exited ${code}): ${stderr.trim().slice(-600)}`)
 		fs.renameSync(partial, outputPath)
 	} catch (error) {
+		// A capture still in flight must not surface later as an unhandled rejection.
+		pending?.catch(() => {})
 		child.kill('SIGKILL')
 		try { fs.unlinkSync(partial) } catch { /* never written */ }
 		throw error

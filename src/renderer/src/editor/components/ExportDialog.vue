@@ -1,6 +1,6 @@
 <template>
 	<AppDialog :model-value="modelValue" :title="title" size="md"
-		@update:model-value="$emit('update:modelValue', $event)">
+		@update:model-value="onToggle">
 		<!-- ===== Idle: options ===== -->
 		<template v-if="!state">
 			<span class="lbl block">Quality</span>
@@ -89,13 +89,13 @@
 </template>
 
 <script setup lang="ts">
-import { computed, ref } from 'vue'
+import { computed, ref, watch } from 'vue'
 import type { DeliveryFormat } from '@shared/types'
 import AppDialog from '../../components/AppDialog.vue'
 import OptionRow from '../../components/OptionRow.vue'
 import { useEditorStore } from '../../stores/editorStore'
 
-defineProps<{ modelValue: boolean }>()
+const props = defineProps<{ modelValue: boolean }>()
 const emit = defineEmits<{ (e: 'update:modelValue', value: boolean): void; (e: 'show-exports'): void }>()
 
 const store = useEditorStore()
@@ -146,7 +146,21 @@ const qualityOptions = [
 
 // Closing the dialog does NOT abort — the render continues and the header
 // button keeps showing progress (reopen anytime).
-const close = () => emit('update:modelValue', false)
+/**
+ * A render that ended without a file (cancelled or failed) has nothing left to
+ * show, so leaving it must not leave its message behind: the next open would
+ * show "Export canceled" again, with no way back to the quality and format
+ * choices except pressing Retry. A finished one stays until Done.
+ */
+const endedWithoutFile = () => !!state.value && !store.isRendering && state.value.phase !== 'done'
+const close = () => {
+	if (endedWithoutFile()) store.clearRenderState()
+	emit('update:modelValue', false)
+}
+// The backdrop and the corner × reach this too, not just the Close button.
+const onToggle = (open: boolean) => (open ? emit('update:modelValue', true) : close())
+// A stale cancelled/failed screen from before is never what opening is for.
+watch(() => props.modelValue, (open) => { if (open && endedWithoutFile()) store.clearRenderState() })
 
 const finish = () => {
 	store.clearRenderState()

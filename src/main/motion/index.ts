@@ -144,7 +144,7 @@ export async function ensureMotionJobs(
 	// Each clip draws in its own hidden window and pipes to its own ffmpeg, and a
 	// frame spends most of its time waiting on the window's screenshot, not on a
 	// core — a 4K60 export of 28 layers sat at about 20% CPU one clip at a time.
-	await mapPool(unique.length, MOTION_CONCURRENCY, async (i, signal) => {
+	await mapPool(unique.length, motionConcurrency(unique), async (i, signal) => {
 		await ensureMotionClip(unique[i], {
 			signal,
 			onProgress: (k) => { done[i] = k; report() }
@@ -155,5 +155,13 @@ export async function ensureMotionJobs(
 	options.onProgress?.(1)
 }
 
-/** Motion clips drawn at once. */
-export const MOTION_CONCURRENCY = 4
+/**
+ * Motion clips drawn at once. At 480p a frame is mostly waiting (~17 ms, 59 fps
+ * alone), so four windows keep the machine busy. At 4K it is mostly the main
+ * thread copying pixels (~108 of ~137 ms), which windows cannot share, so more
+ * than two only queue behind each other and hold 33 MB frames in memory.
+ */
+export const motionConcurrency = (jobs: MotionJob[]): number => {
+	const pixels = jobs.reduce((max, j) => Math.max(max, j.frame.width * j.frame.height), 0)
+	return pixels > 1920 * 1080 ? 2 : 4
+}
