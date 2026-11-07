@@ -283,3 +283,33 @@ export function buildThumbnailBrief(options: { headline: Headline; frameCount: n
 	)
 	return lines.join('\n')
 }
+
+// ===== What is said in the cut =====
+
+/**
+ * The spoken lines of the film as it is cut: for each picture clip in timeline
+ * order, the transcript entries that overlap its trimmed range. A line the
+ * edit dropped never reaches the headline. With no timeline yet, a lone video's
+ * whole transcript stands in.
+ */
+export function transcriptLinesForCut(
+	doc: EditorDocument,
+	transcripts: Record<string, { start: number; end: number; text: string }[]>
+): string[] {
+	const assets = new Map(doc.media.map((a) => [a.id, a]))
+	const items = doc.timeline
+		.filter((i) => i.duration > 0 && hasPicture(assets.get(i.sourceAssetId)))
+		.sort((a, b) => a.timelineStart - b.timelineStart || a.id.localeCompare(b.id))
+
+	const out: string[] = []
+	if (!items.length) {
+		for (const a of doc.media) if (hasPicture(a)) for (const e of transcripts[a.id] ?? []) if (e.text) out.push(e.text)
+		return out
+	}
+	for (const item of items) {
+		for (const e of transcripts[item.sourceAssetId] ?? []) {
+			if (e.text && e.end > item.in && e.start < item.out) out.push(e.text)
+		}
+	}
+	return out
+}

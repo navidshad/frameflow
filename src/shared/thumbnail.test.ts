@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest'
 import type { EditorDocument, MediaAsset, TimelineItem, Track } from './types'
 import {
 	buildThumbnailBrief, chooseHeadline, cleanTitle, frameScore, frameStats, hookFromTranscript,
-	isPlaceholderTitle, isUsableFrame, pickFrames, samplePoints, type Candidate, type GrayFrame
+	isPlaceholderTitle, isUsableFrame, pickFrames, samplePoints, transcriptLinesForCut, type Candidate, type GrayFrame
 } from './thumbnail'
 
 // ---- fakes ----
@@ -202,5 +202,21 @@ describe('brief', () => {
 	it('carries the kicker when there is one', () => {
 		const text = buildThumbnailBrief({ headline: { text: 'A', source: 'title', kicker: 'B C D' }, frameCount: 2 })
 		expect(text).toContain('"B C D"')
+	})
+})
+
+describe('transcriptLinesForCut', () => {
+	it('keeps only the lines inside the trimmed range, in timeline order', () => {
+		const d = doc([asset('a'), asset('b')], [item('j', 'b', 10, 0, 5), item('i', 'a', 0, 20, 30)])
+		const lines = transcriptLinesForCut(d, {
+			a: [{ start: 0, end: 5, text: 'cut out' }, { start: 22, end: 25, text: 'kept a' }],
+			b: [{ start: 1, end: 2, text: 'kept b' }, { start: 9, end: 12, text: 'cut b' }]
+		})
+		expect(lines).toEqual(['kept a', 'kept b'])
+	})
+
+	it('uses a lone video\'s whole transcript when nothing is cut yet', () => {
+		const lines = transcriptLinesForCut(doc([asset('a')], []), { a: [{ start: 0, end: 1, text: 'hello there' }] })
+		expect(lines).toEqual(['hello there'])
 	})
 })
