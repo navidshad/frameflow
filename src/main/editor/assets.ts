@@ -2,18 +2,15 @@ import fs from 'fs'
 import path from 'path'
 import { v4 as uuidv4 } from 'uuid'
 import type { Clip, MediaAsset, Thread } from '@shared/types'
+import { importKindOf } from '@shared/mediaFiles'
 import { threadManager } from '../threads'
 import { getVideoMetadata, getAudioMetadata, sanitizeFilename } from '../ffmpeg'
 import { ASSET_DIRS, THREAD_DIRS } from '../constants/paths'
 import { abortAssetPreprocessing } from './preprocess'
 
-const AUDIO_EXTENSIONS = new Set([
-	'.mp3', '.wav', '.m4a', '.aac', '.flac', '.ogg', '.oga', '.opus', '.wma'
-])
-
 /** Classify an imported source as audio or video by file extension. */
 export function detectMediaKind(filePath: string): 'audio' | 'video' {
-	return AUDIO_EXTENSIONS.has(path.extname(filePath).toLowerCase()) ? 'audio' : 'video'
+	return importKindOf(filePath) === 'audio' ? 'audio' : 'video'
 }
 
 /**
