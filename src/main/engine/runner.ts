@@ -1,7 +1,6 @@
 import { mkdtempSync, rmSync, writeFileSync, chmodSync } from 'node:fs'
 import { join, sep } from 'node:path'
 import os from 'node:os'
-import { randomBytes } from 'node:crypto'
 import {
 	buildCommand, engineFailureNote, ENGINES, lineSplitter, readableError, parseStreamLine, StepTracker, TOKEN_ENV, unexpectedTools,
 	type CliEngineId, type EngineStep
@@ -9,8 +8,8 @@ import {
 import type { AgentActivity } from '@shared/agentFeed'
 import type { AgentPermissions } from '@shared/agent'
 import type { MotionProbe } from '../editor/vetHtml'
-import { AgentServer } from '../mcp/server'
-import type { ApplyOutcome, EditorBridge } from '../mcp/bridge'
+import type { EditorBridge } from '../mcp/bridge'
+import { createTurnSession, type CommitRecord } from './turnSession'
 import { killTree, spawnTree } from './proc'
 import type { Located } from './detect'
 
@@ -38,15 +37,7 @@ import type { Located } from './detect'
 export const enginePermissions = (htmlAllowed: boolean): AgentPermissions =>
 	({ edit: true, html: htmlAllowed, export: false, sound: true, generate: false })
 
-/** Calls past the step limit are refused; this many more and the run is stopped. */
-const OVERRUN_GRACE = 5
-
-export interface CommitRecord {
-	revisionId: string
-	revisionSeq: number
-	parentRevisionId: string | null
-	counts: { added: number; removed: number; updated: number; markers: number }
-}
+export type { CommitRecord }
 
 export interface EngineRunOptions {
 	engine: CliEngineId
@@ -111,68 +102,18 @@ function errorLine(stderr: string): string | undefined {
 export async function runEngineTurn(options: EngineRunOptions): Promise<EngineRunResult> {
 	const { engine, located } = options
 	const label = ENGINES[engine].label
-	const commits: CommitRecord[] = []
-	let finalRevisionId: string | undefined
-
-	// Records what each apply_ops made, so the turn can say "V7" at the end.
-	const bridge: EditorBridge = {
-		...options.bridge,
-		getLiveProject: () => options.bridge.getLiveProject(),
-		readTranscripts: (p, ids) => options.bridge.readTranscripts(p, ids),
-		renderFrame: (p, t) => options.bridge.renderFrame(p, t),
-		async switchRevision(id) {
-			const result = await options.bridge.switchRevision(id)
-			if (result.ok) finalRevisionId = id
-			return result
-		},
-		startExport: (p, o) => options.bridge.startExport(p, o),
-		// Spelled out: a class instance's methods do not survive the spread above.
-		exportStatus: (q) => options.bridge.exportStatus(q),
-		inspectExport: (f, o) => options.bridge.inspectExport(f, o),
-		mediaSheet: (p, id, o) => options.bridge.mediaSheet(p, id, o),
-		findSilences: (p, id, o) => options.bridge.findSilences(p, id, o),
-		isPreparing: (p, id) => options.bridge.isPreparing(p, id),
-		preparingLanes: (p, id) => options.bridge.preparingLanes?.(p, id) ?? [],
-		timelineSheet: (p, t, o) => options.bridge.timelineSheet(p, t, o),
-		listProjects: () => options.bridge.listProjects(),
-		createProject: (t) => options.bridge.createProject(t),
-		openProject: (id) => options.bridge.openProject(id),
-		importMedia: (p, src, cb) => options.bridge.importMedia(p, src, cb),
-		async commitTurn(commit) {
-			const outcome: ApplyOutcome = await options.bridge.commitTurn(commit)
-			if (outcome.ok) {
-				finalRevisionId = outcome.revisionId
-				commits.push({
-					revisionId: outcome.revisionId, revisionSeq: outcome.revisionSeq,
-					parentRevisionId: outcome.parentRevisionId ?? null, counts: outcome.counts
-				})
-			}
-			return outcome
-		}
-	}
-
-	const token = `ff_run_${randomBytes(24).toString('hex')}`
-	let toolCalls = 0
-	let overrun = false
-	const server = new AgentServer({
-		bridge,
-		token: () => token,
+	const session = createTurnSession({
+		bridge: options.bridge,
+		maxSteps: options.maxSteps,
+		turnId: options.turnId,
+		version: options.version,
 		permissions: options.permissions ?? (() => enginePermissions(false)),
 		probeMotion: options.probeMotion,
-		version: options.version,
-		engineTurnId: options.turnId,
-		// The engine's system prompt already carries the baseline: sending it again would double it.
-		instructions: null,
-		maxToolCalls: options.maxSteps,
-		onEvent: (event) => {
-			if (event.type !== 'activity') return
-			if (event.activity.status === 'running' && ++toolCalls > options.maxSteps + OVERRUN_GRACE) {
-				overrun = true
-				stop('overrun')
-			}
-			options.onActivity?.(event.activity)
-		}
+		onActivity: options.onActivity,
+		onOverrun: () => stop('overrun')
 	})
+	const { server, token, commits } = session
+	const overrun = () => session.overrun()
 
 	const workDir = options.workDir || mkdtempSync(join(os.tmpdir(), 'frameflow-engine-'))
 	try { chmodSync(workDir, 0o700) } catch { /* best effort */ }
@@ -254,13 +195,13 @@ export async function runEngineTurn(options: EngineRunOptions): Promise<EngineRu
 		tracker.settle(stopReason === 'abort' ? 'Stopped' : 'Did not finish')
 		options.onSteps?.(tracker.steps.map((s) => ({ ...s })), tracker.model)
 
-		const base = { steps: tracker.steps, model: tracker.model, sessionId: tracker.sessionId, commits, finalRevisionId, exitCode, stderr: tail(stderr) }
+		const base = { steps: tracker.steps, model: tracker.model, sessionId: tracker.sessionId, commits, finalRevisionId: session.finalRevisionId(), exitCode, stderr: tail(stderr) }
 		if (stopReason === 'abort') return { ...base, ok: false, cancelled: true, answer: tracker.answer, error: 'Cancelled' }
 		if (stopReason === 'restricted') {
 			return { ...base, ok: false, cancelled: false, answer: '', error: `Stopped: ${restrictedDetail} Nothing outside FrameFlow’s tools may run.` }
 		}
 		if (stopReason === 'timeout') return { ...base, ok: false, cancelled: false, answer: tracker.answer, error: `${label} took too long and was stopped.` }
-		if (stopReason === 'overrun' || overrun) {
+		if (stopReason === 'overrun' || overrun()) {
 			return { ...base, ok: false, cancelled: false, answer: tracker.answer, error: `${label} kept calling tools past the ${options.maxSteps}-step limit and was stopped.` }
 		}
 

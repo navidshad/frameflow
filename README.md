@@ -67,8 +67,10 @@ open project. An agent's work lands as one **round**: a revision you can undo or
 with the conversation in the chat and its changes outlined on the timeline. Turn it on under
 **Settings → Agent access**.
 
-**Built-in CLI engine.** Pick Claude Code as the editing engine from the chat box's engine chip
-(**Settings → Video editing**). It edits through FrameFlow's own MCP tools; each turn shows its steps.
+**Built-in engines.** Pick Claude Code or Gemini as the editing engine from the chat box's engine chip
+(**Settings → Video editing**). Both edit through FrameFlow's own MCP tools, in as many steps as the
+request needs, and each turn shows its steps. Claude Code runs on your own plan; Gemini runs a loop
+inside FrameFlow on your Gemini key and shows what each turn cost.
 
 <div align="center">
   <img src="./docs/screenshots/settings-ai-engine.png" width="80%" alt="Settings: the AI engine card" />
