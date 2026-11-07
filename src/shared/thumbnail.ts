@@ -265,8 +265,8 @@ export function buildThumbnailBrief(options: { headline: Headline; frameCount: n
 	const lines = [
 		`Generate a YouTube thumbnail, 16:9 (${THUMBNAIL_SIZE.width}x${THUMBNAIL_SIZE.height}), for my video.`,
 		frameCount > 1
-			? `Use the ${frameCount} attached frames from the video as the source; take the first one as the base and keep the people and place looking exactly as they do in it.`
-			: 'Use the attached frame from the video as the base and keep the people and place looking exactly as they do in it.',
+			? `Use the ${frameCount} frames from my video that are in this project as the source; take the first one as the base and keep the people and place looking exactly as they do in it.`
+			: 'Use the frame from my video that is in this project as the base and keep the people and place looking exactly as they do in it.',
 		'Make it high-impact: strong contrast, a clear subject, simple composition.'
 	]
 	if (headline.text) {

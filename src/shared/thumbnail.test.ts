@@ -188,7 +188,7 @@ describe('brief', () => {
 		const text = buildThumbnailBrief({ headline: { text: 'I quit my job', source: 'title' }, frameCount: 3 })
 		expect(text).toContain('"I quit my job"')
 		expect(text).toContain('1280x720')
-		expect(text).toContain('3 attached frames')
+		expect(text).toContain('3 frames from my video')
 		expect(text).toMatch(/Never cover a face/)
 		expect(text).toMatch(/bottom edge/)
 	})
@@ -196,7 +196,7 @@ describe('brief', () => {
 	it('says so when there is no headline instead of inventing one', () => {
 		const text = buildThumbnailBrief({ headline: { text: '', source: 'none' }, frameCount: 1 })
 		expect(text).toContain('No text')
-		expect(text).toContain('attached frame ')
+		expect(text).toContain('frame from my video')
 	})
 
 	it('carries the kicker when there is one', () => {
