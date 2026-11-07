@@ -1,7 +1,7 @@
 import { v4 as uuidv4 } from 'uuid'
 import { applyFollowers, applySoundOps } from './soundOps'
 import type {
-	Clip, EditorDocument, EditorOps, EditorPersona, MediaAsset, PromptTurn, TimelineDiff, TimelineItem, Usage
+	Clip, EditorDocument, EditorOps, MediaAsset, PromptTurn, TimelineDiff, TimelineItem, Usage
 } from '@shared/types'
 import {
 	applyTimelineDiff, clampSpeed, closeTimelineGaps, computeContentEnd, itemDuration, itemEnd, MIN_ITEM_DURATION,
@@ -9,6 +9,7 @@ import {
 } from '@shared/timeline'
 import { DETAIL_MAX_PIECES, EXPAND_MAX_REGIONS } from './context'
 import { clampPan } from '@shared/framing'
+import { FRAMEFLOW_OVERVIEW } from '@shared/baseline'
 import { planRangeRemoval } from '@shared/rangeEdit'
 import { KEY_DEFAULTS } from '@shared/keying'
 import { GENERATOR_DEFAULTS, GENERATORS } from '@shared/generators'
@@ -370,37 +371,6 @@ export const EDITOR_OPS_SCHEMA = {
 	}
 }
 
-/**
- * The persona's house style, as instruction.
- *
- * Preferences, not a whitelist — the catalogues are listed in full elsewhere in
- * the context, and a persona that could only reach four transitions would be a
- * worse editor than one that knows which four it likes. The point is that a
- * user should not have to re-describe a house style in every prompt.
- */
-function personaStyleLines(persona: EditorPersona): string[] {
-	const style = persona.style
-	if (!style) return []
-	const lines: string[] = []
-	if (style.note) lines.push(`House style: ${style.note}`)
-	if (style.transitions?.length) {
-		lines.push(`Preferred transitions: ${style.transitions.join(', ')} — reach for these first.`)
-	}
-	if (style.looks?.length) {
-		lines.push(`Signature looks: ${style.looks.join(', ')}.`)
-	}
-	if (style.captions !== undefined) {
-		lines.push(style.captions
-			? 'Captions belong on this kind of edit — set `captions: true` when the material has a transcript.'
-			: 'This kind of edit is not usually captioned; leave `captions` alone unless asked.')
-	}
-	if (style.loudness) {
-		lines.push('Set `loudness: true` — this is meant to be posted.')
-	}
-	lines.push('These are this voice\'s habits, not limits. Anything in the catalogues is available.')
-	return lines
-}
-
 // ===== System instruction composition =====
 
 /** Project facts the contract quotes back at the model so it knows what "full length" means. */
@@ -419,10 +389,10 @@ const clock = (seconds: number): string => {
 /**
  * Tell the model to work out the intended runtime from the REQUEST.
  *
- * This replaces a persona-driven `targetDurationSec`. The old summarize branch
+ * This replaced a preset `targetDurationSec`. The old summarize branch
  * hard-set a number, and the old longform branch hard-forbade shortening ("if
  * your cut comes to less than 70% you have cut too much"). Both fought the user
- * whenever the request disagreed with the persona.
+ * whenever the request disagreed with the preset.
  *
  * What survives from that guardrail is the reason it existed: models over-cut by
  * default. So the instruction still demands a self-check — but against the
@@ -430,7 +400,7 @@ const clock = (seconds: number): string => {
  * number in `targetLength` so the UI can hold it to its word.
  *
  * The empty-timeline vs existing-cut split stays: that was always keyed on
- * timeline state, never on persona mode.
+ * timeline state, never on a preset.
  */
 function outputLengthLines(stats: PromptStats, phase?: 'survey' | 'detail'): string[] {
 	const haveSource = stats.sourceDurationSec > 0
@@ -453,8 +423,7 @@ function outputLengthLines(stats: PromptStats, phase?: 'survey' | 'detail'): str
 		'that target. If it is more than ~25% short, you have dropped material you meant to',
 		'keep: go back and include it. Coming in far under the intended length is by far the',
 		'most common failure — when in doubt, include more.',
-		'The persona above describes a STYLE. Where the request implies a different length',
-		'than the persona\'s usual habit, the request wins.'
+		'The request is the whole brief: where it implies a length, that length wins.'
 	]
 
 	// Empty timeline: there is no runtime to preserve — it has to be BUILT.
@@ -691,12 +660,9 @@ export function sumUsage(usages: Usage[]): Usage {
  * the output is then byte-identical to the pre-banding instruction.
  */
 export function composeSystemInstruction(
-	persona: EditorPersona,
 	stats: PromptStats,
 	phase?: 'survey' | 'detail'
 ): string {
-	const defaults = persona.defaults || {}
-
 	const phaseLines = phase === 'survey'
 		? [
 			'',
@@ -735,7 +701,7 @@ export function composeSystemInstruction(
 			: []
 
 	return [
-		persona.systemPrompt,
+		FRAMEFLOW_OVERVIEW,
 		'',
 		'=== EDITOR CONTRACT (always applies) ===',
 		'You are proposing an edit to a video timeline in a non-linear editor. You receive the',
@@ -819,9 +785,6 @@ export function composeSystemInstruction(
 		'- Always include a short `rationale` describing what you changed and why, citing what is',
 		'  actually in the pieces.',
 		'',
-		'=== ACTIVE PERSONA DEFAULTS ===',
-		`Tone: ${persona.tone || 'neutral'}. Pacing: ${defaults.pacing || 'balanced'}.`,
-		...personaStyleLines(persona),
 		...outputLengthLines(stats, phase),
 		...phaseLines
 	].filter(Boolean).join('\n')

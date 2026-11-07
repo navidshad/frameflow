@@ -1,7 +1,7 @@
 import { defineStore } from 'pinia'
 import { computed, ref } from 'vue'
 import {
-	asSetIn, CLI_MODELS, DEFAULT_ENGINE_SETTINGS, ENGINES, engineChipLabel, geminiTextModels, isCliEngine,
+	asSetIn, CLI_MODELS, DEFAULT_ENGINE_SETTINGS, ENGINE_IDS, ENGINES, engineChipLabel, geminiTextModels, isCliEngine,
 	type GeminiTextModel,
 	type EngineDetection, type EngineId, type EngineSettings, type ModelOption
 } from '@shared/engines'
@@ -38,7 +38,7 @@ export const useEngineStore = defineStore('engine', () => {
 
 	/** Engines for the chip menu: a CLI found here, then Gemini API. */
 	const available = computed(() =>
-		(['claude-code', 'gemini-api'] as EngineId[]).filter((id) => {
+		ENGINE_IDS.filter((id) => {
 			const d = detectionFor(id)
 			return id === settings.value.engine || (d && d.status !== 'missing')
 		})

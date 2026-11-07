@@ -7,7 +7,7 @@ import {
 import type { PromptTurn, PromptTurnEngine } from '@shared/types'
 import { settingsManager } from '../settings'
 import { threadManager } from '../threads'
-import { emitTurnUpdate, persistTurn, resolvePersona } from '../editor/prompt'
+import { emitTurnUpdate, persistTurn } from '../editor/prompt'
 import { rendererBridge, switchRevisionFor } from '../mcp/rendererBridge'
 import { detectCli, locate, recordRunFailure } from './detect'
 import { enginePermissions, runEngineTurn } from './runner'
@@ -84,7 +84,6 @@ export function cliEngineSelected(): boolean {
 
 export function runCliEditorPrompt(options: {
 	threadId: string
-	personaId: string
 	prompt: string
 	baseStepId: string
 	selectedItemIds: string[]
@@ -103,7 +102,6 @@ export function runCliEditorPrompt(options: {
 	}
 	const turn: PromptTurn = {
 		id: turnId,
-		personaId: options.personaId,
 		prompt: options.prompt,
 		baseStepId: options.baseStepId,
 		status: 'running',
@@ -125,16 +123,18 @@ export function runCliEditorPrompt(options: {
 			const located = await locate(id)
 			if (!located) throw new Error(`${label} is not installed, or FrameFlow cannot find it. Pick another engine, or install it and press Detect again in Settings.`)
 
-			const persona = resolvePersona(thread.editor, options.personaId)
 			// Empty means the CLI's own default: no model flag at all.
 			const model = settings.models[id] || undefined
+			// Same for effort: unset passes no flag.
+			const effort = settings.efforts[id] || undefined
 			let latest: PromptTurn = turn
 			const result = await runEngineTurn({
 				engine: id,
 				located,
 				prompt: buildEngineUserPrompt(options),
-				systemPrompt: buildEngineSystemPrompt({ persona, maxSteps: settings.maxSteps, engineLabel: label }),
+				systemPrompt: buildEngineSystemPrompt({ maxSteps: settings.maxSteps, engineLabel: label }),
 				model,
+				effort,
 				maxSteps: settings.maxSteps,
 				// The user's "Write custom HTML motion layers" switch, read per call.
 				permissions: () => enginePermissions(settingsManager.getAgentAccess().permissions.html),

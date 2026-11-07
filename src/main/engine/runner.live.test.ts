@@ -53,9 +53,7 @@ describe('CLI engines, really spawned', () => {
 					engine: id,
 					located: where,
 					prompt: PROMPT,
-					systemPrompt: buildEngineSystemPrompt({
-						persona: { name: 'Editor', systemPrompt: 'Be brief.' }, maxSteps: 12, engineLabel: ENGINES[id].label
-					}),
+					systemPrompt: buildEngineSystemPrompt({ maxSteps: 12, engineLabel: ENGINES[id].label }),
 					maxSteps: 12,
 					bridge: editor,
 					turnId: 'turn-live',

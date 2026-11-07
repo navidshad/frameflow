@@ -44,7 +44,6 @@ export function makeDoc(): EditorDocument {
 		tracks: [{ id: 'v1', kind: 'video', name: 'V1', order: 0, muted: false, locked: false, hidden: false, height: 64 }],
 		timeline: [item],
 		timelineMeta: { fps: 30, width: 1920, height: 1080, duration: 30 },
-		activePersonaId: 'podcast-editor',
 		turns: [],
 		historyRef: { currentStepId: 'step-0', stepCount: 0 }
 	}

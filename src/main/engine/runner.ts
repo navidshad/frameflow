@@ -54,6 +54,7 @@ export interface EngineRunOptions {
 	prompt: string
 	systemPrompt: string
 	model?: string
+	effort?: string
 	maxSteps: number
 	bridge: EditorBridge
 	/** The chat turn: apply_ops links its revisions to it. */
@@ -150,6 +151,8 @@ export async function runEngineTurn(options: EngineRunOptions): Promise<EngineRu
 		probeMotion: options.probeMotion,
 		version: options.version,
 		engineTurnId: options.turnId,
+		// The engine's system prompt already carries the baseline: sending it again would double it.
+		instructions: null,
 		maxToolCalls: options.maxSteps,
 		onEvent: (event) => {
 			if (event.type !== 'activity') return
@@ -183,6 +186,7 @@ export async function runEngineTurn(options: EngineRunOptions): Promise<EngineRu
 			systemPrompt: options.systemPrompt,
 			mcpUrl: `http://127.0.0.1:${port}/mcp`,
 			model: options.model,
+			effort: options.effort,
 			workDir,
 			pathSep: sep === '\\' ? '\\' : '/'
 		})

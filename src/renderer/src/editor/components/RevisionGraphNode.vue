@@ -19,8 +19,7 @@
 		<div class="flex items-center gap-1.5" :class="compact ? 'mb-1' : 'mb-1.5'">
 			<span class="text-[10px] font-bold text-primary font-mono shrink-0">V{{ revision.seq }}</span>
 			<span class="leading-none shrink-0" :title="origin.title">
-				<span v-if="origin.icon" class="iconify w-3 h-3" :class="[origin.icon, origin.iconClass]"></span>
-				<span v-else class="text-xs">{{ personaIcon }}</span>
+				<span class="iconify w-3 h-3" :class="[origin.icon, origin.iconClass]"></span>
 			</span>
 			<span class="flex-1 min-w-0 text-[10px] font-bold text-zinc-700 dark:text-zinc-300 truncate">
 				{{ revision.label }}
@@ -70,6 +69,6 @@ const compact = computed(() => !!props.data.compact)
 
 const {
 	isCurrent, isDirtyHere, disabled, canDelete,
-	thumbs, time, itemCount, origin, personaIcon, title, switchTo, remove
+	thumbs, time, itemCount, origin, title, switchTo, remove
 } = useRevisionCard(revision, { thumbCount: compact.value ? 1 : 3 })
 </script>

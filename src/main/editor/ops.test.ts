@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import type { Clip, EditorDocument, EditorPersona, MediaAsset, TimelineItem, Track } from '@shared/types'
+import type { Clip, EditorDocument, MediaAsset, TimelineItem, Track } from '@shared/types'
 import { applyTimelineDiff, repairOverlaps, repairOverlapsReporting, TIMELINE_DIFF_SCHEMA_VERSION } from '@shared/timeline'
 import {
 	composeSystemInstruction, EDITOR_OPS_SCHEMA, editorOpsSchema, measureBuild, opsToDiff, opsWriteHtml,
@@ -53,7 +53,6 @@ function makeDoc(assets: MediaAsset[], timeline: TimelineItem[] = []): EditorDoc
 		tracks: [track],
 		timeline,
 		timelineMeta: { fps: 30, width: 1920, height: 1080, duration: 0 },
-		activePersonaId: 'podcast-editor',
 		turns: [],
 		historyRef: { currentStepId: 'step-0', stepCount: 0 }
 	}
@@ -493,31 +492,20 @@ describe('opsToDiff / atScene markers', () => {
 // ===== Output-length contract =====
 
 describe('composeSystemInstruction', () => {
-	const persona: EditorPersona = {
-		id: 'general-editor', name: 'Video Editor', icon: '🎬', description: '',
-		systemPrompt: 'You are a capable, general-purpose video editor.', builtin: true,
-		defaults: { pacing: 'balanced' }
-	}
-	// A persona whose prose leans short — it must NOT force a short output.
-	const summarizer: EditorPersona = {
-		id: 'concise', name: 'Concise', icon: '✂️', description: '',
-		systemPrompt: 'You summarize.', builtin: true,
-		defaults: { pacing: 'tight' }
-	}
 	const stats = (over: Partial<PromptStats>): PromptStats => ({
 		timelineItemCount: 0, timelineDurationSec: 0,
 		sourceDurationSec: 5535, sourceClipCount: 1899, ...over
 	})
 
 	it('tells the model to infer the length from the request', () => {
-		const text = composeSystemInstruction(persona, stats({}))
+		const text = composeSystemInstruction(stats({}))
 		expect(text).toContain('=== OUTPUT LENGTH ===')
 		expect(text).toContain('Work out the intended length from the request')
 		expect(text).toContain('targetLength')
 	})
 
 	it('defaults to a full-length build when the timeline is empty', () => {
-		const text = composeSystemInstruction(persona, stats({}))
+		const text = composeSystemInstruction(stats({}))
 		expect(text).toContain('The timeline is EMPTY')
 		expect(text).toContain('92:15')
 		expect(text).toContain('1899 detected pieces')
@@ -526,28 +514,27 @@ describe('composeSystemInstruction', () => {
 	})
 
 	it('defaults to preserving an existing cut', () => {
-		const text = composeSystemInstruction(persona, stats({ timelineItemCount: 28, timelineDurationSec: 339 }))
+		const text = composeSystemInstruction(stats({ timelineItemCount: 28, timelineDurationSec: 339 }))
 		expect(text).toContain('The current cut is 28 items, 5:39')
 		expect(text).toContain('PRESERVE that runtime')
 		// Short cut + lots of unused source => it is told how to extend.
 		expect(text).toContain('APPEND the missing material')
 	})
 
-	it('says the request wins over the persona\'s habit', () => {
-		expect(composeSystemInstruction(persona, stats({}))).toContain('the request wins')
+	it('says the request is the whole brief', () => {
+		expect(composeSystemInstruction(stats({}))).toContain('The request is the whole brief')
 	})
 
-	it('still reports tone and pacing', () => {
-		expect(composeSystemInstruction(persona, stats({}))).toContain('Pacing: balanced')
+	// The whole point of deleting modes: nothing can preset a runtime or a style.
+	it('never emits a preset duration target, tone, pacing or house style', () => {
+		const text = composeSystemInstruction(stats({}))
+		expect(text).not.toContain('Target output duration')
+		expect(text).not.toContain('Target aspect ratio')
+		expect(text).not.toMatch(/PERSONA|Pacing:|House style|Preferred transitions/)
 	})
 
-	// The whole point of deleting modes: no persona shape can preset a runtime.
-	it('never emits a preset duration target, whatever the persona', () => {
-		for (const p of [persona, summarizer]) {
-			const text = composeSystemInstruction(p, stats({}))
-			expect(text).not.toContain('Target output duration')
-			expect(text).not.toContain('Target aspect ratio')
-		}
+	it('opens with the shared overview of what FrameFlow is', () => {
+		expect(composeSystemInstruction(stats({}))).toContain('FrameFlow is a video editor')
 	})
 })
 
@@ -716,18 +703,13 @@ describe('sumUsage', () => {
 })
 
 describe('composeSystemInstruction / survey phases', () => {
-	const persona: EditorPersona = {
-		id: 'general-editor', name: 'Video Editor', icon: '🎬', description: '',
-		systemPrompt: 'You are a capable, general-purpose video editor.', builtin: true,
-		defaults: { pacing: 'balanced' }
-	}
 	const stats: PromptStats = {
 		timelineItemCount: 0, timelineDurationSec: 0,
 		sourceDurationSec: 5535, sourceClipCount: 1899
 	}
 
 	it('says nothing about surveys without a phase — small sources are untouched', () => {
-		const text = composeSystemInstruction(persona, stats)
+		const text = composeSystemInstruction(stats)
 		expect(text).not.toContain('CONDENSED SURVEY')
 		expect(text).not.toContain('DETAIL VIEW')
 		expect(text).not.toContain('expandRegions')
@@ -736,7 +718,7 @@ describe('composeSystemInstruction / survey phases', () => {
 	})
 
 	it('replaces the pick-pieces arithmetic with the expand instruction in the survey pass', () => {
-		const text = composeSystemInstruction(persona, stats, 'survey')
+		const text = composeSystemInstruction(stats, 'survey')
 		expect(text).toContain('CONDENSED SURVEY')
 		expect(text).toContain('expandRegions')
 		// The blind-curation instruction must NOT survive into the survey pass.
@@ -750,14 +732,14 @@ describe('composeSystemInstruction / survey phases', () => {
 	// which SourceCoverage turns into a no-op or an unwanted append.
 	it('tells an existing-cut survey turn to edit items, not rebuild with ranges', () => {
 		const text = composeSystemInstruction(
-			persona, { ...stats, timelineItemCount: 267, timelineDurationSec: 3600 }, 'survey')
+			{ ...stats, timelineItemCount: 267, timelineDurationSec: 3600 }, 'survey')
 		expect(text).toContain('EXISTING cut')
 		expect(text).toContain('only to APPEND')
 		expect(text).not.toContain('build it NOW')
 	})
 
 	it('tells the detail pass to commit, with the arithmetic restored', () => {
-		const text = composeSystemInstruction(persona, stats, 'detail')
+		const text = composeSystemInstruction(stats, 'detail')
 		expect(text).toContain('DETAIL VIEW')
 		expect(text).toContain('is not available in this response')
 		expect(text).toContain('Pick them with `addClips`')
@@ -958,60 +940,6 @@ describe('opsToDiff / one update per item', () => {
 	})
 })
 
-describe('composeSystemInstruction / persona style', () => {
-	const stats: PromptStats = {
-		timelineItemCount: 0, timelineDurationSec: 0, sourceDurationSec: 600, sourceClipCount: 10
-	}
-	const persona = (style?: EditorPersona['style']): EditorPersona => ({
-		id: 'p', name: 'P', icon: '🎬', description: '', systemPrompt: 'be a good editor',
-		builtin: true, tone: 'neutral', defaults: { pacing: 'balanced' }, featureSets: [], style
-	})
-
-	it('says nothing when a persona has no house style', () => {
-		const text = composeSystemInstruction(persona(), stats)
-		expect(text).not.toContain('House style')
-		expect(text).not.toContain('Preferred transitions')
-	})
-
-	it('quotes the style as habits, not limits', () => {
-		// A persona confined to four transitions would be a worse editor than one
-		// that knows which four it likes.
-		const text = composeSystemInstruction(persona({
-			transitions: ['fade'], looks: ['look-soft'], captions: true, loudness: true,
-			note: 'Sound first.'
-		}), stats)
-		expect(text).toContain('House style: Sound first.')
-		expect(text).toContain('Preferred transitions: fade')
-		expect(text).toContain('Signature looks: look-soft')
-		expect(text).toContain('`captions: true`')
-		expect(text).toContain('`loudness: true`')
-		expect(text).toContain('not limits')
-	})
-
-	it('says explicitly when a voice does NOT caption', () => {
-		// Silence would read as "no opinion", and the model would guess.
-		const text = composeSystemInstruction(persona({ captions: false }), stats)
-		expect(text).toContain('not usually captioned')
-	})
-})
-
-describe('the built-in personas', () => {
-	it('every style names kinds that actually exist', async () => {
-		// A persona pointing at a kind the catalogue does not have would send the
-		// model to write an op that gets dropped.
-		const { BUILTIN_PERSONAS } = await import('../constants/personas')
-		const { isTransitionKind } = await import('@shared/transitionPresets')
-		const { isEffectKind } = await import('@shared/effects')
-		for (const p of BUILTIN_PERSONAS) {
-			for (const kind of p.style?.transitions ?? []) {
-				expect(isTransitionKind(kind), `${p.id}: ${kind}`).toBe(true)
-			}
-			for (const kind of p.style?.looks ?? []) {
-				expect(isEffectKind(kind), `${p.id}: ${kind}`).toBe(true)
-			}
-		}
-	})
-})
 
 describe('opsToDiff / removeRanges', () => {
 	const doc = () => makeDoc([makeAsset('a', uniform(2, 10))], [

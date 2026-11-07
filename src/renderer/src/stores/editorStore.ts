@@ -3,7 +3,7 @@ import { defineStore } from 'pinia'
 import { ref, shallowRef, computed, watch } from 'vue'
 import type {
 	BackgroundTask, Clip, EditorDocument, EditorHistoryStep, EditorMarker,
-	EditorPersona, EditorRevision, EditorRevisionSummary, MediaAsset, RevisionSnapshot, PromptTurn, Thread, TimelineDiff,
+	EditorRevision, EditorRevisionSummary, MediaAsset, RevisionSnapshot, PromptTurn, Thread, TimelineDiff,
 	DeliveryFormat, SoundBinding, TimelineItem, TimelineItemTransform, TimelineSnapshot, Track,
 	EditorOps, MulticamGroup, MulticamSpeakers, PrepLane
 } from '@shared/types'
@@ -40,7 +40,6 @@ import {
 } from '@shared/captions'
 import { sequenceFrame as resolveSequenceFrame } from '@shared/framing'
 import { childrenByParent, collectSubtree, hasBranch, summarizeRevision, withoutProbeStamps } from '@shared/revision-tree'
-import { DEFAULT_PERSONA_ID } from '@shared/personas'
 import { agentChangeBadges, type AgentApplyOutcome } from '@shared/agentFeed'
 import { toMediaUrl } from '@shared/media-url'
 import { roleSpec, type AudioAnalysis, type TrackRole } from '@shared/audio'
@@ -65,7 +64,7 @@ import { dialog } from '../composables/useDialog'
  * - MAIN owns preprocessing-derived asset fields: preprocessing, proxyPath,
  *   metadata, preprocessState, preprocessError, clips content.
  * - RENDERER owns: selection, clip.selected flags, tracks, timeline,
- *   timelineMeta, activePersonaId, customPersonas.
+ *   timelineMeta.
  * persistDoc() sends only renderer-owned fields; the thread-updated handler
  * merges only main-owned fields.
  */
@@ -139,9 +138,6 @@ export const useEditorStore = defineStore('editor', () => {
 	// ===== History state (M2) =====
 	const historySteps = ref<EditorHistoryStep[]>([])
 	let pushCounter = 0
-
-	// ===== Personas (M3) =====
-	const personas = ref<EditorPersona[]>([]) // built-ins + global user library (from main)
 
 	// ===== AI prompt turns (M3, reworked for revisions) =====
 	const activeTurnId = ref<string | null>(null)
@@ -1023,37 +1019,6 @@ export const useEditorStore = defineStore('editor', () => {
 	const canUndo = computed(() => pointerIndex.value >= 0)
 	const canRedo = computed(() => pointerIndex.value < historySteps.value.length - 1)
 
-	// ===== Persona computeds (M3) =====
-	// Resolution: project-local customPersonas -> global library (incl. builtins) -> default
-	const findPersona = (id: string | undefined | null): EditorPersona | null => {
-		if (!id) return null
-		return (
-			doc.value?.customPersonas?.find((p) => p.id === id) ||
-			personas.value.find((p) => p.id === id) ||
-			null
-		)
-	}
-
-	const activePersona = computed<EditorPersona | null>(() =>
-		findPersona(doc.value?.activePersonaId) ||
-		personas.value.find((p) => p.id === DEFAULT_PERSONA_ID) ||
-		personas.value[0] ||
-		null
-	)
-
-	/**
-	 * Built-in vs custom. This used to group by persona mode (Long-form /
-	 * Summarize), which is the taxonomy that no longer exists — a persona is a
-	 * style now, and length comes from the request.
-	 */
-	const personaGroups = computed(() => ({
-		builtin: personas.value.filter((p) => p.builtin),
-		custom: [
-			...personas.value.filter((p) => !p.builtin),
-			...(doc.value?.customPersonas || [])
-		]
-	}))
-
 	// ===== Proposal computeds (M3) =====
 	const promptRunning = computed(() => activeTurnId.value !== null)
 	/**
@@ -1304,8 +1269,6 @@ export const useEditorStore = defineStore('editor', () => {
 				timeline: doc.value.timeline,
 				timelineMeta: doc.value.timelineMeta,
 				selection: doc.value.selection,
-				activePersonaId: doc.value.activePersonaId,
-				customPersonas: doc.value.customPersonas,
 				clipSelections,
 				// Undo pointer rides with the doc: state + pointer land atomically
 				historyRef: doc.value.historyRef,
@@ -1374,13 +1337,6 @@ export const useEditorStore = defineStore('editor', () => {
 			}
 
 			backgroundTasks.value = (await api.getBackgroundTasks(id)) || {}
-
-			// ---- Personas (global library incl. builtins) ----
-			try {
-				personas.value = (await api.getPersonas()) || []
-			} catch (error) {
-				console.error('[editorStore] Failed to load personas:', error)
-			}
 
 			// ---- Which model each operation is configured to use ----
 			// So buttons that spend tokens can name the model instead of just
@@ -3492,46 +3448,6 @@ export const useEditorStore = defineStore('editor', () => {
 			d.tracks.filter((t) => trackFamily(t) === 'video').length > 1
 	}
 
-	// ===== Persona actions (M3) =====
-	const setActivePersona = (id: string) => {
-		if (!doc.value) return
-		doc.value.activePersonaId = id
-		markDirty()
-	}
-
-	/** Create or update a persona in the GLOBAL library (main filters builtins). */
-	const savePersona = async (persona: EditorPersona) => {
-		const userPersonas = personas.value.filter((p) => !p.builtin && p.id !== persona.id)
-		const merged = await api.setPersonas(
-			JSON.parse(JSON.stringify([...userPersonas, { ...persona, builtin: false, featureSets: [] }]))
-		)
-		if (merged) personas.value = merged
-	}
-
-	const clonePersona = (sourceId: string): EditorPersona | null => {
-		const source = findPersona(sourceId) || personas.value.find((p) => p.id === sourceId)
-		if (!source) return null
-		return {
-			...JSON.parse(JSON.stringify(source)),
-			id: (crypto as any).randomUUID ? crypto.randomUUID() : `persona-${Date.now()}`,
-			name: `Copy of ${source.name}`,
-			builtin: false,
-			featureSets: []
-		}
-	}
-
-	const deletePersona = async (id: string) => {
-		const target = personas.value.find((p) => p.id === id)
-		if (!target || target.builtin) return // built-ins can't be deleted
-		const merged = await api.setPersonas(
-			JSON.parse(JSON.stringify(personas.value.filter((p) => !p.builtin && p.id !== id)))
-		)
-		if (merged) personas.value = merged
-		if (doc.value?.activePersonaId === id) {
-			setActivePersona(DEFAULT_PERSONA_ID)
-		}
-	}
-
 	// ===== Revision actions =====
 	const deepClone = <T>(v: T): T => JSON.parse(JSON.stringify(v))
 
@@ -3608,7 +3524,6 @@ export const useEditorStore = defineStore('editor', () => {
 		origin: 'ai' | 'manual'
 		label?: string
 		turnId?: string
-		personaId?: string
 	}): Promise<EditorRevisionSummary | null> => {
 		if (!doc.value || !threadId.value) return null
 		await ensureRootRevision()
@@ -3622,7 +3537,6 @@ export const useEditorStore = defineStore('editor', () => {
 			origin: options.origin,
 			label: options.label?.trim() || (options.origin === 'ai' ? 'AI edit' : 'Checkpoint'),
 			turnId: options.turnId,
-			personaId: options.personaId,
 			snapshot: snapshotOfWorkingState(),
 			createdAt: Date.now()
 		}
@@ -3641,13 +3555,13 @@ export const useEditorStore = defineStore('editor', () => {
 	 * adding another, so switching between revisions stays about whole sessions.
 	 */
 	const replaceRoundRevision = async (
-		id: string, options: { label: string; turnId?: string; personaId?: string }
+		id: string, options: { label: string; turnId?: string }
 	): Promise<EditorRevisionSummary | null> => {
 		const existing = revisions.value.find((r) => r.id === id)
 		if (!existing || !doc.value || !threadId.value) return null
 		const rev: EditorRevision = {
 			id, parentId: existing.parentId, seq: existing.seq, origin: 'ai', label: options.label,
-			turnId: options.turnId, personaId: options.personaId,
+			turnId: options.turnId,
 			snapshot: snapshotOfWorkingState(), createdAt: existing.createdAt
 		}
 		const summary = { ...summarizeRevision(rev), seq: existing.seq }
@@ -3806,7 +3720,6 @@ export const useEditorStore = defineStore('editor', () => {
 		try {
 			const result = await api.runEditorPrompt({
 				threadId: threadId.value,
-				personaId: activePersona.value?.id || DEFAULT_PERSONA_ID,
 				prompt,
 				baseStepId: doc.value.historyRef.currentStepId,
 				selectedItemIds: JSON.parse(JSON.stringify(override?.retry?.selectedItemIds ?? selectedItemIds.value)),
@@ -4037,9 +3950,8 @@ export const useEditorStore = defineStore('editor', () => {
 				await createRevision({ origin: 'manual', label: 'Auto checkpoint' })
 			}
 
-			const persona = findPersona(turn.personaId)
-			// An agent's turn is labelled with the agent: "Claude Code", not a persona.
-			const name = turn.agent?.name || persona?.name || 'AI edit'
+			// An agent's turn is labelled with the agent: "Claude Code".
+			const name = turn.agent?.name || 'AI edit'
 			const goal = roundId ? agentRound.value?.goal?.trim() : ''
 			const label = goal ? `${name}: ${goal.length > 60 ? goal.slice(0, 59) + '…' : goal}` : name
 			if (diffed) {
@@ -4058,11 +3970,10 @@ export const useEditorStore = defineStore('editor', () => {
 			if (settings?.frame) setSequenceFrame(settings.frame.width, settings.frame.height)
 
 			const rev = keepRound
-				? await replaceRoundRevision(keptId!, { label, turnId: turn.id, personaId: turn.personaId })
+				? await replaceRoundRevision(keptId!, { label, turnId: turn.id })
 				: await createRevision({
 					origin: 'ai',
 					turnId: turn.id,
-					personaId: turn.personaId,
 					label
 				})
 			if (rev && roundId && !keepRound) roundRevisions.set(roundId, rev.id)
@@ -4169,8 +4080,6 @@ export const useEditorStore = defineStore('editor', () => {
 			doc.value.timeline = updated.editor.timeline
 			doc.value.timelineMeta = updated.editor.timelineMeta
 			doc.value.selection = updated.editor.selection
-			doc.value.activePersonaId = updated.editor.activePersonaId
-			doc.value.customPersonas = updated.editor.customPersonas
 			doc.value.historyRef = updated.editor.historyRef
 			doc.value.markers = updated.editor.markers
 			doc.value.currentRevisionId = updated.editor.currentRevisionId
@@ -4499,17 +4408,8 @@ export const useEditorStore = defineStore('editor', () => {
 		sourceTimeToTimeline,
 		applySilenceRegions,
 		toggleTrackFlag,
-		// personas
-		personas,
-		activePersona,
-		findPersona,
-		personaGroups,
 		promptDraft,
 		queuePrompt,
-		setActivePersona,
-		savePersona,
-		clonePersona,
-		deletePersona,
 		// AI prompt
 		activeTurnId,
 		lastAnswer,

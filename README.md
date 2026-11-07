@@ -104,7 +104,7 @@ FrameFlow isn't just a tool; it's an iterative workspace:
 
 - **Timeline Editor**: Multi-track editing with a program monitor, filmstrip/context views,
   a left side rail (Media, Motion, Sound and more), an Inspect tab, full-height chat, and an
-  AI prompt bar with swappable editor personas.
+  AI prompt bar where you pick the engine, model and effort (Claude Code or Gemini API).
 - **First-run setup & Settings**: a first-launch wizard, a two-road Home, and a seven-section
   Settings page (General, Connections, Video editing, Image editing, Audio, Agent access, Usage and pricing).
 - **Vue Flow Graph Interface**: Branch image generations — and browse your edit history as
