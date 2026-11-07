@@ -1,4 +1,4 @@
-import type { EditorDocument, EditorRevision, MediaAsset, PromptTurn } from '@shared/types'
+import type { DeliveryFormat, EditorDocument, EditorRevision, MediaAsset, PromptTurn } from '@shared/types'
 import type { AudioAnalysis } from '@shared/audio'
 import type { AudioInspection } from '@shared/audioFeatures'
 import type { SoundRecipe } from '@shared/synth'
@@ -121,7 +121,7 @@ export interface EditorBridge {
 	renderFrame(project: LiveProject, timeSec: number): Promise<RenderedFrame>
 	switchRevision(revisionId: string): Promise<{ ok: true } | { ok: false; error: string }>
 	/** Start an export of the live timeline; FrameFlow shows its progress like any other. */
-	startExport(project: LiveProject, options: { quality: 'original' | 'preview' }): Promise<{ ok: true; renderId: string } | { ok: false; error: string }>
+	startExport(project: LiveProject, options: { quality: 'original' | 'preview'; format?: DeliveryFormat; height?: number }): Promise<{ ok: true; renderId: string } | { ok: false; error: string }>
 	/** The latest progress of a render, or of the project's newest one. */
 	exportStatus(query: { renderId?: string; threadId: string }): ExportStatus | null
 	/** What an exported file is, and contact sheets of its frames. */

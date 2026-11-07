@@ -67,30 +67,54 @@
 				<!-- The frame's own label IS the frame picker. -->
 				<div v-if="edl.hasContent.value" class="relative">
 					<button class="font-mono text-[11px] text-zinc-500 hover:text-primary transition"
-						:title="frameChosen ? 'Sequence frame' : 'Sequence frame — following the footage'"
+						:title="frameChosen ? 'Project resolution' : 'Project resolution — following the footage'"
 						@click="frameMenuOpen = !frameMenuOpen">
+						<span v-if="currentRung" class="text-zinc-400">{{ currentRung.label }}</span>
 						{{ seqWidth }}×{{ seqHeight }}
 						<span v-if="!frameChosen" class="text-zinc-400">auto</span>
 					</button>
 					<template v-if="frameMenuOpen">
 						<div class="fixed inset-0 z-40" @click="frameMenuOpen = false"></div>
-						<div class="absolute right-0 top-7 z-50 w-44 pop p-1 origin-top animate-menu">
-							<button v-for="preset in FRAME_PRESETS" :key="preset.short"
+						<div class="absolute right-0 top-7 z-50 w-56 pop p-1 origin-top animate-menu">
+							<p class="px-2 pt-1 pb-0.5 text-[9px] uppercase tracking-wide text-zinc-400">Shape</p>
+							<button v-for="shape in FRAME_SHAPES" :key="shape.short"
 								class="w-full flex items-center justify-between gap-2 px-2 py-1.5 rounded text-left transition"
-								:class="frameChosen && preset.w === seqWidth && preset.h === seqHeight
+								:class="currentShape?.short === shape.short
 									? 'bg-primary/10 text-primary'
 									: 'text-zinc-600 dark:text-zinc-300 hover:bg-primary/10'"
-								@click="chooseFrame(preset)">
-								<span class="text-[11px] font-semibold">{{ preset.label }}</span>
-								<span class="font-mono text-[9px] text-zinc-400">{{ preset.short }}</span>
+								@click="chooseShape(shape)">
+								<span class="text-[11px] font-semibold">{{ shape.label }}</span>
+								<span class="font-mono text-[9px] text-zinc-400">{{ shape.short }}</span>
 							</button>
-							<button v-if="frameChosen"
-								class="w-full px-2 py-1.5 mt-0.5 rounded text-left text-[11px] text-zinc-500 hover:bg-primary/10 transition"
+
+							<p class="px-2 pt-2 pb-0.5 text-[9px] uppercase tracking-wide text-zinc-400">Resolution</p>
+							<div class="grid grid-cols-4 gap-1 px-1">
+								<button v-for="rung in RESOLUTION_RUNGS" :key="rung.id"
+									class="py-1 rounded text-[10px] font-semibold transition"
+									:class="currentRung?.id === rung.id
+										? 'bg-primary/10 text-primary'
+										: 'text-zinc-600 dark:text-zinc-300 hover:bg-primary/10'"
+									:title="sizeText(frameAtRung(store.sequenceFrame, rung.lines))"
+									@click="chooseRung(rung.lines)">{{ rung.label }}</button>
+							</div>
+
+							<p class="px-2 pt-2 pb-0.5 text-[9px] uppercase tracking-wide text-zinc-400">Custom</p>
+							<form class="flex items-center gap-1 px-1" @submit.prevent="applyCustom">
+								<input v-model.number="customW" type="number" min="128" max="7680" step="2" aria-label="Width"
+									class="w-0 flex-1 px-1.5 py-1 rounded bg-zinc-500/10 text-[11px] font-mono tabular-nums outline-none focus:ring-1 focus:ring-primary" />
+								<span class="text-[10px] text-zinc-400">×</span>
+								<input v-model.number="customH" type="number" min="128" max="7680" step="2" aria-label="Height"
+									class="w-0 flex-1 px-1.5 py-1 rounded bg-zinc-500/10 text-[11px] font-mono tabular-nums outline-none focus:ring-1 focus:ring-primary" />
+								<button type="submit" class="px-2 py-1 rounded text-[10px] font-semibold text-primary hover:bg-primary/10 transition">Set</button>
+							</form>
+
+							<button
+								class="w-full px-2 py-1.5 mt-1 rounded text-left text-[11px] text-zinc-500 hover:bg-primary/10 transition"
 								@click="store.clearSequenceFrame(); frameMenuOpen = false">
 								Match footage
 							</button>
 							<p class="px-2 pt-1.5 pb-1 text-[9px] text-zinc-400 leading-snug">
-								Clips of another shape letterbox unless you set them to fill.
+								The project's frame. Exports are offered at this size and below. Clips of another shape letterbox unless you set them to fill.
 							</p>
 						</div>
 					</template>
@@ -433,7 +457,11 @@ import { guideById, guidesFor, isVertical, safeArea } from '@shared/guides'
 import { effectCss } from '@shared/effects'
 import { generatorCss, hasGeneratorCss } from '@shared/generators'
 import { transformCss } from '@shared/transform'
-import { FRAME_PRESETS, panObjectPosition } from '@shared/framing'
+import { panObjectPosition } from '@shared/framing'
+import {
+	FRAME_SHAPES, RESOLUTION_RUNGS, frameAtRung, frameForShape, rungOf, shapeOf, shortSide, sizeText,
+	type FrameShape
+} from '@shared/resolution'
 import { toMediaUrl } from '@shared/media-url'
 import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { useEditorStore } from '../../stores/editorStore'
@@ -501,8 +529,23 @@ const seqHeight = computed(() => store.sequenceFrame.height)
 const frameChosen = computed(() => store.doc?.timelineMeta?.frameChosen === true)
 
 const frameMenuOpen = ref(false)
-const chooseFrame = (preset: { w: number; h: number }) => {
-	store.setSequenceFrame(preset.w, preset.h)
+const currentShape = computed(() => shapeOf(store.sequenceFrame))
+const currentRung = computed(() => rungOf(store.sequenceFrame))
+// A new shape keeps the resolution the project is at: 4K landscape -> 4K vertical.
+const chooseShape = (shape: FrameShape) => {
+	const frame = frameForShape(shape, shortSide(store.sequenceFrame))
+	store.setSequenceFrame(frame.width, frame.height)
+}
+// A new resolution keeps the shape, custom ones included.
+const chooseRung = (lines: number) => {
+	const frame = frameAtRung(store.sequenceFrame, lines)
+	store.setSequenceFrame(frame.width, frame.height)
+}
+const customW = ref(store.sequenceFrame.width)
+const customH = ref(store.sequenceFrame.height)
+watch([seqWidth, seqHeight], ([w, h]) => { customW.value = w; customH.value = h })
+const applyCustom = () => {
+	store.setSequenceFrame(customW.value, customH.value)
 	frameMenuOpen.value = false
 }
 

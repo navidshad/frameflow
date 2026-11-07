@@ -1154,7 +1154,7 @@ export type ExportQuality = 'original' | 'preview'
  * anything else is a transcode of it, because the intermediates have to be
  * identical h264 for `concat -c copy` to work at all.
  */
-export type DeliveryFormat = 'h264' | 'prores'
+export type DeliveryFormat = 'h264' | 'h265' | 'prores'
 
 export type RenderPhase = 'rendering' | 'stitching' | 'done' | 'error'
 

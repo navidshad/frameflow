@@ -39,6 +39,7 @@ import {
 	captionsFromTimeline, type CaptionCue, type TranscriptEntry
 } from '@shared/captions'
 import { sequenceFrame as resolveSequenceFrame } from '@shared/framing'
+import { documentFrame, migrateProjectFrame, normalizeCustomFrame, usedVideoSources } from '@shared/resolution'
 import { childrenByParent, collectSubtree, hasBranch, summarizeRevision, withoutProbeStamps } from '@shared/revision-tree'
 import { agentChangeBadges, type AgentApplyOutcome } from '@shared/agentFeed'
 import { toMediaUrl } from '@shared/media-url'
@@ -733,11 +734,7 @@ export const useEditorStore = defineStore('editor', () => {
 	const sequenceFrame = computed(() => {
 		const d = doc.value
 		if (!d) return { width: 1920, height: 1080 }
-		const used = new Set(d.timeline.map((i) => i.sourceAssetId))
-		return resolveSequenceFrame(
-			d.timelineMeta,
-			d.media.filter((a) => used.has(a.id) && a.kind !== 'audio').map((a) => a.metadata ?? {})
-		)
+		return documentFrame(d)
 	})
 
 	const contentEnd = computed(() => computeContentEnd(doc.value?.timeline || []))
@@ -1341,6 +1338,15 @@ export const useEditorStore = defineStore('editor', () => {
 					doc.value.timeline = state.timeline
 					console.warn(`[editorStore] Dropped ${orphans.length} timeline item(s) whose media is gone`)
 					refreshMetaDuration()
+					markDirty()
+				}
+
+				// A project that never chose a frame gets its resolution written down:
+				// the one it has always exported at, so nothing about its export moves.
+				const meta = doc.value.timelineMeta
+				const migrated = migrateProjectFrame(meta, usedVideoSources(doc.value))
+				if (migrated !== meta) {
+					doc.value.timelineMeta = migrated
 					markDirty()
 				}
 
@@ -3129,14 +3135,24 @@ export const useEditorStore = defineStore('editor', () => {
 	const setSequenceFrame = (width: number, height: number) => {
 		if (!doc.value || !Number.isFinite(width) || !Number.isFinite(height)) return
 		if (width < 2 || height < 2) return
-		doc.value.timelineMeta = { ...doc.value.timelineMeta, width, height, frameChosen: true }
+		// Even and within what an encoder takes: a custom W×H lands here too.
+		const frame = normalizeCustomFrame(width, height)
+		if (!frame) return
+		doc.value.timelineMeta = { ...doc.value.timelineMeta, ...frame, frameChosen: true }
 		markDirty()
 	}
 
-	/** Back to following the footage. Picking a frame was otherwise one-way. */
+	/**
+	 * Back to the footage's own size: the largest video the timeline uses, written
+	 * down as the project resolution. (It used to un-choose the frame and follow
+	 * the footage live; a project's resolution is now always explicit.)
+	 */
 	const clearSequenceFrame = () => {
 		if (!doc.value) return
-		doc.value.timelineMeta = { ...doc.value.timelineMeta, frameChosen: false }
+		const sources = usedVideoSources(doc.value)
+		if (!sources.some((s) => s.width && s.height)) return
+		const { width, height } = resolveSequenceFrame({ frameChosen: false }, sources)
+		doc.value.timelineMeta = { ...doc.value.timelineMeta, width, height, frameChosen: true }
 		markDirty()
 	}
 

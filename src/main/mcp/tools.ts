@@ -1,5 +1,5 @@
 import { randomUUID } from 'node:crypto'
-import type { EditorOps, MediaAsset, MulticamGroup, PromptTurn, TimelineDiff, TimelineItem } from '@shared/types'
+import type { DeliveryFormat, EditorOps, MediaAsset, MulticamGroup, PromptTurn, TimelineDiff, TimelineItem } from '@shared/types'
 import { motionWorkingHtml, resolveDefinition, resolveMoments, type MotionSpec } from '@shared/motion'
 import { motionStatus } from '@shared/motionCode'
 import { opKeys, opsInputSchema, validateArgs, type AgentPermission, type AgentPermissions, type JsonSchema } from '@shared/agent'
@@ -10,6 +10,7 @@ import {
 import { allEffects } from '@shared/effects'
 import { TRANSITION_PRESETS } from '@shared/transitionPresets'
 import { computeContentEnd } from '@shared/timeline'
+import { documentFrame, exportChoices, linesForChoice } from '@shared/resolution'
 import { EDITOR_OPS_SCHEMA, opsToDiff, opsWriteHtml } from '../editor/ops'
 import { vetHtmlOps, type MotionProbe } from '../editor/vetHtml'
 import { MOTION_KIT_OPS_SCHEMA, opsWriteKits } from '../editor/kitOps'
@@ -1170,35 +1171,72 @@ const revertToVersion: ToolDef = {
 	}
 }
 
+/** File types an agent can ask for, with the names the dialog shows. */
+const EXPORT_FORMATS: Record<string, DeliveryFormat> = { h264: 'h264', h265: 'h265', hevc: 'h265', prores: 'prores' }
+
 const exportTool: ToolDef = {
 	name: 'export',
 	permission: 'export',
 	claims: true,
 	description:
-		'Render the timeline to a video file on disk (H.264 MP4), exactly as the Export button does, and ' +
-		'return its render id. quality "original" renders from the source files at full size; "preview" ' +
-		'renders from the small proxies, much faster, for checking an edit. Refused unless the user has ' +
-		'allowed agents to export. It runs in the background and FrameFlow shows its progress: follow it ' +
-		'with wait {for: "export"}, then look at the file with inspect_export.',
+		'Render the timeline to a video file on disk, exactly as the Export button does, and return its render ' +
+		'id. resolution: "original" (default) is the project\'s own size; "4k", "2k", "1080p" and "720p" render ' +
+		'from the source files at that size (named by the short side, so vertical 1080p is 1080×1920) and are ' +
+		'only accepted when SMALLER than the project: an export is never upscaled. quality "preview" renders ' +
+		'from the small 480p proxies, much faster, for checking an edit (no resolution then). format is the ' +
+		'file type: "h264" (default, MP4), "h265" (MP4 HEVC, smaller, Apple-friendly) or "prores" (ProRes 422 ' +
+		'HQ .mov). Refused unless the user has allowed agents to export. It runs in the background and ' +
+		'FrameFlow shows its progress: follow it with wait {for: "export"}, then look at the file with inspect_export.',
 	inputSchema: {
 		type: 'object',
 		properties: {
-			quality: { type: 'string', enum: ['original', 'preview'], description: 'Default original' }
+			quality: { type: 'string', enum: ['original', 'preview'], description: 'Default original' },
+			resolution: {
+				type: 'string', enum: ['original', '4k', '2k', '1080p', '720p'],
+				description: 'Export size, never above the project\'s own. Default original (the project resolution).'
+			},
+			format: { type: 'string', enum: ['h264', 'h265', 'prores'], description: 'File type. Default h264.' }
 		},
 		additionalProperties: false
 	},
-	title: (args) => `export ${args.quality === 'preview' ? 'preview' : 'original'}`,
+	title: (args) => `export ${args.quality === 'preview' ? 'preview' : (args.resolution as string) || 'original'}`,
 	async run(args, ctx) {
 		const project = await requireProject(ctx)
 		const quality = args.quality === 'preview' ? 'preview' : 'original'
-		const result = await ctx.bridge.startExport(project, { quality })
+		const format = args.format === undefined ? 'h264' : EXPORT_FORMATS[String(args.format)]
+		if (!format) throw new ToolError(`Unknown format "${args.format}". Use h264, h265 or prores.`)
+
+		// A resolution names a rung of the project's frame. Anything that is not
+		// smaller than the project is refused with the list that would have worked.
+		const frame = documentFrame(project.doc)
+		const choices = exportChoices(frame)
+		let height: number | undefined
+		const resolution = args.resolution === undefined ? 'original' : String(args.resolution).toLowerCase()
+		if (resolution !== 'original') {
+			if (quality === 'preview') throw new ToolError('quality "preview" renders from the 480p proxies; it takes no resolution.')
+			const id = resolution.replace(/p$/, '')
+			const lines = linesForChoice(id)
+			const picked = choices.find((c) => c.id === id)
+			if (!lines || !picked) {
+				const offered = choices.map((c) => `${c.id === 'original' ? 'original' : c.label.split(' ')[0].toLowerCase()} (${c.frame.width}×${c.frame.height})`).join(', ')
+				throw new ToolError(
+					`The project is ${frame.width}×${frame.height}: "${args.resolution}" would upscale it or is not a size. ` +
+					`Available: ${offered}. Change the project's size with apply_ops sequenceFrame.`
+				)
+			}
+			height = lines
+		}
+
+		const result = await ctx.bridge.startExport(project, { quality, format, height })
 		if (!result.ok) throw new ToolError(result.error)
+		const size = height ? choices.find((c) => c.lines === height)?.frame : undefined
 		return {
 			content: [json({
-				renderId: result.renderId, quality,
+				renderId: result.renderId, quality, format, resolution: quality === 'preview' ? '480p proxies' : resolution,
+				...(size ? { size: `${size.width}×${size.height}` } : {}),
 				next: 'wait {for: "export"} follows it to the end; inspect_export then shows the file.'
 			})],
-			feed: { detail: `${quality} export started`, chips: [{ text: quality, tone: 'blue' }] }
+			feed: { detail: `${quality === 'preview' ? 'preview' : resolution} ${format} export started`, chips: [{ text: quality === 'preview' ? 'preview' : resolution, tone: 'blue' }] }
 		}
 	}
 }

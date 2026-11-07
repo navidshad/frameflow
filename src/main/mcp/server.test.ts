@@ -885,6 +885,29 @@ describe('AgentServer over Streamable HTTP', () => {
 			expect(editor.sheetTimes.at(-1)).toEqual([0, 10, 20])
 		})
 
+		it('exports at a size and file type derived from the project, and refuses to upscale', async () => {
+			permissions = { ...permissions, export: true }
+			const claude = await connectTo('claude-code')
+			// The project is 1920×1080: 720p is below it, 1080p and 4K are not smaller.
+			const started = text(await claude.callTool({ name: 'export', arguments: { resolution: '720p', format: 'h265' } }))
+			expect(started).toMatchObject({ format: 'h265', resolution: '720p', size: '1280×720' })
+			expect(editor.lastExport).toEqual({ quality: 'original', format: 'h265', height: 720 })
+
+			const defaults = text(await claude.callTool({ name: 'export', arguments: {} }))
+			expect(defaults).toMatchObject({ format: 'h264', resolution: 'original' })
+			expect(editor.lastExport).toEqual({ quality: 'original', format: 'h264', height: undefined })
+
+			const up: any = await claude.callTool({ name: 'export', arguments: { resolution: '4k' } })
+			expect(up.isError).toBe(true)
+			expect(up.content[0].text).toContain('would upscale')
+			expect(up.content[0].text).toContain('1280×720')
+			const same: any = await claude.callTool({ name: 'export', arguments: { resolution: '1080p' } })
+			expect(same.isError).toBe(true)
+
+			const both: any = await claude.callTool({ name: 'export', arguments: { quality: 'preview', resolution: '720p' } })
+			expect(both.isError).toBe(true)
+		})
+
 		it('exports, follows the export and looks at the file', async () => {
 			permissions = { ...permissions, export: true }
 			const claude = await connectTo('claude-code')
