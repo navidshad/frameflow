@@ -23,6 +23,10 @@ export interface LoopTurnArgs {
 	id: LoopEngineId
 	turnId: string
 	prompt: string
+	/** What the prompt's @times and frames are, for the agent. */
+	references?: string
+	/** The attached frames' pictures, in the order `references` lists them. */
+	images?: { data: string; mimeType: string }[]
 	playheadSec: number
 	selectedItemIds: string[]
 	widen?: 'chapter' | 'full'
@@ -74,8 +78,10 @@ export async function runLoopEngineTurn(args: LoopTurnArgs): Promise<LoopTurnOut
 		model: createLoopModel(args.id, modelName, apiKey),
 		modelName,
 		prompt: buildEngineUserPrompt({
-			prompt: args.prompt, playheadSec: args.playheadSec, selectedItemIds: args.selectedItemIds, widen: args.widen, resuming: resumed
+			prompt: args.prompt, playheadSec: args.playheadSec, selectedItemIds: args.selectedItemIds, widen: args.widen, resuming: resumed,
+			references: args.references
 		}),
+		images: args.images,
 		systemPrompt: buildEngineSystemPrompt({ maxSteps: args.maxSteps, engineLabel: label, planTool: true, metered: true, checklist: true }),
 		history,
 		request: args.prompt,

@@ -802,9 +802,34 @@ export interface PromptTurnEngine {
 	end?: 'failed' | 'cancelled'
 }
 
+/**
+ * A frame the user attached to a chat message: the still the monitor showed at
+ * `timeSec`, with their note and any marks they drew on it. Main keeps the
+ * image as a file beside the project; the turn carries its path and a small
+ * thumbnail, so the chat history draws without reading the file.
+ */
+export interface PromptAttachment {
+	id: string
+	timeSec: number
+	note?: string
+	/** The user drew on the still: the picture sent is the marked one. */
+	marked?: boolean
+	/** Words the user wrote on the still, which the agent also gets as text. */
+	labels?: string[]
+	/** The JPEG the engine was sent. */
+	path: string
+	/** A data URL, ~224px wide. */
+	thumbnail: string
+}
+
+/** An attachment on its way from the composer: the picture itself, or (Retry) the file a turn kept. */
+export type PromptAttachmentInput = Omit<PromptAttachment, 'path'> & ({ data: string; mimeType: string; path?: undefined } | { path: string; data?: undefined })
+
 export interface PromptTurn {
 	id: string
 	prompt: string
+	/** Frames the user attached to this message. */
+	attachments?: PromptAttachment[]
 	baseStepId: string
 	resultStepId?: string
 	status: 'pending' | 'running' | 'completed' | 'error'

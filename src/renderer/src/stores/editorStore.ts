@@ -59,6 +59,11 @@ import {
 	type Seam
 } from '@shared/transitionPlan'
 import { dialog } from '../composables/useDialog'
+import type { ComposerAttachment } from '../editor/frameMarks'
+import { markLabels } from '../editor/markGeometry'
+
+/** Frames one message can carry: each is a full picture the model reads at full price. */
+export const MAX_PROMPT_FRAMES = 6
 
 /**
  * Store for the timeline video editor (/editor/:id).
@@ -119,6 +124,13 @@ export const useEditorStore = defineStore('editor', () => {
 	 * half-typed prompt.
 	 */
 	const promptDraft = ref('')
+	/**
+	 * Frames attached to the draft, shared like the draft by the chat's prompt
+	 * bar and the folded composer strip. Sent with the next message, then cleared.
+	 */
+	const promptAttachments = ref<ComposerAttachment[]>([])
+	/** A frame is being rendered for the draft. */
+	const capturingFrame = ref(false)
 	/** Keyed by thread: /editor/:id reuses the component, so a queued prompt must not leak. */
 	const pendingPrompt = ref<{ threadId: string; text: string } | null>(null)
 
@@ -1328,6 +1340,8 @@ export const useEditorStore = defineStore('editor', () => {
 			// has not finished, so the AI would see an empty clip tray.
 			promptDraft.value = pendingPrompt.value?.threadId === id ? pendingPrompt.value.text : ''
 			pendingPrompt.value = null
+			// Frames belong to the project they were taken from.
+			promptAttachments.value = []
 
 			if (doc.value) {
 				const state: TimelineState = { tracks: doc.value.tracks, timeline: doc.value.timeline }
@@ -3806,8 +3820,51 @@ export const useEditorStore = defineStore('editor', () => {
 		pendingPrompt.value = text.trim() ? { threadId: id, text: text.trim() } : null
 	}
 
+	/**
+	 * Attach the frame at the playhead to the draft: the export pipeline's
+	 * picture, exactly what the monitor shows (titles and captions included).
+	 */
+	const captureFrameForPrompt = async (): Promise<boolean> => {
+		if (!threadId.value || !doc.value || capturingFrame.value) return false
+		if (promptAttachments.value.length >= MAX_PROMPT_FRAMES) {
+			promptError.value = `A message can carry ${MAX_PROMPT_FRAMES} frames at most.`
+			return false
+		}
+		capturingFrame.value = true
+		const tid = threadId.value
+		const timeSec = playheadSec.value
+		try {
+			const frame = await api.captureFramePrompt({ threadId: tid, doc: JSON.parse(JSON.stringify(doc.value)), timeSec })
+			if (threadId.value !== tid) return false
+			promptAttachments.value = [...promptAttachments.value, {
+				id: `frame-${Date.now().toString(36)}-${Math.floor(Math.random() * 1e6).toString(36)}`,
+				timeSec, note: '', original: frame.data, data: frame.data, mimeType: 'image/jpeg',
+				thumbnail: frame.thumbnail, width: frame.width, height: frame.height, marks: []
+			}]
+			return true
+		} catch (error: any) {
+			promptError.value = `The frame could not be captured: ${error?.message?.split('Error: ').pop() || 'unknown error'}`
+			return false
+		} finally {
+			capturingFrame.value = false
+		}
+	}
+
+	const updatePromptAttachment = (id: string, patch: Partial<Omit<ComposerAttachment, 'id'>>) => {
+		promptAttachments.value = promptAttachments.value.map((a) => (a.id === id ? { ...a, ...patch } : a))
+	}
+
+	const removePromptAttachment = (id: string) => {
+		promptAttachments.value = promptAttachments.value.filter((a) => a.id !== id)
+	}
+
 	const runPrompt = async (prompt: string, override?: { widen?: 'chapter' | 'full'; retry?: EngineRetry }) => {
 		if (!threadId.value || !doc.value || promptRunning.value) return
+		// Retry re-sends the files its turn kept; a new message sends the draft's frames.
+		const sending = override?.retry ? null : promptAttachments.value
+		const attachments = override?.retry
+			? override.retry.attachments?.map((a) => ({ id: a.id, timeSec: a.timeSec, note: a.note, marked: a.marked, labels: a.labels, thumbnail: a.thumbnail, path: a.path }))
+			: sending!.map((a) => ({ id: a.id, timeSec: a.timeSec, note: a.note.trim() || undefined, marked: a.marks.length > 0 || undefined, labels: markLabels(a.marks), thumbnail: a.thumbnail, data: a.data, mimeType: a.mimeType }))
 		promptError.value = null
 		lastAnswer.value = null
 		// Flush the debounced autosave so main's doc (the context source) is current
@@ -3821,9 +3878,12 @@ export const useEditorStore = defineStore('editor', () => {
 				selectedItemIds: JSON.parse(JSON.stringify(override?.retry?.selectedItemIds ?? selectedItemIds.value)),
 				playheadSec: override?.retry?.playheadSec ?? playheadSec.value,
 				widen: override?.retry ? override.retry.widen : override?.widen ?? (scopeWiden.value === 'auto' ? undefined : scopeWiden.value),
-				engine: override?.retry?.engine
+				engine: override?.retry?.engine,
+				attachments: attachments?.length ? attachments : undefined
 			})
 			if (result?.turnId) activeTurnId.value = result.turnId
+			// Sent: these frames are the turn's now. A frame added while sending stays.
+			if (sending?.length) promptAttachments.value = promptAttachments.value.filter((a) => !sending.includes(a))
 		} catch (error: any) {
 			promptError.value = error?.message || 'Failed to start the prompt'
 		}
@@ -4567,6 +4627,11 @@ export const useEditorStore = defineStore('editor', () => {
 		promptRunning,
 		scopePreview,
 		runPrompt,
+		promptAttachments,
+		capturingFrame,
+		captureFrameForPrompt,
+		updatePromptAttachment,
+		removePromptAttachment,
 		retryFor,
 		retryTurn,
 		abortPrompt,

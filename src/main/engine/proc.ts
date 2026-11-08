@@ -88,11 +88,12 @@ export function runQuick(file: string, args: string[], env: NodeJS.ProcessEnv, t
  * Spawns in its own process group so the whole tree — a CLI's MCP client, its
  * helpers — can be killed together.
  */
-export function spawnTree(file: string, args: string[], options: { cwd: string; env: NodeJS.ProcessEnv }): ChildProcess {
+export function spawnTree(file: string, args: string[], options: { cwd: string; env: NodeJS.ProcessEnv; stdin?: boolean }): ChildProcess {
 	return spawn(file, args, {
 		cwd: options.cwd,
 		env: options.env,
-		stdio: ['ignore', 'pipe', 'pipe'],
+		// A pipe only when the caller writes the message there (a prompt with pictures).
+		stdio: [options.stdin ? 'pipe' : 'ignore', 'pipe', 'pipe'],
 		detached: !isWin,
 		windowsHide: true,
 		shell: isWin && /\.(cmd|bat)$/i.test(file)
