@@ -55,6 +55,15 @@
 			</span>
 		</SlimTooltip>
 
+		<SlimTooltip v-if="showExport" :text="thumbnailBusy ? 'Making the thumbnail project…' : canThumbnail ? 'New thumbnail project from this video' : 'Add a video first'" placement="bottom">
+			<button
+				class="h-[26px] px-2.5 rounded-md text-xs font-semibold flex items-center gap-1.5 transition active:scale-95 text-zinc-600 dark:text-zinc-300 hover:text-primary hover:bg-primary/10 disabled:opacity-40 disabled:cursor-not-allowed disabled:hover:bg-transparent disabled:hover:text-zinc-600"
+				:disabled="!canThumbnail || thumbnailBusy" aria-label="Generate thumbnail" @click="$emit('thumbnail')">
+				<span class="iconify w-3.5 h-3.5" :class="thumbnailBusy ? 'tabler--loader-2 animate-spin' : 'tabler--photo-star'"></span>
+				Thumbnail
+			</button>
+		</SlimTooltip>
+
 		<button v-if="showExport"
 			class="h-[26px] px-3.5 rounded-md text-xs font-semibold flex items-center gap-1.5 transition active:scale-95"
 			:class="exporting
@@ -96,6 +105,10 @@ const props = defineProps<{
 	percent: number
 	/** An MCP agent holding the project: the button says why it is off. */
 	lockedBy?: string | null
+	/** There is a picture to take a frame from. */
+	canThumbnail?: boolean
+	/** The thumbnail project is being built. */
+	thumbnailBusy?: boolean
 }>()
 const editorStore = useEditorStore()
 /** The pre-render of this project's motion layers, while it is drawing. */
@@ -113,6 +126,7 @@ const emit = defineEmits<{
 	(e: 'back'): void
 	(e: 'rename', value: string): void
 	(e: 'export'): void
+	(e: 'thumbnail'): void
 }>()
 
 const router = useRouter()
