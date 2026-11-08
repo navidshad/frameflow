@@ -8,7 +8,7 @@ import { settingsManager } from './settings'
 import { threadManager } from './threads'
 import { MessageRole } from '@shared/types'
 import type { DeliveryFormat, EditorDocument, MulticamGroup, PromptAttachmentInput, TimelineItem } from '@shared/types'
-import { createThumbnailProject } from './thumbnail/project'
+import { createThumbnailProject, previewThumbnailBrief } from './thumbnail/project'
 import * as thumbnailFrames from './thumbnail/frames'
 import { pruneOrphanItems } from '@shared/timeline'
 import * as extraction from './pipeline/phases/extraction'
@@ -457,7 +457,17 @@ app.whenReady().then(() => {
 	// frames, with the brief (headline from the title or transcript) already in
 	// it as the first message. The renderer runs the generation, once, only when
 	// a Gemini key exists; see videoStore.openThumbnailProject.
-	ipcMain.handle('create-thumbnail-project', async (_event, { threadId }: { threadId: string }) => {
+	ipcMain.handle('preview-thumbnail-brief', (_event, { threadId }: { threadId: string }) => {
+		return previewThumbnailBrief(String(threadId), {
+			getThread: (id) => threadManager.getThread(id),
+			transcripts: (thread) => editorCaptions.transcriptsForAssets(thread.editor?.media ?? [])
+		})
+	})
+
+	ipcMain.handle('create-thumbnail-project', async (
+		_event,
+		{ threadId, prompt, expectedFrameCount }: { threadId: string; prompt?: string; expectedFrameCount?: number }
+	) => {
 		return await createThumbnailProject(String(threadId), {
 			getThread: (id) => threadManager.getThread(id),
 			transcripts: (thread) => editorCaptions.transcriptsForAssets(thread.editor?.media ?? []),
@@ -470,6 +480,9 @@ app.whenReady().then(() => {
 			}),
 			hasGeminiKey: () => !!settingsManager.getGeminiApiKey(),
 			startAnalysis: (id) => { void backgroundTaskManager.startImageProcessing(id) }
+		}, {
+			prompt: typeof prompt === 'string' ? prompt : undefined,
+			expectedFrameCount: typeof expectedFrameCount === 'number' ? expectedFrameCount : undefined
 		})
 	})
 

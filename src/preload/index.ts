@@ -58,7 +58,9 @@ const api = {
 	resetModelSettings: () => ipcRenderer.invoke('reset-model-settings'),
 	// Timeline Video Editor
 	createEditorProject: (title?: string) => ipcRenderer.invoke('create-editor-project', { title }),
-	createThumbnailProject: (threadId: string) => ipcRenderer.invoke('create-thumbnail-project', { threadId }),
+	previewThumbnailBrief: (threadId: string) => ipcRenderer.invoke('preview-thumbnail-brief', { threadId }),
+	createThumbnailProject: (threadId: string, options?: { prompt?: string; expectedFrameCount?: number }) =>
+		ipcRenderer.invoke('create-thumbnail-project', { threadId, ...options }),
 	renameEditorProject: (data: { threadId: string, title: string }) =>
 		ipcRenderer.invoke('rename-editor-project', data),
 	saveEditorDoc: (data: { threadId: string, patch: any }) =>

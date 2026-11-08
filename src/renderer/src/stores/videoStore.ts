@@ -216,8 +216,11 @@ export const useVideoStore = defineStore('video', () => {
 	 * message stays in the project with its Retry button: nothing is lost and no
 	 * second run is ever started here, because each one costs real API calls.
 	 */
-	const makeThumbnailProject = async (videoThreadId: string): Promise<{ threadId: string; generating: boolean; headline: string }> => {
-		const result = await (window as any).api.createThumbnailProject(videoThreadId)
+	const makeThumbnailProject = async (
+		videoThreadId: string,
+		options?: { prompt?: string; expectedFrameCount?: number }
+	): Promise<{ threadId: string; generating: boolean; headline: string }> => {
+		const result = await (window as any).api.createThumbnailProject(videoThreadId, options)
 		const thread: Thread = result.thread
 		threads.value = [thread, ...threads.value.filter((t: Thread) => t.id !== thread.id)]
 		await selectThread(thread.id)
@@ -226,6 +229,10 @@ export const useVideoStore = defineStore('video', () => {
 		}
 		return { threadId: thread.id, generating: !!result.hasGeminiKey, headline: result.headline?.text ?? '' }
 	}
+
+	/** The suggested thumbnail prompt for a video project, to show and let the person rewrite before anything is made. */
+	const thumbnailBriefFor = async (videoThreadId: string): Promise<{ brief: string; frameCount: number }> =>
+		(window as any).api.previewThumbnailBrief(videoThreadId)
 
 	const abortProcessing = async (messageId: string) => {
 		if ((window as any).api) {
@@ -456,6 +463,7 @@ export const useVideoStore = defineStore('video', () => {
 		clearMessages,
 		startProcessing,
 		makeThumbnailProject,
+		thumbnailBriefFor,
 		abortProcessing,
 		deleteThread,
 		deleteAllThreads,

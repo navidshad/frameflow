@@ -54,6 +54,7 @@
 					<span class="text-[9px] font-bold uppercase tracking-widest text-zinc-400 flex items-center gap-1">
 						<span v-if="turn.scopeLabel" class="text-secondary">{{ turn.scopeLabel }}</span>
 						<span>{{ formatTime(turn.createdAt) }}</span>
+						<CopyButton :text="turn.prompt" />
 					</span>
 				</div>
 
@@ -97,7 +98,9 @@
 
 						<!-- Question answer -->
 						<div v-else-if="turn.answer"
-							class="px-3 py-2 rounded-2xl rounded-tl-md bg-zinc-100 dark:bg-zinc-900 text-xs text-zinc-700 dark:text-zinc-300 leading-relaxed">
+							class="group relative px-3 py-2 rounded-2xl rounded-tl-md bg-zinc-100 dark:bg-zinc-900 text-xs text-zinc-700 dark:text-zinc-300 leading-relaxed">
+							<CopyButton :text="turn.answer"
+								class="absolute top-1 right-1 opacity-0 group-hover:opacity-100 focus:opacity-100 bg-zinc-100 dark:bg-zinc-900" />
 							<p class="whitespace-pre-wrap">{{ turn.answer }}</p>
 							<template v-if="turn.engine">
 								<EngineSteps v-if="turn.engine.steps.length" class="mt-2" :steps="turn.engine.steps" />
@@ -158,6 +161,7 @@ import { ENGINES } from '@shared/engines'
 import { chatEntries, type ChatEntry } from '@shared/agentRounds'
 import { useAgentStore } from '../../stores/agentStore'
 import { useEngineStore } from '../../stores/engineStore'
+import CopyButton from './CopyButton.vue'
 
 const store = useEditorStore()
 const agent = useAgentStore()

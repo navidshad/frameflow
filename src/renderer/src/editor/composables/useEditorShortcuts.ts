@@ -1,3 +1,4 @@
+import { textIsSelected } from '../shortcutGuards'
 import { onMounted, onUnmounted, ref } from 'vue'
 import { useEditorStore } from '../../stores/editorStore'
 import { useKeyframeLanesStore } from '../../stores/keyframeLanesStore'
@@ -164,6 +165,8 @@ export function useEditorShortcuts(options: {
 
 		const shortcut = matchShortcut(event)
 		if (!shortcut) return
+		// Words are selected (a message in the chat, say): the copy is theirs, not the clips'.
+		if (shortcut.id === 'copy' && textIsSelected(window.getSelection())) return
 		if (store.shortcutsOpen && blockedWhileHelpOpen(shortcut.id)) {
 			event.preventDefault()
 			return

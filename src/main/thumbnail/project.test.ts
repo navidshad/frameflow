@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import type { EditorDocument, MediaAsset, Message, Thread, TimelineItem } from '@shared/types'
 import type { GrayFrame } from '@shared/thumbnail'
-import { createThumbnailProject, thumbnailTitle, type ThumbnailDeps } from './project'
+import { createThumbnailProject, previewThumbnailBrief, thumbnailTitle, type ThumbnailDeps } from './project'
 
 // ---- fakes: no ffmpeg, no disk, no key ----
 const gray = (f: (x: number, y: number) => number): GrayFrame => {
@@ -150,5 +150,61 @@ describe('createThumbnailProject', () => {
 
 	it('titles an unnamed video sensibly', () => {
 		expect(thumbnailTitle('  ')).toBe('Untitled Project – Thumbnail')
+	})
+})
+
+
+/** Of the full-size frames asked for, only the first can be saved: the real count is one, not the three assumed. */
+const onlyTheFirstStillWorks = () => { let asked = 0; return () => ++asked > 1 }
+
+describe('the prompt the person can rewrite', () => {
+	it('previews the suggested prompt without reading a frame or writing anything', () => {
+		const { deps, calls } = harness(videoThread('I quit my job'))
+		const preview = previewThumbnailBrief('vid', deps)
+		expect(preview.brief).toContain('"I quit my job"')
+		expect(preview.frameCount).toBe(3)
+		expect(preview.headline.text).toBe('I quit my job')
+		expect(calls.stills).toEqual([])
+		expect(calls.created).toEqual([])
+		expect(calls.messages).toEqual([])
+	})
+
+	it('refuses to preview for something that is not a video with a picture', () => {
+		expect(() => previewThumbnailBrief('nope', harness(null).deps)).toThrow(/not a video project/)
+		const empty = videoThread('x', editor({ media: [], timeline: [] }))
+		expect(() => previewThumbnailBrief('vid', harness(empty).deps)).toThrow(/Add a video to the project first/)
+	})
+
+	it('sends the prompt exactly as the person wrote it', async () => {
+		const { deps, calls } = harness(videoThread('I quit my job'))
+		const mine = 'Make it dramatic. Red background. Headline: QUIT.'
+		await createThumbnailProject('vid', deps, { prompt: `  ${mine}\n`, expectedFrameCount: 3 })
+		expect(calls.messages).toEqual([mine])
+	})
+
+	it('keeps an untouched suggestion in step with the frames that were really read', async () => {
+		const { deps, calls } = harness(videoThread('I quit my job'), { stillFails: onlyTheFirstStillWorks() })
+		const { brief, frameCount } = previewThumbnailBrief('vid', deps)
+		const r = await createThumbnailProject('vid', deps, { prompt: brief, expectedFrameCount: frameCount })
+		expect(r.frames.length).toBeLessThan(3)
+		// It follows the real count instead of promising three frames that were not made.
+		expect(calls.messages[0]).not.toBe(brief.trim())
+		expect(r.frames).toHaveLength(1)
+		expect(calls.messages[0]).toContain('Use the frame from my video')
+	})
+
+	it('does not rewrite a prompt the person changed, even when the frame count differs', async () => {
+		const { deps, calls } = harness(videoThread('I quit my job'), { stillFails: onlyTheFirstStillWorks() })
+		const { brief, frameCount } = previewThumbnailBrief('vid', deps)
+		const edited = `${brief}\nUse a bright yellow arrow.`
+		await createThumbnailProject('vid', deps, { prompt: edited, expectedFrameCount: frameCount })
+		expect(calls.messages[0]).toBe(edited.trim())
+	})
+
+	it('rejects an empty prompt before reading any frame', async () => {
+		const { deps, calls } = harness(videoThread('I quit my job'))
+		await expect(createThumbnailProject('vid', deps, { prompt: '   ' })).rejects.toThrow(/prompt is empty/)
+		expect(calls.stills).toEqual([])
+		expect(calls.created).toEqual([])
 	})
 })
