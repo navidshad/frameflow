@@ -8,14 +8,9 @@
  * so reopening the editor can still undo or move on from them.
  */
 
-export type MarkTool = 'arrow' | 'rect' | 'ellipse' | 'pen'
+import { fontPx, LINE_HEIGHT, strokePx, textLines, type FrameMark } from './markGeometry'
 
-export interface FrameMark {
-	tool: MarkTool
-	color: string
-	/** Two points for arrow/rect/ellipse (start, end); every sample for pen. */
-	points: { x: number; y: number }[]
-}
+export type { FrameMark, MarkTool } from './markGeometry'
 
 /** A frame in the composer, before it is sent. */
 export interface ComposerAttachment {
@@ -33,27 +28,32 @@ export interface ComposerAttachment {
 	marks: FrameMark[]
 }
 
-export const MARK_COLORS = ['#ef4444', '#facc15', '#ffffff'] as const
+/** The swatches offered first; the colour well picks any other. */
+export const MARK_COLORS = ['#ef4444', '#facc15', '#22c55e', '#3b82f6', '#ffffff', '#000000'] as const
+
+/** The font text marks are drawn in, on the canvas and when measured for hit tests. */
+export const markFont = (px: number) => `600 ${px}px -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif`
 
 /**
- * Draws marks on a context the size of the picture. Line width follows the
- * picture's size, so a mark reads the same on a 720p still and a 4K one.
+ * Draws marks on a context the size of the picture. Each mark's line width is
+ * relative to the picture's short side, so it reads the same on a 720p still
+ * and a 4K one.
  */
 export function drawMarks(ctx: CanvasRenderingContext2D, marks: FrameMark[], width: number, height: number): void {
-	const line = Math.max(2, Math.round(Math.min(width, height) / 140))
 	ctx.save()
 	ctx.lineCap = 'round'
 	ctx.lineJoin = 'round'
-	ctx.lineWidth = line
 	for (const mark of marks) {
 		const pts = mark.points.map((p) => ({ x: p.x * width, y: p.y * height }))
 		if (!pts.length) continue
+		const line = strokePx(mark, width, height)
+		ctx.lineWidth = line
 		ctx.strokeStyle = mark.color
 		ctx.fillStyle = mark.color
 		// A dark halo under each mark: a white or yellow line must read on a bright frame.
 		ctx.shadowColor = 'rgba(0,0,0,0.55)'
 		ctx.shadowBlur = line * 1.5
-		const [a, b = pts[0]] = [pts[0], pts[pts.length - 1]]
+		const [a, b] = [pts[0], pts[pts.length - 1]]
 		ctx.beginPath()
 		switch (mark.tool) {
 			case 'pen':
@@ -84,9 +84,32 @@ export function drawMarks(ctx: CanvasRenderingContext2D, marks: FrameMark[], wid
 				ctx.fill()
 				break
 			}
+			case 'text': {
+				const px = fontPx(mark, width, height)
+				ctx.font = markFont(px)
+				ctx.textBaseline = 'top'
+				// An outline in the opposite tone, so the words read on any picture.
+				ctx.shadowBlur = 0
+				ctx.lineWidth = Math.max(2, px / 7)
+				ctx.strokeStyle = isLight(mark.color) ? 'rgba(0,0,0,0.85)' : 'rgba(255,255,255,0.9)'
+				textLines(mark).forEach((text, i) => {
+					const y = a.y + i * px * LINE_HEIGHT + (px * (LINE_HEIGHT - 1)) / 2
+					ctx.strokeText(text, a.x, y)
+					ctx.fillText(text, a.x, y)
+				})
+				break
+			}
 		}
 	}
 	ctx.restore()
+}
+
+/** Whether a #rrggbb colour is light (it takes a dark outline). */
+export function isLight(color: string): boolean {
+	const m = /^#?([0-9a-f]{2})([0-9a-f]{2})([0-9a-f]{2})$/i.exec(color)
+	if (!m) return true
+	const [r, g, b] = m.slice(1).map((v) => parseInt(v, 16))
+	return 0.299 * r + 0.587 * g + 0.114 * b > 150
 }
 
 const loadImage = (src: string) =>

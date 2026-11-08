@@ -174,7 +174,7 @@ export function describeMoment(sec: number, ctx: RefContext): string {
  */
 export function describeReferences(
 	text: string,
-	attachments: Pick<PromptAttachment, 'timeSec' | 'note' | 'marked'>[],
+	attachments: Pick<PromptAttachment, 'timeSec' | 'note' | 'marked' | 'labels'>[],
 	ctx: RefContext
 ): string {
 	const lines: string[] = []
@@ -189,8 +189,9 @@ export function describeReferences(
 		lines.push(`Attached frame${attachments.length === 1 ? '' : 's'} (the image${attachments.length === 1 ? '' : 's'} with this message, in this order), each the exact frame the monitor showed:`)
 		attachments.forEach((a, i) => {
 			const note = a.note?.trim() ? ` The user's note on it: "${a.note.trim()}".` : ''
-			const marked = a.marked ? ' The user drew marks on it (an arrow, a box, a ring or a line) to point at something; the marks are not in the video.' : ''
-			lines.push(`${i + 1}. Frame at ${timeRefToken(a.timeSec)} = ${describeMoment(a.timeSec, ctx)}.${note}${marked}`)
+			const marked = a.marked ? ' The user drew marks on it (arrows, boxes, rings, lines or text) to point at something; the marks are not in the video.' : ''
+			const labels = a.labels?.length ? ` Text the user wrote on it: ${a.labels.map((l) => `"${l}"`).join(', ')}.` : ''
+			lines.push(`${i + 1}. Frame at ${timeRefToken(a.timeSec)} = ${describeMoment(a.timeSec, ctx)}.${note}${marked}${labels}`)
 		})
 	}
 	return lines.length ? `References in this message:\n${lines.join('\n')}` : ''

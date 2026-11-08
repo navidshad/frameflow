@@ -814,6 +814,8 @@ export interface PromptAttachment {
 	note?: string
 	/** The user drew on the still: the picture sent is the marked one. */
 	marked?: boolean
+	/** Words the user wrote on the still, which the agent also gets as text. */
+	labels?: string[]
 	/** The JPEG the engine was sent. */
 	path: string
 	/** A data URL, ~224px wide. */

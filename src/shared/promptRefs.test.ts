@@ -104,7 +104,7 @@ describe('what a moment is', () => {
 
 	it('writes each reference once, then the frames with their notes', () => {
 		const text = describeReferences('Trim @0:04.5 to @0:04.5 and look at @1:30', [
-			{ timeSec: 3, note: '  this logo is too big ', marked: true },
+			{ timeSec: 3, note: '  this logo is too big ', marked: true, labels: ['smaller', 'move left'] },
 			{ timeSec: 12 }
 		], ctx)
 		const lines = text.split('\n')
@@ -114,6 +114,7 @@ describe('what a moment is', () => {
 		expect(text).toContain('1. Frame at @0:03.0 = timeline 3.000s')
 		expect(text).toContain('The user\'s note on it: "this logo is too big".')
 		expect(text).toContain('drew marks on it')
+		expect(text).toContain('Text the user wrote on it: "smaller", "move left".')
 		expect(text).toMatch(/2\. Frame at @0:12\.0 = [^\n]*"broll\.mov" \(item i2\) at 4\.000s/)
 		expect(describeReferences('no refs here', [], ctx)).toBe('')
 	})

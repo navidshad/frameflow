@@ -60,6 +60,7 @@ import {
 } from '@shared/transitionPlan'
 import { dialog } from '../composables/useDialog'
 import type { ComposerAttachment } from '../editor/frameMarks'
+import { markLabels } from '../editor/markGeometry'
 
 /** Frames one message can carry: each is a full picture the model reads at full price. */
 export const MAX_PROMPT_FRAMES = 6
@@ -3862,8 +3863,8 @@ export const useEditorStore = defineStore('editor', () => {
 		// Retry re-sends the files its turn kept; a new message sends the draft's frames.
 		const sending = override?.retry ? null : promptAttachments.value
 		const attachments = override?.retry
-			? override.retry.attachments?.map((a) => ({ id: a.id, timeSec: a.timeSec, note: a.note, marked: a.marked, thumbnail: a.thumbnail, path: a.path }))
-			: sending!.map((a) => ({ id: a.id, timeSec: a.timeSec, note: a.note.trim() || undefined, marked: a.marks.length > 0 || undefined, thumbnail: a.thumbnail, data: a.data, mimeType: a.mimeType }))
+			? override.retry.attachments?.map((a) => ({ id: a.id, timeSec: a.timeSec, note: a.note, marked: a.marked, labels: a.labels, thumbnail: a.thumbnail, path: a.path }))
+			: sending!.map((a) => ({ id: a.id, timeSec: a.timeSec, note: a.note.trim() || undefined, marked: a.marks.length > 0 || undefined, labels: markLabels(a.marks), thumbnail: a.thumbnail, data: a.data, mimeType: a.mimeType }))
 		promptError.value = null
 		lastAnswer.value = null
 		// Flush the debounced autosave so main's doc (the context source) is current

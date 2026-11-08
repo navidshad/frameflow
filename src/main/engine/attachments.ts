@@ -35,6 +35,9 @@ export async function storeAttachments(projectDir: string, turnId: string, input
 			timeSec: Math.max(0, Number(input.timeSec) || 0),
 			note: typeof input.note === 'string' && input.note.trim() ? input.note.trim().slice(0, 500) : undefined,
 			marked: !!input.marked || undefined,
+			labels: Array.isArray(input.labels) && input.labels.length
+				? input.labels.map((l) => String(l).trim().slice(0, 200)).filter(Boolean).slice(0, 20)
+				: undefined,
 			thumbnail: typeof input.thumbnail === 'string' && input.thumbnail.startsWith('data:image/') ? input.thumbnail : ''
 		}
 		if (input.data !== undefined) {
