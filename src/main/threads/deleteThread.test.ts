@@ -10,7 +10,12 @@ vi.mock('electron', () => ({
 	app: { getPath: () => userData },
 	BrowserWindow: { getAllWindows: () => [] }
 }))
-vi.mock('../settings', () => ({ settingsManager: { getThreadTempDir: (id: string) => path.join(root, 'projects', id) } }))
+vi.mock('../settings', () => ({
+	settingsManager: {
+		getThreadTempDir: (id: string) => path.join(root, 'projects', id),
+		getTempDir: () => path.join(root, 'projects')
+	}
+}))
 vi.mock('../ffmpeg', () => ({ getVideoMetadata: vi.fn() }))
 
 const { threadManager } = await import('./index')
@@ -54,6 +59,20 @@ describe('removing a project', () => {
 		expect(threadManager.deleteThread('cccc', { deleteFiles: false })).toBe(true)
 		expect(hasRecord('cccc')).toBe(false)
 		expect(fs.readFileSync(path.join(folder, 'exports', 'final.mp4'), 'utf8')).toBe('render')
+	})
+
+	it('does not bring a project back at the next start when its files were kept', () => {
+		const folder = makeProject('eeee')
+		// The folder holds a mirror of the project, as the app writes it.
+		fs.writeFileSync(path.join(folder, 'thread.json'), JSON.stringify({ id: 'eeee', title: 'eeee', type: 'editor', tempDir: folder, preprocessing: {}, messages: [] }))
+		threadManager.deleteThread('eeee', { deleteFiles: false })
+		expect(hasRecord('eeee')).toBe(false)
+		// What the app does at every start: re-add any folder that still carries its project file.
+		threadManager.syncWithArtifactDir()
+		expect(hasRecord('eeee')).toBe(false)
+		// The files are all still there, and the project is recoverable by hand.
+		expect(fs.existsSync(path.join(folder, 'exports', 'final.mp4'))).toBe(true)
+		expect(fs.existsSync(path.join(folder, 'thread.removed.json'))).toBe(true)
 	})
 
 	it('never removes a folder that is not named after the project', () => {

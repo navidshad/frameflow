@@ -507,19 +507,34 @@ class ThreadManager {
 		}
 	}
 
+	/** Keep the project's folder but stop the startup recovery from re-adding it: the mirror gets a name it does not look for. */
+	private retireMirror(thread: Thread) {
+		if (!thread.tempDir || path.basename(thread.tempDir) !== thread.id) return
+		const mirror = path.join(thread.tempDir, 'thread.json')
+		try {
+			if (fs.existsSync(mirror)) fs.renameSync(mirror, path.join(thread.tempDir, 'thread.removed.json'))
+		} catch (error) {
+			console.error(`Failed to retire the project mirror ${mirror}:`, error)
+		}
+	}
+
 	/**
 	 * Remove a project from the app.
 	 *
 	 * `deleteFiles` (default true) also removes the project's folder: proxies,
 	 * analysis, motion layers and finished exports. With false the project
 	 * disappears from the list and the folder stays on disk, where it still holds
-	 * a copy of the project (`thread.json`). Footage imported by reference lives
-	 * outside that folder and is never touched either way.
+	 * a copy of the project, renamed `thread.removed.json`: the app re-adds any
+	 * folder that still carries a `thread.json` when it starts (syncWithArtifactDir),
+	 * which would bring the removed project straight back. Footage imported by
+	 * reference lives outside that folder and is never touched either way.
 	 */
 	deleteThread(id: string, options: { deleteFiles?: boolean } = {}): boolean {
 		const thread = this.getThread(id)
 		if (thread && options.deleteFiles !== false) {
 			this.deleteThreadArtifacts(thread)
+		} else if (thread) {
+			this.retireMirror(thread)
 		}
 
 		const filePath = this.getThreadPath(id)
