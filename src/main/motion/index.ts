@@ -4,6 +4,7 @@ import type { TimelineItem } from '@shared/types'
 import { composeMotionPage, motionFramePlan, motionFrameState, type MotionKit } from '@shared/motion'
 import { openMotionCapture } from './capture'
 import { encodeFrames, PARTIAL_SUFFIX } from './encode'
+import { abortable, mapPool } from '../editor/pool'
 
 /**
  * Motion layers for the export: render each clip once, by content hash, to an
@@ -26,7 +27,7 @@ export interface MotionJob {
 /** Render one clip to `outputPath`. Exported for the Electron-run test. */
 export async function renderMotionClip(
 	job: MotionJob,
-	options: { signal?: AbortSignal; onProgress?: (done: number, total: number) => void } = {}
+	options: { signal?: AbortSignal; onProgress?: (done: number, total: number) => void; idleRatio?: number | (() => number) } = {}
 ): Promise<void> {
 	const { item, frame, outputPath } = job
 	const plan = motionFramePlan(item, frame.fps)
@@ -39,7 +40,8 @@ export async function renderMotionClip(
 			next: (k) => capture.frame(plan[k]),
 			outputPath,
 			signal: options.signal,
-			onProgress: options.onProgress
+			onProgress: options.onProgress,
+			idleRatio: options.idleRatio
 		})
 	} finally {
 		capture.close()
@@ -105,12 +107,13 @@ function sweepStills(dir: string): void {
 /** Render the clip unless an identical one is already on disk. */
 export async function ensureMotionClip(
 	job: MotionJob,
-	options: { signal?: AbortSignal; onProgress?: (done: number, total: number) => void } = {}
+	options: { signal?: AbortSignal; onProgress?: (done: number, total: number) => void; idleRatio?: number | (() => number) } = {}
 ): Promise<string> {
 	if (fs.existsSync(job.outputPath)) return job.outputPath
 	const running = inFlight.get(job.outputPath)
 	if (running) {
-		await running
+		// Someone else is drawing this clip: wait for it, but not past a Cancel.
+		await abortable(running, options.signal)
 		return job.outputPath
 	}
 	const work = renderMotionClip(job, options)
@@ -132,20 +135,38 @@ export async function ensureMotionClip(
  */
 export async function ensureMotionJobs(
 	jobs: MotionJob[],
-	options: { signal?: AbortSignal; onProgress?: (fraction: number) => void } = {}
+	options: { signal?: AbortSignal; onProgress?: (fraction: number, clips: { finished: number; total: number }) => void } = {}
 ): Promise<void> {
 	const unique = [...new Map(jobs.map((j) => [j.outputPath, j])).values()]
 		.filter((j) => !fs.existsSync(j.outputPath))
-	const total = unique.reduce((sum, j) => sum + motionFramePlan(j.item, j.frame.fps).length, 0) || 1
-	let done = 0
-	for (const job of unique) {
-		if (options.signal?.aborted) throw new Error('aborted')
-		const before = done
-		await ensureMotionClip(job, {
-			signal: options.signal,
-			onProgress: (k) => options.onProgress?.((before + k) / total)
+	const frames = unique.map((j) => motionFramePlan(j.item, j.frame.fps).length)
+	const total = frames.reduce((sum, n) => sum + n, 0) || 1
+	const done = unique.map(() => 0)
+	const report = () => options.onProgress?.(
+		done.reduce((sum, n) => sum + n, 0) / total,
+		{ finished: done.filter((n, i) => n >= frames[i]).length, total: unique.length }
+	)
+	// Each clip draws in its own hidden window and pipes to its own ffmpeg, and a
+	// frame spends most of its time waiting on the window's screenshot, not on a
+	// core — a 4K60 export of 28 layers sat at about 20% CPU one clip at a time.
+	await mapPool(unique.length, motionConcurrency(unique), async (i, signal) => {
+		await ensureMotionClip(unique[i], {
+			signal,
+			onProgress: (k) => { done[i] = k; report() }
 		})
-		done = before + motionFramePlan(job.item, job.frame.fps).length
-	}
-	options.onProgress?.(1)
+		done[i] = frames[i]
+		report()
+	}, options.signal ?? new AbortController().signal)
+	options.onProgress?.(1, { finished: unique.length, total: unique.length })
+}
+
+/**
+ * Motion clips drawn at once. At 480p a frame is mostly waiting (~17 ms, 59 fps
+ * alone), so four windows keep the machine busy. At 4K it is mostly the main
+ * thread copying pixels (~108 of ~137 ms), which windows cannot share, so more
+ * than two only queue behind each other and hold 33 MB frames in memory.
+ */
+export const motionConcurrency = (jobs: MotionJob[]): number => {
+	const pixels = jobs.reduce((max, j) => Math.max(max, j.frame.width * j.frame.height), 0)
+	return pixels > 1920 * 1080 ? 2 : 4
 }

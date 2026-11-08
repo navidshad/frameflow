@@ -288,13 +288,13 @@ export async function renderExactFrame(options: {
 			layers.push(layerReport(slice, 'clip'))
 			continue
 		}
-		const range = stillFrameRange(slice, plan.fps)
+		const range = stillFrameRange(slice, slice.motion!.fps)
 		const file = await ensureMotionFrames(
 			// With its kit, as the export draws it: a page that builds on one cannot run without it.
 			{ item: slice.item, frame: slice.motion!, outputPath: slice.srcPath, kits: slice.motionKit ? [slice.motionKit] : undefined },
 			range.first, range.last, stillClipPath(slice.srcPath, range)
 		)
-		swap.set(slice, rebasedSlice(slice, range.first, plan.fps, file))
+		swap.set(slice, rebasedSlice(slice, range.first, slice.motion!.fps, file))
 		layers.push(layerReport(slice, 'captured'))
 	}
 	const motion: MotionFrameReport = {

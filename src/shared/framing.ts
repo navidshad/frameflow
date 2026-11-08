@@ -72,3 +72,18 @@ export const FRAME_PRESETS: { label: string; short: string; w: number; h: number
 	{ label: 'Square', short: '1:1', w: 1080, h: 1080 },
 	{ label: 'Portrait', short: '4:5', w: 1080, h: 1350 }
 ]
+
+/**
+ * The frame scaled down to `lines` lines high, the width following the aspect and
+ * kept even (h264 cannot encode an odd one). A frame already that small stays.
+ * The export's resolution choices and the 480p proxies both come through here, so
+ * the dialog can show the size an export will really have.
+ */
+export function fitFrameToHeight(
+	frame: { width: number; height: number },
+	lines: number
+): { width: number; height: number } {
+	if (frame.height <= lines) return { width: frame.width, height: frame.height }
+	const width = Math.max(2, Math.round((frame.width * lines) / frame.height / 2) * 2)
+	return { width, height: lines }
+}

@@ -44,6 +44,17 @@
 			</button>
 		</SlimTooltip>
 
+		<!-- The background pre-render of motion layers, so the long part of an export is
+		     visibly being done before the button is pressed. -->
+		<SlimTooltip v-if="showExport && motionDrawing && !exporting"
+			:text="`Drawing motion layers in the background so Export is faster: ${motionDrawing.done} of ${motionDrawing.total} ready`"
+			placement="bottom">
+			<span class="h-[22px] px-2 rounded-md bg-zinc-100 dark:bg-zinc-800 text-[10px] font-semibold text-zinc-500 dark:text-zinc-400 flex items-center gap-1.5 tabular-nums">
+				<span class="w-2.5 h-2.5 rounded-full border-2 border-primary border-t-transparent animate-spin"></span>
+				Motion {{ motionDrawing.done }}/{{ motionDrawing.total }}
+			</span>
+		</SlimTooltip>
+
 		<SlimTooltip v-if="showExport" :text="thumbnailBusy ? 'Making the thumbnail project…' : canThumbnail ? 'New thumbnail project from this video' : 'Add a video first'" placement="bottom">
 			<button
 				class="h-[26px] px-2.5 rounded-md text-xs font-semibold flex items-center gap-1.5 transition active:scale-95 text-zinc-600 dark:text-zinc-300 hover:text-primary hover:bg-primary/10 disabled:opacity-40 disabled:cursor-not-allowed disabled:hover:bg-transparent disabled:hover:text-zinc-600"
@@ -64,17 +75,18 @@
 			:title="exporting ? 'Export the timeline' : lockedBy ? `${lockedBy} is working on this project over MCP: export when its round ends` : canExport ? 'Export the timeline' : 'Add clips to the timeline first'"
 			@click="$emit('export')">
 			<span v-if="!exporting" class="iconify w-3.5 h-3.5" :class="lockedBy ? 'tabler--lock' : 'tabler--file-export'"></span>
-			{{ exporting ? `Exporting ${percent}%` : 'Export' }}
+			{{ exporting ? (editorStore.cancelling ? 'Stopping…' : `Exporting ${percent}%${etaShort}`) : 'Export' }}
 		</button>
 	</header>
 </template>
 
 <script setup lang="ts">
-import { nextTick, ref } from 'vue'
+import { computed, nextTick, ref } from 'vue'
 import { useRouter } from 'vue-router'
 import SlimTooltip from '../../components/SlimTooltip.vue'
 import GlobalRenderPill from '../../components/GlobalRenderPill.vue'
 import { useAgentStore } from '../../stores/agentStore'
+import { useEditorStore } from '../../stores/editorStore'
 import { useTheme } from '../../composables/useTheme'
 
 /**
@@ -98,6 +110,18 @@ const props = defineProps<{
 	/** The thumbnail project is being built. */
 	thumbnailBusy?: boolean
 }>()
+const editorStore = useEditorStore()
+/** The pre-render of this project's motion layers, while it is drawing. */
+const motionDrawing = computed(() => {
+	const p = editorStore.motionPrerender
+	return p && p.running && p.threadId === editorStore.threadId ? p : null
+})
+/** " · 14 min" beside the percent, once there is an estimate worth showing. */
+const etaShort = computed(() => {
+	const sec = editorStore.renderState?.etaSec
+	if (sec == null || sec < 10) return ''
+	return sec < 90 ? ` · ${Math.round(sec / 5) * 5} s` : sec < 5400 ? ` · ${Math.round(sec / 60)} min` : ` · ${(sec / 3600).toFixed(1)} h`
+})
 const emit = defineEmits<{
 	(e: 'back'): void
 	(e: 'rename', value: string): void

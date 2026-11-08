@@ -38,6 +38,7 @@ import * as editorPreprocess from './editor/preprocess'
 import * as editorHistory from './editor/history'
 import * as editorPreview from './editor/preview'
 import * as editorRender from './editor/render'
+import { prerenderMotion } from './editor/motionPrerender'
 import * as editorCaptions from './editor/captions'
 import { listExportFiles, resolveExportPath } from './editor/exports'
 import { loadPacks, packManifests } from './editor/packs'
@@ -809,12 +810,19 @@ app.whenReady().then(() => {
 
 	// Export / render (M4): fast path via assembleVideo, region path via
 	// segment-then-concat; progress streams over editor-render-progress.
-	ipcMain.handle('export-editor-timeline', (_event, { threadId, quality, doc, format }: {
-		threadId: string, quality: 'original' | 'preview', doc?: EditorDocument, format?: DeliveryFormat
+	ipcMain.handle('export-editor-timeline', (_event, { threadId, quality, doc, format, height }: {
+		threadId: string, quality: 'original' | 'preview', doc?: EditorDocument, format?: DeliveryFormat, height?: number
 	}) => {
 		// `doc` is the renderer's in-memory timeline snapshot at click time —
 		// the render is detached from the live document and never persists it.
-		return editorRender.startEditorRender({ threadId, quality, doc, format })
+		return editorRender.startEditorRender({ threadId, quality, doc, format, height })
+	})
+
+	// Draw the project's motion layers in the background so an export finds them
+	// ready. Returns at once; progress streams over motion-prerender-progress.
+	ipcMain.handle('prerender-motion', (_event, { threadId, doc }: { threadId: string, doc: EditorDocument }) => {
+		void prerenderMotion({ threadId, doc })
+		return { ok: true }
 	})
 
 	ipcMain.handle('render-exact-frame', (_event, data: {

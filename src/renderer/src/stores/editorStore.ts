@@ -5,7 +5,7 @@ import type {
 	BackgroundTask, Clip, EditorDocument, EditorHistoryStep, EditorMarker,
 	EditorRevision, EditorRevisionSummary, MediaAsset, RevisionSnapshot, PromptTurn, Thread, TimelineDiff,
 	DeliveryFormat, SoundBinding, TimelineItem, TimelineItemTransform, TimelineSnapshot, Track,
-	EditorOps, MulticamGroup, MulticamSpeakers, PrepLane
+	EditorOps, MulticamGroup, MulticamSpeakers, PrepLane, RenderStepInfo
 } from '@shared/types'
 import {
 	groupOfItem, groupRippleCut, groupTimeAt, rederiveGroupItems, resolveAngle, shotRun, suggestCameraGroups, type CameraGroupSuggestion
@@ -196,6 +196,10 @@ export const useEditorStore = defineStore('editor', () => {
 		outputPath?: string
 		error?: string
 		startedAt: number
+		/** The steps of the export and where each stands, and the time left. */
+		steps?: RenderStepInfo[]
+		etaSec?: number | null
+		elapsedSec?: number
 	}
 	const renders = ref<Record<string, RenderEntry>>({})
 
@@ -1816,6 +1820,10 @@ export const useEditorStore = defineStore('editor', () => {
 
 	const selectItems = (ids: string[]) => {
 		selectedItemIds.value = [...ids]
+		// Picking a clip leaves the seam: the inspector shows a seam before any
+		// item, so a seam left selected would hide the clip just picked. An empty
+		// list is selectSeam's own clear and must not undo the seam it just set.
+		if (ids.length) selectedSeamId.value = null
 		syncSelectionIntoDoc()
 	}
 
@@ -1823,6 +1831,7 @@ export const useEditorStore = defineStore('editor', () => {
 		selectedItemIds.value = selectedItemIds.value.includes(id)
 			? selectedItemIds.value.filter((x) => x !== id)
 			: [...selectedItemIds.value, id]
+		if (selectedItemIds.value.length) selectedSeamId.value = null
 		syncSelectionIntoDoc()
 	}
 
@@ -3852,7 +3861,7 @@ export const useEditorStore = defineStore('editor', () => {
 	 * at once finishes later than two in sequence while making the progress bar
 	 * meaningless. `renders` is keyed by thread, so there is one slot anyway.
 	 */
-	const exportQueue = ref<{ quality: 'original' | 'preview'; format: DeliveryFormat }[]>([])
+	const exportQueue = ref<{ quality: 'original' | 'preview'; format: DeliveryFormat; height?: number }[]>([])
 
 	/**
 	 * Render the timeline once per format, in order.
@@ -3861,10 +3870,10 @@ export const useEditorStore = defineStore('editor', () => {
 	 * detaches from the live doc, and a doc that changed between jobs should
 	 * produce what it says at the moment each one starts.
 	 */
-	const startExportBatch = (quality: 'original' | 'preview', formats: DeliveryFormat[]) => {
+	const startExportBatch = (quality: 'original' | 'preview', formats: DeliveryFormat[], height?: number) => {
 		const wanted = formats.length ? formats : ['h264' as const]
-		exportQueue.value = wanted.slice(1).map((format) => ({ quality, format }))
-		void startExport(quality, wanted[0])
+		exportQueue.value = wanted.slice(1).map((format) => ({ quality, format, height }))
+		void startExport(quality, wanted[0], height)
 	}
 
 	/** Start the next queued format, if a finished export left one waiting. */
@@ -3872,10 +3881,10 @@ export const useEditorStore = defineStore('editor', () => {
 		const next = exportQueue.value[0]
 		if (!next) return
 		exportQueue.value = exportQueue.value.slice(1)
-		void startExport(next.quality, next.format)
+		void startExport(next.quality, next.format, next.height)
 	}
 
-	const startExport = async (quality: 'original' | 'preview', format: DeliveryFormat = 'h264') => {
+	const startExport = async (quality: 'original' | 'preview', format: DeliveryFormat = 'h264', height?: number) => {
 		if (!threadId.value || !canExport.value || !doc.value) return
 		const tid = threadId.value
 		const entry: RenderEntry = {
@@ -3886,15 +3895,17 @@ export const useEditorStore = defineStore('editor', () => {
 			phase: 'rendering',
 			startedAt: Date.now()
 		}
+		cancelling.value = false
 		renders.value = { ...renders.value, [tid]: entry }
 		try {
 			// Pass an in-memory SNAPSHOT of the live doc: the render detaches
 			// from the editor entirely (keep editing / switch revision / load
 			// another project), and the snapshot is never persisted.
 			const snapshot = JSON.parse(JSON.stringify(doc.value))
-			const result = await api.exportEditorTimeline({ threadId: tid, quality, doc: snapshot, format })
+			const result = await api.exportEditorTimeline({ threadId: tid, quality, doc: snapshot, format, height })
 			if (result?.renderId && renders.value[tid]) {
 				renders.value = { ...renders.value, [tid]: { ...renders.value[tid], renderId: result.renderId } }
+				if (cancelling.value) await api.abortEditorRender({ renderId: result.renderId })
 			}
 		} catch (error: any) {
 			// Pre-flight rejection (missing files, missing media, empty timeline…).
@@ -3910,9 +3921,42 @@ export const useEditorStore = defineStore('editor', () => {
 		}
 	}
 
+	// ===== Motion pre-render =====
+	// Drawing the motion layers is the longest part of a full-quality export and
+	// needs nobody waiting, so once the project has been left alone for a while
+	// the main process draws whatever an export would still need. What it draws
+	// is exactly what the export would, so the export skips it.
+	const motionPrerender = ref<{ threadId: string; done: number; total: number; running: boolean } | null>(null)
+	const PRERENDER_IDLE_MS = 20_000
+	let prerenderTimer: ReturnType<typeof setTimeout> | undefined
+	const schedulePrerender = () => {
+		clearTimeout(prerenderTimer)
+		const tid = threadId.value
+		if (!tid || !doc.value || !api.prerenderMotion) return
+		if (!doc.value.timeline.some((i) => i.motion)) return
+		prerenderTimer = setTimeout(() => {
+			if (threadId.value !== tid || !doc.value || isRendering.value) return
+			void api.prerenderMotion({ threadId: tid, doc: JSON.parse(JSON.stringify(doc.value)) })
+		}, PRERENDER_IDLE_MS)
+	}
+	// Every committed edit, undo, redo and revision switch moves the step; opening a project does too.
+	watch(() => [threadId.value, doc.value?.historyRef?.currentStepId], schedulePrerender)
+	api.onMotionPrerenderProgress?.((progress: { threadId: string; done: number; total: number; running: boolean }) => {
+		motionPrerender.value = progress
+	})
+
+	/**
+	 * Cancel was pressed and the render has not stopped yet. Stopping is not
+	 * instant (an ffmpeg process has to die, a clip being drawn is left), so the
+	 * UI says so at once instead of looking as if the button did nothing.
+	 */
+	const cancelling = ref(false)
 	const abortExport = async () => {
-		if (!renderState.value?.renderId) return
-		await api.abortEditorRender({ renderId: renderState.value.renderId })
+		if (!renderState.value || !isRendering.value) return
+		cancelling.value = true
+		// Before the render has an id there is nothing to name yet: startExport
+		// sends the abort the moment the id arrives.
+		if (renderState.value.renderId) await api.abortEditorRender({ renderId: renderState.value.renderId })
 	}
 
 	/** Dismiss a render entry (defaults to the current project's). */
@@ -4225,6 +4269,7 @@ export const useEditorStore = defineStore('editor', () => {
 				threadId: string; renderId: string; percent: number
 				phase: 'rendering' | 'stitching' | 'done' | 'error'
 				outputPath?: string; error?: string
+				steps?: RenderStepInfo[]; etaSec?: number | null; elapsedSec?: number
 			}) => {
 				// Renders are background jobs — track progress for ANY thread,
 				// not just the currently open project.
@@ -4241,12 +4286,16 @@ export const useEditorStore = defineStore('editor', () => {
 						percent: data.percent,
 						phase: data.phase,
 						outputPath: data.outputPath,
-						error: data.error
+						error: data.error,
+						steps: data.steps ?? existing?.steps,
+						etaSec: data.etaSec,
+						elapsedSec: data.elapsedSec
 					}
 				}
 				// A batch moves on when the one in flight lands — including on an
 				// error, so one bad format does not strand the rest.
 				if (data.threadId === threadId.value && (data.phase === 'done' || data.phase === 'error')) {
+					cancelling.value = false
 					drainExportQueue()
 				}
 			})
@@ -4526,6 +4575,8 @@ export const useEditorStore = defineStore('editor', () => {
 		exportWarnings,
 		startExport,
 		abortExport,
-		clearRenderState
+		cancelling,
+		clearRenderState,
+		motionPrerender
 	}
 })

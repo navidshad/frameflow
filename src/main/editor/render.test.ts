@@ -1,8 +1,11 @@
 import { describe, expect, it } from 'vitest'
 import type { EditorDocument, MediaAsset, TimelineItem, Track } from '@shared/types'
 import { DEFAULT_TRANSITION_SEC } from '@shared/transitionPlan'
-import { computeRegions, fastPathMatchesFrame, isFastPathEligible } from './render'
+import { computeRegions, fastPathMatchesFrame, isFastPathEligible, proxyFrameFor, regionConcurrency } from './render'
 import { allSlices, type OverlapRegion, type RegionPlan } from './renderBuilders'
+import { MOTION_MAX_FPS } from './render'
+import { motionConcurrency } from '../motion'
+import { stillFrameRange, rebasedSlice } from './exactMotion'
 
 // ===== Fixtures =====
 
@@ -482,5 +485,115 @@ describe('fastPathMatchesFrame', () => {
 	it('declines a source whose shape is unknown', () => {
 		expect(fastPathMatchesFrame(undefined, frame)).toBe(false)
 		expect(fastPathMatchesFrame({}, frame)).toBe(false)
+	})
+})
+
+describe('the fast preview frame', () => {
+	// A preview export reads 480p proxies. Rendering at the sequence's 4K would
+	// upscale them and spend the encode on pixels with nothing in them.
+	it('is 480 lines high with the width following the aspect, even', () => {
+		expect(proxyFrameFor({ width: 3840, height: 2160 })).toEqual({ width: 854, height: 480 })
+		expect(proxyFrameFor({ width: 1920, height: 1080 })).toEqual({ width: 854, height: 480 })
+		expect(proxyFrameFor({ width: 1080, height: 1920 })).toEqual({ width: 270, height: 480 })
+		expect(proxyFrameFor({ width: 1080, height: 1080 })).toEqual({ width: 480, height: 480 })
+	})
+
+	it('never makes a frame larger', () => {
+		expect(proxyFrameFor({ width: 640, height: 360 })).toEqual({ width: 640, height: 360 })
+	})
+
+	const one = doc({ timeline: [item(0, { in: 0, out: 10 })] })
+
+	it('is what the plan renders at when asked, and the full frame otherwise', () => {
+		const small = computeRegions(one, 'preview', {}, { proxyFrame: true })
+		expect([small.width, small.height]).toEqual([854, 480])
+		const full = computeRegions(one, 'preview')
+		expect([full.width, full.height]).toEqual([1920, 1080])
+	})
+
+	it('is drawn at the proxies\' frame rate, not the footage\'s', () => {
+		// Proxies are made at no more than 30 fps; a 60 fps preview would draw
+		// each frame twice, and every motion layer is captured frame by frame.
+		const sixty = doc({
+			media: [{ ...asset('a'), metadata: { duration: 1000, width: 3840, height: 2160, fps: 60, hasAudio: true } as MediaAsset['metadata'] }],
+			timeline: [item(0, { in: 0, out: 10 })]
+		})
+		expect(computeRegions(sixty, 'preview', {}, { proxyFrame: true }).fps).toBe(30)
+		expect(computeRegions(sixty, 'original').fps).toBe(60)
+		expect(computeRegions(sixty, 'preview').fps).toBe(60)
+	})
+
+	it('lets the fast path serve a preview from the proxy, whose frame is that size', () => {
+		const source = { width: 3840, height: 2160 }
+		expect(fastPathMatchesFrame(source, { width: 854, height: 480 }, true)).toBe(true)
+		expect(fastPathMatchesFrame(source, { width: 854, height: 480 })).toBe(false)
+		expect(fastPathMatchesFrame(source, { width: 3840, height: 2160 }, true)).toBe(false)
+	})
+
+	it('renders regions in parallel only where the hardware encoder can take them', () => {
+		expect(regionConcurrency()).toBe(process.platform === 'darwin' ? 3 : 1)
+	})
+})
+
+describe('motion layers draw at no more than MOTION_MAX_FPS', () => {
+	const sixty = (): EditorDocument => doc({
+		media: [{ ...asset('a'), metadata: { duration: 1000, width: 3840, height: 2160, fps: 60, hasAudio: true } as MediaAsset['metadata'] }],
+		tracks: [track('v1'), track('v2', { order: 1 })],
+		timeline: [
+			item(0, { in: 0, out: 10 }),
+			item(2, { id: 'title', trackId: 'v2', sourceAssetId: '', in: 0, out: 4, duration: 4, motion: { template: 'lower-third' } })
+		]
+	})
+	const motionSlice = (p: RegionPlan) => p.regions.flatMap(allSlices).find((s) => s.motion)!
+
+	it('a 60 fps sequence draws its motion at 30, and keeps the sequence at 60', () => {
+		const p = computeRegions(sixty(), 'original')
+		expect(p.fps).toBe(60)
+		expect(motionSlice(p).motion!.fps).toBe(MOTION_MAX_FPS)
+	})
+
+	it('leaves a sequence already at or below the cap as it was', () => {
+		const slow = sixty()
+		slow.media[0].metadata = { ...slow.media[0].metadata, fps: 24 } as MediaAsset['metadata']
+		expect(motionSlice(computeRegions(slow, 'original')).motion!.fps).toBe(24)
+	})
+
+	it('the exact frame counts the clip\'s frames at the clip\'s own rate', () => {
+		// A still at 2.0 s into the clip is frame 60 of a 30 fps clip, not of a 60 fps one.
+		const slice = { ...motionSlice(computeRegions(sixty(), 'original')), in: 2, out: 2 + 1 / 60 }
+		const range = stillFrameRange(slice, slice.motion!.fps)
+		expect(range.first).toBe(59)
+		expect(rebasedSlice(slice, range.first, slice.motion!.fps, '/s.mov').in).toBeCloseTo(2 - 59 / 30, 6)
+	})
+
+	it('draws fewer at once when the frame is big, where the main thread is the limit', () => {
+		const job = (w: number, h: number) => ({ item: {} as any, frame: { width: w, height: h, fps: 30 }, outputPath: '/x.mov' })
+		expect(motionConcurrency([job(854, 480)])).toBe(4)
+		expect(motionConcurrency([job(1920, 1080)])).toBe(4)
+		expect(motionConcurrency([job(3840, 2160)])).toBe(2)
+	})
+})
+
+describe('a resolution choice', () => {
+	const uhd = (): EditorDocument => doc({
+		media: [{ ...asset('a'), metadata: { duration: 1000, width: 3840, height: 2160, fps: 60, hasAudio: true } as MediaAsset['metadata'] }],
+		timeline: [item(0, { in: 0, out: 10 })]
+	})
+
+	it('scales the frame to that many lines and leaves the frame rate alone', () => {
+		const p = computeRegions(uhd(), 'original', {}, { frameHeight: 1080 })
+		expect([p.width, p.height, p.fps]).toEqual([1920, 1080, 60])
+		const q = computeRegions(uhd(), 'original', {}, { frameHeight: 720 })
+		expect([q.width, q.height]).toEqual([1280, 720])
+	})
+
+	it('never makes a frame larger than the project', () => {
+		const p = computeRegions(doc({ timeline: [item(0, { in: 0, out: 10 })] }), 'original', {}, { frameHeight: 2160 })
+		expect([p.width, p.height]).toEqual([1920, 1080])
+	})
+
+	it('is no longer the fast path\'s frame, so a smaller export takes the region path', () => {
+		const p = computeRegions(uhd(), 'original', {}, { frameHeight: 1080 })
+		expect(fastPathMatchesFrame({ width: 3840, height: 2160 }, p)).toBe(false)
 	})
 })

@@ -115,11 +115,19 @@ const api = {
 	},
 	// `doc` = in-memory timeline snapshot at click time (render detaches from the live doc)
 	exportEditorTimeline: (data: {
-		threadId: string, quality: 'original' | 'preview', doc?: unknown, format?: 'h264' | 'prores'
+		threadId: string, quality: 'original' | 'preview', doc?: unknown, format?: 'h264' | 'prores', height?: number
 	}) =>
 		ipcRenderer.invoke('export-editor-timeline', data),
 	abortEditorRender: (data: { renderId: string }) =>
 		ipcRenderer.invoke('abort-editor-render', data),
+	// Draw the project's motion layers in the background so an export finds them ready.
+	prerenderMotion: (data: { threadId: string; doc: unknown }) =>
+		ipcRenderer.invoke('prerender-motion', data),
+	onMotionPrerenderProgress: (callback: (data: { threadId: string; done: number; total: number; running: boolean }) => void) => {
+		const listener = (_event: any, data: any) => callback(data)
+		ipcRenderer.on('motion-prerender-progress', listener)
+		return () => ipcRenderer.removeListener('motion-prerender-progress', listener)
+	},
 	getEditorTranscripts: (threadId: string) =>
 		ipcRenderer.invoke('get-editor-transcripts', threadId),
 	getEffectPacks: () => ipcRenderer.invoke('get-effect-packs'),
