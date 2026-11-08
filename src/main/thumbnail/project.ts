@@ -46,11 +46,53 @@ export interface ThumbnailResult {
 	hasGeminiKey: boolean
 }
 
-export const thumbnailTitle = (videoTitle: string): string => `${videoTitle.trim() || 'Untitled Project'} – Thumbnail`
+/** What the person sees before anything is made: the suggested prompt, to keep or rewrite. */
+export interface ThumbnailBriefPreview {
+	brief: string
+	headline: Headline
+	/** How many frames the suggested prompt assumes; the real count can be lower if a frame cannot be read. */
+	frameCount: number
+}
 
-export async function createThumbnailProject(videoThreadId: string, deps: ThumbnailDeps): Promise<ThumbnailResult> {
+/**
+ * The suggested prompt for a video, with nothing made yet: no frame is read and
+ * nothing is written. The headline comes from the title or the cut's transcript,
+ * the same way the real run chooses it.
+ */
+export function previewThumbnailBrief(
+	videoThreadId: string,
+	deps: Pick<ThumbnailDeps, 'getThread' | 'transcripts'>
+): ThumbnailBriefPreview {
 	const video = deps.getThread(videoThreadId)
 	if (!video || video.type !== 'editor' || !video.editor) throw new Error('That is not a video project.')
+	const doc = video.editor
+	const points = samplePoints(doc, CANDIDATE_COUNT)
+	if (!points.length) throw new Error('Add a video to the project first: there is no picture to take a frame from.')
+	const headline = chooseHeadline(video.title, transcriptLinesForCut(doc, deps.transcripts(video)))
+	const frameCount = Math.min(PICK_COUNT, points.length)
+	return { brief: buildThumbnailBrief({ headline, frameCount }), headline, frameCount }
+}
+
+export interface ThumbnailOptions {
+	/** The whole first message, as the person left it. Absent: the suggested prompt. */
+	prompt?: string
+	/** The frame count the suggested prompt that the person saw assumed (see `previewThumbnailBrief`). */
+	expectedFrameCount?: number
+}
+
+export const thumbnailTitle = (videoTitle: string): string => `${videoTitle.trim() || 'Untitled Project'} – Thumbnail`
+
+export async function createThumbnailProject(
+	videoThreadId: string,
+	deps: ThumbnailDeps,
+	options: ThumbnailOptions = {}
+): Promise<ThumbnailResult> {
+	const video = deps.getThread(videoThreadId)
+	if (!video || video.type !== 'editor' || !video.editor) throw new Error('That is not a video project.')
+	// Before any frame is read: an empty prompt would start a paid run with nothing to say.
+	if (options.prompt !== undefined && !options.prompt.trim()) {
+		throw new Error('The prompt is empty. Write what the thumbnail should be, or reset it to the suggested one.')
+	}
 	const doc = video.editor
 
 	const points = samplePoints(doc, CANDIDATE_COUNT)
@@ -89,7 +131,12 @@ export async function createThumbnailProject(videoThreadId: string, deps: Thumbn
 	if (!stills.length) throw new Error('Could not save a frame from the video.')
 
 	const headline = chooseHeadline(video.title, transcriptLinesForCut(doc, deps.transcripts(video)))
-	const brief = buildThumbnailBrief({ headline, frameCount: stills.length })
+	// The suggested prompt names how many frames it uses. If the person left it as suggested and fewer
+	// frames could be read than it assumed, it is rewritten to the real count; a prompt they changed
+	// is theirs and goes as written.
+	const suggested = buildThumbnailBrief({ headline, frameCount: stills.length })
+	const shown = options.expectedFrameCount ? buildThumbnailBrief({ headline, frameCount: options.expectedFrameCount }) : suggested
+	const brief = options.prompt === undefined || options.prompt.trim() === shown.trim() ? suggested : options.prompt.trim()
 
 	const thread = await deps.createImageProject(thumbnailTitle(video.title), stills)
 	const message = await deps.addUserMessage(thread.id, brief)

@@ -11,7 +11,7 @@
 				:locked-by="editorStore.agentHolds"
 				:percent="editorStore.renderState?.percent ?? 0"
 				:can-thumbnail="canThumbnail" :thumbnail-busy="thumbnailBusy"
-				@back="router.push('/home')" @rename="editorStore.renameProject($event)" @export="showExport = true" @thumbnail="makeThumbnail">
+				@back="router.push('/home')" @rename="editorStore.renameProject($event)" @export="showExport = true" @thumbnail="openThumbnailPrompt">
 				<template v-if="agentStore.editingSession" #center>
 					<AgentBanner />
 				</template>
@@ -68,6 +68,8 @@
 
 		<template v-if="!editorStore.loading && !notFound">
 			<ExportDialog v-model="showExport" @show-exports="showExportsTab" />
+			<ThumbnailPromptDialog v-model="showThumbnailPrompt" :suggested="thumbnailBrief.text" :busy="thumbnailBusy"
+				@generate="makeThumbnail" />
 			<ShortcutsOverlay />
 		</template>
 
@@ -82,7 +84,7 @@
 </template>
 
 <script setup lang="ts">
-import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue'
+import { computed, onBeforeUnmount, onMounted, reactive, ref, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { useEditorStore } from '../stores/editorStore'
 import { useKeyframeLanesStore } from '../stores/keyframeLanesStore'
@@ -98,6 +100,7 @@ import ChatColumn from './components/ChatColumn.vue'
 import type { ChatTab } from './chatTab'
 import ComposerStrip from './components/ComposerStrip.vue'
 import ExportDialog from './components/ExportDialog.vue'
+import ThumbnailPromptDialog from './components/ThumbnailPromptDialog.vue'
 import ResizeHandle from './components/ResizeHandle.vue'
 import AgentBanner from './components/AgentBanner.vue'
 import AgentWorkingStrip from './components/AgentWorkingStrip.vue'
@@ -130,12 +133,39 @@ const showExport = ref(false)
 const videoStore = useVideoStore()
 const thumbnailBusy = ref(false)
 const canThumbnail = computed(() => !!editorStore.doc?.media.some((a) => a.kind === 'video'))
-const makeThumbnail = async () => {
+const showThumbnailPrompt = ref(false)
+const thumbnailBrief = reactive({ text: '', frameCount: 0 })
+
+/** The button: write the suggested prompt, and let the person read and change it before anything is made. */
+const openThumbnailPrompt = async () => {
 	if (thumbnailBusy.value || !editorStore.threadId) return
 	thumbnailBusy.value = true
 	try {
 		await editorStore.persistDoc() // main reads the saved project, so flush edits first
-		const made = await videoStore.makeThumbnailProject(editorStore.threadId)
+		const preview = await videoStore.thumbnailBriefFor(editorStore.threadId)
+		thumbnailBrief.text = preview.brief
+		thumbnailBrief.frameCount = preview.frameCount
+		showThumbnailPrompt.value = true
+	} catch (e: any) {
+		thumbnailError(e, 'Something went wrong while preparing the thumbnail prompt.')
+	} finally {
+		thumbnailBusy.value = false
+	}
+}
+
+const thumbnailError = (e: any, fallback: string) => {
+	const detail = String(e?.message || '').replace(/^Error invoking remote method '[^']+': (Error: )?/, '')
+	dialog.notify({ title: 'Could not make the thumbnail project', message: detail || fallback, tone: 'error' })
+}
+
+/** The dialog's Generate: the prompt as the person left it. */
+const makeThumbnail = async (prompt: string) => {
+	if (thumbnailBusy.value || !editorStore.threadId) return
+	thumbnailBusy.value = true
+	try {
+		await editorStore.persistDoc()
+		const made = await videoStore.makeThumbnailProject(editorStore.threadId, { prompt, expectedFrameCount: thumbnailBrief.frameCount })
+		showThumbnailPrompt.value = false
 		await router.push(`/chat/${made.threadId}`)
 		if (!made.generating) {
 			dialog.notify({
@@ -145,8 +175,7 @@ const makeThumbnail = async () => {
 			})
 		}
 	} catch (e: any) {
-		const detail = String(e?.message || '').replace(/^Error invoking remote method '[^']+': (Error: )?/, '')
-		dialog.notify({ title: 'Could not make the thumbnail project', message: detail || 'Something went wrong while taking frames from the video.', tone: 'error' })
+		thumbnailError(e, 'Something went wrong while taking frames from the video.')
 	} finally {
 		thumbnailBusy.value = false
 	}
