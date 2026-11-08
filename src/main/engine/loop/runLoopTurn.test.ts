@@ -87,7 +87,7 @@ describe('runLoopTurn', () => {
 
 	it('sends attached frames with the first message, and saves the conversation without them', async () => {
 		let prompt: any[] = []
-		const model = scripted([(call) => { prompt = call.prompt; return says('That logo is large; I scaled it.')() }])
+		const model = scripted([(call) => { prompt = call.prompt; return says('That logo is large; I scaled it.')(call) }])
 		const r = await run(model, { images: [{ data: 'AAAA', mimeType: 'image/jpeg' }, { data: 'BBBB', mimeType: 'image/png' }] }).result
 		expect(r.ok).toBe(true)
 		const user = prompt.find((m) => m.role === 'user')
