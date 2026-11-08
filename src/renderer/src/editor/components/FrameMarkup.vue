@@ -108,7 +108,8 @@ const tools: { id: Tool; label: string; icon: string; key: string }[] = [
 	{ id: 'pen', label: 'Draw', icon: 'tabler--scribble', key: 'd' },
 	{ id: 'text', label: 'Text', icon: 'tabler--typography', key: 't' }
 ]
-const tool = ref<Tool>('arrow')
+// Draw first: a freehand line is what most people reach for to point at something.
+const tool = ref<Tool>('pen')
 const color = ref<string>(MARK_COLORS[0])
 const size = ref(SIZE_DEFAULT)
 
@@ -273,10 +274,12 @@ const tolerance = () => 8 * dpr()
 
 const down = (e: PointerEvent) => {
 	if (e.button !== 0) return
-	if (editing.value) {
-		finishText()
-		if (tool.value === 'text') return
-	}
+	// No mousedown after this: its default action focuses the editor's root,
+	// which would blur (and so end) a text field this click just opened.
+	e.preventDefault()
+	// A click elsewhere finishes the text being typed and carries on as a click:
+	// with the Text tool that starts the next text right there.
+	if (editing.value) finishText()
 	canvasRef.value?.setPointerCapture(e.pointerId)
 	const p = at(e)
 	const { w, h } = dims()
@@ -371,18 +374,26 @@ const dblclick = (e: MouseEvent) => {
 const startText = (anchor: { x: number; y: number }) => {
 	selected.value = null
 	editing.value = { index: null, x: anchor.x, y: anchor.y, text: '', color: color.value, size: size.value }
-	nextTick(() => textRef.value?.focus())
+	focusField(false)
 }
 const editText = (index: number) => {
 	const mark = marks.value[index]
 	selected.value = index
 	editing.value = { index, x: mark.points[0].x, y: mark.points[0].y, text: mark.text ?? '', color: mark.color, size: mark.size ?? SIZE_DEFAULT }
-	nextTick(() => {
+	focusField(true)
+}
+/**
+ * Focus the field once it exists, and after the click that opened it has
+ * finished: whatever that click still does must not land after the focus.
+ */
+const focusField = (toEnd: boolean) => {
+	// A timer, not an animation frame: frames pause while the window is in the background.
+	nextTick(() => setTimeout(() => {
 		const el = textRef.value
 		if (!el) return
 		el.focus()
-		el.setSelectionRange(el.value.length, el.value.length)
-	})
+		if (toEnd) el.setSelectionRange(el.value.length, el.value.length)
+	}))
 }
 /** Ends typing: the words become (or update) a mark; no words, no mark. */
 function finishText() {
