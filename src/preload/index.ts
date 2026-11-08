@@ -175,7 +175,7 @@ const api = {
 		ipcRenderer.invoke('create-thread', data),
 	getAllThreads: () => ipcRenderer.invoke('get-all-threads'),
 	getThread: (id: string) => ipcRenderer.invoke('get-thread', id),
-	deleteThread: (id: string) => ipcRenderer.invoke('delete-thread', id),
+	deleteThread: (id: string, options?: { deleteFiles?: boolean }) => ipcRenderer.invoke('delete-thread', id, options),
 	deleteAllThreads: () => ipcRenderer.invoke('delete-all-threads'),
 	addMessage: (threadId: string, message: any) =>
 		ipcRenderer.invoke('add-message', { threadId, message }),

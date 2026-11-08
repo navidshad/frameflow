@@ -263,8 +263,8 @@ export const useVideoStore = defineStore('video', () => {
 		});
 	}
 
-	const deleteThread = async (id: string) => {
-		const success = await (window as any).api.deleteThread(id)
+	const deleteThread = async (id: string, options?: { deleteFiles?: boolean }) => {
+		const success = await (window as any).api.deleteThread(id, options)
 		if (success) {
 			threads.value = threads.value.filter((t: Thread) => t.id !== id)
 			if (currentThreadId.value === id) {

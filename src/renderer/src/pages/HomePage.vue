@@ -104,14 +104,42 @@ const openThread = (id: string) => {
 	router.push(thread.type === 'editor' ? `/editor/${id}` : `/chat/${id}`)
 }
 
+/**
+ * Removing a project and deleting its folder are two different things. The
+ * folder holds the proxies, analysis, motion layers and the finished exports,
+ * and it can be many gigabytes, so the person decides. Footage imported by
+ * reference lives elsewhere and is never touched.
+ */
+type RemoveChoice = 'cancel' | 'keep' | 'delete'
+
 const handleDeleteThread = async (id: string) => {
-	const confirmed = await dialog.confirm({
-		title: 'Delete project',
-		message: 'Are you sure you want to delete this project and all its messages?',
-		confirmLabel: 'Delete',
-		danger: true
+	const thread = videoStore.threads.find((t) => t.id === id)
+	// No folder on disk (never made, or already gone): there is nothing to choose.
+	if (!thread?.tempDir || thread.missing) {
+		const confirmed = await dialog.confirm({
+			title: 'Remove project',
+			message: 'Remove this project and all its messages?',
+			confirmLabel: 'Remove',
+			danger: true
+		})
+		if (confirmed) await videoStore.deleteThread(id)
+		return
+	}
+
+	const choice = await dialog.choose<RemoveChoice>({
+		title: 'Remove project',
+		message: 'Remove this project and all its messages?',
+		detail: `Its folder, ${tildePath(thread.tempDir, home.value)}, holds the proxies, analysis and finished exports. Footage you added by reference stays where it is.`,
+		tone: 'warning',
+		actions: [
+			{ label: 'Cancel', value: 'cancel' },
+			{ label: 'Remove, keep files', value: 'keep', primary: true },
+			{ label: 'Remove and delete files', value: 'delete', danger: true }
+		],
+		dismissValue: 'cancel'
 	})
-	if (confirmed) await videoStore.deleteThread(id)
+	if (choice === 'cancel') return
+	await videoStore.deleteThread(id, { deleteFiles: choice === 'delete' })
 }
 
 const fail = (title: string, message: string, tone: 'error' | 'warning' = 'error') => dialog.notify({ title, message, tone })
