@@ -915,7 +915,7 @@ app.whenReady().then(() => {
 		return threadManager.getThread(id)
 	})
 
-	ipcMain.handle('delete-thread', (_event, id) => {
+	ipcMain.handle('delete-thread', (_event, id, options?: { deleteFiles?: boolean }) => {
 		// Editor threads: abort any live per-asset preprocessing and renders,
 		// and remove the history sidecar before deletion
 		const thread = threadManager.getThread(id)
@@ -927,7 +927,7 @@ app.whenReady().then(() => {
 			void editorHistory.deleteHistory(id)
 			void editorRevisions.deleteRevisionsFile(id)
 		}
-		return threadManager.deleteThread(id)
+		return threadManager.deleteThread(id, { deleteFiles: options?.deleteFiles })
 	})
 
 	ipcMain.handle('delete-all-threads', () => {

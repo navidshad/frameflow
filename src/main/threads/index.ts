@@ -483,8 +483,11 @@ class ThreadManager {
 			this.deleteFile(thread.preprocessing.transcriptPath || '')
 		}
 
-		// Delete thread temp directory
-		if (thread.tempDir && fs.existsSync(thread.tempDir)) {
+		// Delete thread temp directory. Only a folder named after the project is
+		// ever removed (that is how getThreadTempDir makes it), so a project whose
+		// tempDir was repaired or edited to point at some shared folder cannot
+		// take that folder with it.
+		if (thread.tempDir && path.basename(thread.tempDir) === thread.id && fs.existsSync(thread.tempDir)) {
 			try {
 				fs.rmSync(thread.tempDir, { recursive: true, force: true })
 			} catch (error) {
@@ -504,10 +507,18 @@ class ThreadManager {
 		}
 	}
 
-	// Delete a thread and its file
-	deleteThread(id: string): boolean {
+	/**
+	 * Remove a project from the app.
+	 *
+	 * `deleteFiles` (default true) also removes the project's folder: proxies,
+	 * analysis, motion layers and finished exports. With false the project
+	 * disappears from the list and the folder stays on disk, where it still holds
+	 * a copy of the project (`thread.json`). Footage imported by reference lives
+	 * outside that folder and is never touched either way.
+	 */
+	deleteThread(id: string, options: { deleteFiles?: boolean } = {}): boolean {
 		const thread = this.getThread(id)
-		if (thread) {
+		if (thread && options.deleteFiles !== false) {
 			this.deleteThreadArtifacts(thread)
 		}
 
