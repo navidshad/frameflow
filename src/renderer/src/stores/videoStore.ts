@@ -209,6 +209,24 @@ export const useVideoStore = defineStore('video', () => {
 		}
 	}
 
+	/**
+	 * "Generate thumbnail" on a video project: main builds the image project
+	 * (frames + the brief as its first message); this runs the generation ONCE,
+	 * and only when a Gemini key exists. Without one, or if the run fails, the
+	 * message stays in the project with its Retry button: nothing is lost and no
+	 * second run is ever started here, because each one costs real API calls.
+	 */
+	const makeThumbnailProject = async (videoThreadId: string): Promise<{ threadId: string; generating: boolean; headline: string }> => {
+		const result = await (window as any).api.createThumbnailProject(videoThreadId)
+		const thread: Thread = result.thread
+		threads.value = [thread, ...threads.value.filter((t: Thread) => t.id !== thread.id)]
+		await selectThread(thread.id)
+		if (result.hasGeminiKey) {
+			await startProcessing(thread.id, result.userMessageId, 1, false, true)
+		}
+		return { threadId: thread.id, generating: !!result.hasGeminiKey, headline: result.headline?.text ?? '' }
+	}
+
 	const abortProcessing = async (messageId: string) => {
 		if ((window as any).api) {
 			await (window as any).api.abortPipeline(messageId)
@@ -437,6 +455,7 @@ export const useVideoStore = defineStore('video', () => {
 		addMessage,
 		clearMessages,
 		startProcessing,
+		makeThumbnailProject,
 		abortProcessing,
 		deleteThread,
 		deleteAllThreads,

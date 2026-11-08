@@ -10,7 +10,8 @@
 				:exporting="editorStore.isRendering"
 				:locked-by="editorStore.agentHolds"
 				:percent="editorStore.renderState?.percent ?? 0"
-				@back="router.push('/home')" @rename="editorStore.renameProject($event)" @export="showExport = true">
+				:can-thumbnail="canThumbnail" :thumbnail-busy="thumbnailBusy"
+				@back="router.push('/home')" @rename="editorStore.renameProject($event)" @export="showExport = true" @thumbnail="makeThumbnail">
 				<template v-if="agentStore.editingSession" #center>
 					<AgentBanner />
 				</template>
@@ -86,6 +87,8 @@ import { useRoute, useRouter } from 'vue-router'
 import { useEditorStore } from '../stores/editorStore'
 import { useKeyframeLanesStore } from '../stores/keyframeLanesStore'
 import { useAgentStore } from '../stores/agentStore'
+import { useVideoStore } from '../stores/videoStore'
+import { dialog } from '../composables/useDialog'
 import EditorTopBar from './components/EditorTopBar.vue'
 import LeftPanel, { type LeftMode, type LeftTab } from './components/LeftPanel.vue'
 import PreviewMonitor from './components/PreviewMonitor.vue'
@@ -119,6 +122,35 @@ const fileDrop = useFileDrop((paths) => {
 	void editorStore.importPaths(paths)
 }, () => !editorStore.loading && !notFound.value && !editorStore.agentHolds)
 const showExport = ref(false)
+
+// ===== Generate thumbnail =====
+// A new IMAGE project, seeded from this video: its best frames, and a headline
+// from the title or transcript. Main does the work; if a Gemini key is set the
+// image project starts generating once, otherwise its first message waits.
+const videoStore = useVideoStore()
+const thumbnailBusy = ref(false)
+const canThumbnail = computed(() => !!editorStore.doc?.media.some((a) => a.kind === 'video'))
+const makeThumbnail = async () => {
+	if (thumbnailBusy.value || !editorStore.threadId) return
+	thumbnailBusy.value = true
+	try {
+		await editorStore.persistDoc() // main reads the saved project, so flush edits first
+		const made = await videoStore.makeThumbnailProject(editorStore.threadId)
+		await router.push(`/chat/${made.threadId}`)
+		if (!made.generating) {
+			dialog.notify({
+				title: 'Thumbnail project ready',
+				message: 'There is no Gemini key set, so nothing was generated. The frames and the first message are in the new project: add a key in Settings, then press Retry on that message.',
+				tone: 'info'
+			})
+		}
+	} catch (e: any) {
+		const detail = String(e?.message || '').replace(/^Error invoking remote method '[^']+': (Error: )?/, '')
+		dialog.notify({ title: 'Could not make the thumbnail project', message: detail || 'Something went wrong while taking frames from the video.', tone: 'error' })
+	} finally {
+		thumbnailBusy.value = false
+	}
+}
 // An agent that begins a round takes the project: an open Export dialog closes.
 watch(() => editorStore.agentHolds, (held) => { if (held) showExport.value = false })
 

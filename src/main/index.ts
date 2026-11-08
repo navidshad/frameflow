@@ -6,7 +6,10 @@ import { pathToFileURL } from 'url'
 import { Pipeline } from './pipeline'
 import { settingsManager } from './settings'
 import { threadManager } from './threads'
+import { MessageRole } from '@shared/types'
 import type { DeliveryFormat, EditorDocument, MulticamGroup, TimelineItem } from '@shared/types'
+import { createThumbnailProject } from './thumbnail/project'
+import * as thumbnailFrames from './thumbnail/frames'
 import { pruneOrphanItems } from '@shared/timeline'
 import * as extraction from './pipeline/phases/extraction'
 import * as supply from './pipeline/phases/supply'
@@ -448,6 +451,26 @@ app.whenReady().then(() => {
 	// preprocessing (media is imported per-asset inside the editor).
 	ipcMain.handle('create-editor-project', async (_event, { title }: { title?: string }) => {
 		return await threadManager.createEditorThread(title || 'Untitled Project')
+	})
+
+	// "Generate thumbnail": a new IMAGE project seeded from this video's best
+	// frames, with the brief (headline from the title or transcript) already in
+	// it as the first message. The renderer runs the generation, once, only when
+	// a Gemini key exists; see videoStore.openThumbnailProject.
+	ipcMain.handle('create-thumbnail-project', async (_event, { threadId }: { threadId: string }) => {
+		return await createThumbnailProject(String(threadId), {
+			getThread: (id) => threadManager.getThread(id),
+			transcripts: (thread) => editorCaptions.transcriptsForAssets(thread.editor?.media ?? []),
+			grabGray: thumbnailFrames.grabGray,
+			grabStill: thumbnailFrames.grabStill,
+			stagingDir: (thread) => join(thread.tempDir, 'thumbnail-frames'),
+			createImageProject: (title, imagePaths) => threadManager.createThread(undefined, title, imagePaths, 'image'),
+			addUserMessage: (id, text) => threadManager.addMessageToThread(id, {
+				role: MessageRole.User, content: text, isPending: false, autoUseImages: true
+			}),
+			hasGeminiKey: () => !!settingsManager.getGeminiApiKey(),
+			startAnalysis: (id) => { void backgroundTaskManager.startImageProcessing(id) }
+		})
 	})
 
 	ipcMain.handle('rename-editor-project', async (_event, { threadId, title }: {

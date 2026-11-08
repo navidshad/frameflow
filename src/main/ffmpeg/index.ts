@@ -155,6 +155,7 @@ export async function getVideoMetadata(filePath: string): Promise<import('../../
 				recordedAt: parseRecordedAt(metadata),
 				colorTransfer: videoStream.color_transfer || undefined,
 				colorPrimaries: videoStream.color_primaries || undefined,
+				colorSpace: videoStream.color_space || undefined,
 				pixFmt: videoStream.pix_fmt || undefined
 			})
 		})
