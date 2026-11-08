@@ -85,6 +85,22 @@ describe('runLoopTurn', () => {
 		expect(second.messages).toHaveLength(first.messages.length + 2)
 	})
 
+	it('sends attached frames with the first message, and saves the conversation without them', async () => {
+		let prompt: any[] = []
+		const model = scripted([(call) => { prompt = call.prompt; return says('That logo is large; I scaled it.')(call) }])
+		const r = await run(model, { images: [{ data: 'AAAA', mimeType: 'image/jpeg' }, { data: 'BBBB', mimeType: 'image/png' }] }).result
+		expect(r.ok).toBe(true)
+		const user = prompt.find((m) => m.role === 'user')
+		expect(user.content[0]).toMatchObject({ type: 'text', text: 'Tighten the cut' })
+		expect(user.content.slice(1).map((p: any) => [p.type, p.mediaType])).toEqual([['file', 'image/jpeg'], ['file', 'image/png']])
+		// A resumed conversation would re-send every frame on every call: only the words are kept.
+		const saved = r.messages[0]
+		expect(saved.role).toBe('user')
+		expect(typeof saved.content).toBe('string')
+		expect(saved.content).toMatch(/^Tighten the cut\n\n\[2 frames were attached here/)
+		expect(JSON.stringify(r.messages)).not.toMatch(/AAAA|BBBB/)
+	})
+
 	it('turns tools off once the budget is spent, so the next model turn is the answer', async () => {
 		const model = scripted([
 			calls({ name: 'get_project' }),

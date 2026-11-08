@@ -13,14 +13,31 @@
 
 		<!-- Flat input zone: the panel's border-t is the only frame. -->
 		<div>
-			<textarea ref="inputRef" v-model="text" rows="1"
-				class="w-full bg-transparent resize-none outline-none text-sm text-zinc-800 dark:text-zinc-200 placeholder-zinc-400 max-h-24 custom-scrollbar py-1"
-				:placeholder="placeholder" :disabled="inputDisabled"
-				@input="autoGrow" @keydown.enter.exact.prevent="submit"></textarea>
+			<AttachmentTray @submit="submit" />
+			<div class="relative">
+				<TimeRefPicker v-if="picker.open.value" :options="picker.options.value" :active="picker.active.value"
+					@pick="picker.pick" @hover="picker.active.value = $event" />
+				<!-- Same font and padding as the textarea, so its chips sit under the text. -->
+				<RefMirror :text="text" :scroll-top="scrollTop" class="text-sm py-1" />
+				<textarea ref="inputRef" v-model="text" rows="1"
+					class="relative block w-full bg-transparent resize-none outline-none text-sm text-zinc-800 dark:text-zinc-200 placeholder-zinc-400 max-h-24 custom-scrollbar py-1"
+					:placeholder="placeholder" :disabled="inputDisabled" data-testid="prompt-input"
+					@input="onInput" @keydown="onKeydown" @click="picker.sync" @keyup="onKeyup" @blur="picker.sync"
+					@scroll="scrollTop = ($event.target as HTMLElement).scrollTop"></textarea>
+			</div>
 
 			<!-- Meta row: quiet text controls left, send right -->
 			<div class="flex items-center gap-1 mt-0.5">
 				<EngineChip />
+
+				<span class="text-zinc-300 dark:text-zinc-700 text-[9px]">·</span>
+
+				<!-- The frame in the monitor, attached to the message as a picture. -->
+				<button class="shrink-0 flex items-center gap-1 px-1 py-0.5 rounded-md text-zinc-500 hover:text-accent transition disabled:opacity-40 disabled:hover:text-zinc-500"
+					:title="frameTitle" :disabled="!canCapture" data-testid="attach-frame" @click="store.captureFrameForPrompt()">
+					<span class="iconify w-2.5 h-2.5" :class="store.capturingFrame ? 'tabler--loader-2 animate-spin' : 'tabler--camera-plus'"></span>
+					<span class="text-[9px] font-bold uppercase tracking-widest">Frame</span>
+				</button>
 
 				<span class="text-zinc-300 dark:text-zinc-700 text-[9px]">·</span>
 
@@ -101,6 +118,13 @@ import EngineChip from './EngineChip.vue'
 import { useEngineStore } from '../../stores/engineStore'
 import { useAgentStore } from '../../stores/agentStore'
 import { resumableSessionId } from '@shared/engines'
+import { formatTimecode } from '@shared/promptRefs'
+import AttachmentTray from './AttachmentTray.vue'
+import TimeRefPicker from './TimeRefPicker.vue'
+import RefMirror from './RefMirror.vue'
+import { useTimeRefPicker } from '../composables/useTimeRefPicker'
+import { draftPrompt } from '../frameMarks'
+import { MAX_PROMPT_FRAMES } from '../../stores/editorStore'
 
 const store = useEditorStore()
 const engine = useEngineStore()
@@ -140,7 +164,39 @@ const conversation = computed(() => {
 	return !store.promptRunning && !!resumableSessionId(store.doc?.turns, id)
 })
 
-const canSend = computed(() => text.value.trim().length > 0 && !inputDisabled.value)
+const picker = useTimeRefPicker(text, inputRef)
+const scrollTop = ref(0)
+
+// Frames alone are a message (their notes say what is wanted); an engine that
+// cannot see pictures cannot be sent them, and the tray says why.
+const attachments = computed(() => store.promptAttachments)
+const imagesBlocked = computed(() => attachments.value.length > 0 && !engine.current.images)
+const canSend = computed(() => (text.value.trim().length > 0 || attachments.value.length > 0) && !imagesBlocked.value && !store.capturingFrame && !inputDisabled.value)
+
+const canCapture = computed(() => !!store.doc?.timeline.length && engine.current.images && !store.capturingFrame && !mcp.value
+	&& attachments.value.length < MAX_PROMPT_FRAMES)
+const frameTitle = computed(() => {
+	if (!engine.current.images) return `${engine.current.label} cannot be sent pictures`
+	if (!store.doc?.timeline.length) return 'Nothing on the timeline to capture'
+	if (attachments.value.length >= MAX_PROMPT_FRAMES) return `A message carries ${MAX_PROMPT_FRAMES} frames at most`
+	return `Attach the frame at the playhead (${formatTimecode(store.playheadSec)}). Or type @ in the message.`
+})
+
+const onInput = () => {
+	autoGrow()
+	picker.sync()
+}
+// Arrow keys move the caret without an input event; the picker follows it.
+const onKeyup = (e: KeyboardEvent) => {
+	if (!picker.open.value || !['ArrowUp', 'ArrowDown', 'Enter', 'Tab', 'Escape'].includes(e.key)) picker.sync()
+}
+const onKeydown = (e: KeyboardEvent) => {
+	if (picker.onKeydown(e)) return
+	if (e.key === 'Enter' && !e.shiftKey && !e.altKey && !e.metaKey && !e.ctrlKey && !e.isComposing) {
+		e.preventDefault()
+		submit()
+	}
+}
 
 const scopeOptions = computed(() => [
 	{
@@ -165,7 +221,7 @@ const autoGrow = () => {
 
 const submit = () => {
 	if (!canSend.value) return
-	lastPrompt.value = text.value.trim()
+	lastPrompt.value = draftPrompt(text.value, attachments.value.length)
 	store.runPrompt(lastPrompt.value)
 	text.value = ''
 	autoGrow()

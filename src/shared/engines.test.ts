@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest'
 import { readFileSync } from 'node:fs'
 import { resolve } from 'node:path'
 import {
-	agentFocus, buildCommand, CLI_EFFORTS, engineEfforts, STEPS_DEFAULT, STEPS_MAX, buildEngineSystemPrompt, buildEngineUserPrompt, displayPath, editTime,
+	agentFocus, buildCommand, ENGINES, CLI_EFFORTS, engineEfforts, STEPS_DEFAULT, STEPS_MAX, buildEngineSystemPrompt, buildEngineUserPrompt, displayPath, editTime,
 	engineChipLabel, engineFailureNote, geminiTextModels, engineRetry, isCliEngine, isLoopEngine, latestEngineTurn, resumableSessionId, shouldRestartFresh, isFrameflowTool, lineSplitter, normalizeEngineSettings, normalizeToolName, parseClaudeAuth,
 	parseStreamLine, parseVersion, readableError, StepTracker, stepTitle, TOKEN_ENV, unexpectedTools, type CliEngineId
 } from './engines'
@@ -186,6 +186,30 @@ describe('command lines', () => {
 		expect(buildCommand({ ...base, engine: 'claude-code', effort: '  ' }).args).not.toContain('--effort')
 	})
 
+	it('Claude Code: a message with pictures goes in on stdin as one stream-json user message', () => {
+		const spec = buildCommand({ ...base, engine: 'claude-code', images: [{ data: 'AAAA', mimeType: 'image/jpeg' }, { data: 'BBBB', mimeType: 'image/png' }] })
+		expect(spec.args.slice(0, 3)).toEqual(['-p', '--input-format', 'stream-json'])
+		// The prompt is not an argument too: it would be read as a second message.
+		expect(spec.args).not.toContain('Cut the pauses')
+		expect(spec.args[spec.args.indexOf('--output-format') + 1]).toBe('stream-json')
+		expect(spec.stdin!.endsWith('\n')).toBe(true)
+		expect(JSON.parse(spec.stdin!)).toEqual({
+			type: 'user',
+			message: {
+				role: 'user',
+				content: [
+					{ type: 'text', text: 'Cut the pauses' },
+					{ type: 'image', source: { type: 'base64', media_type: 'image/jpeg', data: 'AAAA' } },
+					{ type: 'image', source: { type: 'base64', media_type: 'image/png', data: 'BBBB' } }
+				]
+			}
+		})
+		// No pictures: exactly the old command line, and nothing on stdin.
+		const plain = buildCommand({ ...base, engine: 'claude-code', images: [] })
+		expect(plain.args.slice(0, 2)).toEqual(['-p', 'Cut the pauses'])
+		expect(plain.stdin).toBeUndefined()
+	})
+
 	it('Windows paths', () => {
 		const spec = buildCommand({ ...base, engine: 'claude-code', workDir: 'C:\\Temp\\run', pathSep: '\\' })
 		expect(spec.args[spec.args.indexOf('--mcp-config') + 1]).toBe('C:\\Temp\\run\\mcp.json')
@@ -213,6 +237,16 @@ describe('prompts', () => {
 			.toBe('Trim it\n\n---\nPlayhead: 1:03.0. Scope: the selected timeline items (a, b). Change only them unless the request needs more.')
 		expect(buildEngineUserPrompt({ prompt: 'x', playheadSec: 0, selectedItemIds: ['a'], widen: 'full' })).toMatch(/whole timeline/)
 	})
+
+	it('user prompt carries what its references are, between the words and the scope', () => {
+		expect(buildEngineUserPrompt({ prompt: 'Cut at @0:05.0 ', playheadSec: 5, selectedItemIds: [], references: 'References in this message:\n- @0:05.0 = timeline 5.000s' }))
+			.toBe('Cut at @0:05.0\n\nReferences in this message:\n- @0:05.0 = timeline 5.000s\n\n---\nPlayhead: 0:05.0. Scope: whatever the request needs.')
+		expect(buildEngineUserPrompt({ prompt: 'x', playheadSec: 0, selectedItemIds: [], references: '  ' })).not.toMatch(/References/)
+	})
+
+	it('every engine says whether it takes pictures', () => {
+		for (const meta of Object.values(ENGINES)) expect(typeof meta.images).toBe('boolean')
+	})
 })
 
 describe('Retry on a failed engine run', () => {
@@ -226,6 +260,12 @@ describe('Retry on a failed engine run', () => {
 	it('re-sends the same prompt, selection, playhead and widen on the same engine', () => {
 		const t = turn()
 		expect(engineRetry(t, [t])).toEqual({ engine: 'claude-code', prompt: 'tighten the intro', ...request })
+	})
+
+	it('re-sends the frames the message carried', () => {
+		const attachments = [{ id: 'f1', timeSec: 3, note: 'too big', path: '/p/f1.jpg', thumbnail: 'data:' }]
+		const t = turn({ attachments })
+		expect(engineRetry(t, [t])?.attachments).toEqual(attachments)
 	})
 
 	it('is offered when edits landed before it failed (a completed turn with a failure note)', () => {

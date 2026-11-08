@@ -143,7 +143,9 @@ const api = {
 		ipcRenderer.on('editor-render-progress', listener)
 		return () => ipcRenderer.removeListener('editor-render-progress', listener)
 	},
-	runEditorPrompt: (data: { threadId: string, prompt: string, baseStepId: string, selectedItemIds: string[], playheadSec: number, widen?: string, engine?: string }) =>
+	captureFramePrompt: (data: { threadId: string; doc: unknown; timeSec: number }) =>
+		ipcRenderer.invoke('capture-prompt-frame', data),
+	runEditorPrompt: (data: { threadId: string, prompt: string, baseStepId: string, selectedItemIds: string[], playheadSec: number, widen?: string, engine?: string, attachments?: unknown[] }) =>
 		ipcRenderer.invoke('run-editor-prompt', data),
 	abortEditorPrompt: (data: { threadId: string, turnId: string }) =>
 		ipcRenderer.invoke('abort-editor-prompt', data),

@@ -6,7 +6,9 @@ import {
 	buildEngineSystemPrompt, buildEngineUserPrompt, CLI_ENGINE_IDS, ENGINES, isCliEngine, latestEngineTurn, resumableSessionId, shouldRestartFresh,
 	type EngineDetection, type EngineId, type EngineSettings
 } from '@shared/engines'
-import type { PromptTurn, PromptTurnEngine, Usage, UsageRecord } from '@shared/types'
+import type { PromptAttachmentInput, PromptTurn, PromptTurnEngine, Usage, UsageRecord } from '@shared/types'
+import { describeReferences } from '@shared/promptRefs'
+import { storeAttachments } from './attachments'
 import { settingsManager } from '../settings'
 import { threadManager } from '../threads'
 import { emitTurnUpdate, persistTurn } from '../editor/prompt'
@@ -123,6 +125,8 @@ export function runEnginePrompt(options: {
 	widen?: 'chapter' | 'full'
 	/** Retry names the engine the failed run used, whatever is selected now. */
 	engine?: EngineId
+	/** Frames attached to the message: pictures from the composer, or (Retry) the files a turn kept. */
+	attachments?: PromptAttachmentInput[]
 }): { turnId: string } {
 	const settings = settingsManager.getEngineSettings()
 	const id: EngineId = options.engine ?? settings.engine
@@ -149,6 +153,16 @@ export function runEnginePrompt(options: {
 			const thread = threadManager.getThread(threadId)
 			if (!thread || thread.type !== 'editor' || !thread.editor) throw new Error('Not an editor project')
 			if (!hasPromptableContent(thread.editor)) throw new Error('Import media or add a layer before prompting')
+			// The composer will not send pictures to an engine that cannot see them;
+			// if one gets here anyway it is refused, never sent without them.
+			if (options.attachments?.length && !ENGINES[id].images) throw new Error(`${label} cannot be sent pictures. Remove the attached frames, or pick another engine.`)
+			const stored = await storeAttachments(thread.tempDir, turnId, options.attachments)
+			if (stored.attachments.length) turn.attachments = stored.attachments
+			// What each @time and frame is, against the project as it is now.
+			const references = describeReferences(options.prompt, stored.attachments, {
+				timeline: thread.editor.timeline, tracks: thread.editor.tracks, media: thread.editor.media, markers: thread.editor.markers
+			}) || undefined
+			const images = stored.images.length ? stored.images : undefined
 			await persistTurn(threadId, turn)
 			emitTurnUpdate({ threadId, turn })
 
@@ -178,7 +192,8 @@ export function runEnginePrompt(options: {
 				const run = (resumeSessionId?: string) => runEngineTurn({
 					engine: id,
 					located,
-					prompt: buildEngineUserPrompt({ ...options, resuming: !!resumeSessionId }),
+					prompt: buildEngineUserPrompt({ ...options, resuming: !!resumeSessionId, references }),
+					images,
 					systemPrompt: buildEngineSystemPrompt({ maxSteps: settings.maxSteps, engineLabel: label }),
 					model,
 					effort,
@@ -211,7 +226,7 @@ export function runEnginePrompt(options: {
 				if (cli.note) void detectAll()
 			} else {
 				const looped = await runLoopEngineTurn({
-					id, turnId, prompt: options.prompt, playheadSec: options.playheadSec, selectedItemIds: options.selectedItemIds,
+					id, turnId, prompt: options.prompt, references, images, playheadSec: options.playheadSec, selectedItemIds: options.selectedItemIds,
 					widen: options.widen, maxSteps: settings.maxSteps, resumeId, dir, signal: controller.signal, onSteps, onActivity
 				})
 				result = looped.result

@@ -1,5 +1,5 @@
 import { app, shell, BrowserWindow, ipcMain, dialog, protocol } from 'electron'
-import { net } from 'electron'
+import { nativeImage, net } from 'electron'
 import * as fs from 'fs'
 import { basename, dirname, extname, join } from 'path'
 import { pathToFileURL } from 'url'
@@ -7,7 +7,7 @@ import { Pipeline } from './pipeline'
 import { settingsManager } from './settings'
 import { threadManager } from './threads'
 import { MessageRole } from '@shared/types'
-import type { DeliveryFormat, EditorDocument, MulticamGroup, TimelineItem } from '@shared/types'
+import type { DeliveryFormat, EditorDocument, MulticamGroup, PromptAttachmentInput, TimelineItem } from '@shared/types'
 import { createThumbnailProject, previewThumbnailBrief } from './thumbnail/project'
 import * as thumbnailFrames from './thumbnail/frames'
 import { pruneOrphanItems } from '@shared/timeline'
@@ -785,7 +785,8 @@ app.whenReady().then(() => {
 	// via editor-turn-update. Its edits are revisions already.
 	ipcMain.handle('run-editor-prompt', (_event, options: {
 		threadId: string, prompt: string, baseStepId: string,
-		selectedItemIds: string[], playheadSec: number, widen?: 'chapter' | 'full', engine?: EngineId
+		selectedItemIds: string[], playheadSec: number, widen?: 'chapter' | 'full', engine?: EngineId,
+		attachments?: PromptAttachmentInput[]
 	}) => {
 		// One agent per project: an outside agent's open round holds it.
 		const holder = agentHolding(options.threadId)
@@ -843,6 +844,23 @@ app.whenReady().then(() => {
 		doc: EditorDocument
 		timeSec: number
 	}) => editorPreview.renderExactFrame(data))
+
+	// A frame for a chat message: the monitor's picture at the playhead, with its
+	// titles and captions in it (the monitor draws those over its own still, and
+	// the agent has no monitor), sized as render_frame sends the agent one.
+	ipcMain.handle('capture-prompt-frame', async (_event, data: { threadId: string; doc: EditorDocument; timeSec: number }) => {
+		const { path: file } = await editorPreview.renderExactFrame({ ...data, burnText: true })
+		const image = nativeImage.createFromPath(file)
+		if (image.isEmpty()) throw new Error('The frame rendered but could not be read back. Try again.')
+		const large = image.getSize().width > 1280 ? image.resize({ width: 1280, quality: 'good' }) : image
+		const thumb = image.resize({ width: 224, quality: 'good' })
+		return {
+			data: large.toJPEG(85).toString('base64'),
+			mimeType: 'image/jpeg' as const,
+			thumbnail: `data:image/jpeg;base64,${thumb.toJPEG(75).toString('base64')}`,
+			...large.getSize()
+		}
+	})
 
 	ipcMain.handle('ensure-transition-preview', (_event, data: {
 		threadId: string
