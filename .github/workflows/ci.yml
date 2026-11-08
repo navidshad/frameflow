@@ -43,16 +43,32 @@ jobs:
             ~/.cache/electron
           key: deps-${{ runner.os }}-node24-${{ hashFiles('package-lock.json', 'scripts/ffmpeg-manifest.json', 'scripts/fetch-ffmpeg.mjs') }}
 
-      # Plain `npm ci` on purpose: it runs the same postinstall the app needs
-      # (scripts/fetch-ffmpeg.mjs, electron-builder install-app-deps), so CI
-      # installs exactly what a developer gets. A failed install is retried with a
-      # longer wait each time, for the short outages; the cache is for the long ones.
+      # `npm ci` with the install scripts held back, then the ones the build needs
+      # run one by one, so that the one download CI has no use for is not among
+      # them: yt-dlp's postinstall fetches a binary from GitHub releases, and the
+      # tests only ever read its error messages, never run it. An empty file where
+      # that binary goes makes the package's own script skip the download. When the
+      # release host answers 5xx (it did, for hours, to this runner while a browser
+      # could still fetch the same file) that download alone failed every run
+      # before a single test. Everything else is what a developer's install does:
+      # `npm rebuild` runs the other packages' scripts, then the project's own
+      # postinstall (the ffmpeg fetch and electron-builder).
+      # A failed install is retried with a longer wait each time, for the short
+      # outages; the cache above is for the long ones.
       - name: Install dependencies
         if: steps.deps.outputs.cache-hit != 'true'
         run: |
+          install() {
+            npm ci --ignore-scripts || return 1
+            mkdir -p node_modules/ytdlp-nodejs/bin
+            : > node_modules/ytdlp-nodejs/bin/yt-dlp_linux
+            npm rebuild || return 1
+            node scripts/fetch-ffmpeg.mjs || return 1
+            npx electron-builder install-app-deps || return 1
+          }
           for attempt in 1 2 3 4; do
-            if npm ci; then exit 0; fi
-            echo "::warning::npm ci failed (attempt $attempt of 4). A binary download may have failed; retrying."
+            if install; then exit 0; fi
+            echo "::warning::The install failed (attempt $attempt of 4). A binary download may have failed; retrying."
             sleep $((attempt * 30))
           done
           exit 1
