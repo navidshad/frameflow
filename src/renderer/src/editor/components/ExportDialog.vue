@@ -127,18 +127,19 @@ import AppDialog from '../../components/AppDialog.vue'
 import OptionRow from '../../components/OptionRow.vue'
 import { useEditorStore } from '../../stores/editorStore'
 import { fitFrameToHeight } from '@shared/framing'
+import { PREVIEW_LINES, exportChoices, linesForChoice, sizeText, type ExportChoiceId } from '@shared/resolution'
 import { formatEta } from '@shared/renderEta'
 
 const props = defineProps<{ modelValue: boolean }>()
 const emit = defineEmits<{ (e: 'update:modelValue', value: boolean): void; (e: 'show-exports'): void }>()
 
 const store = useEditorStore()
-type Choice = 'original' | '1080' | '720' | 'preview'
+type Choice = ExportChoiceId
 const CHOICE_KEY = 'frameflow.export.resolution'
 const savedChoice = (): Choice => {
 	try {
 		const v = localStorage.getItem(CHOICE_KEY)
-		return v === '1080' || v === '720' || v === 'preview' ? v : 'original'
+		return v === '4k' || v === '2k' || v === '1080' || v === '720' || v === 'preview' ? v : 'original'
 	} catch { return 'original' }
 }
 const choice = ref<Choice>(savedChoice())
@@ -146,7 +147,7 @@ watch(choice, (v) => { try { localStorage.setItem(CHOICE_KEY, v) } catch { /* pr
 /** What the main process is asked for: sources or proxies, and how many lines. */
 const request = computed(() => ({
 	quality: (choice.value === 'preview' ? 'preview' : 'original') as 'original' | 'preview',
-	height: choice.value === '1080' ? 1080 : choice.value === '720' ? 720 : undefined
+	height: linesForChoice(choice.value)
 }))
 // Kept for the notes below that only concern a render from the sources at full size.
 const quality = computed(() => (choice.value === 'original' ? 'original' : 'other'))
@@ -165,9 +166,14 @@ const FORMATS: { value: DeliveryFormat; label: string; description: string }[] =
 		description: 'What you post. Plays everywhere, small file.'
 	},
 	{
+		value: 'h265',
+		label: 'MP4 (H.265 / HEVC)',
+		description: 'Much smaller than H.264 at the same look (measured: about a third). Plays on Apple devices and current browsers; some older players and sites cannot.'
+	},
+	{
 		value: 'prores',
-		label: 'ProRes 422 HQ',
-		description: 'What you hand to another editor. Large file, no generation loss.'
+		label: 'ProRes 422 HQ (.mov)',
+		description: 'What you hand to another editor. Very large file, no generation loss.'
 	}
 ]
 
@@ -202,29 +208,18 @@ const title = computed(() => {
 })
 const fileName = computed(() => state.value?.outputPath?.split('/').pop() || '')
 
-const size = (lines?: number) => {
-	const frame = store.sequenceFrame
-	const fit = lines ? fitFrameToHeight(frame, lines) : frame
-	return `${fit.width}×${fit.height}`
-}
-// Only the sizes below the project's own are offered: a 1080p choice on a 720p project is no choice.
+// The sizes come from the project's own frame and stop at it: an export is never larger
+// than the project, so a 720p project is offered 720p and the fast preview, nothing above.
 const qualityOptions = computed<{ value: Choice; label: string; description: string }[]>(() => {
-	const height = store.sequenceFrame.height
-	const list: { value: Choice; label: string; description: string }[] = [{
-		value: 'original',
-		label: `Original · ${size()}`,
-		description: 'Renders from the source files at the full size of the project. The slowest.'
-	}]
-	if (height > 1080) list.push({
-		value: '1080', label: `1080p · ${size(1080)}`,
-		description: 'From the source files, scaled down. Much faster than full size on 4K projects.'
-	})
-	if (height > 720) list.push({
-		value: '720', label: `720p · ${size(720)}`,
-		description: 'From the source files, scaled down. Faster again, and a small file.'
-	})
+	const list = exportChoices(store.sequenceFrame).map((c) => ({
+		value: c.id as Choice,
+		label: c.id === 'original' ? `Project size · ${c.label}` : c.label,
+		description: c.id === 'original'
+			? 'Renders from the source files at the full size of the project. The slowest.'
+			: 'From the source files, scaled down. Faster, and a smaller file.'
+	}))
 	list.push({
-		value: 'preview', label: `Fast preview · ${size(480)}`,
+		value: 'preview', label: `Fast preview · ${sizeText(fitFrameToHeight(store.sequenceFrame, PREVIEW_LINES))}`,
 		description: 'Renders from the 480p proxies at up to 30 fps. The fastest, and the lowest quality.'
 	})
 	return list

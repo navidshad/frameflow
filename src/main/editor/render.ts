@@ -13,6 +13,7 @@ import { findOrphanItems, itemEnd } from '@shared/timeline'
 import { isCompositedItem } from '@shared/tracks'
 import { planTransitions, sourceDurationsFrom, type TransitionWindow } from '@shared/transitionPlan'
 import { fitFrameToHeight, sequenceFrame, type FrameSource } from '@shared/framing'
+import { fitFrameToShortSide } from '@shared/resolution'
 import { hasRenderableEffects } from '@shared/effects'
 import { speechIntervals } from '@shared/ducking'
 import { hasTransform } from '@shared/transform'
@@ -153,8 +154,9 @@ export function computeRegions(
 		 */
 		proxyFrame?: boolean
 		/**
-		 * Render at no more than this many lines, from the source files (a 1080p
-		 * export of 4K footage). The frame rate stays the footage's.
+		 * Render with the SHORT side at no more than this many lines, from the
+		 * source files (a 1080p export of 4K footage: 1080×1920 for a vertical
+		 * one). Never upscales. The frame rate stays the footage's.
 		 */
 		frameHeight?: number
 	} = {}
@@ -223,7 +225,7 @@ export function computeRegions(
 	)
 	const { width, height } = options.proxyFrame
 		? proxyFrameFor(fullFrame)
-		: options.frameHeight ? fitFrameToHeight(fullFrame, options.frameHeight) : fullFrame
+		: options.frameHeight ? fitFrameToShortSide(fullFrame, options.frameHeight) : fullFrame
 	const sourceFps = Math.min(60, Math.max(10,
 		usedVideoAssets.reduce((max, a) => Math.max(max, a.metadata?.fps || 0), 0) || 30
 	))
@@ -781,7 +783,7 @@ export function startEditorRender(options: {
 	doc?: EditorDocument
 	/** What kind of file to deliver. Defaults to the h264 mp4 already produced. */
 	format?: DeliveryFormat
-	/** Render at no more than this many lines high (1080, 720…). Absent: the sequence's own size. */
+	/** Render with the short side at no more than this many lines (2160, 1440, 1080, 720). Absent: the project's own size. */
 	height?: number
 }): { renderId: string } {
 	const { threadId, quality } = options

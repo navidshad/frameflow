@@ -1,4 +1,4 @@
-import type { Clip, EditorDocument, MediaAsset, MulticamGroup, TimelineItem } from '@shared/types'
+import type { Clip, DeliveryFormat, EditorDocument, MediaAsset, MulticamGroup, TimelineItem } from '@shared/types'
 import { buildCameraGroup } from '../multicam/group'
 import { applyTimelineDiff, repairOverlapsReporting } from '@shared/timeline'
 import type { TranscriptEntry } from '@shared/captions'
@@ -44,7 +44,7 @@ export function makeDoc(): EditorDocument {
 		media: [makeAsset()],
 		tracks: [{ id: 'v1', kind: 'video', name: 'V1', order: 0, muted: false, locked: false, hidden: false, height: 64 }],
 		timeline: [item],
-		timelineMeta: { fps: 30, width: 1920, height: 1080, duration: 30 },
+		timelineMeta: { fps: 30, width: 1920, height: 1080, duration: 30, frameChosen: true },
 		turns: [],
 		historyRef: { currentStepId: 'step-0', stepCount: 0 }
 	}
@@ -126,12 +126,14 @@ export class FakeEditor implements EditorBridge {
 	imported: MediaSource[] = []
 	exportPhase: ExportStatus['phase'] = 'done'
 
-	async startExport(_project: LiveProject, options: { quality: 'original' | 'preview' }) {
+	async startExport(_project: LiveProject, options: { quality: 'original' | 'preview'; format?: DeliveryFormat; height?: number }) {
 		this.exports++
 		this.lastQuality = options.quality
+		this.lastExport = options
 		return { ok: true as const, renderId: `render-${this.exports}` }
 	}
 	lastQuality: 'original' | 'preview' | null = null
+	lastExport: { quality: 'original' | 'preview'; format?: DeliveryFormat; height?: number } | null = null
 
 	exportStatus(query: { renderId?: string; threadId: string }): ExportStatus | null {
 		if (!this.exports) return null

@@ -115,7 +115,7 @@ const api = {
 	},
 	// `doc` = in-memory timeline snapshot at click time (render detaches from the live doc)
 	exportEditorTimeline: (data: {
-		threadId: string, quality: 'original' | 'preview', doc?: unknown, format?: 'h264' | 'prores', height?: number
+		threadId: string, quality: 'original' | 'preview', doc?: unknown, format?: 'h264' | 'h265' | 'prores', height?: number
 	}) =>
 		ipcRenderer.invoke('export-editor-timeline', data),
 	abortEditorRender: (data: { renderId: string }) =>

@@ -199,7 +199,7 @@ export const rendererBridge: EditorBridge = {
 		try {
 			// The live document, as the Export button passes its snapshot: the render
 			// detaches from the editor and never writes the document back.
-			const { renderId } = startEditorRender({ threadId: project.threadId, quality: options.quality, doc: project.doc })
+			const { renderId } = startEditorRender({ threadId: project.threadId, quality: options.quality, doc: project.doc, format: options.format, height: options.height })
 			return { ok: true, renderId }
 		} catch (error: any) {
 			return { ok: false, error: `The export could not start: ${error?.message || error}` }

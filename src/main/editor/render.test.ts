@@ -6,6 +6,7 @@ import { allSlices, type OverlapRegion, type RegionPlan } from './renderBuilders
 import { MOTION_MAX_FPS } from './render'
 import { motionConcurrency } from '../motion'
 import { stillFrameRange, rebasedSlice } from './exactMotion'
+import { migrateProjectFrame, usedVideoSources } from '@shared/resolution'
 
 // ===== Fixtures =====
 
@@ -595,5 +596,61 @@ describe('a resolution choice', () => {
 	it('is no longer the fast path\'s frame, so a smaller export takes the region path', () => {
 		const p = computeRegions(uhd(), 'original', {}, { frameHeight: 1080 })
 		expect(fastPathMatchesFrame({ width: 3840, height: 2160 }, p)).toBe(false)
+	})
+})
+
+
+// ===== Project resolution =====
+
+describe('computeRegions — project resolution and export size', () => {
+	const uhd = (id = 'a'): MediaAsset => ({
+		...asset(id),
+		metadata: { duration: 1000, width: 3840, height: 2160, fps: 30, hasAudio: true } as MediaAsset['metadata']
+	})
+	const sized = (over: Partial<EditorDocument>, frameHeight?: number) =>
+		computeRegions(doc(over), 'original', undefined, { frameHeight })
+	const at = (p: RegionPlan) => [p.width, p.height]
+
+	it('an old project with no chosen frame exports at its largest source, before and after migrating', () => {
+		const old = doc({
+			media: [uhd()], timeline: [item(0)],
+			timelineMeta: { fps: 30, width: 1920, height: 1080, duration: 0 } // the seeded literal nothing read
+		})
+		const before = computeRegions(old, 'original')
+		expect(at(before)).toEqual([3840, 2160])
+
+		const migrated = { ...old, timelineMeta: migrateProjectFrame(old.timelineMeta, usedVideoSources(old)) }
+		expect(migrated.timelineMeta).toMatchObject({ width: 3840, height: 2160, frameChosen: true })
+		expect(at(computeRegions(migrated, 'original'))).toEqual(at(before))
+	})
+
+	it('an old portrait phone project keeps its frame through the migration', () => {
+		const phone: MediaAsset = {
+			...asset('a'),
+			metadata: { duration: 1000, width: 2160, height: 3840, fps: 30, hasAudio: true } as MediaAsset['metadata']
+		}
+		const old = doc({ media: [phone], timeline: [item(0)], timelineMeta: { fps: 30, width: 1920, height: 1080, duration: 0 } })
+		const before = computeRegions(old, 'original')
+		const migrated = { ...old, timelineMeta: migrateProjectFrame(old.timelineMeta, usedVideoSources(old)) }
+		expect(at(before)).toEqual([2160, 3840])
+		expect(at(computeRegions(migrated, 'original'))).toEqual([2160, 3840])
+	})
+
+	it('renders a lower rung with the short side at that many lines', () => {
+		const base = { media: [uhd()], timeline: [item(0)] }
+		const landscape = { ...base, timelineMeta: { fps: 30, width: 3840, height: 2160, duration: 0, frameChosen: true } }
+		expect(at(sized(landscape, 1440))).toEqual([2560, 1440])
+		expect(at(sized(landscape, 1080))).toEqual([1920, 1080])
+		expect(at(sized(landscape, 720))).toEqual([1280, 720])
+		// Vertical: the rung is the SHORT side, so 1080p is 1080 wide, not 1080 tall.
+		const vertical = { ...base, timelineMeta: { fps: 30, width: 2160, height: 3840, duration: 0, frameChosen: true } }
+		expect(at(sized(vertical, 1080))).toEqual([1080, 1920])
+		expect(at(sized(vertical, 1440))).toEqual([1440, 2560])
+	})
+
+	it('never upscales: a rung at or above the project size changes nothing', () => {
+		const hd = { media: [asset('a')], timeline: [item(0)], timelineMeta: { fps: 30, width: 1920, height: 1080, duration: 0, frameChosen: true } }
+		expect(at(sized(hd, 2160))).toEqual([1920, 1080])
+		expect(at(sized(hd, 1080))).toEqual([1920, 1080])
 	})
 })

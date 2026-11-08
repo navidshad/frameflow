@@ -1022,6 +1022,20 @@ describe('delivery vs the real binary', () => {
 		expect(stdout).toContain('pcm_s16le')
 	}, 90_000)
 
+	it.each([[false], [true]])('writes a real H.265 mp4 tagged hvc1 (hardware=%s, falling back if absent)', async (hardware) => {
+		const out = await deliver({
+			sourcePath: source, format: 'h265', hardware, signal: new AbortController().signal
+		})
+		expect(out).toMatch(/_h265\.mp4$/)
+		expect(out).not.toBe(source)
+		const { stdout } = await execFileAsync(ffprobe, ['-v', 'error',
+			'-show_entries', 'stream=codec_name,codec_tag_string,pix_fmt', '-of', 'csv=p=0', out!])
+		expect(stdout).toContain('hevc')
+		expect(stdout).toContain('hvc1')
+		expect(stdout).toContain('yuv420p')
+		expect(stdout).toContain('aac')
+	}, 90_000)
+
 	it('keeps the picture, rather than quietly rescaling it', async () => {
 		const out = await deliver({
 			sourcePath: source, format: 'prores', signal: new AbortController().signal
