@@ -1,4 +1,4 @@
-import { BrowserWindow } from 'electron'
+import { app, BrowserWindow } from 'electron'
 import ffmpeg from 'fluent-ffmpeg'
 import fs from 'fs'
 import path from 'path'
@@ -36,6 +36,8 @@ import {
 } from './renderBuilders'
 import { regionTimeoutMs, runCommand } from './ffmpegRun'
 import { mapPool } from './pool'
+import { exportSummary, type ExportSummaryRow } from '@shared/exportSummary'
+import { calibrate, loadCalibration, recordActuals, saveCalibration } from './renderCalibration'
 import { colorAction, type SourceColor } from './colorPolicy'
 import {
 	RenderTracker, estimateBurnSec, estimateDeliverySec, estimateJoinSec, estimateLoudnessSec,
@@ -823,6 +825,7 @@ export function startEditorRender(options: {
 	// the estimated total. `emit` is throttled to what a person can read: a change
 	// of whole percent, of step or of detail at once, the estimate once a second.
 	let tracker: RenderTracker | null = null
+	let summary: ExportSummaryRow[] | undefined
 	let phase: EditorRenderProgress['phase'] = 'rendering'
 	let lastKey = ''
 	let lastAt = 0
@@ -837,7 +840,7 @@ export function startEditorRender(options: {
 		lastAt = now
 		emitRenderProgress({
 			threadId, renderId, percent: Math.round(snap?.percent ?? 0), phase,
-			steps: snap?.steps, etaSec: snap?.etaSec, elapsedSec: snap?.elapsedSec
+			steps: snap?.steps, etaSec: snap?.etaSec, etaSpread: snap?.etaSpread, elapsedSec: snap?.elapsedSec, summary
 		})
 	}
 
@@ -899,18 +902,26 @@ export function startEditorRender(options: {
 				.filter((j) => !fs.existsSync(j.outputPath))
 			const framesToDraw = motionToDraw.reduce((sum, j) => sum + motionFramePlan(j.item, j.frame.fps).length, 0)
 			const format = options.format ?? 'h264'
+			// The first-guess estimates, scaled by what this machine measured on its own past exports.
+			const calibrationFile = path.join(app.getPath('userData'), 'render-calibration.json')
+			const calibration = loadCalibration(calibrationFile)
+			const plan1 = (id: string, label: string, rawEstSec: number): StepPlan => ({ id, label, rawEstSec, ...calibrate(calibration, id, rawEstSec) })
 			const steps: StepPlan[] = [
-				...(motionJobs.length ? [{ id: 'motion', label: 'Drawing motion layers', estSec: estimateMotionSec(framesToDraw, pixels) }] : []),
+				...(motionJobs.length ? [plan1('motion', 'Drawing motion layers', estimateMotionSec(framesToDraw, pixels))] : []),
 				...(useFastPath
-					? [{ id: 'cut', label: 'Cutting the clips', estSec: 2 + seconds * 0.02 }]
+					? [plan1('cut', 'Cutting the clips', 2 + seconds * 0.02)]
 					: [
-						{ id: 'regions', label: 'Rendering segments', estSec: estimateRegionsSec(seconds, pixels) },
-						{ id: 'join', label: 'Joining the segments', estSec: estimateJoinSec(seconds) }
+						plan1('regions', 'Rendering segments', estimateRegionsSec(seconds, pixels, plan.regions.length)),
+						plan1('join', 'Joining the segments', estimateJoinSec(seconds))
 					]),
-				...(cues.length ? [{ id: 'text', label: 'Adding titles and captions', estSec: estimateBurnSec(seconds, pixels) }] : []),
-				...(doc.loudnessEnabled ? [{ id: 'loudness', label: 'Levelling the loudness', estSec: estimateLoudnessSec(seconds) }] : []),
-				...(format !== 'h264' ? [{ id: 'delivery', label: 'Converting for delivery', estSec: estimateDeliverySec(seconds) }] : [])
+				...(cues.length ? [plan1('text', 'Adding titles and captions', estimateBurnSec(seconds, pixels))] : []),
+				...(doc.loudnessEnabled ? [plan1('loudness', 'Levelling the loudness', estimateLoudnessSec(seconds))] : []),
+				...(format !== 'h264' ? [plan1('delivery', 'Converting for delivery', estimateDeliverySec(seconds))] : [])
 			]
+			summary = exportSummary({
+				width: plan.width, height: plan.height, fps: plan.fps, format, quality,
+				seconds, segments: plan.regions.length, loudness: !!doc.loudnessEnabled, captions: cues.length > 0
+			})
 			tracker = new RenderTracker(steps)
 			emit('rendering')
 
@@ -1054,10 +1065,13 @@ export function startEditorRender(options: {
 			}
 
 			tracker.finishAll()
+			// What this export really took, so the next one's estimate is closer. Only a render that
+			// landed counts: a cancelled or failed one never reached its slow steps.
+			saveCalibration(calibrationFile, recordActuals(calibration, tracker.actuals()))
 			const landed = tracker.snapshot()
 			emitRenderProgress({
 				threadId, renderId, percent: 100, phase: 'done', outputPath: finalPath,
-				steps: landed.steps, etaSec: 0, elapsedSec: landed.elapsedSec
+				steps: landed.steps, etaSec: 0, etaSpread: 0, elapsedSec: landed.elapsedSec, summary
 			})
 		} catch (error: any) {
 			const message = signal.aborted ? 'aborted' : (error?.message || 'Export failed')

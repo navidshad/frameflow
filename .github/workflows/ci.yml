@@ -25,11 +25,37 @@ jobs:
           node-version: 24
           cache: npm
 
+      # What the install downloads from GitHub releases (Electron, yt-dlp, and the
+      # Linux ffmpeg) is the one thing in this job that is not ours to keep up.
+      # When that service answers 5xx the run fails before a single test, on code
+      # that is fine: it did, for hours, on the day this was written. So the
+      # finished install is cached, and a run that finds it downloads nothing.
+      # The key changes with the lockfile, the ffmpeg manifest and the fetch
+      # script, so a cache is never older than what it was made from. A run that
+      # misses the cache installs as before, and the first one that passes fills it.
+      - name: Cache the installed dependencies
+        id: deps
+        uses: actions/cache@v4
+        with:
+          path: |
+            node_modules
+            vendor/ffmpeg
+            ~/.cache/electron
+          key: deps-${{ runner.os }}-node24-${{ hashFiles('package-lock.json', 'scripts/ffmpeg-manifest.json', 'scripts/fetch-ffmpeg.mjs') }}
+
       # Plain `npm ci` on purpose: it runs the same postinstall the app needs
       # (scripts/fetch-ffmpeg.mjs, electron-builder install-app-deps), so CI
-      # installs exactly what a developer gets.
+      # installs exactly what a developer gets. A failed install is retried with a
+      # longer wait each time, for the short outages; the cache is for the long ones.
       - name: Install dependencies
-        run: npm ci
+        if: steps.deps.outputs.cache-hit != 'true'
+        run: |
+          for attempt in 1 2 3 4; do
+            if npm ci; then exit 0; fi
+            echo "::warning::npm ci failed (attempt $attempt of 4). A binary download may have failed; retrying."
+            sleep $((attempt * 30))
+          done
+          exit 1
 
       # The postinstall already refuses a non-redistributable build, but this
       # states the guarantee in the log rather than leaving it implicit in an
