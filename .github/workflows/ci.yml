@@ -28,8 +28,20 @@ jobs:
       # Plain `npm ci` on purpose: it runs the same postinstall the app needs
       # (scripts/fetch-ffmpeg.mjs, electron-builder install-app-deps), so CI
       # installs exactly what a developer gets.
+      #
+      # The install downloads binaries from GitHub releases (Electron, yt-dlp,
+      # ffmpeg). When that service answers 5xx the whole run used to fail before
+      # a single test: three times in one afternoon, on code that was fine. So a
+      # failed install is retried, with a longer wait each time, before it is a
+      # real failure.
       - name: Install dependencies
-        run: npm ci
+        run: |
+          for attempt in 1 2 3 4; do
+            if npm ci; then exit 0; fi
+            echo "::warning::npm ci failed (attempt $attempt of 4). A binary download may have failed; retrying."
+            sleep $((attempt * 30))
+          done
+          exit 1
 
       # The postinstall already refuses a non-redistributable build, but this
       # states the guarantee in the log rather than leaving it implicit in an
