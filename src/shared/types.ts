@@ -1203,7 +1203,11 @@ export interface EditorRenderProgress {
 	steps?: RenderStepInfo[]
 	/** Seconds left, estimated before a step starts and measured while it runs. */
 	etaSec?: number | null
+	/** How far the time left may be off, as a share of it (0.3 is plus or minus 30%). */
+	etaSpread?: number
 	elapsedSec?: number
+	/** What the export was started with, in words (size, file type, frame rate, length). */
+	summary?: { label: string; value: string }[]
 }
 
 export interface TimelineSegment {

@@ -41,6 +41,14 @@
 				<div class="h-full bg-primary transition-all duration-300" :style="{ width: `${state.percent}%` }"></div>
 			</div>
 
+			<!-- What was asked for: an export runs long, and nobody remembers the choices an hour in. -->
+			<dl v-if="summaryRows.length" class="mt-3 grid grid-cols-[auto_1fr] gap-x-4 gap-y-0.5 text-[11px] leading-snug" aria-label="This export">
+				<template v-for="row in summaryRows" :key="row.label">
+					<dt class="text-zinc-400 dark:text-zinc-500">{{ row.label }}</dt>
+					<dd class="text-zinc-700 dark:text-zinc-200 min-w-0 break-words">{{ row.value }}</dd>
+				</template>
+			</dl>
+
 			<!-- What it is doing, step by step. -->
 			<ol v-if="state.steps?.length" class="mt-3 space-y-1.5" aria-label="Export steps">
 				<li v-for="step in state.steps" :key="step.id" class="flex items-start gap-2 text-[11px] leading-snug">
@@ -57,6 +65,8 @@
 					</span>
 				</li>
 			</ol>
+
+			<p v-if="etaNote && !store.cancelling" class="mt-2 text-[11px] leading-relaxed text-zinc-400 dark:text-zinc-500">{{ etaNote }}</p>
 
 			<p v-if="store.cancelling" class="mt-3 flex items-center gap-2 text-[11px] leading-relaxed text-zinc-500 dark:text-zinc-400">
 				<span class="w-3 h-3 rounded-full border-2 border-primary border-t-transparent animate-spin shrink-0"></span>
@@ -129,6 +139,7 @@ import { useEditorStore } from '../../stores/editorStore'
 import { fitFrameToHeight } from '@shared/framing'
 import { PREVIEW_LINES, exportChoices, linesForChoice, sizeText, type ExportChoiceId } from '@shared/resolution'
 import { formatEta } from '@shared/renderEta'
+import { FORMAT_LABELS } from '@shared/exportSummary'
 
 const props = defineProps<{ modelValue: boolean }>()
 const emit = defineEmits<{ (e: 'update:modelValue', value: boolean): void; (e: 'show-exports'): void }>()
@@ -178,7 +189,19 @@ const FORMATS: { value: DeliveryFormat; label: string; description: string }[] =
 ]
 
 const state = computed(() => store.renderState)
-const etaText = computed(() => formatEta(state.value?.etaSec))
+const etaText = computed(() => formatEta(state.value?.etaSec, state.value?.etaSpread))
+// The settings of the export in flight, plus the other file types still waiting their turn.
+const summaryRows = computed(() => {
+	const rows = [...(state.value?.summary ?? [])]
+	const queued = store.exportQueue.map((q) => FORMAT_LABELS[q.format])
+	if (rows.length && queued.length) rows.push({ label: 'Then', value: queued.join(', ') })
+	return rows
+})
+// The time left is a guess; say so while it is a wide one, and say why it will improve.
+const etaNote = computed(() => {
+	const spread = state.value?.etaSpread ?? 0
+	return spread >= 0.5 ? 'A first estimate. It gets closer as the steps finish, and after an export it learns how fast this Mac really is.' : ''
+})
 const elapsedText = computed(() => {
 	const sec = state.value?.elapsedSec ?? 0
 	if (sec < 5) return ''

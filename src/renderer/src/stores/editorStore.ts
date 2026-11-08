@@ -211,7 +211,10 @@ export const useEditorStore = defineStore('editor', () => {
 		/** The steps of the export and where each stands, and the time left. */
 		steps?: RenderStepInfo[]
 		etaSec?: number | null
+		etaSpread?: number
 		elapsedSec?: number
+		/** What the export was started with, so it is still on screen an hour in. */
+		summary?: { label: string; value: string }[]
 	}
 	const renders = ref<Record<string, RenderEntry>>({})
 
@@ -4344,7 +4347,8 @@ export const useEditorStore = defineStore('editor', () => {
 				threadId: string; renderId: string; percent: number
 				phase: 'rendering' | 'stitching' | 'done' | 'error'
 				outputPath?: string; error?: string
-				steps?: RenderStepInfo[]; etaSec?: number | null; elapsedSec?: number
+				steps?: RenderStepInfo[]; etaSec?: number | null; etaSpread?: number; elapsedSec?: number
+				summary?: { label: string; value: string }[]
 			}) => {
 				// Renders are background jobs — track progress for ANY thread,
 				// not just the currently open project.
@@ -4364,7 +4368,9 @@ export const useEditorStore = defineStore('editor', () => {
 						error: data.error,
 						steps: data.steps ?? existing?.steps,
 						etaSec: data.etaSec,
-						elapsedSec: data.elapsedSec
+						etaSpread: data.etaSpread,
+						elapsedSec: data.elapsedSec,
+						summary: data.summary ?? existing?.summary
 					}
 				}
 				// A batch moves on when the one in flight lands — including on an
