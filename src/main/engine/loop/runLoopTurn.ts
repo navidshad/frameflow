@@ -36,6 +36,8 @@ export interface LoopRunOptions {
 	/** What the chat names as the model: "gemini-3.6-flash". */
 	modelName: string
 	prompt: string
+	/** Pictures sent with the prompt (base64), in order after its text. */
+	images?: { data: string; mimeType: string }[]
 	systemPrompt: string
 	/** The conversation so far, from a resumed one; empty for a fresh start. */
 	history: ModelMessage[]
@@ -111,7 +113,16 @@ export async function runLoopTurn(options: LoopRunOptions): Promise<LoopRunResul
 	tracker.apply({ type: 'init', model: options.modelName })
 	const emit = () => options.onSteps?.(tracker.steps.map((s) => ({ ...s })), tracker.model)
 
-	const userMessage: ModelMessage = { role: 'user', content: options.prompt }
+	// Pictures ride in the first message as image parts. What is SAVED for the
+	// next turn keeps only the words: a resumed conversation would otherwise
+	// re-send every frame ever attached, on every call, at full price.
+	const images = options.images ?? []
+	const userMessage: ModelMessage = images.length
+		? { role: 'user', content: [{ type: 'text', text: options.prompt }, ...images.map((image) => ({ type: 'image' as const, image: image.data, mediaType: image.mimeType }))] }
+		: { role: 'user', content: options.prompt }
+	const savedUser: ModelMessage = images.length
+		? { role: 'user', content: `${options.prompt}\n\n[${images.length === 1 ? 'A frame was' : `${images.length} frames were`} attached here; it is no longer shown. render_frame shows any moment again.]` }
+		: userMessage
 	let usage = NO_USAGE
 	let produced: ModelMessage[] = []
 	let failure: unknown
@@ -249,6 +260,6 @@ export async function runLoopTurn(options: LoopRunOptions): Promise<LoopRunResul
 	}
 	return {
 		...base, ok: true, cancelled: false, answer: tracker.answer, note: null,
-		messages: [...options.history, userMessage, ...produced], notes: notes.length ? notes : undefined
+		messages: [...options.history, savedUser, ...produced], notes: notes.length ? notes : undefined
 	}
 }

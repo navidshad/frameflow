@@ -43,6 +43,8 @@ export interface EngineRunOptions {
 	engine: CliEngineId
 	located: Located
 	prompt: string
+	/** Pictures sent with the prompt (base64), in order. */
+	images?: { data: string; mimeType: string }[]
 	systemPrompt: string
 	model?: string
 	effort?: string
@@ -134,6 +136,7 @@ export async function runEngineTurn(options: EngineRunOptions): Promise<EngineRu
 		const spec = buildCommand({
 			engine,
 			prompt: options.prompt,
+			images: options.images,
 			systemPrompt: options.systemPrompt,
 			mcpUrl: `http://127.0.0.1:${port}/mcp`,
 			model: options.model,
@@ -148,9 +151,15 @@ export async function runEngineTurn(options: EngineRunOptions): Promise<EngineRu
 		const exitCode = stopReason ? null : await new Promise<number | null>((resolve) => {
 			const proc = spawnTree(located.path, spec.args, {
 				cwd: workDir,
-				env: { ...located.env, ...spec.env, [TOKEN_ENV]: token }
+				env: { ...located.env, ...spec.env, [TOKEN_ENV]: token },
+				stdin: spec.stdin !== undefined
 			})
 			child = proc
+			// The whole message, then EOF: the CLI answers it and exits, as with -p.
+			if (spec.stdin !== undefined && proc.stdin) {
+				proc.stdin.on('error', (error) => { stderr += `\n${error.message}` })
+				proc.stdin.end(spec.stdin)
+			}
 			const onAbort = () => stop('abort')
 			options.signal.addEventListener('abort', onAbort, { once: true })
 			const timer = setTimeout(() => stop('timeout'), options.timeoutMs ?? 20 * 60_000)

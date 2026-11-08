@@ -2,7 +2,7 @@ import { clock } from './agentFeed'
 import { opKeys } from './agent'
 import { FRAMEFLOW_BASELINE } from './baseline'
 import { WORKING_CHECKLIST } from './turnReview'
-import type { PromptTurn } from './types'
+import type { PromptAttachment, PromptTurn } from './types'
 
 /**
  * AI engines: which AI edits when the user chats in FrameFlow.
@@ -46,18 +46,27 @@ export interface EngineMeta {
 	blurb: string
 	/** The turn card's footer: "Claude Code · subscription". */
 	footer: string
+	/**
+	 * It can be sent pictures with a message (a frame the user attached). An
+	 * engine that cannot says so in the composer rather than dropping them.
+	 */
+	images: boolean
 }
 
 export const ENGINES: Record<EngineId, EngineMeta> = {
 	'claude-code': {
 		id: 'claude-code', label: 'Claude Code', bin: 'claude',
 		blurb: 'Uses your Claude plan. Looks at frames while it edits, and drives FrameFlow through its own tools.',
-		footer: 'Claude Code · subscription'
+		footer: 'Claude Code · subscription',
+		// Over `--input-format stream-json`: the message is a content list with the pictures in it.
+		images: true
 	},
 	'gemini-api': {
 		id: 'gemini-api', label: 'Gemini API',
 		blurb: 'Edits in many steps through FrameFlow\u2019s own tools, and looks at frames. Costs show in the project header.',
-		footer: 'Gemini API'
+		footer: 'Gemini API',
+		// The loop's first message carries them as image parts.
+		images: true
 	}
 }
 
@@ -292,6 +301,8 @@ export interface EngineRetry {
 	selectedItemIds: string[]
 	playheadSec: number
 	widen?: 'chapter' | 'full'
+	/** The frames the failed message carried: Retry sends them again, from the files the turn kept. */
+	attachments?: PromptAttachment[]
 }
 
 /**
@@ -308,7 +319,7 @@ export function engineRetry(turn: PromptTurn | null | undefined, turns: PromptTu
 	const chat = turns.filter((t) => !t.agent?.engineTurnId)
 	const latest = chat.reduce<PromptTurn | undefined>((a, t) => (!a || t.createdAt >= a.createdAt ? t : a), undefined)
 	if (latest?.id !== turn.id) return null
-	return { engine: engine.id, prompt: turn.prompt, ...engine.request }
+	return { engine: engine.id, prompt: turn.prompt, ...engine.request, ...(turn.attachments?.length ? { attachments: turn.attachments } : {}) }
 }
 
 /**
@@ -712,6 +723,8 @@ export interface EngineUserPromptInput {
 	widen?: 'chapter' | 'full'
 	/** This continues the CLI's earlier conversation about the project. */
 	resuming?: boolean
+	/** What the message's @times and attached frames are (promptRefs.describeReferences). */
+	references?: string
 }
 
 export function buildEngineUserPrompt(input: EngineUserPromptInput): string {
@@ -724,7 +737,8 @@ export function buildEngineUserPrompt(input: EngineUserPromptInput): string {
 				: 'Scope: whatever the request needs.'
 	// A continued conversation remembers what it saw, and the user may have edited since.
 	const changed = input.resuming ? ' The project may have changed since your last message (the user can edit too), so read what you need again before relying on it.' : ''
-	return `${input.prompt.trim()}\n\n---\nPlayhead: ${clock(input.playheadSec)}. ${scope}${changed}`
+	const references = input.references?.trim() ? `\n\n${input.references.trim()}` : ''
+	return `${input.prompt.trim()}${references}\n\n---\nPlayhead: ${clock(input.playheadSec)}. ${scope}${changed}`
 }
 
 // ===== Command lines =====
@@ -753,10 +767,17 @@ export interface CommandInput {
 	 */
 	workDir: string
 	pathSep?: '/' | '\\'
+	/** Pictures sent with the message (base64), in order after the text. */
+	images?: { data: string; mimeType: string }[]
 }
 
 export interface CommandSpec {
 	args: string[]
+	/**
+	 * Written to the CLI's stdin, then closed. Set when the message carries
+	 * pictures: a prompt argument can only be text.
+	 */
+	stdin?: string
 	/** Added to the environment (the token goes in separately). */
 	env: Record<string, string>
 	/** Written into workDir before spawning. */
@@ -764,6 +785,15 @@ export interface CommandSpec {
 }
 
 const join = (dir: string, name: string, sep: '/' | '\\' = '/') => `${dir.replace(/[\\/]+$/, '')}${sep}${name}`
+
+/** One user message in Claude Code's stream-json input: the text, then the pictures. */
+export function claudeStdinMessage(prompt: string, images: { data: string; mimeType: string }[]): string {
+	const content = [
+		{ type: 'text', text: prompt },
+		...images.map((image) => ({ type: 'image', source: { type: 'base64', media_type: image.mimeType, data: image.data } }))
+	]
+	return `${JSON.stringify({ type: 'user', message: { role: 'user', content } })}\n`
+}
 
 export function buildCommand(input: CommandInput): CommandSpec {
 	const sep = input.pathSep || '/'
@@ -776,11 +806,16 @@ export function buildCommand(input: CommandInput): CommandSpec {
 					[MCP_SERVER_KEY]: { type: 'http', url: input.mcpUrl, headers: { Authorization: `Bearer \${${TOKEN_ENV}}` } }
 				}
 			}
+			// With pictures the message goes in on stdin as one stream-json user
+			// message (text, then each image). Without, the prompt stays an argument
+			// as it always was.
+			const images = input.images?.length ? input.images : null
 			return {
 				files: [{ name: 'mcp.json', content: JSON.stringify(mcpConfig, null, 2) }],
 				env: {},
+				...(images ? { stdin: claudeStdinMessage(input.prompt, images) } : {}),
 				args: [
-					'-p', input.prompt,
+					...(images ? ['-p', '--input-format', 'stream-json'] : ['-p', input.prompt]),
 					'--output-format', 'stream-json', '--verbose',
 					'--mcp-config', join(input.workDir, 'mcp.json', sep), '--strict-mcp-config',
 					// No built-in tools at all: no Bash, no Read/Write/Edit, no web, no subagents.

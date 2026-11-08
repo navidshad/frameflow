@@ -47,8 +47,9 @@
 				<template v-for="turn in [turnOf(entry)]" :key="turn.id">
 				<!-- User prompt -->
 				<div class="flex flex-col items-end gap-1">
+					<SentFrames v-if="turn.attachments?.length" :attachments="turn.attachments" />
 					<div class="max-w-[85%] px-3 py-2 rounded-2xl rounded-br-md bg-primary text-white text-xs leading-relaxed whitespace-pre-wrap">
-						{{ turn.prompt }}
+						<PromptText :text="turn.prompt" />
 					</div>
 					<span class="text-[9px] font-bold uppercase tracking-widest text-zinc-400 flex items-center gap-1">
 						<span v-if="turn.scopeLabel" class="text-secondary">{{ turn.scopeLabel }}</span>
@@ -151,6 +152,8 @@ import PromptBar from './PromptBar.vue'
 import EngineSteps from './EngineSteps.vue'
 import RetryButton from './RetryButton.vue'
 import McpRoundCard from './McpRoundCard.vue'
+import PromptText from './PromptText.vue'
+import SentFrames from './SentFrames.vue'
 import { ENGINES } from '@shared/engines'
 import { chatEntries, type ChatEntry } from '@shared/agentRounds'
 import { useAgentStore } from '../../stores/agentStore'
