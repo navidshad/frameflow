@@ -21,6 +21,10 @@ import { hasKeyframes } from '@shared/keyframes'
 import { hasKey } from '@shared/keying'
 import { generatorSource } from '@shared/generators'
 import { motionFramePlan, motionKitFor } from '@shared/motion'
+import { hasFollows, withFollows } from '@shared/follow'
+import { documentFrame } from '@shared/resolution'
+import type { ObjectTrack } from '@shared/tracking'
+import { followTracksFor } from '../tracking/store'
 import { fallbackMotionDir, motionCacheDir, motionClipPath } from '../motion/cache'
 import { ensureMotionJobs } from '../motion'
 import type { TranscriptEntry } from '@shared/captions'
@@ -161,8 +165,18 @@ export function computeRegions(
 		 * one). Never upscales. The frame rate stays the footage's.
 		 */
 		frameHeight?: number
+		/**
+		 * The tracks that following motion layers name (`followTracksFor`). A
+		 * following layer is drawn from its track through the clip it follows, so
+		 * the items planned here carry those keys. Without its track a following
+		 * layer is hidden, never left where its settings happen to put it.
+		 */
+		tracks?: readonly ObjectTrack[]
 	} = {}
 ): RegionPlan {
+	if (hasFollows(doc.timeline)) {
+		doc = { ...doc, timeline: withFollows(doc.timeline, { tracks: options.tracks ?? [], media: doc.media, frame: documentFrame(doc) }) }
+	}
 	// Video tracks TOP-most first (highest order wins visually); [0] of a
 	// region's videoLayers is the layer v1 actually renders.
 	const videoTracks = doc.tracks
@@ -747,6 +761,7 @@ function emitRenderProgress(payload: EditorRenderProgress) {
 export function planForRender(doc: EditorDocument, quality: ExportQuality, tempDir: string, height?: number): RegionPlan {
 	return computeRegions(doc, quality, transcriptsForDoc(doc), {
 		motionDir: motionCacheDir(tempDir),
+		tracks: followTracksFor(doc.timeline, tempDir),
 		frameGrid: true,
 		proxyFrame: quality === 'preview',
 		// A resolution choice applies to renders from the sources; the preview has its own.

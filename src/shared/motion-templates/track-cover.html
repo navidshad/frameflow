@@ -1,0 +1,31 @@
+<!-- Track cover — an emoji, a blob or a box that sits over something a track follows (a face, a logo). -->
+<style>
+	#cover { position: absolute; left: 0; top: 0; display: flex; align-items: center; justify-content: center;
+		line-height: 1; white-space: nowrap; will-change: transform; }
+</style>
+<div id="cover" data-ff-bounds></div>
+<script>
+	const cover = document.getElementById('cover')
+
+	frameflow.define({
+		seek(t, s) {
+			const W = window.innerWidth
+			const H = window.innerHeight
+			// The box the track gives, grown by `scale` so hair and chin are inside it.
+			const w = Number(s.w) * W * Number(s.scale)
+			const h = Number(s.h) * H * Number(s.scale)
+			const side = Math.max(w, h)
+			const emoji = s.style === 'emoji'
+			const bw = emoji ? side : w
+			const bh = emoji ? side : h
+			cover.style.display = Number(s.on) >= 0.5 ? 'flex' : 'none'
+			cover.style.width = `${bw.toFixed(2)}px`
+			cover.style.height = `${bh.toFixed(2)}px`
+			cover.style.transform = `translate(${(Number(s.x) * W - bw / 2).toFixed(2)}px, ${(Number(s.y) * H - bh / 2).toFixed(2)}px)`
+			cover.style.fontSize = `${(side * 0.86).toFixed(2)}px`
+			cover.style.background = emoji ? 'none' : s.color
+			cover.style.borderRadius = s.style === 'blob' ? '50%' : s.style === 'box' ? `${(side * 0.06).toFixed(2)}px` : '0'
+			cover.textContent = emoji ? s.emoji : ''
+		}
+	})
+</script>

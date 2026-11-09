@@ -175,4 +175,6 @@ A track belongs to the footage, not the edit: samples are in SOURCE seconds and 
 | `get_track` | A track's position on every frame as `[t, cx, cy, w, h]` rows, on the timeline clock for a clip. |
 | `edit_track` | Rename, set the cover shape, merge one track into another, delete. |
 
-Not built yet: a motion layer following a track live, the monitor UI for drawing a box, and blur.
+**Following.** A motion layer follows a track with `follow: { track }` on `addMotion` / `updateMotion` (stored as `TimelineItem.follow`: track, footage, clip). Nothing is copied onto the layer: `withFollow` (`src/shared/follow.ts`) turns the track into keys for the page's `x, y, w, h, size, on` settings at draw time, through the followed clip's place, speed, framing and transform. The monitor (`editorStore.drawnItem`) and the export (`computeRegions`) both call it, so they agree by construction, and the link survives trims, moves, retimes and splits. The `track-cover` template (emoji, blob or box) defines all of those settings; `callout-ring` follows too.
+
+Not built yet: a Follow picker in the motion inspector, the monitor UI for drawing a box, and blur.

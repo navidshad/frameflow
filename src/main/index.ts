@@ -41,6 +41,7 @@ import * as editorPreview from './editor/preview'
 import * as editorRender from './editor/render'
 import { prerenderMotion } from './editor/motionPrerender'
 import * as editorCaptions from './editor/captions'
+import { listTracks } from './tracking/store'
 import { listExportFiles, resolveExportPath } from './editor/exports'
 import { loadPacks, packManifests } from './editor/packs'
 import * as editorRevisions from './editor/revisions'
@@ -885,6 +886,14 @@ app.whenReady().then(() => {
 		const thread = threadManager.getThread(threadId)
 		if (!thread || thread.type !== 'editor' || !thread.editor) return {}
 		return editorCaptions.transcriptsForAssets(thread.editor.media)
+	})
+
+	// The monitor draws a following motion layer itself, from the same track the
+	// export reads — so it needs the tracks, which live beside the media.
+	ipcMain.handle('get-object-tracks', (_event, threadId: string) => {
+		const thread = threadManager.getThread(threadId)
+		if (!thread || thread.type !== 'editor' || !thread.editor) return []
+		return thread.editor.media.flatMap((asset) => listTracks(editorAssets.getAssetDir(thread, asset.id)))
 	})
 
 	ipcMain.handle('abort-editor-render', (_event, { renderId }: { renderId: string }) => {

@@ -386,7 +386,7 @@ const transformStill = (key: 'x' | 'y') => props.item.transform?.[key] ?? TRANSF
 const animateRows = computed<AnimateRow[]>(() => {
 	const u = clipTime.value
 	const keys = props.item.keyframes ?? {}
-	const frame = motionFrameState(props.item, u)
+	const frame = motionFrameState(store.drawnItem(props.item), u)
 	const pctFormat = (v: number) => `${Math.round(v * 100)}%`
 	// Across / Down are where the layer's centre sits on the frame: 50% is
 	// untouched. Stored as the transform's offset from centre, the same

@@ -464,6 +464,8 @@ export interface TimelineItem {  // an instance of a clip placed on a track
 	layerRole?: 'subject' | 'background' | 'overlay'
 	/** On a sound clip: the moment it follows. See SoundBinding. */
 	bind?: SoundBinding
+	/** On a motion layer: the track it follows, and through which clip. See shared/follow.ts. */
+	follow?: import('./follow').TrackFollow
 	/**
 	 * Part of a camera group: a SHOT shows one angle of the group, the SOUND is
 	 * the group's main sound under every shot. `in`/`out` stay ordinary source
@@ -879,6 +881,13 @@ export interface PromptTurn {
 	createdAt: number
 }
 
+/**
+ * Make a motion layer follow a track: `track` is a track id or name, `clip`
+ * the footage clip it follows it in (the one the layer overlaps most when left
+ * out). An empty `track` stops the layer following.
+ */
+export interface MotionFollowRequest { track: string; clip?: string }
+
 /** A motion layer's settings as an agent may send them: a map, or key/value pairs. */
 export type MotionOpSettings =
 	| Record<string, number | string>
@@ -1002,6 +1011,8 @@ export interface EditorOps {
 		html?: string
 		/** A custom page only: the project motion kit (`setMotionKits` id) the page builds on. */
 		kit?: string
+		/** Follow a track (find_faces / track_object): see `MotionFollowRequest`. */
+		follow?: MotionFollowRequest
 	}>
 	/** Change a motion layer already on the timeline: its fields, its windows, its timing. */
 	updateMotion?: Array<{
@@ -1014,6 +1025,8 @@ export interface EditorOps {
 		html?: string
 		/** Use this project motion kit for the page; "" stops using one. */
 		kit?: string
+		/** Follow a track, or (`track: ""`) stop following. */
+		follow?: MotionFollowRequest
 	}>
 	/**
 	 * Project motion kits: CSS and JS stored once and shared by every custom

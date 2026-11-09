@@ -20,12 +20,12 @@ const motionItem = (spec: MotionSpec, duration = 4, extra: Partial<TimelineItem>
 })
 
 describe('the template library', () => {
-	it('is the seven board-1 templates, in two sections', () => {
+	it('is the seven board-1 templates in two sections, then the track cover in its own', () => {
 		expect(MOTION_TEMPLATES.map((t) => t.label)).toEqual([
 			'Lower third', 'Title card', 'Chapter card', 'Pull quote',
-			'Stat counter', 'Callout ring', 'Bar reveal'
+			'Stat counter', 'Callout ring', 'Bar reveal', 'Track cover'
 		])
-		expect(motionSections().map((s) => s.section)).toEqual(['Text', 'Data and callouts'])
+		expect(motionSections().map((s) => s.section)).toEqual(['Text', 'Data and callouts', 'Tracking'])
 		expect(new Set(MOTION_TEMPLATES.map((t) => t.id)).size).toBe(MOTION_TEMPLATES.length)
 	})
 
@@ -33,7 +33,7 @@ describe('the template library', () => {
 		const durations = Object.fromEntries(MOTION_TEMPLATES.map((t) => [t.id, t.definition.duration]))
 		expect(durations).toEqual({
 			'lower-third': 4, 'title-card': 3, 'chapter-card': 2, 'pull-quote': 5,
-			'stat-counter': 4, 'callout-ring': 2.5, 'bar-reveal': 3.5
+			'stat-counter': 4, 'callout-ring': 2.5, 'bar-reveal': 3.5, 'track-cover': 4
 		})
 	})
 

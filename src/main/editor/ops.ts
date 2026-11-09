@@ -24,7 +24,9 @@ import { userMotionTemplate } from '@shared/motionTemplates'
 import { applyMotionKitOps, withKit } from './kitOps'
 import { applyMulticamOps, opsTouchMulticam } from './multicamOps'
 import { groupRippleCut } from '@shared/multicam'
-import type { MotionOpSettings } from '@shared/types'
+import type { MotionFollowRequest, MotionOpSettings } from '@shared/types'
+import { clipToFollow, followable, type TrackFollow } from '@shared/follow'
+import type { ObjectTrack } from '@shared/tracking'
 import { isTransitionKind } from '@shared/transitionPresets'
 import {
 	DEFAULT_TRANSITION_SEC, MAX_TRANSITION_SEC, MIN_TRANSITION_SEC
@@ -82,6 +84,20 @@ const MOTION_MOMENTS_SCHEMA = {
 		hold: { type: 'number' },
 		out: { type: 'number' }
 	}
+}
+
+const MOTION_FOLLOW_SCHEMA = {
+	type: 'object',
+	description:
+		'Make the layer FOLLOW a track (a person from find_faces, a thing from track_object), so it stays on it as it moves. ' +
+		'The track drives the page’s settings x, y (centre, fractions of the frame), w, h (size, fractions), size and on (1 while ' +
+		'tracked, 0 in a gap), for whichever of those the page defines as animatable numbers: the "track-cover" template has them ' +
+		'all. It is a live link through the footage clip under the layer, so it survives trims, moves and retimes. `track: ""` stops following.',
+	properties: {
+		track: { type: 'string', description: 'Track id or name (list_tracks)' },
+		clip: { type: 'string', description: 'The footage clip to follow it in. Leave out: the clip of that footage the layer overlaps most' }
+	},
+	required: ['track']
 }
 
 export const EDITOR_OPS_SCHEMA = {
@@ -263,7 +279,8 @@ export const EDITOR_OPS_SCHEMA = {
 					durationSec: { type: 'number', description: 'How long it stays. Omit for the template’s own length.' },
 					settings: MOTION_SETTINGS_SCHEMA,
 					moments: MOTION_MOMENTS_SCHEMA,
-					label: { type: 'string' }
+					label: { type: 'string' },
+					follow: MOTION_FOLLOW_SCHEMA
 				},
 				required: ['template', 'atSec']
 			}
@@ -280,7 +297,8 @@ export const EDITOR_OPS_SCHEMA = {
 					settings: MOTION_SETTINGS_SCHEMA,
 					moments: MOTION_MOMENTS_SCHEMA,
 					atSec: { type: 'number' },
-					durationSec: { type: 'number' }
+					durationSec: { type: 'number' },
+					follow: MOTION_FOLLOW_SCHEMA
 				},
 				required: ['id']
 			}
@@ -484,7 +502,9 @@ export function opsToDiff(
 	 * (vetHtmlOps' `definitions`). Ahead of the text read, which cannot see
 	 * `duration: SPEC.duration`.
 	 */
-	pageDefinitions: Map<string, MotionDefinition> = new Map()
+	pageDefinitions: Map<string, MotionDefinition> = new Map(),
+	/** The project's tracks, for a motion layer asked to follow one (`follow`). */
+	objectTracks: readonly FollowableTrack[] = []
 ): OpsToDiffResult {
 	const droppedOps: string[] = []
 	const notes: string[] = []
@@ -1262,7 +1282,7 @@ export function opsToDiff(
 		? applyMotionKitOps(ops, doc, diff, droppedOps, notes)
 		: ops
 	if (motionOps.addMotion?.length || motionOps.updateMotion?.length) {
-		applyMotionOps(motionOps, doc, diff, droppedOps, notes, writer, pageDefinitions)
+		applyMotionOps(motionOps, doc, diff, droppedOps, notes, writer, pageDefinitions, objectTracks)
 	}
 
 	if (opsTouchMulticam(ops)) applyMulticamOps(ops, doc, diff, droppedOps, notes)
@@ -1282,6 +1302,51 @@ export function opsToDiff(
 
 
 // ===== Motion layers =====
+
+/** What a follow request needs to know of a track. */
+export type FollowableTrack = Pick<ObjectTrack, 'id' | 'name' | 'assetId'>
+
+/**
+ * A `follow` request against the layer it is for. `undefined` leaves the layer
+ * as it is (and says why, when the request could not be met); `null` stops it
+ * following.
+ */
+function followFor(
+	request: MotionFollowRequest | undefined,
+	layer: Pick<TimelineItem, 'motion' | 'timelineStart' | 'duration'>,
+	name: string,
+	placed: readonly TimelineItem[],
+	objectTracks: readonly FollowableTrack[],
+	media: readonly MediaAsset[],
+	notes: string[]
+): TrackFollow | null | undefined {
+	if (!request || typeof request.track !== 'string') return undefined
+	const wanted = request.track.trim()
+	if (!wanted) return null
+	const track = objectTracks.find((t) => t.id === wanted) ?? objectTracks.find((t) => t.name.toLowerCase() === wanted.toLowerCase())
+	if (!track) {
+		notes.push(`"${name}" does not follow anything: there is no track "${wanted}" (list_tracks shows them; find_faces or track_object makes one).`)
+		return undefined
+	}
+	const driven = followable(layer)
+	if (!driven.length) {
+		notes.push(`"${name}" cannot follow a track: its page defines none of the settings a track drives (x, y, w, h, size, on as animatable numbers). The "track-cover" template has them.`)
+		return undefined
+	}
+	const footage = media.find((a) => a.id === track.assetId)?.name ?? 'that footage'
+	const clip = request.clip
+		? placed.find((i) => i.id === request.clip && i.sourceAssetId === track.assetId)
+		: clipToFollow(layer, placed, track.assetId)
+	if (!clip) {
+		notes.push(request.clip
+			? `"${name}" does not follow "${track.name}": clip ${request.clip} is not a clip of ${footage}, which is what the track was measured in.`
+			: `"${name}" does not follow "${track.name}": it is not over any clip of ${footage} on the timeline. Place it over the clip, or name the clip.`)
+		return undefined
+	}
+	notes.push(`"${name}" follows "${track.name}" through "${clip.label || clip.id}" (driving ${driven.join(', ')}).`)
+	return { trackId: track.id, assetId: track.assetId, clipId: clip.id }
+}
+
 
 const MIN_MOTION_SEC = 0.2
 const MAX_MOTION_SEC = 600
@@ -1397,7 +1462,8 @@ function applyMotionOps(
 	droppedOps: string[],
 	notes: string[],
 	writer: { by: string; turnId?: string },
-	pageDefinitions: Map<string, MotionDefinition>
+	pageDefinitions: Map<string, MotionDefinition>,
+	objectTracks: readonly FollowableTrack[] = []
 ): void {
 	const removed = new Set(diff.removeItemIds ?? [])
 	const tracks = [...doc.tracks, ...(diff.addTracks ?? [])]
@@ -1464,6 +1530,8 @@ function applyMotionOps(
 			layerRole: 'overlay',
 			motion: spec
 		}
+		const follow = followFor(request.follow, item, item.label || label, placed, objectTracks, doc.media, notes)
+		if (follow) item.follow = follow
 		placed.push(item)
 		;(diff.addItems ||= []).push(item)
 	}
@@ -1539,6 +1607,11 @@ function applyMotionOps(
 				notes.push(`"${name}" moved to ${to.name}:${why} at ${secs(start)}–${secs(start + timing.duration)}. Nothing else moved.`)
 			}
 		}
+		const follow = followFor(
+			request.follow, { motion: spec, timelineStart: start, duration: timing.duration }, name, placed, objectTracks, doc.media, notes
+		)
+		if (follow !== undefined) fields.follow = follow ?? undefined
+
 		const updates = (diff.updateItems ||= [])
 		const existing = updates.find((u) => u.id === item.id)
 		if (existing) Object.assign(existing, fields)

@@ -10,6 +10,7 @@ import { cuesForDoc, transcriptsForDoc } from './captions'
 import { burnFrameText } from './frameText'
 import { cuesAtInstant } from '@shared/captions'
 import { motionCacheDir } from '../motion/cache'
+import { followTracksFor } from '../tracking/store'
 import { ensureMotionFrames, ensureMotionJobs } from '../motion'
 import { motionClipLabel } from '@shared/motion'
 import {
@@ -172,6 +173,7 @@ export async function ensureTransitionPreview(options: {
 	// render exactly as it will in the export (it silently did not, before).
 	const full = computeRegions(doc, 'preview', transcriptsForDoc(doc), {
 		motionDir: motionCacheDir(thread.tempDir),
+		tracks: followTracksFor(doc.timeline, thread.tempDir),
 		frameGrid: true
 	})
 	const plan = previewPlan(full)
@@ -252,6 +254,7 @@ export async function renderExactFrame(options: {
 	// On the frame grid, as the export plans it: same regions, same motion keys.
 	const plan = computeRegions(doc, 'original', transcriptsForDoc(doc), {
 		motionDir: motionCacheDir(thread.tempDir),
+		tracks: followTracksFor(doc.timeline, thread.tempDir),
 		frameGrid: true
 	})
 	let cursor = 0

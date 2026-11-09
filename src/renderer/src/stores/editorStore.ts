@@ -40,6 +40,8 @@ import {
 } from '@shared/captions'
 import { sequenceFrame as resolveSequenceFrame } from '@shared/framing'
 import { documentFrame, migrateProjectFrame, normalizeCustomFrame, usedVideoSources } from '@shared/resolution'
+import { withFollow } from '@shared/follow'
+import type { ObjectTrack } from '@shared/tracking'
 import { childrenByParent, collectSubtree, hasBranch, summarizeRevision, withoutProbeStamps } from '@shared/revision-tree'
 import { agentChangeBadges, type AgentApplyOutcome } from '@shared/agentFeed'
 import { toMediaUrl } from '@shared/media-url'
@@ -308,6 +310,34 @@ export const useEditorStore = defineStore('editor', () => {
 		} catch (error) {
 			console.error('[editorStore] transcript fetch failed:', error)
 		}
+	}
+
+	// ===== Object tracks =====
+
+	/**
+	 * The project's tracks (faces found, things followed), from the main process,
+	 * which owns the files. A motion layer that follows one is drawn from it here
+	 * exactly as the export draws it: `drawnItem` is the same `withFollow`.
+	 */
+	const objectTracks = shallowRef<ObjectTrack[]>([])
+
+	const refreshObjectTracks = async () => {
+		if (!threadId.value) { objectTracks.value = []; return }
+		try {
+			objectTracks.value = await api.getObjectTracks(threadId.value) || []
+		} catch (error) {
+			console.error('[editorStore] track fetch failed:', error)
+		}
+	}
+	watch(threadId, () => { void refreshObjectTracks() }, { immediate: true })
+	api.onObjectTracksChanged?.((data: { threadId: string }) => {
+		if (data.threadId === threadId.value) void refreshObjectTracks()
+	})
+
+	/** The item as the monitor should draw it: a following layer with its track's keys. */
+	const drawnItem = (item: TimelineItem): TimelineItem => {
+		if (!item.follow || !doc.value) return item
+		return withFollow(item, doc.value.timeline, { tracks: objectTracks.value, media: doc.value.media, frame: documentFrame(doc.value) })
 	}
 
 	/**
@@ -4593,6 +4623,9 @@ export const useEditorStore = defineStore('editor', () => {
 		loudnessEnabled,
 		setLoudnessEnabled,
 		refreshTranscripts,
+		objectTracks,
+		refreshObjectTracks,
+		drawnItem,
 		seams,
 		conflictedSeamIds,
 		selectedSeamId,

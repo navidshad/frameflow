@@ -889,6 +889,51 @@ describe('motion ops', () => {
 		expect(diff.addItems![0].trackId).toBe('m')
 	})
 
+	describe('following a track', () => {
+		const tracks = [{ id: 'trk_00000001', name: 'Hoodie woman', assetId: asset.id }]
+		const run = (ops: Parameters<typeof opsToDiff>[0], d = doc()) => opsToDiff(ops, d, undefined, undefined, undefined, tracks)
+
+		it('binds a new cover to the track and the clip under it', () => {
+			const { diff, notes } = run({ addMotion: [{ template: 'track-cover', atSec: clip.timelineStart + 0.5, durationSec: 1, follow: { track: 'hoodie woman' } }] })
+			expect(diff.addItems![0].follow).toEqual({ trackId: 'trk_00000001', assetId: asset.id, clipId: clip.id })
+			expect(notes.join(' ')).toMatch(/follows "Hoodie woman" through/)
+		})
+
+		it('says why when there is no such track, and still adds the layer', () => {
+			const { diff, notes } = run({ addMotion: [{ template: 'track-cover', atSec: clip.timelineStart, follow: { track: 'nobody' } }] })
+			expect(diff.addItems![0].follow).toBeUndefined()
+			expect(notes.join(' ')).toMatch(/no track "nobody"/)
+		})
+
+		it('refuses a page that has nothing for a track to drive', () => {
+			const { diff, notes } = run({ addMotion: [{ template: 'lower-third', atSec: clip.timelineStart, follow: { track: 'trk_00000001' } }] })
+			expect(diff.addItems![0].follow).toBeUndefined()
+			expect(notes.join(' ')).toMatch(/defines none of the settings a track drives/)
+		})
+
+		it('refuses a layer that is not over that footage', () => {
+			const { diff, notes } = run({ addMotion: [{ template: 'track-cover', atSec: 5000, follow: { track: 'trk_00000001' } }] })
+			expect(diff.addItems![0].follow).toBeUndefined()
+			expect(notes.join(' ')).toMatch(/not over any clip/)
+		})
+
+		it('starts and stops an existing layer following', () => {
+			const layer: TimelineItem = {
+				id: 'cv', trackId: 'm', sourceAssetId: '', timelineStart: clip.timelineStart, in: 0, out: 1,
+				speed: 1, preservePitch: true, duration: 1, label: 'Cover', motion: { template: 'track-cover' }
+			}
+			const d = makeDoc([asset], [clip, layer])
+			d.tracks.push({ id: 'm', kind: 'video', name: 'M1', order: 1, muted: false, locked: false, hidden: false, height: 64 })
+			const on = run({ updateMotion: [{ id: 'cv', follow: { track: 'trk_00000001' } }] }, d)
+			expect(on.diff.updateItems![0].follow).toEqual({ trackId: 'trk_00000001', assetId: asset.id, clipId: clip.id })
+
+			d.timeline[1] = { ...layer, follow: on.diff.updateItems![0].follow }
+			const off = run({ updateMotion: [{ id: 'cv', follow: { track: '' } }] }, d)
+			expect('follow' in off.diff.updateItems![0]).toBe(true)
+			expect(off.diff.updateItems![0].follow).toBeUndefined()
+		})
+	})
+
 	describe('updateMotion', () => {
 		const placed: TimelineItem = {
 			id: 'lt', trackId: 'm', sourceAssetId: '', timelineStart: 3, in: 0, out: 4,

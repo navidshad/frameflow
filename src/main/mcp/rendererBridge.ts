@@ -414,6 +414,7 @@ export const rendererBridge: EditorBridge = {
 			if (old.kind === 'face' && overlaps && /^Person \d+$/.test(old.name)) deleteTrack(dir, old.id)
 		}
 		for (const track of scan.tracks) saveTrack(dir, track)
+		tracksChanged(project.threadId)
 		const names = new Map(scan.tracks.map((t) => [t.id, t.name]))
 		return { tracks: scan.tracks, frames: scan.frames, sheet: await trackSheet(scan.tiles, (tile) => names.get(tile.trackId) || '', 220) }
 	},
@@ -422,6 +423,7 @@ export const rendererBridge: EditorBridge = {
 		const { file, dir } = trackingSource(project, assetId)
 		const made = await followObject(file, assetId, request)
 		saveTrack(dir, made.track)
+		tracksChanged(project.threadId)
 		return { track: made.track, sheet: await trackSheet(made.tiles, (tile) => sheetClock(tile.t), 320) }
 	},
 
@@ -434,10 +436,20 @@ export const rendererBridge: EditorBridge = {
 
 	async saveTrack(project, track) {
 		saveTrack(trackingSource(project, track.assetId).dir, track)
+		tracksChanged(project.threadId)
 	},
 
 	async deleteTrack(project, track) {
-		return deleteTrack(trackingSource(project, track.assetId).dir, track.id)
+		const deleted = deleteTrack(trackingSource(project, track.assetId).dir, track.id)
+		if (deleted) tracksChanged(project.threadId)
+		return deleted
+	}
+}
+
+/** Tell the editor its tracks changed, so a following layer in the monitor redraws from the new one. */
+function tracksChanged(threadId: string): void {
+	for (const win of BrowserWindow.getAllWindows()) {
+		if (!win.isDestroyed() && !isCaptureWindow(win)) win.webContents.send('object-tracks-changed', { threadId })
 	}
 }
 

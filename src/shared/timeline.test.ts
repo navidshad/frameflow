@@ -449,6 +449,18 @@ describe('applyTimelineDiff — media that left the project', () => {
 		expect(s.timeline).toHaveLength(0)
 	})
 
+	it('records a layer starting and stopping following a track, so it can be undone', () => {
+		const tracks = [track('v1')]
+		const plain = items([[0, 10]], 'v1', 'a')
+		const following = plain.map((i) => ({ ...i, follow: { trackId: 'trk_00000001', assetId: 'a', clipId: 'c' } }))
+		const start = diffTimelines({ tracks, timeline: plain }, { tracks, timeline: following })!
+		expect(start.forward.updateItems![0].follow).toEqual({ trackId: 'trk_00000001', assetId: 'a', clipId: 'c' })
+		expect('follow' in start.inverse.updateItems![0]).toBe(true)
+		expect(start.inverse.updateItems![0].follow).toBeUndefined()
+		// The same link written again is not a change.
+		expect(diffTimelines({ tracks, timeline: following }, { tracks, timeline: following.map((i) => ({ ...i, follow: { ...i.follow! } })) })).toBeNull()
+	})
+
 	it('undo cannot resurrect a removed asset’s clip', () => {
 		// The full chain: an edit is recorded, the media is removed, the user
 		// hits undo. diffTimelines stores a FULL item clone in the inverse.

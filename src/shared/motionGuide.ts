@@ -72,7 +72,16 @@ export const MOTION_CRAFT_LINES: string[] = [
 	'   declared in the object form with `animate: true`, e.g. `jacket: { type: "color", default: "#7A5BC4", animate: true }`.',
 	'   The bare `jacket: "#7A5BC4"` form is NOT keyframable. Never tell the user a field is keyframable unless you',
 	'   declared it so.',
-	'7. Verify like an editor. render_frame the first frame, every beat, one mid-motion frame and the last frame, and',
+	'7. To keep something ON a moving person or thing, do not key its position by hand: make the layer FOLLOW a track.',
+	'   find_faces (people) or track_object (anything else) makes the track; then addMotion/updateMotion with',
+	'   `follow: { track }`. The track then drives these settings, for whichever your page defines as',
+	'   `{ type: "number", animate: true }`: x, y (the centre, fractions of the frame, 0–1 from the top-left), w, h (the',
+	'   box, fractions of the frame’s width and height), size (half the box’s longer side over the frame’s short side)',
+	'   and on (1 while it is tracked, 0 in a gap: hide when `on < 0.5`). The "track-cover" template has them all',
+	'   (style emoji | blob | box). Give x and y a range wider than 0–1 (say -0.5 to 1.5) so a face at the edge is not',
+	'   clamped. Where a track has a gap the layer hides: list_tracks shows the gaps, and a second layer keyed by hand',
+	'   covers one.',
+	'8. Verify like an editor. render_frame the first frame, every beat, one mid-motion frame and the last frame, and',
 	'   fix what you see — cropped content, empty areas, the wrong subject — before you answer. Then report only what',
 	'   you verified.'
 ]

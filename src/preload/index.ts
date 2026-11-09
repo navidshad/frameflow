@@ -132,6 +132,14 @@ const api = {
 	},
 	getEditorTranscripts: (threadId: string) =>
 		ipcRenderer.invoke('get-editor-transcripts', threadId),
+	// Object tracks (faces, followed things): what a following motion layer is drawn from.
+	getObjectTracks: (threadId: string) =>
+		ipcRenderer.invoke('get-object-tracks', threadId),
+	onObjectTracksChanged: (callback: (data: { threadId: string }) => void) => {
+		const listener = (_event: any, data: any) => callback(data)
+		ipcRenderer.on('object-tracks-changed', listener)
+		return () => ipcRenderer.removeListener('object-tracks-changed', listener)
+	},
 	getEffectPacks: () => ipcRenderer.invoke('get-effect-packs'),
 	renderExactFrame: (data: { threadId: string; doc: unknown; timeSec: number }) =>
 		ipcRenderer.invoke('render-exact-frame', data),

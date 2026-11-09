@@ -1050,7 +1050,10 @@ const applyOps: ToolDef = {
 		const wanted = soundRecipesOf(ops, project.doc)
 		const rendered = wanted.length ? await ctx.bridge.prepareSounds(project, wanted) : []
 		const soundAssets = new Map(wanted.map((r, i) => [recipeKey(r), rendered[i]]))
-		const mapped = opsToDiff(ops, project.doc, { by: ctx.clientName, turnId }, soundAssets, vetted.definitions)
+		// A layer asked to follow a track is bound by the track's id and footage, which only the track list knows.
+		const follows = [...(ops.addMotion ?? []), ...(ops.updateMotion ?? [])].some((r) => r?.follow?.track)
+		const objectTracks = follows ? await ctx.bridge.listTracks(project) : []
+		const mapped = opsToDiff(ops, project.doc, { by: ctx.clientName, turnId }, soundAssets, vetted.definitions, objectTracks)
 		const { diff, addMarkers, docSettings, notes } = mapped
 		const frame = (args as { sequenceFrame?: { width: number; height: number } }).sequenceFrame
 		if (frame) {
@@ -2431,7 +2434,7 @@ const findFaces: ToolDef = {
 			picture: found.sheet ? `One tile per person, in the order listed: ${found.sheet.labels.join(', ')}.` : undefined,
 			positions: framePositionNote(project, target),
 			next: found.tracks.length
-				? 'edit_track renames or merges people; get_track gives a person\'s position on every frame.'
+				? 'edit_track renames or merges people. To cover one: apply_ops addMotion {template: "track-cover", atSec, durationSec, follow: {track}} over this clip.'
 				: 'No faces were found in that stretch. For anything that is not a face, use track_object with a box.'
 		}))
 		return { content, feed: { detail: `${found.tracks.length} people · ${found.frames} frames`, thumbnail: found.sheet ? `data:${found.sheet.mimeType};base64,${found.sheet.data}` : undefined } }
@@ -2506,7 +2509,7 @@ const trackObject: ToolDef = {
 				? `It lost the object going ${lost.join(' and ')}, and stopped there. If the object is still in the picture after that, give a new box on a later frame and merge the two tracks.`
 				: undefined,
 			positions: framePositionNote(project, target),
-			next: 'get_track gives its position on every frame.'
+			next: 'To put something on it: apply_ops addMotion {template: "track-cover" (or your own page), atSec, durationSec, follow: {track}} over this clip. get_track gives the raw positions.'
 		}))
 		return { content, feed: { detail: `${made.track.name} · ${clock(summary.seenSec ?? 0)} followed${lost.length ? ' · lost' : ''}`, thumbnail: made.sheet ? `data:${made.sheet.mimeType};base64,${made.sheet.data}` : undefined } }
 	}
