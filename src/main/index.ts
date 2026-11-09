@@ -1,3 +1,4 @@
+import './userData' // first: pins the data folder before any store opens it
 import { app, shell, BrowserWindow, ipcMain, dialog, protocol } from 'electron'
 import { nativeImage, net } from 'electron'
 import * as fs from 'fs'
