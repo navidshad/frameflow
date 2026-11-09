@@ -39,9 +39,11 @@ describe.skipIf(!ready)('tracking on a real clip', () => {
 		console.log(`faces: ${scan.frames} frames in ${(ms / 1000).toFixed(1)} s (${(ms / scan.frames).toFixed(1)} ms/frame), ${scan.tracks.length} people`)
 		for (const track of scan.tracks) {
 			const filled = track.samples.filter((s) => s.filled).length
-			console.log(`  ${track.name}: ${track.samples.length} samples (${filled} filled) @${track.fps} fps  ${spans(track)}`)
+			const bridged = track.samples.filter((s) => s.bridged).length
+			console.log(`  ${track.name}: ${track.samples.length} samples (${filled} filled, ${bridged} bridged) @${track.fps} fps  ${spans(track)}`)
 		}
 		await sheet('people', scan.tiles, scan.tracks.map((t) => t.name))
+		writeFileSync(join(out, 'tracks.json'), JSON.stringify(scan.tracks))
 		expect(scan.tracks.length).toBeGreaterThan(0)
 	}, 600_000)
 

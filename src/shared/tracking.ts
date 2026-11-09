@@ -41,6 +41,11 @@ export interface TrackSample {
 	score: number
 	/** Not measured: interpolated across a short gap between two measured frames. */
 	filled?: boolean
+	/**
+	 * Faces only: not seen by the detector (hidden, side-on, blurred), but
+	 * followed across the gap from the face on either side of it.
+	 */
+	bridged?: boolean
 }
 
 export interface ObjectTrack {
@@ -241,6 +246,68 @@ export function objectLost(
 
 /** This many lost answers in a row end the track. One bad frame (a blur) does not. */
 export const LOST_FRAMES_TO_STOP = 3
+
+// ===== Faces: across a gap the detector could not see =====
+
+/** A gap longer than this is not bridged: the person has probably left the picture. */
+export const MAX_BRIDGE_SEC = 4
+/** The two followers agree when their centres are within this much of the box's larger side. */
+export const BRIDGE_AGREE = 0.6
+/** One follower alone is believed only this sure of itself. */
+export const BRIDGE_ALONE_SCORE = 0.55
+
+export interface BridgeGuess {
+	t: number
+	cx: number
+	cy: number
+	score: number
+}
+
+/**
+ * The samples for a gap in a face's track, from two followers: one started on
+ * the last face before the gap and run forwards, one started on the first face
+ * after it and run backwards.
+ *
+ * Where both have an answer and agree, the answer is their blend, leaning to
+ * whichever started nearer in time. Where they disagree, one of them is on
+ * something else and there is no telling which, so the frame is left open
+ * unless one is clearly sure. Where only one got that far, it is believed only
+ * if it is sure. An open frame shows a face; a wrong one puts a cover on
+ * somebody else, so doubt leaves it open.
+ */
+export function bridgeGap(
+	before: TrackSample, after: TrackSample,
+	forward: readonly BridgeGuess[], backward: readonly BridgeGuess[], fps: number
+): TrackSample[] {
+	const frame = (t: number) => Math.round(t * fps)
+	const back = new Map(backward.map((g) => [frame(g.t), g]))
+	const fore = new Map(forward.map((g) => [frame(g.t), g]))
+	const span = after.t - before.t
+	const out: TrackSample[] = []
+	for (let k = frame(before.t) + 1; k < frame(after.t); k++) {
+		const f = fore.get(k), b = back.get(k)
+		const t = (f ?? b)?.t
+		if (t === undefined) continue
+		const u = Math.min(1, Math.max(0, (t - before.t) / span))
+		const w = before.w + (after.w - before.w) * u
+		const h = before.h + (after.h - before.h) * u
+		let guess: { cx: number; cy: number; score: number } | null = null
+		if (f && b) {
+			const apart = Math.hypot(f.cx - b.cx, f.cy - b.cy) / Math.max(w, h)
+			if (apart <= BRIDGE_AGREE) guess = { cx: f.cx * (1 - u) + b.cx * u, cy: f.cy * (1 - u) + b.cy * u, score: Math.min(f.score, b.score) }
+			else {
+				const surer = f.score >= b.score ? f : b
+				const other = surer === f ? b : f
+				if (surer.score >= BRIDGE_ALONE_SCORE && surer.score - other.score > 0.2) guess = surer
+			}
+		} else {
+			const only = (f ?? b)!
+			if (only.score >= BRIDGE_ALONE_SCORE) guess = only
+		}
+		if (guess) out.push({ t, cx: guess.cx, cy: guess.cy, w, h, score: guess.score, bridged: true })
+	}
+	return out
+}
 
 // ===== Reading a track =====
 

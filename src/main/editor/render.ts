@@ -21,7 +21,7 @@ import { hasKeyframes } from '@shared/keyframes'
 import { hasKey } from '@shared/keying'
 import { generatorSource } from '@shared/generators'
 import { motionFramePlan, motionKitFor } from '@shared/motion'
-import { hasFollows, withFollows } from '@shared/follow'
+import { hasFollows, withFollows, type FrameLock, type ShownSlice } from '@shared/follow'
 import { documentFrame } from '@shared/resolution'
 import type { ObjectTrack } from '@shared/tracking'
 import { followTracksFor } from '../tracking/store'
@@ -121,6 +121,24 @@ export const MOTION_MAX_FPS = 30
 export const PROXY_LINES = 480
 
 /**
+ * Every stretch of footage the plan shows, with the timeline second its first
+ * frame plays at: what a following layer's cover is keyed against.
+ */
+export function shownSlices(plan: RegionPlan): ShownSlice[] {
+	const out: ShownSlice[] = []
+	let cursor = 0
+	for (const region of plan.regions) {
+		const slices = region.kind === 'overlap' ? [region.from, region.to] : region.videoLayers
+		for (const slice of slices) {
+			if (slice.lavfi || slice.motion || !slice.item.sourceAssetId) continue
+			out.push({ clipId: slice.item.id, start: cursor + (slice.offset || 0), in: slice.in, out: slice.out })
+		}
+		cursor += region.duration
+	}
+	return out
+}
+
+/**
  * The frame at the proxies' size: 480 lines, the width following the aspect and
  * kept even, as `scale=-2:480` makes it. A frame already that small stays.
  */
@@ -172,10 +190,23 @@ export function computeRegions(
 		 * layer is hidden, never left where its settings happen to put it.
 		 */
 		tracks?: readonly ObjectTrack[]
+		/** The first of the two passes a document with following layers takes (see below). */
+		withoutFrameLock?: boolean
 	} = {}
 ): RegionPlan {
 	if (hasFollows(doc.timeline)) {
-		doc = { ...doc, timeline: withFollows(doc.timeline, { tracks: options.tracks ?? [], media: doc.media, frame: documentFrame(doc) }) }
+		const sources = { tracks: options.tracks ?? [], media: doc.media, frame: documentFrame(doc) }
+		// Planned twice. A cover has to sit on the source frame each output frame
+		// SHOWS, and which frame that is depends on where the regions fall (each
+		// seeks and rounds from its own start). So: plan once to learn the
+		// regions, then key the covers to them and plan again. The regions do not
+		// move between the two: a cover's keys change what it draws, not when.
+		let lock: FrameLock | undefined
+		if (!options.withoutFrameLock) {
+			const first = computeRegions(doc, quality, transcripts, { ...options, withoutFrameLock: true })
+			lock = { fps: first.fps, slices: shownSlices(first) }
+		}
+		doc = { ...doc, timeline: withFollows(doc.timeline, { ...sources, lock }) }
 	}
 	// Video tracks TOP-most first (highest order wins visually); [0] of a
 	// region's videoLayers is the layer v1 actually renders.

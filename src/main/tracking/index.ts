@@ -1,7 +1,7 @@
 import { randomBytes } from 'node:crypto'
 import {
-	fillGaps, groupPeople, LOST_FRAMES_TO_STOP, measuredFps, objectLost, TrackletLinker,
-	type ObjectTrack, type TrackEnd, type TrackSample, type TrackShape
+	bridgeGap, fillGaps, groupPeople, LOST_FRAMES_TO_STOP, MAX_BRIDGE_SEC, measuredFps, objectLost, TrackletLinker,
+	type BridgeGuess, type ObjectTrack, type TrackEnd, type TrackSample, type TrackShape
 } from '@shared/tracking'
 import { readFrames, readFramesBackward, type TimedFrame } from './frames'
 import { drawBox, frameToPpm, greyThumb, pictureShift, resizeWindow, sharpness, type Frame, type Grey } from './image'
@@ -118,15 +118,71 @@ export async function scanFaces(
 		if (measured.length < MIN_PERSON_FRAMES) continue
 		const fps = measuredFps(kept.reduce((a, b) => (b.samples.length > a.samples.length ? b : a)).samples)
 		const id = newTrackId()
+		// Where the detector lost them for a while (hidden behind someone, side-on, a blur), follow
+		// the face across the gap from both ends. A short gap is simply filled on a straight line.
+		const bridged: TrackSample[] = []
+		for (let i = 1; i < measured.length; i++) {
+			const before = measured[i - 1], after = measured[i]
+			const gap = after.t - before.t
+			if (gap <= FILL_MAX_SEC + 1e-6 || gap > MAX_BRIDGE_SEC) continue
+			options.onProgress?.(0.99, `following ${`Person ${tracks.length + 1}`} across a gap`)
+			bridged.push(...await bridgeFace(file, before, after, fps))
+		}
+		const joined = bridged.length ? [...measured, ...bridged].sort((a, b) => a.t - b.t) : measured
 		tracks.push({
 			id, assetId, kind: 'face', name: `Person ${tracks.length + 1}`, shape: 'ellipse', fps,
-			samples: fillGaps(measured, fps), scannedFrom: options.fromSec, scannedTo: options.toSec, createdAt
+			samples: fillGaps(joined, fps), scannedFrom: options.fromSec, scannedTo: options.toSec, createdAt
 		})
 		const best = parts.map((p) => p.best).filter((b): b is NonNullable<Tracklet['best']> => !!b).sort((a, b) => b.quality - a.quality)[0]
 		if (best) tiles.push({ t: best.t, ppm: best.ppm, trackId: id })
 	}
 	options.onProgress?.(1, `${tracks.length} people`)
 	return { tracks, tiles, frames: index }
+}
+
+/** A gap this short is filled on a straight line (`fillGaps`); a longer one is followed across. */
+const FILL_MAX_SEC = 0.4
+/** The follower is given the head, not just the face: more to hold on to when the face turns away. */
+const HEAD = 1.7
+
+/** Follows a face's head box from `start` through `frames`, until the follower stops believing it. */
+async function followHead(first: TimedFrame, start: TrackSample, frames: AsyncGenerator<TimedFrame>): Promise<BridgeGuess[]> {
+	const follower = new ObjectFollower()
+	const w = start.w * HEAD, h = start.h * HEAD
+	await follower.start(first, { x: (start.cx - w / 2) * first.width, y: (start.cy - h / 2) * first.height, w: w * first.width, h: h * first.height })
+	const out: BridgeGuess[] = []
+	let believed = { w, h }
+	let lostRun = 0
+	for await (const frame of frames) {
+		const { box, score } = await follower.step(frame)
+		const now = { w: box.w / frame.width, h: box.h / frame.height, score }
+		if (objectLost(now, believed)) {
+			if (++lostRun >= LOST_FRAMES_TO_STOP) break
+			continue
+		}
+		lostRun = 0
+		believed = now
+		out.push({ t: frame.t, cx: (box.x + box.w / 2) / frame.width, cy: (box.y + box.h / 2) / frame.height, score })
+	}
+	return out
+}
+
+/** The frames between two sightings of a face, followed from both ends (`bridgeGap` decides what to keep). */
+async function bridgeFace(file: string, before: TrackSample, after: TrackSample, fps: number): Promise<TrackSample[]> {
+	const half = 0.5 / fps
+	const read = { longSide: FACE_LONG_SIDE }
+	const forwardFrames = readFrames(file, { ...read, fromSec: before.t - half, toSec: after.t - half })
+	const first = await forwardFrames.next()
+	if (first.done) return []
+	const forward = await followHead(first.value, before, forwardFrames)
+	await forwardFrames.return(undefined)
+
+	const backwardFrames = readFramesBackward(file, { ...read, fromSec: before.t + half, toSec: after.t + half })
+	const last = await backwardFrames.next()
+	if (last.done) return []
+	const backward = await followHead(last.value, after, backwardFrames)
+	await backwardFrames.return(undefined)
+	return bridgeGap(before, after, forward, backward, fps)
 }
 
 // ===== Following one box =====

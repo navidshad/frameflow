@@ -27,7 +27,8 @@ export function saveTrack(assetDir: string, track: ObjectTrack): void {
 		...track,
 		samples: track.samples.map((s) => ({
 			t: round(s.t, 4), cx: round(s.cx, 5), cy: round(s.cy, 5), w: round(s.w, 5), h: round(s.h, 5), score: round(s.score, 3),
-			...(s.filled ? { filled: true } : {})
+			...(s.filled ? { filled: true } : {}),
+			...(s.bridged ? { bridged: true } : {})
 		}))
 	}
 	const file = path.join(dir, `${track.id}.json`)

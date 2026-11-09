@@ -2371,6 +2371,8 @@ function trackSummary(track: ObjectTrack, names: Map<string, string>, clip?: Tim
 		track: track.id, name: track.name, kind: track.kind, shape: track.shape, asset: names.get(track.assetId) ?? track.assetId,
 		frames: track.samples.length,
 		filledFrames: track.samples.filter((s) => s.filled).length || undefined,
+		// Not seen by the detector, but followed across a gap from the face on either side.
+		bridgedFrames: track.samples.filter((s) => s.bridged).length || undefined,
 		seenSec: r3(spans.reduce((n, s) => n + (s.to - s.from), 0)),
 		sourceSpans: spanRows(spans),
 		timelineSpans: onClip ? spanRows(onClip) : undefined,

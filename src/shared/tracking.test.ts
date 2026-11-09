@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import {
-	clipSourceTime, clipTimelineTime, fillGaps, groupPeople, measuredFps, objectLost, thinSamples, trackAt, trackOnClip, trackSpans,
+	bridgeGap, clipSourceTime, clipTimelineTime, fillGaps, groupPeople, measuredFps, objectLost, thinSamples, trackAt, trackOnClip, trackSpans,
 	TrackletLinker, type TrackSample
 } from './tracking'
 
@@ -138,6 +138,45 @@ describe('when the follower has lost the object', () => {
 
 	it('doubts a box of no size', () => {
 		expect(objectLost({ w: 0, h: 0.1, score: 0.9 }, { w: 0.1, h: 0.1 })).toBe(true)
+	})
+})
+
+describe('across a gap the detector could not see', () => {
+	// Seen at 1.00 on the left and again at 1.20 on the right; four frames in between at 25 fps.
+	const before = sample(1, 0.2), after = sample(1.2, 0.4)
+	const guess = (t: number, cx: number, score = 0.8) => ({ t, cx, cy: 0.5, score })
+	const times = [1.04, 1.08, 1.12, 1.16]
+
+	it('blends two followers that agree, leaning to the one that started nearer', () => {
+		const forward = times.map((t) => guess(t, 0.2 + (t - 1)))
+		const backward = times.map((t) => guess(t, 0.22 + (t - 1)))
+		const out = bridgeGap(before, after, forward, backward, 25)
+		expect(out.map((s) => +s.t.toFixed(2))).toEqual(times)
+		expect(out.every((s) => s.bridged)).toBe(true)
+		expect(out[0].cx).toBeCloseTo(0.24 + 0.02 * 0.2, 3)
+		expect(out[3].cx).toBeCloseTo(0.36 + 0.02 * 0.8, 3)
+	})
+
+	it('leaves a frame open when the two followers are on different things', () => {
+		const forward = times.map((t) => guess(t, 0.2))
+		const backward = times.map((t) => guess(t, 0.7))
+		expect(bridgeGap(before, after, forward, backward, 25)).toEqual([])
+	})
+
+	it('takes the one that is clearly sure when they disagree', () => {
+		const out = bridgeGap(before, after, [guess(1.08, 0.2, 0.9)], [guess(1.08, 0.7, 0.45)], 25)
+		expect(out).toHaveLength(1)
+		expect(out[0].cx).toBe(0.2)
+	})
+
+	it('believes a lone follower only when it is sure', () => {
+		expect(bridgeGap(before, after, [guess(1.04, 0.22, 0.7)], [], 25)).toHaveLength(1)
+		expect(bridgeGap(before, after, [guess(1.04, 0.22, 0.4)], [], 25)).toEqual([])
+	})
+
+	it('never writes over the frames on either side of the gap', () => {
+		const out = bridgeGap(before, after, [guess(1, 0.9), guess(1.2, 0.9)], [], 25)
+		expect(out).toEqual([])
 	})
 })
 

@@ -69,8 +69,14 @@ describe('steadying a track', () => {
 	it('takes the tremble out without moving a steady path', () => {
 		const line = [sample(0, 0.1), sample(0.04, 0.2), sample(0.08, 0.3)]
 		expect(steady(line, 25)[1].cx).toBeCloseTo(0.2)
-		const shaky = [sample(0, 0.2), sample(0.04, 0.24), sample(0.08, 0.2)]
-		expect(steady(shaky, 25)[1].cx).toBeCloseTo(0.22)
+		const shaky = [sample(0, 0.2), sample(0.04, 0.204), sample(0.08, 0.2)]
+		expect(steady(shaky, 25)[1].cx).toBeCloseTo(0.202)
+	})
+
+	it('leaves a fast-moving sample exactly where it was measured', () => {
+		// Half its own width per frame, and curving: an average would pull it off the face.
+		const fast = [sample(0, 0.2), sample(0.04, 0.25), sample(0.08, 0.36)]
+		expect(steady(fast, 25)[1].cx).toBe(0.25)
 	})
 
 	it('never blends across a gap', () => {
@@ -125,7 +131,24 @@ describe('a motion layer following a track', () => {
 		const item = withFollow(cover(), [zoomed, cover()], sources())
 		// Source x 0.2 is 0.3 left of centre; at 2× that is 0.6 left: off the frame, held at the page's limit.
 		expect(motionFrameState(item, 0).settings.x).toBeCloseTo(-0.1, 2)
-		expect(motionFrameState(item, 0).settings.w).toBeCloseTo(0.2, 2)
+		// Twice the box, and twice the 0.01 it travels per frame added for its smear.
+		expect(motionFrameState(item, 0).settings.w).toBeCloseTo(0.22, 2)
+	})
+
+	it('holds each frame\'s position until the next frame, as the footage does', () => {
+		const item = withFollow(cover(), [clip(), cover()], sources())
+		const x = (u: number) => motionFrameState(item, u).settings.x as number
+		// Frames are 0.04 s apart; the track moves 0.01 a frame.
+		expect(x(0.05)).toBeCloseTo(x(0.079), 6)
+		expect(x(0.081) - x(0.079)).toBeCloseTo(0.01, 3)
+	})
+
+	it('grows the cover by how far the thing travels in a frame', () => {
+		const still = { id: 'trk', fps: 25, samples: Array.from({ length: 51 }, (_, k) => sample(12 + k / 25, 0.5)) }
+		const swing = { id: 'trk', fps: 25, samples: Array.from({ length: 51 }, (_, k) => sample(12 + k / 25, 0.1 + k * 0.05)) }
+		const w = (t: typeof still) => motionFrameState(withFollow(cover(), [clip(), cover()], sources([t])), 1).settings.w as number
+		expect(w(still)).toBeCloseTo(0.1, 3)
+		expect(w(swing)).toBeCloseTo(0.15, 3)
 	})
 
 	it('hides a cover whose track or clip is gone', () => {
@@ -155,6 +178,46 @@ describe('a motion layer following a track', () => {
 	it('writes nothing for a page with no setting to drive', () => {
 		const card = cover({ motion: { template: 'lower-third' } })
 		expect(followKeys(card, { track: track(), clip: clip(), source: HD, frame: HD })).toEqual({})
+	})
+})
+
+describe('keyed to the frames the export shows', () => {
+	// 25 fps footage in a 30 fps sequence, one stretch starting on the clip's in-point.
+	const footage = { id: 'trk', fps: 25, samples: Array.from({ length: 101 }, (_, k) => sample(10 + k / 25, k / 1000)) }
+	const layer = cover({ timelineStart: 100, duration: 3, out: 3 })
+	const lock = { fps: 30, slices: [{ clipId: 'clip', start: 100, in: 10, out: 20 }] }
+	const drawn = withFollow(layer, [clip(), layer], { ...sources([footage]), lock })
+	/** The source frame whose position the cover has on output frame n. */
+	const frameAt = (n: number) => Math.round((motionFrameState(drawn, n / 30).settings.x as number) * 1000)
+
+	it('repeats a source frame where the export repeats it', () => {
+		// Each source frame k goes to output frame round(1.2 k): 0 1 2 4 5 6 7 8 10 ...
+		expect([0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10].map(frameAt)).toEqual([0, 1, 2, 2, 3, 4, 5, 6, 7, 7, 8])
+	})
+
+	it('starts each stretch from the first frame at or after half an output frame before its in-point', () => {
+		// A stretch cut in at source 10.013: 10.0 is inside the half-frame lead, so it is frame zero.
+		const cut = { fps: 30, slices: [{ clipId: 'clip', start: 100, in: 10.013, out: 20 }] }
+		const item = withFollow(layer, [clip({ in: 10.013 }), layer], { ...sources([footage]), lock: cut })
+		expect(Math.round((motionFrameState(item, 0).settings.x as number) * 1000)).toBe(0)
+		// One cut in at 10.03 starts on the 10.04 frame instead.
+		const later = { fps: 30, slices: [{ clipId: 'clip', start: 100, in: 10.03, out: 20 }] }
+		const item2 = withFollow(layer, [clip({ in: 10.03 }), layer], { ...sources([footage]), lock: later })
+		expect(Math.round((motionFrameState(item2, 0).settings.x as number) * 1000)).toBe(1)
+	})
+
+	it('restarts the count at every stretch of the clip', () => {
+		// A second stretch from timeline 101: its own frame zero, its own rounding.
+		const two = { fps: 30, slices: [{ clipId: 'clip', start: 100, in: 10, out: 11 }, { clipId: 'clip', start: 101, in: 11, out: 20 }] }
+		const item = withFollow(layer, [clip(), layer], { ...sources([footage]), lock: two })
+		const at = (n: number) => Math.round((motionFrameState(item, n / 30).settings.x as number) * 1000)
+		expect([30, 31, 32, 33].map(at)).toEqual([25, 26, 27, 27])
+	})
+
+	it('ignores stretches of other clips', () => {
+		const other = { fps: 30, slices: [{ clipId: 'someone-else', start: 100, in: 10, out: 20 }] }
+		const item = withFollow(layer, [clip(), layer], { ...sources([footage]), lock: other })
+		expect(motionFrameState(item, 1).settings.on).toBe(0)
 	})
 })
 
