@@ -11,6 +11,7 @@ import { normalizeAudioSettings, type AudioProviderSettings } from '../shared/au
 import { isSetupComplete } from '../shared/setup'
 import { DEFAULT_MODEL_SETTINGS } from './constants/gemini'
 import { mergeModelSettings } from './modelSettings'
+import { openKey, storeKey, type KeyCrypto, type OpenedKey } from './sealedKeys'
 
 interface Settings {
 	tempDir: string
@@ -60,33 +61,25 @@ const normalizeAgentAccess = (value: any): AgentAccessSettings => ({
  * silently stops working is worse than one stored the way it was yesterday.
  * The file records WHICH it is, so a key never gets read back as the wrong one.
  */
-const encryptKey = (key: string): { enc?: string; plain?: string } => {
-	if (!key) return {}
-	try {
-		if (safeStorage.isEncryptionAvailable()) {
-			return { enc: safeStorage.encryptString(key).toString('base64') }
-		}
-	} catch (error) {
-		console.warn('[SettingsManager] safeStorage unavailable, key stays in plain text:', error)
-	}
-	return { plain: key }
+const keychain: KeyCrypto = {
+	available: () => safeStorage.isEncryptionAvailable(),
+	encrypt: (value) => safeStorage.encryptString(value).toString('base64'),
+	decrypt: (ciphertext) => safeStorage.decryptString(Buffer.from(ciphertext, 'base64'))
 }
 
-const decryptKey = (parsed: { geminiApiKeyEnc?: string; geminiApiKey?: string }): string | undefined => {
-	if (parsed.geminiApiKeyEnc) {
-		try {
-			return safeStorage.decryptString(Buffer.from(parsed.geminiApiKeyEnc, 'base64'))
-		} catch (error) {
-			// A key encrypted on another machine, or after a keychain reset. It is
-			// not recoverable, and saying so beats an authentication error later.
-			console.error('[SettingsManager] Could not decrypt the stored API key:', error)
-			return undefined
-		}
-	}
-	return parsed.geminiApiKey
-}
+/** The secrets settings.json holds, by the name each has in memory. */
+type SecretName = 'geminiApiKey' | 'agentToken' | 'elevenLabsKey'
+
+const encryptKey = (key: OpenedKey) =>
+	storeKey(key, keychain, (error) => console.warn('[SettingsManager] safeStorage unavailable, key stays in plain text:', error))
 
 class SettingsManager {
+	/**
+	 * Ciphertexts this launch could not decrypt (written under another app name,
+	 * or before a keychain reset), kept so that saving the settings does not
+	 * erase them. See sealedKeys.ts.
+	 */
+	private sealed: Partial<Record<SecretName, string>> = {}
 	private settingsPath: string
 	private settings: Settings
 	private defaultTempDir: string
@@ -133,15 +126,21 @@ class SettingsManager {
 			if (existsSync(this.settingsPath)) {
 				const data = readFileSync(this.settingsPath, 'utf-8')
 				const parsed = JSON.parse(data)
+				const open = (name: SecretName, enc?: string, plain?: string): string | undefined => {
+					const key = openKey({ enc, plain }, keychain, (error) =>
+						console.error(`[SettingsManager] Could not decrypt the stored ${name}; it is kept as it is, unread:`, error))
+					if (key.sealed) this.sealed[name] = key.sealed
+					return key.value
+				}
 				return {
 					tempDir: parsed.tempDir || this.defaultTempDir,
-					geminiApiKey: decryptKey(parsed),
+					geminiApiKey: open('geminiApiKey', parsed.geminiApiKeyEnc, parsed.geminiApiKey),
 					modelSettings: this.mergeModelSettings(parsed.modelSettings || DEFAULT_MODEL_SETTINGS),
 					agentAccess: normalizeAgentAccess(parsed.agentAccess),
-					agentToken: decryptKey({ geminiApiKeyEnc: parsed.agentTokenEnc, geminiApiKey: parsed.agentToken }),
+					agentToken: open('agentToken', parsed.agentTokenEnc, parsed.agentToken),
 					engine: normalizeEngineSettings(parsed.engine),
 					audio: normalizeAudioSettings(parsed.audio),
-					elevenLabsKey: decryptKey({ geminiApiKeyEnc: parsed.elevenLabsKeyEnc, geminiApiKey: parsed.elevenLabsKey }),
+					elevenLabsKey: open('elevenLabsKey', parsed.elevenLabsKeyEnc, parsed.elevenLabsKey),
 					setupComplete: typeof parsed.setupComplete === 'boolean' ? parsed.setupComplete : undefined
 				}
 			}
@@ -165,10 +164,10 @@ class SettingsManager {
 			// plaintext one — otherwise an upgrade would leave the old copy behind
 			// beside the new one.
 			const { geminiApiKey, agentToken, elevenLabsKey, ...rest } = this.settings
-			const { enc, plain } = encryptKey(geminiApiKey ?? '')
+			const { enc, plain } = encryptKey({ value: geminiApiKey, sealed: this.sealed.geminiApiKey })
 			// The agent token follows the same rule: encrypted where the OS can.
-			const token = encryptKey(agentToken ?? '')
-			const eleven = encryptKey(elevenLabsKey ?? '')
+			const token = encryptKey({ value: agentToken, sealed: this.sealed.agentToken })
+			const eleven = encryptKey({ value: elevenLabsKey, sealed: this.sealed.elevenLabsKey })
 			// Written beside and renamed over: a quit or kill mid-write must never
 			// leave an empty settings.json (which loses the key, the projects folder
 			// and agent access on the next launch).
@@ -260,6 +259,7 @@ class SettingsManager {
 	}
 
 	setGeminiApiKey(key: string): void {
+		delete this.sealed.geminiApiKey
 		this.settings.geminiApiKey = key
 		this.saveSettings()
 	}
@@ -314,6 +314,7 @@ class SettingsManager {
 	}
 
 	newAgentToken(): string {
+		delete this.sealed.agentToken
 		this.settings.agentToken = `${TOKEN_PREFIX}${randomBytes(24).toString('hex')}`
 		this.saveSettings()
 		return this.settings.agentToken
@@ -337,6 +338,7 @@ class SettingsManager {
 
 	/** An empty key removes it. */
 	setElevenLabsKey(key: string): void {
+		delete this.sealed.elevenLabsKey
 		this.settings.elevenLabsKey = key.trim() || undefined
 		this.saveSettings()
 	}
