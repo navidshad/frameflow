@@ -138,7 +138,7 @@ const statusIcon = (call: AgentCallRecord) => {
 	if (call.status === 'error') return 'tabler--x text-red-500'
 	if (call.status === 'refused') return 'tabler--lock text-amber-500'
 	if (call.tool === 'apply_ops' || call.tool === 'revert_to_version' || call.tool === 'make_multicam') return 'tabler--pencil text-primary-light'
-	if (call.tool === 'render_frame' || call.tool === 'inspect_export' || call.tool === 'get_angles') return 'tabler--camera text-emerald-500'
+	if (call.tool === 'render_frame' || call.tool === 'inspect_export' || call.tool === 'get_angles' || call.tool === 'find_faces' || call.tool === 'track_object') return 'tabler--camera text-emerald-500'
 	if (call.tool === 'export' || call.tool === 'import_media') return 'tabler--file-export text-primary-light'
 	return 'tabler--check text-emerald-500'
 }

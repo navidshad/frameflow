@@ -1,0 +1,38 @@
+{
+	"_comment": [
+		"Pinned, hash-verified vision models for object tracking. Read scripts/fetch-models.mjs first.",
+		"",
+		"Every URL carries the opencv_zoo COMMIT, never a branch, so a build made today and a build",
+		"made next year fetch the identical bytes. To bump: change `commit`, run",
+		"`node scripts/fetch-models.mjs --print-hashes`, paste the hashes back, and update",
+		"THIRD-PARTY-NOTICES.md. Check each model's LICENSE in that commit before you do."
+	],
+	"repo": "https://github.com/opencv/opencv_zoo",
+	"commit": "48b10fa505aeb51fbd127fc60a5c660040e823b7",
+	"models": [
+		{
+			"file": "yunet.onnx",
+			"use": "face detector",
+			"path": "models/face_detection_yunet/face_detection_yunet_2023mar.onnx",
+			"licensePath": "models/face_detection_yunet/LICENSE",
+			"license": "MIT",
+			"sha256": "8f2383e4dd3cfbb4553ea8718107fc0423210dc964f9f4280604804ed2552fa4"
+		},
+		{
+			"file": "sface.onnx",
+			"use": "face matcher (tells two people apart)",
+			"path": "models/face_recognition_sface/face_recognition_sface_2021dec.onnx",
+			"licensePath": "models/face_recognition_sface/LICENSE",
+			"license": "Apache-2.0",
+			"sha256": "0ba9fbfa01b5270c96627c4ef784da859931e02f04419c829e83484087c34e79"
+		},
+		{
+			"file": "vittrack.onnx",
+			"use": "generic object tracker",
+			"path": "models/object_tracking_vittrack/object_tracking_vittrack_2023sep.onnx",
+			"licensePath": "models/object_tracking_vittrack/LICENSE",
+			"license": "Apache-2.0",
+			"sha256": "2990f0b7cd44d92afa48cd97db6de7be113fc1d9594fddb74e2725c10478e91d"
+		}
+	]
+}

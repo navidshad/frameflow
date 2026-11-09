@@ -162,3 +162,17 @@ A podcast or interview shot on two or more cameras, each started a second or two
 | `find_speakers` | Who speaks when: listens to every camera's microphone once, tells the voices apart, and gives the group Speaker 1…N with turns and a confidence per turn. Give `speakers` (the number of people). |
 | `get_speakers` | The voices found, each with sample moments and one frame per angle, so an agent can see who is who before naming them. |
 | `apply_ops` | `placeMulticam`, `switchAngles` (cut between angles; the sound never moves), `setMainSound`, `nudgeAngle`; `setSpeaker` (name a voice, its camera and where it sits), `mergeSpeakers`, `setSpeakerTurns` (fix a stretch). |
+
+## Object tracking: where something is, frame by frame (tools built; UI not yet)
+
+A track belongs to the footage, not the edit: samples are in SOURCE seconds and fractions of the source picture, saved beside the media (`media/<asset>/tracks/`), so every clip cut from that footage reads the same track. Faces and other objects use different engines because they fail differently: a face detector runs on every frame and recovers after a gap; an arbitrary object can only be followed from where it last was. Logic in `src/shared/tracking.ts`, models and frames in `src/main/tracking/`.
+
+| Tool | What it does |
+|---|---|
+| `find_faces` | Every face in a stretch of a clip or media file, one track per person, with one picture per person to check. Fills gaps under 0.4 s and lists longer ones. |
+| `track_object` | Follows one box given on one frame, forwards, backwards or both. Stops when the object is lost and says so; returns frames with the box drawn. |
+| `list_tracks` | The saved tracks and when each is on screen (on the timeline too, for a clip). |
+| `get_track` | A track's position on every frame as `[t, cx, cy, w, h]` rows, on the timeline clock for a clip. |
+| `edit_track` | Rename, set the cover shape, merge one track into another, delete. |
+
+Not built yet: a motion layer following a track live, the monitor UI for drawing a box, and blur.

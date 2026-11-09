@@ -110,7 +110,8 @@ describe('AgentServer over Streamable HTTP', () => {
 			'get_motion_guide', 'get_motion_kit',
 			'get_sound_guide', 'list_sounds', 'suggest_cues', 'render_sound', 'analyze_audio', 'inspect_audio', 'generate_audio',
 			'apply_ops', 'revert_to_version', 'export', 'inspect_export',
-			'find_camera_groups', 'make_multicam', 'get_multicam', 'get_angles', 'find_speakers', 'get_speakers'
+			'find_camera_groups', 'make_multicam', 'get_multicam', 'get_angles', 'find_speakers', 'get_speakers',
+			'find_faces', 'track_object', 'list_tracks', 'get_track', 'edit_track'
 		])
 		const apply = tools.find((t) => t.name === 'apply_ops')!
 		expect(Object.keys(apply.inputSchema.properties || {})).toContain('removeRanges')
