@@ -146,7 +146,7 @@
 										<span class="font-bold text-sm">Gemini API</span>
 										<span class="tag bg-accent/15 text-accent-dark dark:text-accent-light">Ready</span>
 									</div>
-									<p class="mt-1 text-xs text-zinc-500 dark:text-zinc-400 leading-normal">One reply per turn, using the key from step 2. Costs show in the project header.</p>
+									<p class="mt-1 text-xs text-zinc-500 dark:text-zinc-400 leading-normal">{{ ENGINES['gemini-api'].blurb }}</p>
 								</div>
 							</label>
 						</div>

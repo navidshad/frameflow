@@ -26,17 +26,18 @@
 					@scroll="scrollTop = ($event.target as HTMLElement).scrollTop"></textarea>
 			</div>
 
-			<!-- Meta row: quiet text controls left, send right -->
-			<div class="flex items-center gap-1 mt-0.5">
+			<!-- Meta row: quiet text controls left, send right. It measures itself
+			     (container query below) so a narrow chat drops labels, never Send. -->
+			<div class="meta-row flex items-center gap-1 mt-0.5">
 				<EngineChip />
 
 				<span class="text-zinc-300 dark:text-zinc-700 text-[9px]">·</span>
 
 				<!-- The frame in the monitor, attached to the message as a picture. -->
 				<button class="shrink-0 flex items-center gap-1 px-1 py-0.5 rounded-md text-zinc-500 hover:text-accent transition disabled:opacity-40 disabled:hover:text-zinc-500"
-					:title="frameTitle" :disabled="!canCapture" data-testid="attach-frame" @click="store.captureFrameForPrompt()">
+					:title="frameTitle" aria-label="Attach frame" :disabled="!canCapture" data-testid="attach-frame" @click="store.captureFrameForPrompt()">
 					<span class="iconify w-2.5 h-2.5" :class="store.capturingFrame ? 'tabler--loader-2 animate-spin' : 'tabler--camera-plus'"></span>
-					<span class="text-[9px] font-bold uppercase tracking-widest">Frame</span>
+					<span class="meta-label text-[9px] font-bold uppercase tracking-widest">Frame</span>
 				</button>
 
 				<span class="text-zinc-300 dark:text-zinc-700 text-[9px]">·</span>
@@ -45,16 +46,17 @@
 				<template v-if="conversation">
 					<button class="shrink-0 flex items-center gap-1 px-1 py-0.5 rounded-md text-zinc-500 hover:text-primary transition"
 						title="The agent remembers this chat. Start a new conversation: it forgets what was said, the project stays as it is."
-						data-testid="new-conversation" @click="store.resetEngineConversation()">
+						aria-label="New conversation" data-testid="new-conversation" @click="store.resetEngineConversation()">
 						<span class="iconify tabler--message-plus w-2.5 h-2.5"></span>
-						<span class="text-[9px] font-bold uppercase tracking-widest">New conversation</span>
+						<span class="meta-label text-[9px] font-bold uppercase tracking-widest">New conversation</span>
 					</button>
 					<span class="text-zinc-300 dark:text-zinc-700 text-[9px]">·</span>
 				</template>
 
 				<!-- Scope: text-level control — owns the flexible space so it
-				     truncates with clearance before the send button -->
-				<div class="relative flex-1 min-w-0" ref="scopeRef">
+				     truncates with clearance before the send button; never narrower
+				     than its icon, so it can always be opened -->
+				<div class="relative flex-1 min-w-[18px]" ref="scopeRef">
 					<button v-if="store.scopePreview"
 						class="max-w-full flex items-center gap-1 px-1 py-0.5 rounded-md text-zinc-500 hover:text-secondary transition min-w-0"
 						:title="'What the AI can see — click to change'"
@@ -248,3 +250,13 @@ const onDocClick = (e: MouseEvent) => {
 onMounted(() => document.addEventListener('click', onDocClick))
 onUnmounted(() => document.removeEventListener('click', onDocClick))
 </script>
+
+<style scoped>
+.meta-row { container-type: inline-size; }
+/* With every label the row needs about 570 px (chip ~200, Frame ~60, New
+   conversation ~130, scope ~110, Send). Below this Frame and New conversation keep
+   only their icons (their titles still say what they do), which frees ~150 px. */
+@container (max-width: 539px) {
+	.meta-label { display: none; }
+}
+</style>
