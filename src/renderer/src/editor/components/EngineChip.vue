@@ -1,7 +1,8 @@
 <template>
-	<div class="relative shrink-0" ref="rootRef" @keydown.esc.stop="close(true)">
+	<!-- min-w-0: in a tight composer row the chip is what gives way, so Send stays on screen -->
+	<div class="relative min-w-0" ref="rootRef" @keydown.esc.stop="close(true)">
 		<!-- An outside agent holds the project: the chip says who is working instead -->
-		<div v-if="mcp" class="flex items-center gap-1.5 px-1 py-0.5 rounded-md text-violet-500 dark:text-violet-400"
+		<div v-if="mcp" class="flex items-center gap-1.5 px-1 py-0.5 rounded-md min-w-0 text-violet-500 dark:text-violet-400"
 			role="status" :title="`${mcp.clientName} is working over MCP (round ${mcp.seq}). The engine can be changed when its round ends.`">
 			<span class="relative flex w-1.5 h-1.5 shrink-0">
 				<span class="absolute inset-0 rounded-full bg-secondary-light animate-ping opacity-75"></span>
@@ -11,7 +12,7 @@
 		</div>
 		<button v-else
 			ref="chipRef"
-			class="flex items-center gap-1.5 px-1 py-0.5 rounded-md text-violet-500 dark:text-violet-400 hover:text-violet-300 transition disabled:opacity-50"
+			class="max-w-full flex items-center gap-1.5 px-1 py-0.5 rounded-md text-violet-500 dark:text-violet-400 hover:text-violet-300 transition disabled:opacity-50"
 			:title="`AI engine, model and effort: ${engine.chipLabel} — click to change`"
 			aria-haspopup="menu"
 			:aria-expanded="open"
