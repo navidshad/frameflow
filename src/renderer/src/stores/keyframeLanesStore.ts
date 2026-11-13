@@ -9,6 +9,7 @@ import {
 	type KeyRef, type LaneDef, type SnapCandidate
 } from '@shared/keyframeLanes'
 import { useEditorStore } from './editorStore'
+import { useEditorMode } from '../editor/editorMode'
 
 /**
  * The keyframe lanes' UI state: whether they are open, which keys are
@@ -18,9 +19,15 @@ import { useEditorStore } from './editorStore'
  * The decisions live in shared/keyframeLanes.ts. This store only wires them to
  * the editor store, and every edit goes through its gesture path — snapshot,
  * replace the keyframes, commitStep — so each one is a single undo step.
+ *
+ * Animation is a Pro tool. Everything that draws or edits keys asks `expanded`
+ * first, so in Light that one answer is always no: the lanes, the Keyframe
+ * panel, the motion path and the Delete key all stand down together. The keys
+ * themselves stay on the clip and keep playing.
  */
 export const useKeyframeLanesStore = defineStore('keyframeLanes', () => {
 	const editor = useEditorStore()
+	const { isPro } = useEditorMode()
 
 	/** The toolbar's Keyframes toggle. */
 	const open = ref(false)
@@ -46,8 +53,8 @@ export const useKeyframeLanesStore = defineStore('keyframeLanes', () => {
 
 	const tracks = computed<KeyframeTracks | undefined>(() => item.value?.keyframes)
 
-	/** Lanes are drawn: the toggle is on, and the selected clip has something to key. */
-	const expanded = computed(() => open.value && !!item.value && lanes.value.length > 0)
+	/** Lanes are drawn: the editor is in Pro, the toggle is on, and the selected clip has something to key. */
+	const expanded = computed(() => isPro.value && open.value && !!item.value && lanes.value.length > 0)
 
 	/** Whether the selected clip has any key on its lanes — lights the toggle while it is off (board 1). */
 	const itemHasKeys = computed(() =>
@@ -62,6 +69,15 @@ export const useKeyframeLanesStore = defineStore('keyframeLanes', () => {
 	watch(tracks, (t) => {
 		const kept = pruneSelection(selection.value, t)
 		if (kept.length !== selection.value.length) selection.value = kept
+	})
+
+	// Leaving Pro puts the lanes away, not just out of sight: coming back to Pro
+	// later starts with them closed, and no key stays selected where Light has
+	// nothing to show it with (a selected key would still claim Esc and Inspect).
+	watch(isPro, (pro) => {
+		if (pro) return
+		open.value = false
+		selection.value = []
 	})
 
 	const keysOn = (path: string) => normalise(tracks.value?.[path])
@@ -86,7 +102,11 @@ export const useKeyframeLanesStore = defineStore('keyframeLanes', () => {
 		editor.endItemGesture(label)
 	}
 
-	const toggle = () => { open.value = !open.value }
+	/** The Keyframes toggle. Light has no lanes to open, so there it does nothing. */
+	const toggle = () => {
+		if (!isPro.value) return
+		open.value = !open.value
+	}
 
 	const select = (ref: KeyRef, additive = false) => {
 		selection.value = selectKey(selection.value, ref, additive)
