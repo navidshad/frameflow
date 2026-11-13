@@ -2,7 +2,7 @@ import { afterEach, beforeEach, describe, expect, it } from 'vitest'
 import fs from 'fs'
 import os from 'os'
 import path from 'path'
-import { importStrayProjects, pinnedUserDataDir } from './userDataPin'
+import { BACKUP_DIR_NAME, importStrayProjects, pinnedUserDataDir } from './userDataPin'
 
 let root: string
 let stray: string
@@ -12,6 +12,10 @@ const write = (...p: string[]) => {
 	const file = path.join(...rest)
 	fs.mkdirSync(path.dirname(file), { recursive: true })
 	fs.writeFileSync(file, content)
+}
+const age = (file: string, secondsAgo: number) => {
+	const t = new Date(Date.now() - secondsAgo * 1000)
+	fs.utimesSync(file, t, t)
 }
 const read = (...p: string[]) => fs.readFileSync(path.join(...p), 'utf8')
 
@@ -37,11 +41,32 @@ describe('one data folder for every launch', () => {
 		expect(read(pinned, 'editor-revisions', 'a', 'r1.json')).toBe('rev')
 	})
 
-	it('never overwrites a project the pinned folder already has', () => {
+	it('keeps a pinned project that is as new or newer than the stray copy', () => {
 		write(stray, 'threads', 'a.json', 'old')
 		write(pinned, 'threads', 'a.json', 'mine')
+		age(path.join(stray, 'threads', 'a.json'), 60)
 		expect(importStrayProjects(stray, pinned)).toEqual([])
 		expect(read(pinned, 'threads', 'a.json')).toBe('mine')
+		expect(fs.existsSync(path.join(pinned, BACKUP_DIR_NAME))).toBe(false)
+	})
+
+	it('replaces a stale pinned project with the newer stray copy, backing the old one up', () => {
+		write(pinned, 'threads', 'a.json', 'stale')
+		write(pinned, 'editor-history', 'a.json', 'stale-history')
+		write(pinned, 'editor-revisions', 'a', 'r1.json', 'stale-rev')
+		age(path.join(pinned, 'threads', 'a.json'), 60)
+		write(stray, 'threads', 'a.json', 'fresh')
+		write(stray, 'editor-history', 'a.json', 'fresh-history')
+		write(stray, 'editor-revisions', 'a', 'r2.json', 'fresh-rev')
+		expect(importStrayProjects(stray, pinned, new Date('2026-11-09T22:00:00Z'))).toEqual(['a'])
+		expect(read(pinned, 'threads', 'a.json')).toBe('fresh')
+		expect(read(pinned, 'editor-history', 'a.json')).toBe('fresh-history')
+		expect(fs.existsSync(path.join(pinned, 'editor-revisions', 'a', 'r1.json'))).toBe(false)
+		expect(read(pinned, 'editor-revisions', 'a', 'r2.json')).toBe('fresh-rev')
+		const backup = path.join(pinned, BACKUP_DIR_NAME, '2026-11-09T22-00-00-000Z')
+		expect(read(backup, 'threads', 'a.json')).toBe('stale')
+		expect(read(backup, 'editor-history', 'a.json')).toBe('stale-history')
+		expect(read(backup, 'editor-revisions', 'a', 'r1.json')).toBe('stale-rev')
 	})
 
 	it('skips backup copies', () => {
