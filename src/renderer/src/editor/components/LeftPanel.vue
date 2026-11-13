@@ -4,7 +4,7 @@
 		     collapsed sidebar is still a row of things you can click rather
 		     than a stub that only reopens whatever you last had. -->
 		<nav aria-label="Panels" class="w-11 shrink-0 hair-r flex flex-col items-center gap-0.5 pt-2">
-			<SlimTooltip v-for="t in TABS" :key="t.value" :text="t.label" placement="right">
+			<SlimTooltip v-for="t in railTabs" :key="t.value" :text="t.label" placement="right">
 				<button
 					class="w-8 h-8 flex items-center justify-center rounded-md transition active:scale-95"
 					:class="isActive(t.value)
@@ -56,14 +56,15 @@
 			</div>
 
 			<!-- Media keeps its state across a tab switch (`v-show`); the rest are
-			     cheap to rebuild and mount on demand. -->
+			     cheap to rebuild and mount on demand. They follow `shownTab`, so
+			     Light never mounts a library it does not list on the rail. -->
 			<div v-show="mode === 'library'" class="flex-1 min-h-0 flex flex-col">
-				<MediaPanel v-show="tab === 'media'" class="flex-1 min-h-0 min-w-0" />
-				<MotionPanel v-if="tab === 'motion'" class="flex-1 min-h-0 min-w-0" />
-				<LibraryPanel v-if="tab === 'transitions'" class="flex-1 min-h-0 min-w-0" />
-				<EffectsPanel v-if="tab === 'effects'" class="flex-1 min-h-0 min-w-0" />
-				<TranscriptPanel v-if="tab === 'words'" class="flex-1 min-h-0 min-w-0" />
-				<SoundPanel v-if="tab === 'sound'" class="flex-1 min-h-0 min-w-0" />
+				<MediaPanel v-show="shownTab === 'media'" class="flex-1 min-h-0 min-w-0" />
+				<MotionPanel v-if="shownTab === 'motion'" class="flex-1 min-h-0 min-w-0" />
+				<LibraryPanel v-if="shownTab === 'transitions'" class="flex-1 min-h-0 min-w-0" />
+				<EffectsPanel v-if="shownTab === 'effects'" class="flex-1 min-h-0 min-w-0" />
+				<TranscriptPanel v-if="shownTab === 'words'" class="flex-1 min-h-0 min-w-0" />
+				<SoundPanel v-if="shownTab === 'sound'" class="flex-1 min-h-0 min-w-0" />
 			</div>
 			<InspectorPanel v-if="mode === 'inspect'" class="flex-1 min-h-0 min-w-0" />
 		</section>
@@ -83,6 +84,7 @@ import TranscriptPanel from './TranscriptPanel.vue'
 import SoundPanel from './SoundPanel.vue'
 import InspectorPanel from './InspectorPanel.vue'
 import SlimTooltip from '../../components/SlimTooltip.vue'
+import { isAdvancedTab, tabForMode, useEditorMode } from '../editorMode'
 
 /**
  * The left side of the editor: a slim rail of libraries, and one panel whose
@@ -120,9 +122,21 @@ const emit = defineEmits<{
 }>()
 
 const editor = useEditorStore()
+// `mode` is already this panel's Library | Inspect prop, so the editor's is renamed.
+const { mode: editorMode, isLight } = useEditorMode()
 
-const libraryLabel = computed(() => TABS.find((t) => t.value === props.tab)?.label ?? 'Media')
-const isActive = (value: LeftTab) => !props.collapsed && props.mode === 'library' && props.tab === value
+/** Light lists the everyday libraries only; Pro lists them all, in the same order. */
+const railTabs = computed(() => (isLight.value ? TABS.filter((t) => !isAdvancedTab(t.value)) : TABS))
+
+/**
+ * The library on screen. In Light a tab the rail does not list (one saved
+ * while in Pro) reads as Media everywhere: the label, the lit rail button and
+ * the panel that mounts. The saved tab itself is the page's to correct.
+ */
+const shownTab = computed<LeftTab>(() => tabForMode(props.tab, editorMode.value))
+
+const libraryLabel = computed(() => TABS.find((t) => t.value === shownTab.value)?.label ?? 'Media')
+const isActive = (value: LeftTab) => !props.collapsed && props.mode === 'library' && shownTab.value === value
 
 /**
  * A rail icon opens its library. Clicking the one that is already showing
@@ -142,7 +156,7 @@ const pick = (value: LeftTab) => {
 		emit('update:mode', 'library')
 		return
 	}
-	if (value === props.tab) emit('update:collapsed', true)
+	if (value === shownTab.value) emit('update:collapsed', true)
 	else emit('update:tab', value)
 }
 </script>
