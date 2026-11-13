@@ -40,6 +40,13 @@
   ::selection {
     @apply bg-primary/20 text-primary-dark;
   }
+
+  /* On a surface that IS the primary colour (your own message bubble) the tint above is the same
+     blue as the background and the selected words vanish: select them light on dark instead. */
+  .bg-primary::selection,
+  .bg-primary ::selection {
+    @apply bg-white/90 text-primary-dark;
+  }
 }
 
 @layer components {

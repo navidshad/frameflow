@@ -88,8 +88,10 @@ const frameStyle = computed(() => ({
 let ready = false
 let seekId = 0
 
+// A layer that follows a track is drawn from it: `drawn` carries the track's keys.
+const drawn = computed(() => store.drawnItem(props.item))
 const state = computed(() =>
-	motionFrameState(props.item, store.playheadSec - props.item.timelineStart))
+	motionFrameState(drawn.value, store.playheadSec - props.item.timelineStart))
 
 const seek = () => {
 	const win = frameRef.value?.contentWindow

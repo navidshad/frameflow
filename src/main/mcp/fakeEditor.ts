@@ -1,10 +1,13 @@
-import type { Clip, EditorDocument, MediaAsset, MulticamGroup, TimelineItem } from '@shared/types'
+import type { Clip, DeliveryFormat, EditorDocument, MediaAsset, MulticamGroup, TimelineItem } from '@shared/types'
 import { buildCameraGroup } from '../multicam/group'
 import { applyTimelineDiff, repairOverlapsReporting } from '@shared/timeline'
 import type { TranscriptEntry } from '@shared/captions'
 import type { AudioAnalysis } from '@shared/audio'
+import type { AudioInspection } from '@shared/audioFeatures'
 import { normaliseRecipe, presetOf, recipeKey, soundLength, type SoundRecipe } from '@shared/synth'
 import type { AudioProvenance, GenerateRequest, ProviderId, SpendPolicy } from '@shared/audioProviders'
+import type { ObjectTrack } from '@shared/tracking'
+import type { FollowRequest } from './bridge'
 import type {
 	EditorBridge, ExportStatus, InspectOptions, InspectReport, LiveProject, MediaSource, ProjectSummary, RevisionSummary,
 	SoundReport, TurnCommit
@@ -43,8 +46,7 @@ export function makeDoc(): EditorDocument {
 		media: [makeAsset()],
 		tracks: [{ id: 'v1', kind: 'video', name: 'V1', order: 0, muted: false, locked: false, hidden: false, height: 64 }],
 		timeline: [item],
-		timelineMeta: { fps: 30, width: 1920, height: 1080, duration: 30 },
-		activePersonaId: 'podcast-editor',
+		timelineMeta: { fps: 30, width: 1920, height: 1080, duration: 30, frameChosen: true },
 		turns: [],
 		historyRef: { currentStepId: 'step-0', stepCount: 0 }
 	}
@@ -126,12 +128,14 @@ export class FakeEditor implements EditorBridge {
 	imported: MediaSource[] = []
 	exportPhase: ExportStatus['phase'] = 'done'
 
-	async startExport(_project: LiveProject, options: { quality: 'original' | 'preview' }) {
+	async startExport(_project: LiveProject, options: { quality: 'original' | 'preview'; format?: DeliveryFormat; height?: number }) {
 		this.exports++
 		this.lastQuality = options.quality
+		this.lastExport = options
 		return { ok: true as const, renderId: `render-${this.exports}` }
 	}
 	lastQuality: 'original' | 'preview' | null = null
+	lastExport: { quality: 'original' | 'preview'; format?: DeliveryFormat; height?: number } | null = null
 
 	exportStatus(query: { renderId?: string; threadId: string }): ExportStatus | null {
 		if (!this.exports) return null
@@ -193,6 +197,50 @@ export class FakeEditor implements EditorBridge {
 	preparing = new Set<string>()
 	isPreparing(_project: LiveProject, assetId: string) {
 		return this.preparing.has(assetId)
+	}
+
+	/** Tracks "on disk", and what the tracking tools were asked for. */
+	tracks: ObjectTrack[] = []
+	trackRequests: Array<{ kind: 'faces' | 'object'; assetId: string; fromSec: number; toSec: number; atSec?: number }> = []
+
+	async findFaces(_project: LiveProject, assetId: string, options: { fromSec: number; toSec: number }) {
+		this.trackRequests.push({ kind: 'faces', assetId, fromSec: options.fromSec, toSec: options.toSec })
+		const person = (n: number, from: number, to: number): ObjectTrack => ({
+			id: `trk_0000000${n}`, assetId, kind: 'face', name: `Person ${n}`, shape: 'ellipse', fps: 25,
+			samples: Array.from({ length: Math.round((to - from) * 25) + 1 }, (_, k) => ({ t: from + k / 25, cx: 0.2 * n + k * 0.001, cy: 0.4, w: 0.06, h: 0.1, score: 0.9 })),
+			scannedFrom: options.fromSec, scannedTo: options.toSec, createdAt: n
+		})
+		const found = [person(1, options.fromSec, options.toSec), person(2, options.fromSec + 1, Math.min(options.toSec, options.fromSec + 2))]
+		this.tracks = this.tracks.filter((t) => !found.some((f) => f.id === t.id)).concat(found)
+		return { tracks: found, frames: 100, sheet: { data: PIXEL, mimeType: 'image/png', columns: 2, rows: 1, labels: found.map((t) => t.name) } }
+	}
+
+	async followObject(_project: LiveProject, assetId: string, request: FollowRequest) {
+		this.trackRequests.push({ kind: 'object', assetId, fromSec: request.fromSec, toSec: request.toSec, atSec: request.atSec })
+		const end = Math.min(request.toSec, request.atSec + 2)
+		const track: ObjectTrack = {
+			id: 'trk_000000aa', assetId, kind: 'object', name: request.name, shape: request.shape, fps: 25,
+			samples: Array.from({ length: Math.round((end - request.atSec) * 25) + 1 }, (_, k) => ({
+				t: request.atSec + k / 25, cx: request.box.x + request.box.w / 2 + k * 0.002, cy: request.box.y + request.box.h / 2, w: request.box.w, h: request.box.h, score: 0.8
+			})),
+			scannedFrom: request.fromSec, scannedTo: request.toSec, ended: { forward: end < request.toSec ? 'lost' : 'range' }, createdAt: 10
+		}
+		this.tracks = this.tracks.filter((t) => t.id !== track.id).concat([track])
+		return { track, sheet: { data: PIXEL, mimeType: 'image/png', columns: 1, rows: 1, labels: ['0:00'] } }
+	}
+
+	async listTracks(_project: LiveProject, assetId?: string) {
+		return this.tracks.filter((t) => !assetId || t.assetId === assetId).sort((a, b) => a.createdAt - b.createdAt)
+	}
+
+	async saveTrack(_project: LiveProject, track: ObjectTrack) {
+		this.tracks = this.tracks.filter((t) => t.id !== track.id).concat([track])
+	}
+
+	async deleteTrack(_project: LiveProject, track: Pick<ObjectTrack, 'id' | 'assetId'>) {
+		const before = this.tracks.length
+		this.tracks = this.tracks.filter((t) => t.id !== track.id)
+		return this.tracks.length < before
 	}
 
 	async findSilences() {
@@ -267,6 +315,33 @@ export class FakeEditor implements EditorBridge {
 				lufs: sound ? sound.levelDb - 12 : -16, truePeakDb: sound ? sound.levelDb : -3, lra: null
 			}]
 		}))
+	}
+
+	/** Every inspection asked of the fake, for tests. */
+	inspections: Array<{ assetId: string; fromSec?: number; toSec?: number }> = []
+
+	async inspectAudio(_project: LiveProject, req: { assetId: string; fromSec?: number; toSec?: number }): Promise<AudioInspection> {
+		this.inspections.push(req)
+		const asset = this.doc.media.find((a) => a.id === req.assetId)
+		if (!asset) throw new Error('No such media')
+		const fromSec = req.fromSec ?? 0
+		const toSec = req.toSec ?? (asset.metadata?.duration ?? 10)
+		const length = toSec - fromSec
+		return {
+			hasAudio: asset.metadata?.hasAudio !== false, fromSec, toSec,
+			loudness: { lufs: -16, lra: 4, truePeakDb: -2 },
+			summary: {
+				durationSec: length,
+				energy: { stepSec: length / 4, db: [-20, -18, -12, -22] },
+				dynamics: { loudDb: -10, typicalDb: -16, quietDb: -26, rangeDb: 16 },
+				quiet: { thresholdDb: -40, totalSec: 0, sharePct: 0, spans: [], spansTotal: 0 },
+				balance: { lowPct: 30, midPct: 50, highPct: 20, centroidHz: 1200, tone: 'balanced' },
+				tempo: { bpm: 120, confidence: 0.5, measuredSec: length },
+				sections: [{ startSec: fromSec, endSec: toSec, level: 'medium', meanDb: -16, centroidHz: 1200, lowPct: 30, highPct: 20, character: 'mid-focused' }],
+				hints: ['A steady pulse near 120 BPM (confidence 0.5): rhythmic music.']
+			},
+			spectrogram: PIXEL, notes: []
+		}
 	}
 
 	/** Providers the fake pretends are connected; the cap an agent may spend. */

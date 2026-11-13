@@ -1,5 +1,5 @@
 <template>
-	<div class="mb-1.5 p-3 rounded-xl transition cursor-pointer group"
+	<div class="asset-row mb-1.5 p-3 rounded-xl transition cursor-pointer group"
 		:class="reading
 			? 'bg-violet-500/10 ring-1 ring-violet-500/35'
 			: active
@@ -9,18 +9,19 @@
 		:title="canPlace ? 'Drag onto the timeline to place the whole file' : undefined"
 		@click="$emit('select')"
 		@dragstart="onDragStart">
-		<div class="flex items-start gap-3">
+		<div class="ar-top flex items-start gap-3">
 			<!-- Thumbnail -->
 			<div
-				class="w-16 h-10 rounded-lg bg-zinc-200 dark:bg-zinc-800 overflow-hidden shrink-0 flex items-center justify-center">
+				class="ar-thumb w-16 h-10 rounded-lg bg-zinc-200 dark:bg-zinc-800 overflow-hidden shrink-0 flex items-center justify-center">
 				<img v-if="thumbSrc" :src="thumbSrc" class="w-full h-full object-cover" loading="lazy" />
 				<span v-else class="iconify w-4 h-4 text-zinc-400"
 					:class="asset.kind === 'audio' ? 'tabler--music' : 'tabler--movie'"></span>
 			</div>
 
-			<div class="flex-1 min-w-0">
-				<p class="text-xs font-bold text-zinc-800 dark:text-zinc-200 truncate">{{ asset.name }}</p>
-				<div class="flex items-center gap-2 mt-0.5">
+			<div class="ar-text flex-1 min-w-0">
+				<!-- File names have no spaces: break anywhere and give two lines, so a narrow panel still tells clips apart -->
+				<p class="ar-name text-xs font-bold text-zinc-800 dark:text-zinc-200 break-all line-clamp-2 leading-snug" :title="asset.name">{{ asset.name }}</p>
+				<div class="ar-meta flex flex-wrap items-center gap-x-2 gap-y-0.5 mt-0.5">
 					<span v-if="asset.metadata" class="text-[10px] font-mono text-zinc-500">
 						{{ formatDuration(asset.metadata.duration) }}
 					</span>
@@ -33,13 +34,13 @@
 					</span>
 					<!-- State chip: the plain piece count once everything is done -->
 					<span v-else-if="!usesLanes || readiness.settled || asset.preprocessState === 'error' || !readiness.placeable"
-						class="text-[9px] font-bold uppercase tracking-widest px-1.5 py-0.5 rounded"
+						class="text-[9px] font-bold uppercase tracking-widest px-1.5 py-0.5 rounded whitespace-nowrap"
 						:class="stateChipClass">
 						{{ stateLabel }}
 					</span>
 				</div>
 				<!-- What is ready, in plain words: placeable now, transcript, proxy, colours -->
-				<div v-if="usesLanes && !readiness.settled && readiness.chips.length" class="flex flex-wrap items-center gap-1 mt-1"
+				<div v-if="usesLanes && !readiness.settled && readiness.chips.length" class="ar-chips flex flex-wrap items-center gap-1 mt-1"
 					data-testid="asset-readiness">
 					<span v-for="chip in readiness.chips" :key="chip.text"
 						class="text-[9px] font-semibold px-1.5 py-0.5 rounded whitespace-nowrap"
@@ -51,7 +52,7 @@
 
 			<!-- Remove -->
 			<button
-				class="w-6 h-6 flex items-center justify-center rounded-lg text-zinc-400 opacity-0 group-hover:opacity-100 hover:text-red-500 hover:bg-red-500/10 transition shrink-0"
+				class="ar-remove w-6 h-6 flex items-center justify-center rounded-lg text-zinc-400 opacity-0 group-hover:opacity-100 hover:text-red-500 hover:bg-red-500/10 transition shrink-0"
 				title="Remove media"
 				@click.stop="editorStore.removeAsset(asset.id)">
 				<span class="iconify tabler--trash w-3.5 h-3.5"></span>
@@ -133,8 +134,9 @@
 		</template>
 
 		<!-- Transcript failed but the import went on without it -->
-		<div v-if="(asset.preprocessState === 'completed' || wordsDone) && asset.transcriptError" class="mt-1.5 flex items-start gap-2">
-			<p class="flex-1 min-w-0 text-[10px] text-amber-600 dark:text-amber-400 font-medium leading-snug line-clamp-2"
+		<div v-if="(asset.preprocessState === 'completed' || wordsDone) && asset.transcriptError" class="mt-1.5 flex flex-wrap items-start gap-x-2 gap-y-1">
+			<!-- min-w: in a narrow panel the button drops below the message instead of squeezing it to nothing -->
+			<p class="flex-1 min-w-[9rem] text-[10px] text-amber-600 dark:text-amber-400 font-medium leading-snug line-clamp-2"
 				:title="asset.transcriptError">
 				<span class="iconify tabler--alert-triangle w-3 h-3 inline-block align-[-1px]"></span>
 				No transcript: {{ asset.transcriptError }}
@@ -260,3 +262,21 @@ const formatDuration = (seconds: number) => {
 }
 
 </script>
+
+<style scoped>
+/* The row asks how wide IT is, not the window: the left panel can sit anywhere
+   from 200 to 440px. Narrow, the name gets the full width on top and the
+   thumbnail sits beside the facts, so no row needs more than ~90px. */
+.asset-row { container-type: inline-size; }
+@container (max-width: 12rem) {
+	.ar-top { display: grid; grid-template-columns: 3rem minmax(0, 1fr); column-gap: 0.5rem; row-gap: 0.25rem; position: relative; }
+	.ar-text { display: contents; }
+	.ar-name { grid-area: 1 / 1 / 2 / -1; padding-right: 1.25rem; }
+	.ar-thumb { grid-area: 2 / 1; width: 3rem; height: 2rem; }
+	.ar-meta { grid-area: 2 / 2; align-self: center; margin-top: 0; column-gap: 0.375rem; }
+	/* the speaker icon is the first thing to go: the duration and the state matter more than "has audio" */
+	.ar-meta .iconify { display: none; }
+	.ar-chips { grid-area: 3 / 1 / 4 / -1; }
+	.ar-remove { position: absolute; top: -0.25rem; right: -0.25rem; }
+}
+</style>

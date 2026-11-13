@@ -1,5 +1,5 @@
 import { randomUUID } from 'node:crypto'
-import type { EditorOps, MediaAsset, MulticamGroup, PromptTurn, TimelineDiff, TimelineItem } from '@shared/types'
+import type { DeliveryFormat, EditorOps, MediaAsset, MulticamGroup, PromptTurn, TimelineDiff, TimelineItem } from '@shared/types'
 import { motionWorkingHtml, resolveDefinition, resolveMoments, type MotionSpec } from '@shared/motion'
 import { motionStatus } from '@shared/motionCode'
 import { opKeys, opsInputSchema, validateArgs, type AgentPermission, type AgentPermissions, type JsonSchema } from '@shared/agent'
@@ -10,6 +10,7 @@ import {
 import { allEffects } from '@shared/effects'
 import { TRANSITION_PRESETS } from '@shared/transitionPresets'
 import { computeContentEnd } from '@shared/timeline'
+import { documentFrame, exportChoices, linesForChoice } from '@shared/resolution'
 import { EDITOR_OPS_SCHEMA, opsToDiff, opsWriteHtml } from '../editor/ops'
 import { vetHtmlOps, type MotionProbe } from '../editor/vetHtml'
 import { MOTION_KIT_OPS_SCHEMA, opsWriteKits } from '../editor/kitOps'
@@ -23,6 +24,7 @@ import { peaksForRange } from '@shared/audio'
 import { TIMELINE_DIFF_SCHEMA_VERSION } from '@shared/timeline'
 import { MOTION_TEMPLATES, userMotionTemplates } from '@shared/motionTemplates'
 import { motionGuideText } from '@shared/motionGuide'
+import { outsideAgentInstructions } from '@shared/baseline'
 import { soundGuideText } from '@shared/soundGuide'
 import { estimateMix } from '@shared/mix'
 import { cueLead, describeCue, suggestCues } from '@shared/sound'
@@ -38,6 +40,9 @@ import type { EditorBridge, LiveProject } from './bridge'
 import { ROUND_IDLE_MS, type RoundBook } from '@shared/agentRounds'
 import { sheetClock } from '../editor/exportInspect'
 import { aiReady, laneStatus, mediaReadiness, prepStatus } from '@shared/mediaPrep'
+import {
+	clipSourceTime, fillGaps, thinSamples, trackOnClip, trackSpans, type ObjectTrack, type TrackSample
+} from '@shared/tracking'
 
 /**
  * Where one media file's preparation stands, for agents: the overall state as
@@ -653,7 +658,7 @@ const getSoundGuide: ToolDef = {
 	description:
 		'How to use sound well. Every sound the synth makes with its length, level and lead; the roles and where each ' +
 		'sits against the voice; the one rule about key; how to choose; and the loop to follow. You cannot hear: this ' +
-		'and render_sound / analyze_audio are how you work by numbers. Read it before your first apply_ops with addSounds.',
+		'and render_sound / analyze_audio / inspect_audio are how you work by numbers. Read it before your first apply_ops with addSounds.',
 	inputSchema: { type: 'object', properties: {}, additionalProperties: false },
 	async run() {
 		return { content: [{ type: 'text', text: soundGuideText() }], feed: { detail: 'read the sound guide' } }
@@ -893,6 +898,85 @@ const analyzeAudio: ToolDef = {
 	}
 }
 
+const inspectAudioTool: ToolDef = {
+	name: 'inspect_audio',
+	permission: 'read',
+	description:
+		'Listen to any sound without hearing it: music, a voice, a recording, or the audio inside a video. Give an asset ' +
+		'(id or file name) or a timeline clip (`item`: the part of its source that clip plays). Returns a spectrogram picture ' +
+		'(time left to right in seconds, pitch bottom to top on a log scale from 20 Hz, colour = loudness in dBFS: beats show ' +
+		'as vertical stripes, a drop or a new instrument as a change in the texture, silence as black) and numbers: loudness ' +
+		'(LUFS, range, true peak), how loud it is through time (`energy`), quiet spans, the tonal balance (low <250 Hz, mid, ' +
+		'high >2 kHz, brightness), tempo with a confidence when there is a steady pulse, a section map (where the level or ' +
+		'tone changes), and plain-language `hints` about what it probably is. Use it to guess what is happening in a file ' +
+		'before you cut it, to find where a track changes (cut music on its sections and bars), to tell speech from music from ' +
+		'noise, or to choose where a music bed should start. The hints are rules over the numbers, so the picture decides. ' +
+		'fromSec/toSec are SOURCE seconds: look at a stretch closely, or page through a long file. Costs nothing and changes ' +
+		'nothing; a few seconds for a song, longer for hours of audio.',
+	inputSchema: {
+		type: 'object',
+		properties: {
+			asset: { type: 'string', description: 'Media id or file name' },
+			item: { type: 'string', description: '…or a timeline clip id: inspects the part of its source it plays' },
+			fromSec: { type: 'number', minimum: 0, description: 'Start, in SOURCE seconds. Default: the start (of the clip, with item).' },
+			toSec: { type: 'number', minimum: 0, description: 'End, in SOURCE seconds. Default: the end (of the clip, with item).' }
+		},
+		additionalProperties: false
+	},
+	title: (args) => `inspect_audio ${args.asset || args.item || ''}`.trim(),
+	async run(args, ctx) {
+		const project = await requireProject(ctx)
+		let asset: MediaAsset
+		let fromSec: number | undefined = typeof args.fromSec === 'number' ? args.fromSec : undefined
+		let toSec: number | undefined = typeof args.toSec === 'number' ? args.toSec : undefined
+		if (args.item) {
+			const item = project.doc.timeline.find((i) => i.id === args.item)
+			const source = item?.sourceAssetId && project.doc.media.find((a) => a.id === item.sourceAssetId)
+			if (!item || !source) throw new ToolError(`No clip ${args.item} with a source. Read get_timeline for ids.`)
+			asset = source
+			// The clip's own trim is the default; fromSec/toSec narrow it within SOURCE time.
+			fromSec = fromSec ?? item.in
+			toSec = toSec ?? item.out
+		} else if (args.asset) {
+			asset = resolveAsset(project.doc.media, args.asset)
+		} else {
+			throw new ToolError('Name an asset (id or file name) or a timeline clip (item). get_media lists the media.')
+		}
+		if (asset.kind === 'image') throw new ToolError(`${asset.name} is a picture: it has no sound.`)
+		if (asset.metadata?.hasAudio === false) throw new ToolError(`${asset.name} has no audio track.`)
+		if (fromSec !== undefined && toSec !== undefined && toSec <= fromSec) throw new ToolError('toSec must be after fromSec.')
+
+		const result = await ctx.bridge.inspectAudio(project, { assetId: asset.id, fromSec, toSec })
+		if (!result.hasAudio || !result.summary) throw new ToolError(`${asset.name} has no audio track.`)
+		const { summary } = result
+		const sourceLen = asset.metadata?.duration
+		const body = {
+			source: asset.name,
+			asset: asset.id,
+			range: { fromSec: r3(result.fromSec), toSec: r3(result.toSec), ofSec: sourceLen ? r3(sourceLen) : undefined, ...(args.item ? { fromClip: args.item } : {}) },
+			loudness: {
+				lufs: result.loudness.lufs === null ? null : r3(result.loudness.lufs),
+				lra: result.loudness.lra === null ? null : r3(result.loudness.lra),
+				truePeakDb: result.loudness.truePeakDb === null ? null : r3(result.loudness.truePeakDb)
+			},
+			...summary,
+			picture: `The image is the spectrogram of source ${r3(result.fromSec)}–${r3(result.toSec)} s: its time labels count seconds from the left edge, so add ${r3(result.fromSec)} to read source time. Frequency is a log axis from 20 Hz; colour is dBFS (scale on the right).`,
+			notes: result.notes.length ? result.notes : undefined
+		}
+		const content: ToolContent[] = [json(body)]
+		if (result.spectrogram) content.push({ type: 'image', data: result.spectrogram, mimeType: 'image/png' })
+		const lufs = result.loudness.lufs
+		return {
+			content,
+			feed: {
+				detail: `${clock(result.fromSec)}–${clock(result.toSec)}${lufs === null ? '' : ` · ${r3(lufs)} LUFS`}${summary.tempo ? ` · ${summary.tempo.bpm} BPM` : ''}`,
+				quote: summary.hints[0],
+				thumbnail: result.spectrogram ? `data:image/png;base64,${result.spectrogram}` : undefined
+			}
+		}
+	}
+}
+
 /** Project settings outside the timeline that only agents set through ops. */
 const PROJECT_OPS_SCHEMA = {
 	splitAt: {
@@ -966,7 +1050,10 @@ const applyOps: ToolDef = {
 		const wanted = soundRecipesOf(ops, project.doc)
 		const rendered = wanted.length ? await ctx.bridge.prepareSounds(project, wanted) : []
 		const soundAssets = new Map(wanted.map((r, i) => [recipeKey(r), rendered[i]]))
-		const mapped = opsToDiff(ops, project.doc, { by: ctx.clientName, turnId }, soundAssets, vetted.definitions)
+		// A layer asked to follow a track is bound by the track's id and footage, which only the track list knows.
+		const follows = [...(ops.addMotion ?? []), ...(ops.updateMotion ?? [])].some((r) => r?.follow?.track)
+		const objectTracks = follows ? await ctx.bridge.listTracks(project) : []
+		const mapped = opsToDiff(ops, project.doc, { by: ctx.clientName, turnId }, soundAssets, vetted.definitions, objectTracks)
 		const { diff, addMarkers, docSettings, notes } = mapped
 		const frame = (args as { sequenceFrame?: { width: number; height: number } }).sequenceFrame
 		if (frame) {
@@ -976,7 +1063,6 @@ const applyOps: ToolDef = {
 		const droppedOps = [...vetted.dropped, ...mapped.droppedOps]
 		const turn: PromptTurn = {
 			id: turnId,
-			personaId: project.doc.activePersonaId,
 			prompt: `${ctx.clientName} edited over MCP`,
 			baseStepId: project.doc.historyRef?.currentStepId || '',
 			status: 'completed',
@@ -1091,35 +1177,72 @@ const revertToVersion: ToolDef = {
 	}
 }
 
+/** File types an agent can ask for, with the names the dialog shows. */
+const EXPORT_FORMATS: Record<string, DeliveryFormat> = { h264: 'h264', h265: 'h265', hevc: 'h265', prores: 'prores' }
+
 const exportTool: ToolDef = {
 	name: 'export',
 	permission: 'export',
 	claims: true,
 	description:
-		'Render the timeline to a video file on disk (H.264 MP4), exactly as the Export button does, and ' +
-		'return its render id. quality "original" renders from the source files at full size; "preview" ' +
-		'renders from the small proxies, much faster, for checking an edit. Refused unless the user has ' +
-		'allowed agents to export. It runs in the background and FrameFlow shows its progress: follow it ' +
-		'with wait {for: "export"}, then look at the file with inspect_export.',
+		'Render the timeline to a video file on disk, exactly as the Export button does, and return its render ' +
+		'id. resolution: "original" (default) is the project\'s own size; "4k", "2k", "1080p" and "720p" render ' +
+		'from the source files at that size (named by the short side, so vertical 1080p is 1080×1920) and are ' +
+		'only accepted when SMALLER than the project: an export is never upscaled. quality "preview" renders ' +
+		'from the small 480p proxies, much faster, for checking an edit (no resolution then). format is the ' +
+		'file type: "h264" (default, MP4), "h265" (MP4 HEVC, smaller, Apple-friendly) or "prores" (ProRes 422 ' +
+		'HQ .mov). Refused unless the user has allowed agents to export. It runs in the background and ' +
+		'FrameFlow shows its progress: follow it with wait {for: "export"}, then look at the file with inspect_export.',
 	inputSchema: {
 		type: 'object',
 		properties: {
-			quality: { type: 'string', enum: ['original', 'preview'], description: 'Default original' }
+			quality: { type: 'string', enum: ['original', 'preview'], description: 'Default original' },
+			resolution: {
+				type: 'string', enum: ['original', '4k', '2k', '1080p', '720p'],
+				description: 'Export size, never above the project\'s own. Default original (the project resolution).'
+			},
+			format: { type: 'string', enum: ['h264', 'h265', 'prores'], description: 'File type. Default h264.' }
 		},
 		additionalProperties: false
 	},
-	title: (args) => `export ${args.quality === 'preview' ? 'preview' : 'original'}`,
+	title: (args) => `export ${args.quality === 'preview' ? 'preview' : (args.resolution as string) || 'original'}`,
 	async run(args, ctx) {
 		const project = await requireProject(ctx)
 		const quality = args.quality === 'preview' ? 'preview' : 'original'
-		const result = await ctx.bridge.startExport(project, { quality })
+		const format = args.format === undefined ? 'h264' : EXPORT_FORMATS[String(args.format)]
+		if (!format) throw new ToolError(`Unknown format "${args.format}". Use h264, h265 or prores.`)
+
+		// A resolution names a rung of the project's frame. Anything that is not
+		// smaller than the project is refused with the list that would have worked.
+		const frame = documentFrame(project.doc)
+		const choices = exportChoices(frame)
+		let height: number | undefined
+		const resolution = args.resolution === undefined ? 'original' : String(args.resolution).toLowerCase()
+		if (resolution !== 'original') {
+			if (quality === 'preview') throw new ToolError('quality "preview" renders from the 480p proxies; it takes no resolution.')
+			const id = resolution.replace(/p$/, '')
+			const lines = linesForChoice(id)
+			const picked = choices.find((c) => c.id === id)
+			if (!lines || !picked) {
+				const offered = choices.map((c) => `${c.id === 'original' ? 'original' : c.label.split(' ')[0].toLowerCase()} (${c.frame.width}×${c.frame.height})`).join(', ')
+				throw new ToolError(
+					`The project is ${frame.width}×${frame.height}: "${args.resolution}" would upscale it or is not a size. ` +
+					`Available: ${offered}. Change the project's size with apply_ops sequenceFrame.`
+				)
+			}
+			height = lines
+		}
+
+		const result = await ctx.bridge.startExport(project, { quality, format, height })
 		if (!result.ok) throw new ToolError(result.error)
+		const size = height ? choices.find((c) => c.lines === height)?.frame : undefined
 		return {
 			content: [json({
-				renderId: result.renderId, quality,
+				renderId: result.renderId, quality, format, resolution: quality === 'preview' ? '480p proxies' : resolution,
+				...(size ? { size: `${size.width}×${size.height}` } : {}),
 				next: 'wait {for: "export"} follows it to the end; inspect_export then shows the file.'
 			})],
-			feed: { detail: `${quality} export started`, chips: [{ text: quality, tone: 'blue' }] }
+			feed: { detail: `${quality === 'preview' ? 'preview' : resolution} ${format} export started`, chips: [{ text: quality === 'preview' ? 'preview' : resolution, tone: 'blue' }] }
 		}
 	}
 }
@@ -1662,7 +1785,6 @@ async function commitAgentEdit(
 ) {
 	const turn: PromptTurn = {
 		id: randomUUID(),
-		personaId: project.doc.activePersonaId,
 		prompt: edit.prompt,
 		baseStepId: project.doc.historyRef?.currentStepId || '',
 		status: 'completed',
@@ -2176,27 +2298,377 @@ function bestSamples(turns: Array<{ start: number; end: number; confidence: numb
 	return out.sort((a, b) => a.start - b.start)
 }
 
+// ===== Object tracking =====
+
+/** The longest stretch one call measures. Longer footage is tracked in pieces. */
+const TRACK_MAX_SEC = 180
+const TRACK_MAX_ROWS = 400
+
+const TRACK_WHERE_PROPS = {
+	clip: { type: 'string', description: 'A clip on the timeline (its id from get_timeline). Times are then TIMELINE seconds' },
+	asset: { type: 'string', description: 'Or a media id or file name. Times are then SOURCE seconds of that file' }
+}
+
+interface TrackTarget {
+	asset: MediaAsset
+	clip: TimelineItem | null
+	/** Turns a time in the caller's clock (timeline for a clip, source for media) into SOURCE seconds. */
+	toSource: (sec: number) => number
+	/** The stretch of the SOURCE the caller can mean: the clip's in–out, or the whole file. */
+	from: number
+	to: number
+}
+
+function trackTarget(project: LiveProject, args: Record<string, any>): TrackTarget {
+	if (args.clip) {
+		const clip = project.doc.timeline.find((i) => i.id === args.clip)
+		if (!clip) throw new ToolError(`No clip "${args.clip}" on the timeline. get_timeline lists the clips with their ids.`)
+		const asset = project.doc.media.find((a) => a.id === clip.sourceAssetId)
+		if (!asset || asset.kind !== 'video') throw new ToolError('That clip has no footage to track (it is a title, a motion layer or a sound).')
+		return { asset, clip, toSource: (sec) => clipSourceTime(clip, sec), from: clip.in, to: clip.out }
+	}
+	if (!args.asset) throw new ToolError('Say what to track in: `clip` (a clip id from get_timeline) or `asset` (a media id or file name).')
+	const asset = resolveAsset(project.doc.media, args.asset)
+	if (asset.kind !== 'video') throw new ToolError(`${asset.name} has no picture.`)
+	return { asset, clip: null, toSource: (sec) => sec, from: 0, to: asset.metadata?.duration ?? 0 }
+}
+
+/** The stretch to measure, in SOURCE seconds, from optional fromSec/toSec in the caller's clock. */
+function trackRange(target: TrackTarget, args: Record<string, any>): { fromSec: number; toSec: number } {
+	const a = args.fromSec !== undefined ? target.toSource(Number(args.fromSec)) : target.from
+	const b = args.toSec !== undefined ? target.toSource(Number(args.toSec)) : target.to
+	const fromSec = Math.max(target.from, Math.min(a, b))
+	const toSec = Math.min(target.to || Infinity, Math.max(a, b))
+	if (!(toSec > fromSec)) throw new ToolError('That stretch is empty: toSec must be after fromSec, and inside the clip.')
+	return { fromSec, toSec }
+}
+
+/**
+ * Whether a position in the SOURCE picture is the same position in the frame:
+ * true for a clip that fills the frame untouched. Otherwise the caller has to
+ * be told, because a cover placed by these numbers would miss.
+ */
+function framePositionNote(project: LiveProject, target: TrackTarget): string | undefined {
+	const { clip, asset } = target
+	if (!clip) return 'Positions are fractions of the media\'s own picture (0–1, from its top-left).'
+	const moved = !!clip.transform || !!clip.framing || Object.keys(clip.keyframes ?? {}).some((k) => k.startsWith('transform.'))
+	const meta = project.doc.timelineMeta
+	const sameShape = !asset.metadata?.width || !asset.metadata?.height ||
+		Math.abs(asset.metadata.width / asset.metadata.height - meta.width / meta.height) < 0.01
+	if (moved || !sameShape) {
+		return 'Positions are fractions of the SOURCE picture. This clip is reframed (moved, scaled, cropped or a different shape from the frame), so they are NOT the same positions in the exported frame: render_frame to check where things land.'
+	}
+	return 'Positions are fractions of the frame (0–1, from its top-left): this clip fills the frame untouched.'
+}
+
+const spanRows = (spans: { from: number; to: number }[]) => spans.map((s) => ({ from: r3(s.from), to: r3(s.to), sec: r3(s.to - s.from) }))
+
+/** A track without its samples: what it is, when it is on screen, and (for a clip) when on the timeline. */
+function trackSummary(track: ObjectTrack, names: Map<string, string>, clip?: TimelineItem | null) {
+	const spans = trackSpans(track.samples, track.fps)
+	const onClip = clip ? trackSpans(trackOnClip(track.samples, clip), track.fps * (clip.speed || 1)) : undefined
+	return {
+		track: track.id, name: track.name, kind: track.kind, shape: track.shape, asset: names.get(track.assetId) ?? track.assetId,
+		frames: track.samples.length,
+		filledFrames: track.samples.filter((s) => s.filled).length || undefined,
+		// Not seen by the detector, but followed across a gap from the face on either side.
+		bridgedFrames: track.samples.filter((s) => s.bridged).length || undefined,
+		seenSec: r3(spans.reduce((n, s) => n + (s.to - s.from), 0)),
+		sourceSpans: spanRows(spans),
+		timelineSpans: onClip ? spanRows(onClip) : undefined,
+		ended: track.ended
+	}
+}
+
+async function findTrack(ctx: ToolContext, project: LiveProject, ref: string): Promise<ObjectTrack> {
+	const all = await ctx.bridge.listTracks(project)
+	const wanted = String(ref || '').trim()
+	const found = all.find((t) => t.id === wanted) ?? all.filter((t) => t.name.toLowerCase() === wanted.toLowerCase())[0]
+	if (!found) {
+		throw new ToolError(`No track "${wanted}". ${all.length ? `Tracks: ${all.map((t) => `${t.name} (${t.id})`).join(', ')}.` : 'This project has no tracks yet: find_faces or track_object makes them.'}`)
+	}
+	return found
+}
+
+const assetNames = (project: LiveProject) => new Map(project.doc.media.map((a) => [a.id, a.name]))
+
+const findFaces: ToolDef = {
+	name: 'find_faces',
+	permission: 'read',
+	description:
+		'Find every face in a stretch of footage and follow each one, frame by frame: one track per person, saved with the media. ' +
+		'Use it to cover, blur or label people who move. It looks at every frame, so a face that is hidden or leaves the picture is ' +
+		'picked up again when it returns; it tells people apart by how their faces look but cannot know who anyone is. Returns one ' +
+		'picture per person (their clearest frame, the face boxed) and when each is on screen. LOOK at the picture: rename the people ' +
+		'with edit_track, and merge two tracks that are the same person (it splits a person when their face looks different, e.g. ' +
+		'side-on). Blurred or side-on frames can be missed: gaps under 0.4 s are filled in, longer ones are listed, so render_frames ' +
+		'across a gap before trusting a cover there. Takes about as long as the stretch itself; at most ' + TRACK_MAX_SEC + ' s a call.',
+	inputSchema: {
+		type: 'object',
+		properties: {
+			...TRACK_WHERE_PROPS,
+			fromSec: { type: 'number', minimum: 0, description: 'Start of the stretch (default: the start of the clip or file)' },
+			toSec: { type: 'number', minimum: 0, description: 'End of the stretch (default: the end of the clip or file)' }
+		},
+		additionalProperties: false
+	},
+	title: () => 'find_faces',
+	async run(args, ctx) {
+		const project = await requireProject(ctx)
+		const target = trackTarget(project, args)
+		const range = trackRange(target, args)
+		if (range.toSec - range.fromSec > TRACK_MAX_SEC) {
+			throw new ToolError(`That is ${Math.round(range.toSec - range.fromSec)} s of footage; one call measures at most ${TRACK_MAX_SEC} s. Give fromSec and toSec, and call again for the next stretch.`)
+		}
+		const started = Date.now()
+		const found = await ctx.bridge.findFaces(project, target.asset.id, {
+			...range,
+			onProgress: (fraction, label) => ctx.progress?.(`finding faces ${Math.round(fraction * 100)}% · ${label}`, Date.now() - started)
+		})
+		const names = assetNames(project)
+		const content: ToolContent[] = []
+		if (found.sheet) content.push({ type: 'image', data: found.sheet.data, mimeType: found.sheet.mimeType })
+		content.push(json({
+			asset: target.asset.name,
+			scannedSource: { from: r3(range.fromSec), to: r3(range.toSec) },
+			frames: found.frames,
+			people: found.tracks.map((t) => trackSummary(t, names, target.clip)),
+			picture: found.sheet ? `One tile per person, in the order listed: ${found.sheet.labels.join(', ')}.` : undefined,
+			positions: framePositionNote(project, target),
+			next: found.tracks.length
+				? 'edit_track renames or merges people. To cover one: apply_ops addMotion {template: "track-cover", atSec, durationSec, follow: {track}} over this clip.'
+				: 'No faces were found in that stretch. For anything that is not a face, use track_object with a box.'
+		}))
+		return { content, feed: { detail: `${found.tracks.length} people · ${found.frames} frames`, thumbnail: found.sheet ? `data:${found.sheet.mimeType};base64,${found.sheet.data}` : undefined } }
+	}
+}
+
+const BOX_SCHEMA = {
+	type: 'object',
+	description: 'The box around the object on that frame, as fractions of the picture (0–1): x,y is its top-left corner, w,h its size. Fit it to the object itself, not loosely.',
+	properties: {
+		x: { type: 'number', minimum: 0, maximum: 1 },
+		y: { type: 'number', minimum: 0, maximum: 1 },
+		w: { type: 'number', minimum: 0.005, maximum: 1 },
+		h: { type: 'number', minimum: 0.005, maximum: 1 }
+	},
+	required: ['x', 'y', 'w', 'h'],
+	additionalProperties: false
+}
+
+const trackObject: ToolDef = {
+	name: 'track_object',
+	permission: 'read',
+	description:
+		'Follow ONE thing through the footage from a box you give on one frame: a bottle, a logo, a hand, a car, a hat. Look at the ' +
+		'frame first (render_frame or inspect_media) and give the box at `atSec`. It is followed forwards, backwards or both, and the ' +
+		'track is saved with the media. It follows the thing from where it last was, so it works while the thing stays in view and ' +
+		'STOPS when it is lost (hidden, out of the picture, a hard cut); it does not find it again by itself. When it comes back, ' +
+		'call track_object again with a new box there, then edit_track mergeInto to join the two. Returns frames along the track with ' +
+		'the box drawn: LOOK at them, because a follower can drift onto something else without knowing. For faces use find_faces, ' +
+		'which does recover.',
+	inputSchema: {
+		type: 'object',
+		properties: {
+			...TRACK_WHERE_PROPS,
+			atSec: { type: 'number', minimum: 0, description: 'The frame the box is drawn on' },
+			box: BOX_SCHEMA,
+			name: { type: 'string', description: 'What it is, in a word or two ("whisky bottle")' },
+			shape: { type: 'string', enum: ['box', 'ellipse'], description: 'The shape a cover drawn from it should take (default box)' },
+			direction: { type: 'string', enum: ['forward', 'backward', 'both'], description: 'Default both' },
+			fromSec: { type: 'number', minimum: 0, description: 'How far back to follow it (default: the start of the clip or file)' },
+			toSec: { type: 'number', minimum: 0, description: 'How far forward to follow it (default: the end of the clip or file)' }
+		},
+		required: ['atSec', 'box'],
+		additionalProperties: false
+	},
+	title: (args) => `track_object ${String(args.name || '').slice(0, 24)}`.trim(),
+	async run(args, ctx) {
+		const project = await requireProject(ctx)
+		const target = trackTarget(project, args)
+		const range = trackRange(target, args)
+		const atSec = target.toSource(Number(args.atSec))
+		if (atSec < range.fromSec - 1e-3 || atSec > range.toSec + 1e-3) throw new ToolError('atSec is outside the stretch to follow (and outside the clip).')
+		const box = args.box as { x: number; y: number; w: number; h: number }
+		if (box.x + box.w > 1.001 || box.y + box.h > 1.001) throw new ToolError('The box runs outside the picture: x + w and y + h must each be at most 1.')
+		// The limit is on what is measured, counted from the frame the box is on.
+		const fromSec = Math.max(range.fromSec, atSec - TRACK_MAX_SEC)
+		const toSec = Math.min(range.toSec, atSec + TRACK_MAX_SEC)
+		const started = Date.now()
+		const made = await ctx.bridge.followObject(project, target.asset.id, {
+			atSec, box, direction: args.direction ?? 'both', fromSec, toSec,
+			name: String(args.name || '').trim().slice(0, 60) || 'Object', shape: args.shape ?? 'box',
+			onProgress: (fraction, label) => ctx.progress?.(`following ${Math.round(fraction * 100)}% · ${label}`, Date.now() - started)
+		})
+		const summary = trackSummary(made.track, assetNames(project), target.clip)
+		const lost = [made.track.ended?.backward === 'lost' ? 'backwards' : null, made.track.ended?.forward === 'lost' ? 'forwards' : null].filter(Boolean)
+		const content: ToolContent[] = []
+		if (made.sheet) content.push({ type: 'image', data: made.sheet.data, mimeType: made.sheet.mimeType })
+		content.push(json({
+			...summary,
+			picture: made.sheet ? `Frames along the track with the box drawn, at SOURCE ${made.sheet.labels.join(', ')}.` : undefined,
+			lost: lost.length
+				? `It lost the object going ${lost.join(' and ')}, and stopped there. If the object is still in the picture after that, give a new box on a later frame and merge the two tracks.`
+				: undefined,
+			positions: framePositionNote(project, target),
+			next: 'To put something on it: apply_ops addMotion {template: "track-cover" (or your own page), atSec, durationSec, follow: {track}} over this clip. get_track gives the raw positions.'
+		}))
+		return { content, feed: { detail: `${made.track.name} · ${clock(summary.seenSec ?? 0)} followed${lost.length ? ' · lost' : ''}`, thumbnail: made.sheet ? `data:${made.sheet.mimeType};base64,${made.sheet.data}` : undefined } }
+	}
+}
+
+const listTracksTool: ToolDef = {
+	name: 'list_tracks',
+	permission: 'read',
+	description:
+		'The saved tracks (people found by find_faces, things followed by track_object): what each is and when it is on screen. ' +
+		'With `clip`, also when it is on screen on the TIMELINE inside that clip.',
+	inputSchema: { type: 'object', properties: TRACK_WHERE_PROPS, additionalProperties: false },
+	title: () => 'list_tracks',
+	async run(args, ctx) {
+		const project = await requireProject(ctx)
+		const target = args.clip || args.asset ? trackTarget(project, args) : null
+		const tracks = await ctx.bridge.listTracks(project, target?.asset.id)
+		const names = assetNames(project)
+		return {
+			content: [json({ tracks: tracks.map((t) => trackSummary(t, names, target?.clip)) })],
+			feed: { detail: `${tracks.length} track${tracks.length === 1 ? '' : 's'}` }
+		}
+	}
+}
+
+const getTrack: ToolDef = {
+	name: 'get_track',
+	permission: 'read',
+	description:
+		'Where a tracked person or thing is, frame by frame: rows of [time, centreX, centreY, width, height], positions as fractions ' +
+		'of the picture (0–1 from the top-left). With `clip` the times are TIMELINE seconds and only the part inside that clip comes ' +
+		'back; without it they are SOURCE seconds. Use the rows to key a motion layer\'s position over the thing (one key per row; ' +
+		'keys are seconds from the layer\'s own start). `everySec` thins the rows (0.2 is enough for a slow move; leave it out for ' +
+		'every frame through a fast one); at most ' + TRACK_MAX_ROWS + ' rows come back, so page with fromSec/toSec.',
+	inputSchema: {
+		type: 'object',
+		properties: {
+			track: { type: 'string', description: 'Track id or name (list_tracks)' },
+			clip: TRACK_WHERE_PROPS.clip,
+			fromSec: { type: 'number', minimum: 0 },
+			toSec: { type: 'number', minimum: 0 },
+			everySec: { type: 'number', minimum: 0.01, maximum: 5, description: 'At most one row per this many seconds' }
+		},
+		required: ['track'],
+		additionalProperties: false
+	},
+	title: () => 'get_track',
+	async run(args, ctx) {
+		const project = await requireProject(ctx)
+		const track = await findTrack(ctx, project, args.track)
+		const target = args.clip ? trackTarget(project, { clip: args.clip }) : null
+		if (target && target.asset.id !== track.assetId) throw new ToolError(`${track.name} is a track of other footage than that clip shows.`)
+		const speed = target?.clip?.speed || 1
+		let samples: TrackSample[] = target?.clip ? trackOnClip(track.samples, target.clip) : [...track.samples]
+		const fps = track.fps * speed
+		const from = args.fromSec !== undefined ? Number(args.fromSec) : -Infinity
+		const to = args.toSec !== undefined ? Number(args.toSec) : Infinity
+		samples = samples.filter((s) => s.t >= from - 1e-6 && s.t <= to + 1e-6)
+		const total = samples.length
+		if (args.everySec) samples = thinSamples(samples, fps, Number(args.everySec))
+		const cut = samples.length > TRACK_MAX_ROWS
+		if (cut) samples = samples.slice(0, TRACK_MAX_ROWS)
+		const r4 = (n: number) => Math.round(n * 10000) / 10000
+		return {
+			content: [json({
+				...trackSummary(track, assetNames(project), target?.clip),
+				clock: target?.clip ? 'timeline seconds' : 'source seconds',
+				clipStart: target?.clip ? r3(target.clip.timelineStart) : undefined,
+				fps: r3(fps),
+				columns: ['t', 'cx', 'cy', 'w', 'h'],
+				rows: samples.map((s) => [r3(s.t), r4(s.cx), r4(s.cy), r4(s.w), r4(s.h)]),
+				framesInRange: total,
+				more: cut ? `Only the first ${TRACK_MAX_ROWS} rows are here. Continue with fromSec ${r3(samples[samples.length - 1].t)}.` : undefined,
+				positions: target ? framePositionNote(project, target) : 'Positions are fractions of the media\'s own picture (0–1, from its top-left).'
+			})],
+			feed: { detail: `${track.name} · ${samples.length} rows` }
+		}
+	}
+}
+
+const editTrack: ToolDef = {
+	name: 'edit_track',
+	permission: 'edit',
+	writes: true,
+	description:
+		'Rename a track, change the shape a cover drawn from it takes, merge it into another, or delete it. `mergeInto` joins this ' +
+		'track INTO that one (the same person found as two, or an object followed again after it was lost) and removes this one; ' +
+		'where both have a frame, the surer one is kept.',
+	inputSchema: {
+		type: 'object',
+		properties: {
+			track: { type: 'string', description: 'Track id or name' },
+			name: { type: 'string' },
+			shape: { type: 'string', enum: ['box', 'ellipse'] },
+			mergeInto: { type: 'string', description: 'The track (id or name) this one becomes part of' },
+			delete: { type: 'boolean' }
+		},
+		required: ['track'],
+		additionalProperties: false
+	},
+	title: () => 'edit_track',
+	async run(args, ctx) {
+		const project = await requireProject(ctx)
+		const track = await findTrack(ctx, project, args.track)
+		const names = assetNames(project)
+		if (args.delete) {
+			await ctx.bridge.deleteTrack(project, track)
+			return { content: [json({ deleted: track.id, name: track.name })], feed: { detail: `deleted ${track.name}` } }
+		}
+		if (args.mergeInto) {
+			const into = await findTrack(ctx, project, args.mergeInto)
+			if (into.id === track.id) throw new ToolError('A track cannot be merged into itself.')
+			if (into.assetId !== track.assetId) throw new ToolError('Those two tracks are of different footage and cannot be one.')
+			// Only what was measured is merged; the short gaps are filled again over the joined track.
+			const byFrame = new Map<number, TrackSample>()
+			for (const s of [...into.samples, ...track.samples]) {
+				if (s.filled) continue
+				const key = Math.round(s.t * into.fps)
+				const had = byFrame.get(key)
+				if (!had || s.score > had.score) byFrame.set(key, s)
+			}
+			const measured = [...byFrame.values()].sort((a, b) => a.t - b.t)
+			const merged: ObjectTrack = {
+				...into,
+				name: typeof args.name === 'string' && args.name.trim() ? args.name.trim().slice(0, 60) : into.name,
+				shape: args.shape ?? into.shape,
+				samples: fillGaps(measured, into.fps),
+				scannedFrom: Math.min(into.scannedFrom, track.scannedFrom),
+				scannedTo: Math.max(into.scannedTo, track.scannedTo),
+				ended: into.kind === 'object' ? undefined : into.ended
+			}
+			await ctx.bridge.saveTrack(project, merged)
+			await ctx.bridge.deleteTrack(project, track)
+			return { content: [json({ merged: track.id, into: trackSummary(merged, names) })], feed: { detail: `${track.name} → ${merged.name}` } }
+		}
+		const changed: ObjectTrack = {
+			...track,
+			name: typeof args.name === 'string' && args.name.trim() ? args.name.trim().slice(0, 60) : track.name,
+			shape: args.shape ?? track.shape
+		}
+		await ctx.bridge.saveTrack(project, changed)
+		return { content: [json(trackSummary(changed, names))], feed: { detail: changed.name } }
+	}
+}
+
+
 export const TOOLS: ToolDef[] = [
 	beginRound, endRound, listProjects, createProject, openProject, importMedia, waitTool,
 	getProject, getTimeline, getMedia, inspectMedia, findSilences, searchMomentsTool, renderFrame, renderFrames, getMotionGuide, getMotionKit,
-	getSoundGuide, listSounds, suggestCuesTool, renderSoundTool, analyzeAudio, generateAudioTool,
+	getSoundGuide, listSounds, suggestCuesTool, renderSoundTool, analyzeAudio, inspectAudioTool, generateAudioTool,
 	applyOps, revertToVersion, exportTool, inspectExport,
-	findCameraGroups, makeMulticam, getMulticam, getAngles, findSpeakers, getSpeakers
+	findCameraGroups, makeMulticam, getMulticam, getAngles, findSpeakers, getSpeakers,
+	findFaces, trackObject, listTracksTool, getTrack, editTrack
 ]
 
-export const SERVER_INSTRUCTIONS =
-	'FrameFlow is a video editor running on this computer; these tools act on the project the user has ' +
-	'open in it, live. One agent works on a project at a time: begin_round with your goal before you work ' +
-	'(the user then sees you working and their chat is locked) and end_round with a summary when the piece ' +
-	'of work is done. No project open: list_projects / open_project / create_project, then import_media and ' +
-	'wait {for: "media"}. A good loop: get_project → get_timeline and get_media (or search_moments) to find ' +
-	'material → apply_ops to edit (get_motion_guide first if you will write an HTML motion page) → ' +
-	'render_frame to look at the result → revert_to_version if it is ' +
-	'wrong. For sound: get_sound_guide, then suggest_cues → apply_ops addSounds (with follow) → analyze_audio; ' +
-	'you cannot hear, so work by the numbers and the spectrogram render_sound gives. Spoken words or a sound the palette cannot make: generate_audio (costs money, capped) then apply_ops placeAudio. Inside a round all your apply_ops are one revision the user can see and undo; the user may edit at the same time, ' +
-	'so read the timeline again before each edit instead of relying on an old read. To deliver: export, wait {for: "export"}, ' +
-	'then inspect_export to look at the file frame by frame. Several cameras of one moment (a podcast): ' +
-	'find_camera_groups → make_multicam (syncs them by sound and places them) → get_multicam for the one shared ' +
-	'transcript → find_speakers (once: who speaks when, so every transcript line has a speaker; give the number of people) → ' +
-	'get_speakers (frames per voice) → apply_ops setSpeaker to name them → get_angles to compare every angle of a stretch ' +
-	'→ apply_ops switchAngles to cut; the sound never moves. Never choose angles from the loudest microphone: use the speakers.'
+/**
+ * What outside agents read when they connect. The text lives in @shared/baseline
+ * so FrameFlow's own engine starts from the same one.
+ */
+export const SERVER_INSTRUCTIONS = outsideAgentInstructions()

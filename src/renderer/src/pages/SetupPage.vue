@@ -146,7 +146,7 @@
 										<span class="font-bold text-sm">Gemini API</span>
 										<span class="tag bg-accent/15 text-accent-dark dark:text-accent-light">Ready</span>
 									</div>
-									<p class="mt-1 text-xs text-zinc-500 dark:text-zinc-400 leading-normal">One reply per turn, using the key from step 2. Costs show in the project header.</p>
+									<p class="mt-1 text-xs text-zinc-500 dark:text-zinc-400 leading-normal">{{ ENGINES['gemini-api'].blurb }}</p>
 								</div>
 							</label>
 						</div>
@@ -179,7 +179,7 @@
 <script setup lang="ts">
 import { computed, onMounted, ref, watch } from 'vue'
 import { useRouter } from 'vue-router'
-import { CLI_MODELS, ENGINES, asSetIn, type EngineId } from '@shared/engines'
+import { CLI_DEFAULTS, CLI_MODELS, ENGINES, type EngineId } from '@shared/engines'
 import { buildChecks, checksPass, tildePath, type KeyTestResult } from '@shared/setup'
 import AppTopBar from '../components/AppTopBar.vue'
 import { useEngineStore } from '../stores/engineStore'
@@ -207,7 +207,7 @@ const keyError = ref('')
 const elevenLabsKey = ref('')
 
 const engineId = ref<EngineId>('gemini-api')
-const claudeModel = ref('opus')
+const claudeModel = ref(CLI_DEFAULTS['claude-code'].model)
 const starting = ref(false)
 const startError = ref('')
 
@@ -226,7 +226,7 @@ const claudeFound = computed(() => !!claudeDetection.value && claudeDetection.va
 const claudeTag = computed(() => !claudeDetection.value ? 'Looking…' : claudeFound.value ? (claudeDetection.value.status === 'signed-out' ? 'Signed out' : 'Found') : 'Not found')
 const claudeModels = computed(() => {
 	const reported = claudeDetection.value?.models || []
-	return [...(reported.length ? reported : CLI_MODELS['claude-code']), { value: '', label: asSetIn('claude-code') }]
+	return reported.length ? reported : CLI_MODELS['claude-code']
 })
 
 const checks = computed(() => buildChecks({

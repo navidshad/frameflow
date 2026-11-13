@@ -7,16 +7,16 @@
 		<!-- Header row: the mode, what the picture is telling you, and the frame size.
 		     Everything the monitor says about the picture lives here or in the
 		     transport row below it — nothing is drawn over the picture itself. -->
-		<div class="h-8 shrink-0 hair-b flex items-end gap-4 px-3.5">
+		<div class="monitor-head h-8 shrink-0 hair-b flex items-end gap-4 px-3.5">
 			<button v-for="m in (['source', 'timeline'] as const)" :key="m"
-				class="tab-u !h-[31px] !text-[11px] uppercase tracking-[.08em]"
+				class="tab-u shrink-0 !h-[31px] !text-[11px] uppercase tracking-[.08em]"
 				:class="{ 'tab-u-active': mode === m }"
 				@click="mode = m">
 				{{ m }}
 			</button>
 			<!-- Multicam: the angle strip under the program picture, on or off. -->
 			<button v-if="hasCameraGroups"
-				class="tab-u !h-[31px] !text-[11px] uppercase tracking-[.08em]"
+				class="tab-u shrink-0 !h-[31px] !text-[11px] uppercase tracking-[.08em]"
 				:class="{ 'tab-u-active': showAngles && mode === 'timeline' }"
 				:aria-pressed="showAngles"
 				title="Every camera angle at the playhead (1–9 cuts to one)"
@@ -24,20 +24,22 @@
 				@click="toggleAngles">
 				Angles
 			</button>
-			<div class="flex-1"></div>
+			<div class="flex-1 min-w-0"></div>
 			<!-- The picture is a stand-in until the proxy is ready: say so, here rather than over the picture. -->
-			<span v-if="pictureNote" class="h-[31px] flex items-center gap-1.5 text-[11px] text-amber-500 font-semibold truncate"
+			<span v-if="pictureNote" class="h-[31px] min-w-0 flex items-center gap-1.5 text-[11px] text-amber-500 font-semibold whitespace-nowrap"
 				data-testid="monitor-picture-note">
-				<span class="w-1.5 h-1.5 rounded-full bg-amber-500"></span>{{ pictureNote.text }}
+				<span class="w-1.5 h-1.5 shrink-0 rounded-full bg-amber-500"></span><span class="truncate">{{ pictureNote.text }}</span>
 			</span>
-			<div v-if="mode === 'timeline'" class="h-[31px] flex items-center gap-3.5 text-[11px] text-zinc-500 min-w-0">
-				<span v-if="motionPathShown" class="truncate text-primary">Motion path shown while a position key is selected</span>
-				<span v-else-if="edl.currentSegmentId.value && !agentStore.agentActive" class="font-mono truncate max-w-[220px]">
+			<!-- What the picture is and its size keep their width; the clip's name and
+			     the hints are what truncate, and a narrow monitor drops them (below). -->
+			<div v-if="mode === 'timeline'" class="h-[31px] flex items-center gap-3.5 text-[11px] text-zinc-500 min-w-0 whitespace-nowrap">
+				<span v-if="motionPathShown" class="mh-wide min-w-0 truncate text-primary">Motion path shown while a position key is selected</span>
+				<span v-else-if="edl.currentSegmentId.value && !agentStore.agentActive" class="mh-wide min-w-0 font-mono truncate max-w-[220px]">
 					{{ activeSegmentLabel }}
 				</span>
 				<!-- While an agent edits, the playhead can follow it. -->
 				<button v-if="agentStore.agentActive"
-					class="flex items-center gap-2 font-semibold transition"
+					class="shrink-0 flex items-center gap-2 font-semibold transition"
 					:class="agentStore.followAgent ? 'text-violet-500' : 'text-zinc-500 hover:text-zinc-400'"
 					:title="agentStore.followAgent ? 'The playhead moves to where the agent looks and edits — click to stop' : 'Move the playhead to where the agent looks and edits'"
 					:aria-pressed="agentStore.followAgent"
@@ -49,48 +51,72 @@
 				</button>
 
 				<!-- What the picture is, right now -->
-				<span v-if="motionWarning" data-motion-warning class="flex items-center gap-1.5 text-amber-500 font-semibold truncate"
+				<span v-if="motionWarning" data-motion-warning class="min-w-0 flex items-center gap-1.5 text-amber-500 font-semibold"
 					:title="`${motionWarning.layer}: its HTML fails a check. Open the HTML tab to see which.`">
-					<span class="w-1.5 h-1.5 rounded-full bg-amber-500"></span>{{ motionWarning.text }}
+					<span class="w-1.5 h-1.5 shrink-0 rounded-full bg-amber-500"></span><span class="truncate">{{ motionWarning.text }}</span>
 				</span>
-				<span v-else-if="exactFrame.src" class="flex items-center gap-1.5 text-accent font-semibold">
+				<span v-else-if="exactFrame.src" class="shrink-0 flex items-center gap-1.5 text-accent font-semibold">
 					<span class="w-1.5 h-1.5 rounded-full bg-accent"></span>Exact
 				</span>
-				<span v-else-if="store.activeMotion.length" class="flex items-center gap-1.5 text-accent font-semibold"
+				<span v-else-if="store.activeMotion.length" class="shrink-0 flex items-center gap-1.5 text-accent font-semibold"
 					title="Motion layers preview exactly: the export captures this same page.">
 					<span class="w-1.5 h-1.5 rounded-full bg-accent"></span>Motion · exact
 				</span>
-				<span v-if="agentLookedHere" class="flex items-center gap-1.5 text-violet-500 font-semibold">
-					<span class="iconify tabler--eye w-3 h-3"></span>Agent looked at {{ clock(agentStore.lookedAt ?? 0) }}
+				<span v-if="agentLookedHere" class="shrink-0 flex items-center gap-1.5 text-violet-500 font-semibold">
+					<span class="iconify tabler--eye w-3 h-3"></span><span class="mh-wide">Agent looked at</span> {{ clock(agentStore.lookedAt ?? 0) }}
 				</span>
 
 				<!-- The frame's own label IS the frame picker. -->
-				<div v-if="edl.hasContent.value" class="relative">
+				<div v-if="edl.hasContent.value" class="relative shrink-0">
 					<button class="font-mono text-[11px] text-zinc-500 hover:text-primary transition"
-						:title="frameChosen ? 'Sequence frame' : 'Sequence frame — following the footage'"
+						:title="frameChosen ? 'Project resolution' : 'Project resolution — following the footage'"
 						@click="frameMenuOpen = !frameMenuOpen">
+						<span v-if="currentRung" class="text-zinc-400">{{ currentRung.label }}</span>
 						{{ seqWidth }}×{{ seqHeight }}
-						<span v-if="!frameChosen" class="text-zinc-400">auto</span>
+						<span v-if="!frameChosen" class="mh-wide text-zinc-400">auto</span>
 					</button>
 					<template v-if="frameMenuOpen">
 						<div class="fixed inset-0 z-40" @click="frameMenuOpen = false"></div>
-						<div class="absolute right-0 top-7 z-50 w-44 pop p-1 origin-top animate-menu">
-							<button v-for="preset in FRAME_PRESETS" :key="preset.short"
+						<div class="absolute right-0 top-7 z-50 w-56 pop p-1 origin-top animate-menu">
+							<p class="px-2 pt-1 pb-0.5 text-[9px] uppercase tracking-wide text-zinc-400">Shape</p>
+							<button v-for="shape in FRAME_SHAPES" :key="shape.short"
 								class="w-full flex items-center justify-between gap-2 px-2 py-1.5 rounded text-left transition"
-								:class="frameChosen && preset.w === seqWidth && preset.h === seqHeight
+								:class="currentShape?.short === shape.short
 									? 'bg-primary/10 text-primary'
 									: 'text-zinc-600 dark:text-zinc-300 hover:bg-primary/10'"
-								@click="chooseFrame(preset)">
-								<span class="text-[11px] font-semibold">{{ preset.label }}</span>
-								<span class="font-mono text-[9px] text-zinc-400">{{ preset.short }}</span>
+								@click="chooseShape(shape)">
+								<span class="text-[11px] font-semibold">{{ shape.label }}</span>
+								<span class="font-mono text-[9px] text-zinc-400">{{ shape.short }}</span>
 							</button>
-							<button v-if="frameChosen"
-								class="w-full px-2 py-1.5 mt-0.5 rounded text-left text-[11px] text-zinc-500 hover:bg-primary/10 transition"
+
+							<p class="px-2 pt-2 pb-0.5 text-[9px] uppercase tracking-wide text-zinc-400">Resolution</p>
+							<div class="grid grid-cols-4 gap-1 px-1">
+								<button v-for="rung in RESOLUTION_RUNGS" :key="rung.id"
+									class="py-1 rounded text-[10px] font-semibold transition"
+									:class="currentRung?.id === rung.id
+										? 'bg-primary/10 text-primary'
+										: 'text-zinc-600 dark:text-zinc-300 hover:bg-primary/10'"
+									:title="sizeText(frameAtRung(store.sequenceFrame, rung.lines))"
+									@click="chooseRung(rung.lines)">{{ rung.label }}</button>
+							</div>
+
+							<p class="px-2 pt-2 pb-0.5 text-[9px] uppercase tracking-wide text-zinc-400">Custom</p>
+							<form class="flex items-center gap-1 px-1" @submit.prevent="applyCustom">
+								<input v-model.number="customW" type="number" min="128" max="7680" step="2" aria-label="Width"
+									class="w-0 flex-1 px-1.5 py-1 rounded bg-zinc-500/10 text-[11px] font-mono tabular-nums outline-none focus:ring-1 focus:ring-primary" />
+								<span class="text-[10px] text-zinc-400">×</span>
+								<input v-model.number="customH" type="number" min="128" max="7680" step="2" aria-label="Height"
+									class="w-0 flex-1 px-1.5 py-1 rounded bg-zinc-500/10 text-[11px] font-mono tabular-nums outline-none focus:ring-1 focus:ring-primary" />
+								<button type="submit" class="px-2 py-1 rounded text-[10px] font-semibold text-primary hover:bg-primary/10 transition">Set</button>
+							</form>
+
+							<button
+								class="w-full px-2 py-1.5 mt-1 rounded text-left text-[11px] text-zinc-500 hover:bg-primary/10 transition"
 								@click="store.clearSequenceFrame(); frameMenuOpen = false">
 								Match footage
 							</button>
 							<p class="px-2 pt-1.5 pb-1 text-[9px] text-zinc-400 leading-snug">
-								Clips of another shape letterbox unless you set them to fill.
+								The project's frame. Exports are offered at this size and below. Clips of another shape letterbox unless you set them to fill.
 							</p>
 						</div>
 					</template>
@@ -433,7 +459,11 @@ import { guideById, guidesFor, isVertical, safeArea } from '@shared/guides'
 import { effectCss } from '@shared/effects'
 import { generatorCss, hasGeneratorCss } from '@shared/generators'
 import { transformCss } from '@shared/transform'
-import { FRAME_PRESETS, panObjectPosition } from '@shared/framing'
+import { panObjectPosition } from '@shared/framing'
+import {
+	FRAME_SHAPES, RESOLUTION_RUNGS, frameAtRung, frameForShape, rungOf, shapeOf, shortSide, sizeText,
+	type FrameShape
+} from '@shared/resolution'
 import { toMediaUrl } from '@shared/media-url'
 import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { useEditorStore } from '../../stores/editorStore'
@@ -501,8 +531,23 @@ const seqHeight = computed(() => store.sequenceFrame.height)
 const frameChosen = computed(() => store.doc?.timelineMeta?.frameChosen === true)
 
 const frameMenuOpen = ref(false)
-const chooseFrame = (preset: { w: number; h: number }) => {
-	store.setSequenceFrame(preset.w, preset.h)
+const currentShape = computed(() => shapeOf(store.sequenceFrame))
+const currentRung = computed(() => rungOf(store.sequenceFrame))
+// A new shape keeps the resolution the project is at: 4K landscape -> 4K vertical.
+const chooseShape = (shape: FrameShape) => {
+	const frame = frameForShape(shape, shortSide(store.sequenceFrame))
+	store.setSequenceFrame(frame.width, frame.height)
+}
+// A new resolution keeps the shape, custom ones included.
+const chooseRung = (lines: number) => {
+	const frame = frameAtRung(store.sequenceFrame, lines)
+	store.setSequenceFrame(frame.width, frame.height)
+}
+const customW = ref(store.sequenceFrame.width)
+const customH = ref(store.sequenceFrame.height)
+watch([seqWidth, seqHeight], ([w, h]) => { customW.value = w; customH.value = h })
+const applyCustom = () => {
+	store.setSequenceFrame(customW.value, customH.value)
 	frameMenuOpen.value = false
 }
 
@@ -975,3 +1020,13 @@ watch(activeClip, (clip) => {
 	sourceTime.value = clip.in
 })
 </script>
+
+<style scoped>
+/* The header is as wide as the picture, which the layout lets down to its floor
+   (and lower in a small window). Tabs, the picture's state and its size always
+   show; the clip's name and the wordier hints need a monitor wide enough. */
+.monitor-head { container: monitor-head / inline-size; }
+@container monitor-head (max-width: 600px) {
+	.mh-wide { display: none; }
+}
+</style>

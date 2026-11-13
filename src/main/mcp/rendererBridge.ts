@@ -10,6 +10,7 @@ import { writeQueue } from './writeQueue'
 import { isCaptureWindow } from '../motion/capture'
 import { threadManager } from '../threads'
 import { analyzeAudioFile, getAudioAnalysis, spectrogramBase64 } from '../editor/audioAnalysis'
+import { inspectAudioFile } from '../editor/audioInspect'
 import { ensureSoundAsset, ensureSoundFile, soundDirFor } from '../editor/synth'
 import { getAssetDir } from '../editor/assets'
 import { normaliseRecipe } from '../../shared/synth'
@@ -27,6 +28,9 @@ import { detectSilence } from '../ffmpeg'
 import { isAssetPreprocessing, preparingLanes } from '../editor/preprocess'
 import { importMediaFromFile, importMediaFromUrl } from '../editor/importMedia'
 import { computeContentEnd } from '../../shared/timeline'
+import { followObject, scanFaces, type Tile } from '../tracking'
+import { deleteTrack, listTracks, saveTrack } from '../tracking/store'
+import type { TrackSheet } from './bridge'
 
 /**
  * The bridge to the renderer, whose Pinia store owns the live timeline.
@@ -198,7 +202,7 @@ export const rendererBridge: EditorBridge = {
 		try {
 			// The live document, as the Export button passes its snapshot: the render
 			// detaches from the editor and never writes the document back.
-			const { renderId } = startEditorRender({ threadId: project.threadId, quality: options.quality, doc: project.doc })
+			const { renderId } = startEditorRender({ threadId: project.threadId, quality: options.quality, doc: project.doc, format: options.format, height: options.height })
 			return { ok: true, renderId }
 		} catch (error: any) {
 			return { ok: false, error: `The export could not start: ${error?.message || error}` }
@@ -369,6 +373,17 @@ export const rendererBridge: EditorBridge = {
 	}
 	,
 
+	async inspectAudio(project, req) {
+		const thread = threadManager.getThread(project.threadId)
+		const asset = thread?.editor?.media.find((a) => a.id === req.assetId)
+		if (!thread || !asset) throw new ToolError(`No media ${req.assetId} in this project.`)
+		try {
+			return await inspectAudioFile(asset.originalPath, { fromSec: req.fromSec, toSec: req.toSec, durationSec: asset.metadata?.duration })
+		} catch (error: any) {
+			throw new ToolError(`Could not read the sound of ${asset.name}: ${error?.message || error}`)
+		}
+	},
+
 	audioStatus() {
 		return { connected: connectedProviders(), spend: settingsManager.getAudioSettings().spend }
 	},
@@ -388,5 +403,82 @@ export const rendererBridge: EditorBridge = {
 		// it never heard of, so it is told before anything can place it.
 		await request('upsert-assets', { assets: [made.asset] })
 		return made
+	},
+
+	async findFaces(project, assetId, options) {
+		const { file, dir } = trackingSource(project, assetId)
+		const scan = await scanFaces(file, assetId, options)
+		// A second look at the same stretch replaces the people found before, unless someone has named them.
+		for (const old of listTracks(dir)) {
+			const overlaps = old.scannedFrom < options.toSec && old.scannedTo > options.fromSec
+			if (old.kind === 'face' && overlaps && /^Person \d+$/.test(old.name)) deleteTrack(dir, old.id)
+		}
+		for (const track of scan.tracks) saveTrack(dir, track)
+		tracksChanged(project.threadId)
+		const names = new Map(scan.tracks.map((t) => [t.id, t.name]))
+		return { tracks: scan.tracks, frames: scan.frames, sheet: await trackSheet(scan.tiles, (tile) => names.get(tile.trackId) || '', 220) }
+	},
+
+	async followObject(project, assetId, request) {
+		const { file, dir } = trackingSource(project, assetId)
+		const made = await followObject(file, assetId, request)
+		saveTrack(dir, made.track)
+		tracksChanged(project.threadId)
+		return { track: made.track, sheet: await trackSheet(made.tiles, (tile) => sheetClock(tile.t), 320) }
+	},
+
+	async listTracks(project, assetId) {
+		const thread = threadManager.getThread(project.threadId)
+		if (!thread) throw new ToolError('That project is not open any more.')
+		const ids = assetId ? [assetId] : project.doc.media.filter((a) => a.kind === 'video').map((a) => a.id)
+		return ids.flatMap((id) => listTracks(getAssetDir(thread, id)))
+	},
+
+	async saveTrack(project, track) {
+		saveTrack(trackingSource(project, track.assetId).dir, track)
+		tracksChanged(project.threadId)
+	},
+
+	async deleteTrack(project, track) {
+		const deleted = deleteTrack(trackingSource(project, track.assetId).dir, track.id)
+		if (deleted) tracksChanged(project.threadId)
+		return deleted
+	}
+}
+
+/** Tell the editor its tracks changed, so a following layer in the monitor redraws from the new one. */
+function tracksChanged(threadId: string): void {
+	for (const win of BrowserWindow.getAllWindows()) {
+		if (!win.isDestroyed() && !isCaptureWindow(win)) win.webContents.send('object-tracks-changed', { threadId })
+	}
+}
+
+/** The file to read a media file's frames from, and where its tracks are kept. */
+function trackingSource(project: LiveProject, assetId: string): { file: string; dir: string } {
+	const thread = threadManager.getThread(project.threadId)
+	if (!thread) throw new ToolError('That project is not open any more.')
+	const asset = project.doc.media.find((a) => a.id === assetId)
+	if (!asset) throw new ToolError(`No media ${assetId} in this project.`)
+	// The original: a face that is 60 pixels wide there is 15 in the proxy, too small to tell apart.
+	const file = fs.existsSync(asset.originalPath) ? asset.originalPath : asset.proxyPath
+	if (!file || !fs.existsSync(file)) throw new ToolError(`${asset.name}: its file is not on this computer any more.`)
+	return { file, dir: getAssetDir(thread, assetId) }
+}
+
+/** The check pictures of a track, tiled into one labelled JPEG. */
+async function trackSheet(tiles: Tile[], label: (tile: Tile) => string, tileWidth: number): Promise<TrackSheet | null> {
+	if (!tiles.length) return null
+	const dir = fs.mkdtempSync(join(tmpdir(), 'frameflow-track-'))
+	try {
+		const files = tiles.map((tile, i) => {
+			const file = join(dir, `${String(i).padStart(3, '0')}.ppm`)
+			fs.writeFileSync(file, tile.ppm)
+			return file
+		})
+		const labels = tiles.map(label)
+		const made = await tileImages(files, labels, { columns: Math.min(6, files.length), tileWidth, workDir: dir })
+		return { data: made.jpeg.toString('base64'), mimeType: 'image/jpeg', columns: made.columns, rows: made.rows, labels }
+	} finally {
+		fs.rmSync(dir, { recursive: true, force: true })
 	}
 }

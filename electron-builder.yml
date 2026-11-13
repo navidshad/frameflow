@@ -16,8 +16,13 @@ directories:
 # `extraResources` copies that directory in whole — which puts the binaries
 # outside the archive to begin with, so there is nothing to unpack, no path to
 # rewrite, and no per-arch pruning to get wrong.
+#
+# onnxruntime-node (object tracking) is a native module: its .node file loads
+# the onnxruntime library that sits beside it, and neither can be loaded from
+# inside the archive.
 asarUnpack:
   - '**/node_modules/ytdlp-nodejs/bin/*'
+  - '**/node_modules/onnxruntime-node/bin/**'
 
 # vendor/ffmpeg holds exactly one target's binaries: the fetch script resolves
 # npm_config_platform/npm_config_arch, so a cross-arch CI leg populates it with
@@ -35,14 +40,26 @@ extraResources:
     filter:
       - '**/*'
       - '!.target'
+  # The vision models object tracking runs (scripts/fetch-models.mjs), with each
+  # model's licence and PROVENANCE.txt beside it. They land at resources/models,
+  # where getModelsDir() looks (src/main/tracking/models.ts).
+  - from: vendor/models
+    to: models
+    filter:
+      - '**/*'
 
 # electron-builder excludes an extraResources SOURCE from the app package, but
 # not its siblings — so vendor/.cache (the downloaded upstream archives, kept
 # so a reinstall does not refetch ~150MB) was landing inside app.asar and
 # inflating it by the size of every archive ever fetched. Exclude the whole
 # vendor tree: everything under it that ships, ships via extraResources above.
+#
+# onnxruntime-node ships the runtime for every platform in one package (about
+# 300 MB). Only the one this build targets goes in.
 files:
   - '!vendor'
+  - '!node_modules/onnxruntime-node/bin/napi-v6/!(${platform})/**'
+  - '!node_modules/onnxruntime-node/bin/napi-v6/${platform}/!(${arch})/**'
 
 mac:
   category: public.app-category.video

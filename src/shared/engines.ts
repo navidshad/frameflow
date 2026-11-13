@@ -1,6 +1,8 @@
 import { clock } from './agentFeed'
 import { opKeys } from './agent'
-import type { PromptTurn } from './types'
+import { FRAMEFLOW_BASELINE } from './baseline'
+import { WORKING_CHECKLIST } from './turnReview'
+import type { PromptAttachment, PromptTurn } from './types'
 
 /**
  * AI engines: which AI edits when the user chats in FrameFlow.
@@ -21,6 +23,16 @@ export type CliEngineId = Exclude<EngineId, 'gemini-api'>
 export const ENGINE_IDS: EngineId[] = ['claude-code', 'gemini-api']
 export const CLI_ENGINE_IDS: CliEngineId[] = ['claude-code']
 
+/**
+ * An engine whose loop runs inside FrameFlow: any model with tool calling,
+ * driven over the same MCP tools a CLI gets. Gemini first; OpenRouter models
+ * later plug in as another id with a provider and a model list.
+ */
+export type LoopEngineId = Exclude<EngineId, CliEngineId>
+export const LOOP_ENGINE_IDS: LoopEngineId[] = ['gemini-api']
+export const isLoopEngine = (id: EngineId | string | undefined): id is LoopEngineId =>
+	id === 'gemini-api'
+
 export const isCliEngine = (id: EngineId | string | undefined): id is CliEngineId =>
 	id === 'claude-code'
 
@@ -34,68 +46,127 @@ export interface EngineMeta {
 	blurb: string
 	/** The turn card's footer: "Claude Code · subscription". */
 	footer: string
+	/**
+	 * It can be sent pictures with a message (a frame the user attached). An
+	 * engine that cannot says so in the composer rather than dropping them.
+	 */
+	images: boolean
 }
 
 export const ENGINES: Record<EngineId, EngineMeta> = {
 	'claude-code': {
 		id: 'claude-code', label: 'Claude Code', bin: 'claude',
 		blurb: 'Uses your Claude plan. Looks at frames while it edits, and drives FrameFlow through its own tools.',
-		footer: 'Claude Code · subscription'
+		footer: 'Claude Code · subscription',
+		// Over `--input-format stream-json`: the message is a content list with the pictures in it.
+		images: true
 	},
 	'gemini-api': {
 		id: 'gemini-api', label: 'Gemini API',
-		blurb: 'One reply per turn. Costs show in the project header.',
-		footer: 'Gemini API'
+		blurb: 'Edits in many steps through FrameFlow\u2019s own tools, and looks at frames. Costs show in the project header.',
+		footer: 'Gemini API',
+		// The loop's first message carries them as image parts.
+		images: true
 	}
 }
 
 // ===== Settings =====
 
+/** What a CLI runs until the user picks otherwise: the model and effort, by value. */
+export const CLI_DEFAULTS: Record<CliEngineId, { model: string; effort: string }> = {
+	'claude-code': { model: 'claude-opus-5-5', effort: 'medium' }
+}
+
 export const STEPS_MIN = 1
-export const STEPS_MAX = 50
-export const STEPS_DEFAULT = 20
+// A real edit is dozens of calls (read, cut, look, fix, motion layers, sound).
+// 20 ran out mid-edit: past the limit the server refuses calls and tells the
+// agent to wrap up, where Claude Desktop over MCP has no limit at all.
+export const STEPS_MAX = 300
+export const STEPS_DEFAULT = 80
+/** The old default. Settings files saved it as if chosen, so it reads as "never changed". */
+const STEPS_LEGACY_DEFAULT = 20
 
 export interface EngineSettings {
 	engine: EngineId
-	/** Per CLI; empty means "as set in the CLI". */
+	/** Per CLI: the model it runs. Always set; a CLI the user never configured gets CLI_DEFAULTS. */
 	models: Partial<Record<CliEngineId, string>>
+	/** Per CLI: how hard it thinks. Always set, the same way. */
+	efforts: Partial<Record<CliEngineId, string>>
 	/** Tool calls a CLI engine may make in one turn. */
 	maxSteps: number
 }
 
 /** Today's engine stays the default: nothing changes until the user picks a CLI. */
-export const DEFAULT_ENGINE_SETTINGS: EngineSettings = { engine: 'gemini-api', models: {}, maxSteps: STEPS_DEFAULT }
+export const DEFAULT_ENGINE_SETTINGS: EngineSettings = {
+	engine: 'gemini-api',
+	models: Object.fromEntries(CLI_ENGINE_IDS.map((id) => [id, CLI_DEFAULTS[id].model])),
+	efforts: Object.fromEntries(CLI_ENGINE_IDS.map((id) => [id, CLI_DEFAULTS[id].effort])),
+	maxSteps: STEPS_DEFAULT
+}
 
 export function normalizeEngineSettings(raw: Partial<EngineSettings> | undefined | null): EngineSettings {
 	const engine = ENGINE_IDS.includes(raw?.engine as EngineId) ? raw!.engine! : DEFAULT_ENGINE_SETTINGS.engine
 	const models: EngineSettings['models'] = {}
 	for (const id of CLI_ENGINE_IDS) {
 		const value = raw?.models?.[id]
-		if (typeof value === 'string' && value.trim()) models[id] = value.trim()
+		const model = typeof value === 'string' ? value.trim() : ''
+		// Nothing chosen (or "as set in the CLI", which older versions offered) is the default model.
+		models[id] = model ? LEGACY_MODEL_ALIASES[id][model.toLowerCase()] ?? model : CLI_DEFAULTS[id].model
+	}
+	// An effort the CLI does not know would fail every run, so only listed ones stay.
+	const efforts: EngineSettings['efforts'] = {}
+	for (const id of CLI_ENGINE_IDS) {
+		const value = typeof raw?.efforts?.[id] === 'string' ? raw!.efforts![id]!.trim() : ''
+		efforts[id] = CLI_EFFORTS[id].some((o) => o.value === value) ? value : CLI_DEFAULTS[id].effort
 	}
 	const steps = Math.round(Number(raw?.maxSteps))
-	const maxSteps = Number.isFinite(steps) ? Math.min(STEPS_MAX, Math.max(STEPS_MIN, steps)) : STEPS_DEFAULT
-	return { engine, models, maxSteps }
+	const maxSteps = Number.isFinite(steps) && steps !== STEPS_LEGACY_DEFAULT ? Math.min(STEPS_MAX, Math.max(STEPS_MIN, steps)) : STEPS_DEFAULT
+	return { engine, models, efforts, maxSteps }
 }
 
 export interface ModelOption { value: string; label: string }
 
 /**
- * Models each CLI accepts by name. Claude Code takes aliases that follow the
- * latest model. A CLI that reports its own catalogue at run time can fill
+ * Models each CLI accepts by name: the newest of each family, by full model id,
+ * so the label says which version runs. Move these up when a new one ships.
+ * A CLI that reports its own catalogue at run time can fill
  * `EngineDetection.models` instead.
  */
 export const CLI_MODELS: Record<CliEngineId, ModelOption[]> = {
 	'claude-code': [
-		{ value: 'fable', label: 'Fable' },
-		{ value: 'opus', label: 'Opus' },
-		{ value: 'sonnet', label: 'Sonnet' },
-		{ value: 'haiku', label: 'Haiku' }
+		{ value: 'claude-fable-5-1', label: 'Fable 5.1' },
+		{ value: 'claude-opus-5-5', label: 'Opus 5.5' },
+		{ value: 'claude-sonnet-5-5', label: 'Sonnet 5.5' },
+		{ value: 'claude-haiku-5-5', label: 'Haiku 5.5' }
 	],
 }
 
-/** The default option, which passes no model flag: the CLI uses its own setting. */
-export const asSetIn = (id: CliEngineId) => `As set in ${ENGINES[id].label}`
+/**
+ * Short aliases an earlier version saved ("opus"), read as the model they meant
+ * then: the newest of that family, which is what an alias follows.
+ */
+const LEGACY_MODEL_ALIASES: Record<CliEngineId, Record<string, string>> = {
+	'claude-code': {
+		fable: 'claude-fable-5-1', opus: 'claude-opus-5-5', sonnet: 'claude-sonnet-5-5', haiku: 'claude-haiku-5-5'
+	}
+}
+
+/**
+ * How hard each CLI can be told to think, by the value its own flag takes. An
+ * engine with no entry here has no effort control. Claude Code: `--effort`.
+ */
+export const CLI_EFFORTS: Record<CliEngineId, ModelOption[]> = {
+	'claude-code': [
+		{ value: 'low', label: 'Low' },
+		{ value: 'medium', label: 'Medium' },
+		{ value: 'high', label: 'High' },
+		{ value: 'xhigh', label: 'Extra high' },
+		{ value: 'max', label: 'Max' }
+	]
+}
+
+/** What the composer can pick for an engine; Gemini API has a model only. */
+export const engineEfforts = (id: EngineId): ModelOption[] => (isCliEngine(id) ? CLI_EFFORTS[id] : [])
 
 export interface GeminiTextModel { value: string; label: string; inputPerM: number }
 
@@ -121,17 +192,36 @@ export function geminiTextModels(
 	return models.sort((a, b) => rank(a.value) - rank(b.value) || a.inputPerM - b.inputPerM)
 }
 
-/** The chip's text: "Claude Code · Opus", "Gemini API · 3 Flash Preview", or just the engine. */
-export function engineChipLabel(settings: EngineSettings, geminiModelLabel?: string): string {
+/** The chip's parts: the engine, then its model and effort where they are set. */
+function engineChipParts(settings: EngineSettings, geminiModelLabel?: string) {
 	const label = ENGINES[settings.engine].label
 	let model: string | undefined
+	let effort: string | undefined
 	if (isCliEngine(settings.engine)) {
 		const value = settings.models[settings.engine]
 		model = value ? (CLI_MODELS[settings.engine].find((m) => m.value === value)?.label ?? value) : undefined
+		const level = settings.efforts[settings.engine]
+		effort = level ? (CLI_EFFORTS[settings.engine].find((o) => o.value === level)?.label ?? level) : undefined
 	} else {
 		model = geminiModelLabel?.replace(/^Gemini\s+/i, '')
 	}
-	return model ? `${label} · ${model}` : label
+	return { label, model, effort }
+}
+
+/** The chip's text: "Claude Code · Opus · High", "Gemini API · 3 Flash Preview", or just the engine. */
+export function engineChipLabel(settings: EngineSettings, geminiModelLabel?: string): string {
+	const { label, model, effort } = engineChipParts(settings, geminiModelLabel)
+	return [label, model, effort].filter(Boolean).join(' · ')
+}
+
+/**
+ * The chip where there is no room for the whole label: the model, which is the part
+ * that changes what a message costs and how well it is answered. The engine's own
+ * name stands in when it has no model set.
+ */
+export function engineChipShort(settings: EngineSettings, geminiModelLabel?: string): string {
+	const { label, model } = engineChipParts(settings, geminiModelLabel)
+	return model || label
 }
 
 /**
@@ -222,11 +312,13 @@ export function engineFailureNote(id: CliEngineId, output: string): string | nul
 // ===== Retry =====
 
 export interface EngineRetry {
-	engine: CliEngineId
+	engine: EngineId
 	prompt: string
 	selectedItemIds: string[]
 	playheadSec: number
 	widen?: 'chapter' | 'full'
+	/** The frames the failed message carried: Retry sends them again, from the files the turn kept. */
+	attachments?: PromptAttachment[]
 }
 
 /**
@@ -243,7 +335,42 @@ export function engineRetry(turn: PromptTurn | null | undefined, turns: PromptTu
 	const chat = turns.filter((t) => !t.agent?.engineTurnId)
 	const latest = chat.reduce<PromptTurn | undefined>((a, t) => (!a || t.createdAt >= a.createdAt ? t : a), undefined)
 	if (latest?.id !== turn.id) return null
-	return { engine: engine.id, prompt: turn.prompt, ...engine.request }
+	return { engine: engine.id, prompt: turn.prompt, ...engine.request, ...(turn.attachments?.length ? { attachments: turn.attachments } : {}) }
+}
+
+/**
+ * The newest chat turn this engine ran. A CLI run's edits are agent turns inside
+ * its chat turn, so only chat turns count. `exceptTurnId` leaves out the run
+ * that is asking.
+ */
+export function latestEngineTurn(turns: PromptTurn[] | undefined, engine: EngineId, exceptTurnId?: string): PromptTurn | undefined {
+	let latest: PromptTurn | undefined
+	for (const turn of turns || []) {
+		if (turn.id === exceptTurnId || turn.agent?.engineTurnId || turn.engine?.id !== engine) continue
+		if (!latest || turn.createdAt >= latest.createdAt) latest = turn
+	}
+	return latest
+}
+
+/**
+ * The conversation the next run continues (a CLI's own, or the one FrameFlow's
+ * loop keeps for a model): the one the newest chat turn of this engine was part of. That turn decides, so clearing its id (the user's
+ * "New conversation") starts a fresh one instead of reaching back to an older turn's.
+ */
+export function resumableSessionId(turns: PromptTurn[] | undefined, engine: EngineId, exceptTurnId?: string): string | undefined {
+	return latestEngineTurn(turns, engine, exceptTurnId)?.engine?.sessionId
+}
+
+/**
+ * A resumed run that died before doing anything (the CLI no longer has that
+ * conversation, or it cannot be continued) is worth one fresh start. A sign-in
+ * failure is not: it would fail the same way again.
+ */
+export function shouldRestartFresh(
+	resumed: boolean,
+	result: { ok: boolean; cancelled: boolean; note?: string | null; steps: unknown[]; commits: unknown[] }
+): boolean {
+	return resumed && !result.ok && !result.cancelled && !result.note && !result.steps.length && !result.commits.length
 }
 
 // ===== The common step model =====
@@ -271,6 +398,22 @@ export interface EngineStep {
 
 export const MCP_SERVER_KEY = 'frameflow'
 
+/** The planning tool the loop adds beside FrameFlow's own; it lives in the loop, not on the MCP server. */
+export const PLAN_TOOL = 'update_plan'
+/** The step the chat shows when FrameFlow hands the agent its review (see shared/turnReview). */
+export const REVIEW_STEP = 'review'
+export type PlanStatus = 'pending' | 'in_progress' | 'completed'
+export interface PlanItem { step: string; status: PlanStatus }
+
+/** "plan · 2/4 · Trim the cold open": where the agent is in its own plan. */
+export function planTitle(args: Record<string, unknown>): string {
+	const items = Array.isArray(args.items) ? (args.items as Partial<PlanItem>[]) : []
+	if (!items.length) return 'plan'
+	const done = items.filter((i) => i.status === 'completed').length
+	const doing = items.find((i) => i.status === 'in_progress') ?? items.find((i) => i.status !== 'completed')
+	return `plan · ${done}/${items.length}${doing?.step ? ` · ${String(doing.step).slice(0, 60)}` : ''}`
+}
+
 /**
  * Each CLI names an MCP tool its own way: Claude Code `mcp__frameflow__get_project`.
  * A CLI that reports the server beside the bare tool passes it as `server`.
@@ -284,7 +427,7 @@ export function normalizeToolName(name: string, server?: string | null): { tool:
 
 const FRAMEFLOW_TOOLS = new Set([
 	'get_project', 'get_timeline', 'get_media', 'search_moments', 'render_frame', 'get_motion_guide', 'get_motion_kit', 'apply_ops',
-	'get_sound_guide', 'list_sounds', 'suggest_cues', 'render_sound', 'analyze_audio',
+	'get_sound_guide', 'list_sounds', 'suggest_cues', 'render_sound', 'analyze_audio', 'inspect_audio',
 	'revert_to_version', 'export'
 ])
 
@@ -311,6 +454,8 @@ function opSummary(args: Record<string, unknown>): string {
 export function stepTitle(tool: string, args: Record<string, unknown> = {}, foreign = false): string {
 	if (foreign) return `${tool} — not allowed`
 	switch (tool) {
+		case PLAN_TOOL: return planTitle(args)
+		case REVIEW_STEP: return Number(args.round) > 1 ? 'review again · measured, checklist' : 'review · measured, checklist'
 		case 'search_moments': return `search_moments “${String(args.query ?? '').slice(0, 60)}”`
 		case 'get_media': {
 			const from = num(args.fromSec), to = num(args.toSec)
@@ -469,6 +614,8 @@ export function lineSplitter(onLine: (line: string) => void) {
 export class StepTracker {
 	steps: EngineStep[] = []
 	model?: string
+	/** The CLI's own id for this conversation, from its start line. */
+	sessionId?: string
 	initTools?: string[]
 	errors: string[] = []
 	done?: { ok: boolean; error?: string }
@@ -480,6 +627,7 @@ export class StepTracker {
 			case 'init':
 				this.model = event.model ?? this.model
 				this.initTools = event.tools ?? this.initTools
+				this.sessionId = event.sessionId ?? this.sessionId
 				return false
 			case 'tool-start': {
 				const foreign = !isFrameflowTool(event.tool, event.server)
@@ -548,32 +696,37 @@ export function unexpectedTools(tools: string[] | undefined): string[] {
 // ===== Prompts =====
 
 export interface EnginePromptInput {
-	/** The persona's own instructions. */
-	persona: { name: string; systemPrompt: string }
 	maxSteps: number
 	engineLabel: string
+	/** The loop gives the model a local planning tool; a CLI has none. */
+	planTool?: boolean
+	/** The model is billed by the token and the loop re-sends the conversation each step. */
+	metered?: boolean
+	/** The loop holds the agent to a review after it edits: say so, with the steps it checks. */
+	checklist?: boolean
 }
 
+/**
+ * The engine's system prompt: the baseline every agent shares, then only what
+ * this sandbox needs on top. Nothing here has an opinion about the edit: the
+ * user's message is the brief.
+ */
 export function buildEngineSystemPrompt(input: EnginePromptInput): string {
 	return [
 		`You are the video editor inside FrameFlow, working for the user through FrameFlow's own tools (the "frameflow" MCP server). You are running as ${input.engineLabel}.`,
-		'You have no shell, no file access and no web access in this session — only FrameFlow\'s tools. Do not try anything else.',
+		'You have no shell, no file access and no web access in this session: only FrameFlow\'s tools. Exporting is the user\'s: you cannot export.',
 		'',
-		'How to work:',
-		'- Start with get_project, then read what you need: get_timeline, get_media, search_moments.',
-		'- Edit with apply_ops. Each call is one revision the user can undo, so prefer a few focused calls. Always give a short rationale.',
-		'- Look at your result with render_frame before you finish, and fix it (or revert_to_version) if it is wrong.',
-		'- Before you write a custom HTML motion page (apply_ops with html), call get_motion_guide and follow it.',
-		'- For sound effects or a music bed, call get_sound_guide first. You cannot hear: use suggest_cues, apply_ops addSounds (with follow), render_sound and analyze_audio, and work by their numbers. Spoken words or a sound the palette cannot make: generate_audio (costs money, capped; only if list_sounds says it is allowed), then apply_ops placeAudio.',
-		'- Timeline times (timelineStart, atSec, removeRanges) are TIMELINE seconds; in/out are SOURCE seconds.',
-		'- Never call export: the user exports.',
-		`- You have at most ${input.maxSteps} tool calls for this turn.`,
-		'- If the user asked a question rather than for an edit, answer it without editing.',
+		FRAMEFLOW_BASELINE,
 		'',
-		'When you are done, reply in two or three plain sentences: what you changed and where (with times), or the answer. That reply is shown to the user as your rationale. No markdown headings, no lists of tool calls.',
-		'',
-		`The user's editor persona is "${input.persona.name}". Follow its instructions:`,
-		input.persona.systemPrompt.trim()
+		`You have at most ${input.maxSteps} tool calls for this turn. If the user asked a question rather than for an edit, answer it without editing.`,
+		...(input.metered
+			? ['Every tool call sends this whole conversation to the model again, so read only what the request needs, ask for a range rather than everything, and do not read again what you already have unless you have changed it since. Older results are cleared from the conversation to save space: call the tool again if you need one back.']
+			: []),
+		...(input.checklist ? [WORKING_CHECKLIST] : []),
+		...(input.planTool
+			? ['For a request with several parts, write the steps down with update_plan first and keep it current as you go: mark a step in_progress when you start it and completed when it is done. It changes nothing in the project and does not count as a tool call.']
+			: []),
+		'When you are done, reply in two or three plain sentences: what you changed and where (with times), or the answer. That reply is shown to the user in the chat. No markdown headings, no lists of tool calls.'
 	].join('\n')
 }
 
@@ -584,6 +737,10 @@ export interface EngineUserPromptInput {
 	selectedItemIds: string[]
 	/** The scope chip's choice. */
 	widen?: 'chapter' | 'full'
+	/** This continues the CLI's earlier conversation about the project. */
+	resuming?: boolean
+	/** What the message's @times and attached frames are (promptRefs.describeReferences). */
+	references?: string
 }
 
 export function buildEngineUserPrompt(input: EngineUserPromptInput): string {
@@ -594,7 +751,10 @@ export function buildEngineUserPrompt(input: EngineUserPromptInput): string {
 			: input.selectedItemIds.length
 				? `Scope: the selected timeline item${input.selectedItemIds.length === 1 ? '' : 's'} (${input.selectedItemIds.join(', ')}). Change only ${input.selectedItemIds.length === 1 ? 'it' : 'them'} unless the request needs more.`
 				: 'Scope: whatever the request needs.'
-	return `${input.prompt.trim()}\n\n---\nPlayhead: ${clock(input.playheadSec)}. ${scope}`
+	// A continued conversation remembers what it saw, and the user may have edited since.
+	const changed = input.resuming ? ' The project may have changed since your last message (the user can edit too), so read what you need again before relying on it.' : ''
+	const references = input.references?.trim() ? `\n\n${input.references.trim()}` : ''
+	return `${input.prompt.trim()}${references}\n\n---\nPlayhead: ${clock(input.playheadSec)}. ${scope}${changed}`
 }
 
 // ===== Command lines =====
@@ -608,13 +768,32 @@ export interface CommandInput {
 	systemPrompt: string
 	mcpUrl: string
 	model?: string
-	/** An empty scratch directory: the CLI's cwd, and where its config files go. */
+	/** Empty = no effort flag. */
+	effort?: string
+	/**
+	 * Keep this conversation on disk so a later turn can continue it. Without
+	 * it the run leaves nothing behind, which is what a one-off run wants.
+	 */
+	keepSession?: boolean
+	/** Continue this earlier conversation (the CLI's own id, from a previous run). */
+	resumeSessionId?: string
+	/**
+	 * The CLI's cwd, and where its config files go. The CLI files a conversation
+	 * under this folder, so resuming one needs the same folder as the run that began it.
+	 */
 	workDir: string
 	pathSep?: '/' | '\\'
+	/** Pictures sent with the message (base64), in order after the text. */
+	images?: { data: string; mimeType: string }[]
 }
 
 export interface CommandSpec {
 	args: string[]
+	/**
+	 * Written to the CLI's stdin, then closed. Set when the message carries
+	 * pictures: a prompt argument can only be text.
+	 */
+	stdin?: string
 	/** Added to the environment (the token goes in separately). */
 	env: Record<string, string>
 	/** Written into workDir before spawning. */
@@ -623,9 +802,19 @@ export interface CommandSpec {
 
 const join = (dir: string, name: string, sep: '/' | '\\' = '/') => `${dir.replace(/[\\/]+$/, '')}${sep}${name}`
 
+/** One user message in Claude Code's stream-json input: the text, then the pictures. */
+export function claudeStdinMessage(prompt: string, images: { data: string; mimeType: string }[]): string {
+	const content = [
+		{ type: 'text', text: prompt },
+		...images.map((image) => ({ type: 'image', source: { type: 'base64', media_type: image.mimeType, data: image.data } }))
+	]
+	return `${JSON.stringify({ type: 'user', message: { role: 'user', content } })}\n`
+}
+
 export function buildCommand(input: CommandInput): CommandSpec {
 	const sep = input.pathSep || '/'
 	const model = input.model?.trim()
+	const effort = input.effort?.trim()
 	switch (input.engine) {
 		case 'claude-code': {
 			const mcpConfig = {
@@ -633,22 +822,29 @@ export function buildCommand(input: CommandInput): CommandSpec {
 					[MCP_SERVER_KEY]: { type: 'http', url: input.mcpUrl, headers: { Authorization: `Bearer \${${TOKEN_ENV}}` } }
 				}
 			}
+			// With pictures the message goes in on stdin as one stream-json user
+			// message (text, then each image). Without, the prompt stays an argument
+			// as it always was.
+			const images = input.images?.length ? input.images : null
 			return {
 				files: [{ name: 'mcp.json', content: JSON.stringify(mcpConfig, null, 2) }],
 				env: {},
+				...(images ? { stdin: claudeStdinMessage(input.prompt, images) } : {}),
 				args: [
-					'-p', input.prompt,
+					...(images ? ['-p', '--input-format', 'stream-json'] : ['-p', input.prompt]),
 					'--output-format', 'stream-json', '--verbose',
 					'--mcp-config', join(input.workDir, 'mcp.json', sep), '--strict-mcp-config',
 					// No built-in tools at all: no Bash, no Read/Write/Edit, no web, no subagents.
 					'--tools', '',
 					'--allowedTools', `mcp__${MCP_SERVER_KEY}`,
 					'--permission-mode', 'dontAsk',
-					'--no-session-persistence',
+					...(input.keepSession || input.resumeSessionId ? [] : ['--no-session-persistence']),
+					...(input.resumeSessionId ? ['--resume', input.resumeSessionId] : []),
 					'--disable-slash-commands',
 					// User settings only (their model and sign-in); never a project's.
 					'--setting-sources', 'user',
 					'--system-prompt', input.systemPrompt,
+					...(effort ? ['--effort', effort] : []),
 					...(model ? ['--model', model] : [])
 				]
 			}

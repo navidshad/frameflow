@@ -4,10 +4,10 @@
 		<div ref="scrollRef" class="flex-1 min-h-0 overflow-y-auto custom-scrollbar px-3 py-3 space-y-3">
 			<!-- Empty state — reflects whether media is ready to talk about -->
 			<div v-if="entries.length === 0" class="h-full flex flex-col items-center justify-center gap-2 text-center px-4">
-				<span class="text-2xl" :class="{ 'opacity-40': !store.canPrompt }">{{ store.activePersona?.icon || '🎬' }}</span>
+				<span class="iconify tabler--sparkles w-6 h-6 text-primary" :class="{ 'opacity-40': !store.canPrompt }"></span>
 				<template v-if="store.canPrompt">
 					<p class="text-xs font-bold text-zinc-600 dark:text-zinc-300">
-						{{ store.activePersona?.name || 'Your editor' }} is ready
+						{{ engine.current.label }} is ready
 					</p>
 					<p v-if="store.hasReadyMedia" class="text-[11px] text-zinc-400 leading-relaxed">
 						Ask for a cut, a cleanup, or a question about the footage. Every request and result stays here.
@@ -35,7 +35,7 @@
 				<template v-else>
 					<p class="text-xs font-bold text-zinc-600 dark:text-zinc-300">Import media to start</p>
 					<p class="text-[11px] text-zinc-400 leading-relaxed">
-						Add a video in the Media panel. Once it’s processed, your editor persona can build the cut.
+						Add a video in the Media panel. Once it’s processed, the AI can build the cut.
 					</p>
 				</template>
 			</div>
@@ -47,18 +47,20 @@
 				<template v-for="turn in [turnOf(entry)]" :key="turn.id">
 				<!-- User prompt -->
 				<div class="flex flex-col items-end gap-1">
+					<SentFrames v-if="turn.attachments?.length" :attachments="turn.attachments" />
 					<div class="max-w-[85%] px-3 py-2 rounded-2xl rounded-br-md bg-primary text-white text-xs leading-relaxed whitespace-pre-wrap">
-						{{ turn.prompt }}
+						<PromptText :text="turn.prompt" />
 					</div>
 					<span class="text-[9px] font-bold uppercase tracking-widest text-zinc-400 flex items-center gap-1">
 						<span v-if="turn.scopeLabel" class="text-secondary">{{ turn.scopeLabel }}</span>
 						<span>{{ formatTime(turn.createdAt) }}</span>
+						<CopyButton :text="turn.prompt" />
 					</span>
 				</div>
 
 				<!-- Assistant response -->
 				<div class="flex items-start gap-2">
-					<span class="text-sm leading-none mt-1 shrink-0">{{ personaIcon(turn.personaId) }}</span>
+					<span class="iconify tabler--sparkles w-3.5 h-3.5 mt-1 shrink-0 text-secondary"></span>
 					<div class="flex-1 min-w-0">
 						<!-- Running -->
 						<div v-if="(turn.status === 'pending' || turn.status === 'running') && turn.engine"
@@ -96,7 +98,9 @@
 
 						<!-- Question answer -->
 						<div v-else-if="turn.answer"
-							class="px-3 py-2 rounded-2xl rounded-tl-md bg-zinc-100 dark:bg-zinc-900 text-xs text-zinc-700 dark:text-zinc-300 leading-relaxed">
+							class="group relative px-3 py-2 rounded-2xl rounded-tl-md bg-zinc-100 dark:bg-zinc-900 text-xs text-zinc-700 dark:text-zinc-300 leading-relaxed">
+							<CopyButton :text="turn.answer"
+								class="absolute top-1 right-1 opacity-0 group-hover:opacity-100 focus:opacity-100 bg-zinc-100 dark:bg-zinc-900" />
 							<p class="whitespace-pre-wrap">{{ turn.answer }}</p>
 							<template v-if="turn.engine">
 								<EngineSteps v-if="turn.engine.steps.length" class="mt-2" :steps="turn.engine.steps" />
@@ -136,9 +140,6 @@
 			</template>
 		</div>
 
-		<!-- Latest applied result actions (Back to parent, etc.) -->
-		<AiResultCard v-if="store.lastResult" class="shrink-0 mx-2 mb-2 max-h-[60%] overflow-y-auto custom-scrollbar" />
-
 		<!-- Input, pinned — the border-t is the only frame around it -->
 		<div class="shrink-0 border-t border-zinc-200/60 dark:border-zinc-800 px-3 pt-2 pb-2.5">
 			<PromptBar />
@@ -151,16 +152,20 @@ import { computed, nextTick, ref, watch } from 'vue'
 import type { PromptTurn } from '@shared/types'
 import { useEditorStore } from '../../stores/editorStore'
 import PromptBar from './PromptBar.vue'
-import AiResultCard from './AiResultCard.vue'
 import EngineSteps from './EngineSteps.vue'
 import RetryButton from './RetryButton.vue'
 import McpRoundCard from './McpRoundCard.vue'
+import PromptText from './PromptText.vue'
+import SentFrames from './SentFrames.vue'
 import { ENGINES } from '@shared/engines'
 import { chatEntries, type ChatEntry } from '@shared/agentRounds'
 import { useAgentStore } from '../../stores/agentStore'
+import { useEngineStore } from '../../stores/engineStore'
+import CopyButton from './CopyButton.vue'
 
 const store = useEditorStore()
 const agent = useAgentStore()
+const engine = useEngineStore()
 
 const scrollRef = ref<HTMLElement | null>(null)
 
@@ -174,9 +179,12 @@ const turns = computed<PromptTurn[]>(() =>
 const entries = computed(() => chatEntries(turns.value, agent.rounds))
 const turnOf = (entry: ChatEntry<PromptTurn>): PromptTurn => (entry as Extract<ChatEntry<PromptTurn>, { kind: 'turn' }>).turn
 
-const engineFooter = (turn: PromptTurn) => (turn.engine ? ENGINES[turn.engine.id]?.footer || turn.engine.label : '')
-
-const personaIcon = (personaId: string) => store.findPersona(personaId)?.icon || '🤖'
+// A CLI runs on the user's own plan; a model billed by the token says what the turn cost.
+const engineFooter = (turn: PromptTurn) => {
+	if (!turn.engine) return ''
+	const footer = ENGINES[turn.engine.id]?.footer || turn.engine.label
+	return turn.cost ? footer + ' · $' + turn.cost.toFixed(4) : footer
+}
 
 const revisionSeq = (turn: PromptTurn) => {
 	if (!turn.revisionId) return null

@@ -281,6 +281,13 @@ const sameBind = (a: TimelineItem['bind'], b: TimelineItem['bind']): boolean => 
 	return a.itemId === b.itemId && a.at === b.at && (a.leadSec ?? 0) === (b.leadSec ?? 0)
 }
 
+/** A following layer's link to its track: three ids, compared by value. */
+const sameFollow = (a: TimelineItem['follow'], b: TimelineItem['follow']): boolean => {
+	if (a === b) return true
+	if (!a || !b) return false
+	return a.trackId === b.trackId && a.assetId === b.assetId && a.clipId === b.clipId
+}
+
 const sameText = (a: TimelineItem['text'], b: TimelineItem['text']): boolean => {
 	if (a === b) return true
 	if (!a || !b) return false
@@ -346,6 +353,7 @@ export function diffTimelines(
 				!sameGenerator(beforeItem.generator, afterItem.generator) ||
 				!sameMotion(beforeItem.motion, afterItem.motion) ||
 				!sameBind(beforeItem.bind, afterItem.bind) ||
+				!sameFollow(beforeItem.follow, afterItem.follow) ||
 				!sameMulticamRef(beforeItem.multicam, afterItem.multicam)
 			const fwd = changedFields(beforeItem, afterItem, ITEM_FIELDS)
 				?? (objectChanged ? {} : null)
@@ -379,6 +387,9 @@ export function diffTimelines(
 				}
 				if (!sameBind(beforeItem.bind, afterItem.bind)) {
 					fwd.bind = afterItem.bind
+				}
+				if (!sameFollow(beforeItem.follow, afterItem.follow)) {
+					fwd.follow = afterItem.follow
 				}
 				if (!sameMulticamRef(beforeItem.multicam, afterItem.multicam)) {
 					fwd.multicam = afterItem.multicam

@@ -6,6 +6,7 @@ import pullQuote from './motion-templates/pull-quote.html?raw'
 import statCounter from './motion-templates/stat-counter.html?raw'
 import calloutRing from './motion-templates/callout-ring.html?raw'
 import barReveal from './motion-templates/bar-reveal.html?raw'
+import trackCover from './motion-templates/track-cover.html?raw'
 
 /**
  * The bundled motion library — board 1's Motion tab.
@@ -25,7 +26,7 @@ import barReveal from './motion-templates/bar-reveal.html?raw'
 export interface MotionTemplate {
 	id: string
 	label: string
-	section: 'Text' | 'Data and callouts'
+	section: 'Text' | 'Data and callouts' | 'Tracking'
 	/** What the library tile and the AI context say it is for. */
 	description: string
 	definition: MotionDefinition
@@ -165,6 +166,32 @@ export const MOTION_TEMPLATES: MotionTemplate[] = [
 				{ key: 'labels', label: 'Labels', type: 'text', default: 'Q1, Q2, Q3' },
 				{ key: 'unit', label: 'Unit', type: 'text', default: '' },
 				accent
+			]
+		}
+	},
+	{
+		id: 'track-cover',
+		label: 'Track cover',
+		section: 'Tracking',
+		description: 'An emoji, a blob or a box over something that moves: give it a track to follow (a face from find_faces, a thing from track_object) and it stays on it, hiding itself where the track has a gap.',
+		html: trackCover,
+		definition: {
+			duration: 4,
+			moments: [{ name: 'hold', duration: 4, flex: true }],
+			settings: [
+				{
+					key: 'style', label: 'Style', type: 'enum', default: 'emoji',
+					options: [{ value: 'emoji', label: 'Emoji' }, { value: 'blob', label: 'Blob' }, { value: 'box', label: 'Box' }]
+				},
+				{ key: 'emoji', label: 'Emoji', type: 'text', default: '😊' },
+				{ key: 'color', label: 'Colour', type: 'color', default: '#18181b' },
+				{ key: 'scale', label: 'Cover size', type: 'number', default: 1.5, min: 0.5, max: 4, step: 0.05, unit: '×' },
+				// What a followed track drives (shared/follow.ts). Set by hand, they place a cover that stays put.
+				{ key: 'x', label: 'Across', type: 'number', default: 0.5, min: -0.5, max: 1.5, step: 0.001, unit: '%', animate: true },
+				{ key: 'y', label: 'Down', type: 'number', default: 0.5, min: -0.5, max: 1.5, step: 0.001, unit: '%', animate: true },
+				{ key: 'w', label: 'Width', type: 'number', default: 0.08, min: 0.005, max: 2, step: 0.001, unit: '%', animate: true },
+				{ key: 'h', label: 'Height', type: 'number', default: 0.14, min: 0.005, max: 2, step: 0.001, unit: '%', animate: true },
+				{ key: 'on', label: 'Shown', type: 'number', default: 1, min: 0, max: 1, step: 1, animate: true }
 			]
 		}
 	}

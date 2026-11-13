@@ -1,7 +1,7 @@
 import { defineStore } from 'pinia'
 import { computed, ref } from 'vue'
 import {
-	asSetIn, CLI_MODELS, DEFAULT_ENGINE_SETTINGS, ENGINES, engineChipLabel, geminiTextModels, isCliEngine,
+	CLI_MODELS, DEFAULT_ENGINE_SETTINGS, ENGINE_IDS, ENGINES, engineChipLabel, engineChipShort, geminiTextModels, isCliEngine,
 	type GeminiTextModel,
 	type EngineDetection, type EngineId, type EngineSettings, type ModelOption
 } from '@shared/engines'
@@ -38,7 +38,7 @@ export const useEngineStore = defineStore('engine', () => {
 
 	/** Engines for the chip menu: a CLI found here, then Gemini API. */
 	const available = computed(() =>
-		(['claude-code', 'gemini-api'] as EngineId[]).filter((id) => {
+		ENGINE_IDS.filter((id) => {
 			const d = detectionFor(id)
 			return id === settings.value.engine || (d && d.status !== 'missing')
 		})
@@ -49,7 +49,7 @@ export const useEngineStore = defineStore('engine', () => {
 		const id = settings.value.engine
 		if (!isCliEngine(id)) return []
 		const reported = detectionFor(id)?.models || []
-		const options = [{ value: '', label: asSetIn(id) }, ...(reported.length ? reported : CLI_MODELS[id])]
+		const options = [...(reported.length ? reported : CLI_MODELS[id])]
 		const chosen = settings.value.models[id]
 		if (chosen && !options.some((o) => o.value === chosen)) options.push({ value: chosen, label: chosen })
 		return options
@@ -64,6 +64,7 @@ export const useEngineStore = defineStore('engine', () => {
 	const editorModel = computed(() => modelSettings.value?.selection?.[EDITOR_OP] || EDITOR_FALLBACK)
 	const editorModelLabel = computed(() => modelMetadata.value[editorModel.value]?.label || editorModel.value)
 	const chipLabel = computed(() => engineChipLabel(settings.value, editorModelLabel.value))
+	const chipShort = computed(() => engineChipShort(settings.value, editorModelLabel.value))
 
 	const loadModels = async () => {
 		try {
@@ -94,5 +95,5 @@ export const useEngineStore = defineStore('engine', () => {
 
 	if (api?.onEngineState) api.onEngineState(apply)
 
-	return { settings, detections, geminiModels, editorModel, editorModelLabel, chipLabel, setEditorModel, detecting, loaded, current, isCli, available, modelOptions, detectionFor, load, detect, update, select }
+	return { settings, detections, geminiModels, editorModel, editorModelLabel, chipLabel, chipShort, setEditorModel, detecting, loaded, current, isCli, available, modelOptions, detectionFor, load, detect, update, select }
 })

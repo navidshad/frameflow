@@ -1,9 +1,11 @@
-import type { EditorDocument, EditorRevision, MediaAsset, PromptTurn } from '@shared/types'
+import type { DeliveryFormat, EditorDocument, EditorRevision, MediaAsset, PromptTurn } from '@shared/types'
 import type { AudioAnalysis } from '@shared/audio'
+import type { AudioInspection } from '@shared/audioFeatures'
 import type { SoundRecipe } from '@shared/synth'
 import type { TranscriptEntry } from '@shared/captions'
 import type { AgentApplyOutcome } from '@shared/agentFeed'
 import type { AudioProvenance, GenerateRequest, ProviderId, SpendPolicy } from '@shared/audioProviders'
+import type { ObjectTrack, TrackShape } from '@shared/tracking'
 
 /**
  * What the MCP tools need from the rest of the app, as an interface.
@@ -111,6 +113,27 @@ export interface SoundReport {
 	spectrogram?: string
 }
 
+/** A track that was just made, with a picture to check it by. */
+export interface TrackSheet {
+	data: string
+	mimeType: string
+	columns: number
+	rows: number
+	/** What each tile shows, in order. */
+	labels: string[]
+}
+
+export interface FollowRequest {
+	atSec: number
+	box: { x: number; y: number; w: number; h: number }
+	direction: 'forward' | 'backward' | 'both'
+	fromSec: number
+	toSec: number
+	name: string
+	shape: TrackShape
+	onProgress?: (fraction: number, label: string) => void
+}
+
 export interface EditorBridge {
 	/** Null when no project is open in the editor. */
 	getLiveProject(): Promise<LiveProject | null>
@@ -120,7 +143,7 @@ export interface EditorBridge {
 	renderFrame(project: LiveProject, timeSec: number): Promise<RenderedFrame>
 	switchRevision(revisionId: string): Promise<{ ok: true } | { ok: false; error: string }>
 	/** Start an export of the live timeline; FrameFlow shows its progress like any other. */
-	startExport(project: LiveProject, options: { quality: 'original' | 'preview' }): Promise<{ ok: true; renderId: string } | { ok: false; error: string }>
+	startExport(project: LiveProject, options: { quality: 'original' | 'preview'; format?: DeliveryFormat; height?: number }): Promise<{ ok: true; renderId: string } | { ok: false; error: string }>
 	/** The latest progress of a render, or of the project's newest one. */
 	exportStatus(query: { renderId?: string; threadId: string }): ExportStatus | null
 	/** What an exported file is, and contact sheets of its frames. */
@@ -168,10 +191,25 @@ export interface EditorBridge {
 	inspectSound(project: LiveProject, target: { recipe: SoundRecipe } | { assetId: string }): Promise<SoundReport>
 	/** Waveform and loudness of media, measured once and cached. */
 	audioAnalyses(project: LiveProject, assetIds: string[]): Promise<Record<string, AudioAnalysis>>
+	/** How a source sounds, as a spectrogram and numbers: for the whole asset or a range of its SOURCE seconds. Works on a video's sound too. */
+	inspectAudio(project: LiveProject, req: { assetId: string; fromSec?: number; toSec?: number }): Promise<AudioInspection>
 	/** Which audio providers are connected, and what an agent may spend on them. */
 	audioStatus(): { connected: ProviderId[]; spend: SpendPolicy }
 	/** What a request would cost in USD before it is made; null when the provider bills in credits. */
 	estimateAudio(req: GenerateRequest): number | null
 	/** Make a voice, effect or music with a provider, keep it as an asset in the project and hand it to the editor. */
 	generateAudio(project: LiveProject, req: GenerateRequest): Promise<{ asset: MediaAsset; provenance: AudioProvenance }>
+
+	// ----- Object tracking (tracks live beside the media, not in the document) -----
+	/** Every face in a stretch of a media file (SOURCE seconds), one saved track per person. */
+	findFaces(
+		project: LiveProject, assetId: string,
+		options: { fromSec: number; toSec: number; onProgress?: (fraction: number, label: string) => void }
+	): Promise<{ tracks: ObjectTrack[]; frames: number; sheet: TrackSheet | null }>
+	/** Follows a box drawn on one frame, and saves the track. */
+	followObject(project: LiveProject, assetId: string, request: FollowRequest): Promise<{ track: ObjectTrack; sheet: TrackSheet | null }>
+	/** The saved tracks of one media file, or of every media file in the project. */
+	listTracks(project: LiveProject, assetId?: string): Promise<ObjectTrack[]>
+	saveTrack(project: LiveProject, track: ObjectTrack): Promise<void>
+	deleteTrack(project: LiveProject, track: Pick<ObjectTrack, 'id' | 'assetId'>): Promise<boolean>
 }

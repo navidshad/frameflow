@@ -5,6 +5,7 @@ import type { MediaAsset } from '@shared/types'
 import { threadManager } from '../threads'
 import { downloadVideo } from '../ytdlp'
 import { settingsManager } from '../settings'
+import { importKindOf, VIDEO_EXTENSIONS, AUDIO_EXTENSIONS } from '@shared/mediaFiles'
 import * as editorAssets from './assets'
 import * as editorPreprocess from './preprocess'
 
@@ -58,27 +59,32 @@ export async function importMediaFromUrl(
 	}
 }
 
-const MEDIA_EXTENSIONS = new Set([
-	'.mp4', '.mov', '.m4v', '.mkv', '.webm', '.avi', '.mts', '.m2ts', '.mpg', '.mpeg',
-	'.mp3', '.wav', '.m4a', '.aac', '.flac', '.ogg', '.opus', '.aif', '.aiff'
-])
-
 /**
  * Import a file on disk. The user's own file is referenced where it lives
  * (copying a multi-GB source would block the main process); a file the app
  * itself downloaded to a scratch folder is moved in.
  */
-export async function importMediaFromFile(threadId: string, filePath: string, name?: string): Promise<MediaAsset | null> {
+export async function importMediaFromFile(
+	threadId: string,
+	filePath: string,
+	name?: string,
+	options: { /** A file that cannot be read is an error, and leaves no asset behind (a batch lists it; a lone import keeps the asset with its error and a Retry). */ discardUnreadable?: boolean } = {}
+): Promise<MediaAsset | null> {
 	const resolved = path.resolve(filePath)
 	if (!fs.existsSync(resolved) || fs.statSync(resolved).isDirectory()) throw new Error(`There is no file at ${resolved}.`)
-	if (!MEDIA_EXTENSIONS.has(path.extname(resolved).toLowerCase())) {
-		throw new Error(`${path.basename(resolved)} is not a video or audio file FrameFlow imports (${[...MEDIA_EXTENSIONS].join(' ')}).`)
+	if (!importKindOf(resolved)) {
+		throw new Error(`${path.basename(resolved)} is not a video or audio file FrameFlow imports (${[...VIDEO_EXTENSIONS, ...AUDIO_EXTENSIONS].join(' ')}).`)
 	}
 	// Match the download scratch dirs specifically: the artifact root holds every project.
 	const isFreshDownload = resolved.startsWith(path.join(settingsManager.getTempDir(), 'download-'))
 	const asset = await editorAssets.createMediaAsset(threadId, {
 		sourcePath: resolved, name, referenceInPlace: !isFreshDownload, move: isFreshDownload
 	})
+	if (options.discardUnreadable && asset?.preprocessState === 'error') {
+		const reason = asset.preprocessError || 'Could not read media metadata (corrupt or unsupported file).'
+		await editorAssets.removeAsset(threadId, asset.id)
+		throw new Error(reason)
+	}
 	startPreprocess(threadId, asset)
 	return asset
 }

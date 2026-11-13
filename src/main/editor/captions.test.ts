@@ -4,7 +4,7 @@ import { writeFileSync } from 'fs'
 import { tmpdir } from 'os'
 import { join } from 'path'
 import type { EditorDocument, MediaAsset, TimelineItem, Track } from '@shared/types'
-import { cuesForDoc, transcriptsForAssets } from './captions'
+import { burnVideoOpts, cuesForDoc, transcriptsForAssets } from './captions'
 
 /**
  * The boundary the pure module deliberately does not cross: transcripts on
@@ -38,7 +38,7 @@ const item = (over: Partial<TimelineItem> = {}): TimelineItem => ({
 const doc = (over: Partial<EditorDocument>): EditorDocument => ({
 	schemaVersion: 1, media: [], tracks: [vtrack], timeline: [item()],
 	timelineMeta: { fps: 30, width: 1920, height: 1080, duration: 0 },
-	activePersonaId: 'podcast-editor', turns: [],
+	turns: [],
 	historyRef: { currentStepId: 'step-0', stepCount: 0 }, ...over
 })
 
@@ -116,5 +116,17 @@ describe('cuesForDoc', () => {
 	it('ignores an asset the timeline does not use', () => {
 		const path = write('t4.json', [{ start: '0', end: '3', text: 'unused' }])
 		expect(cuesForDoc(doc({ media: [asset('a2', path)], captionsEnabled: true }), FRAME)).toEqual([])
+	})
+})
+
+describe('burnVideoOpts', () => {
+	// Measured, not assumed: veryfast halves the time of medium at the same size,
+	// and the hardware encoder was no faster than medium (see captions.ts).
+	it('runs x264 at veryfast and keeps its quality', () => {
+		const opts = burnVideoOpts()
+		expect(opts.slice(0, 2)).toEqual(['-c:v', 'libx264'])
+		expect(opts[opts.indexOf('-preset') + 1]).toBe('veryfast')
+		expect(opts[opts.indexOf('-crf') + 1]).toBe('18')
+		expect(opts).not.toContain('h264_videotoolbox')
 	})
 })

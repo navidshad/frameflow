@@ -1,5 +1,5 @@
 <template>
-	<AppDialog :model-value="!!request" :title="request?.title ?? lastTitle" size="sm"
+	<AppDialog :model-value="!!request" :title="request?.title ?? lastTitle" :size="(request?.actions.length ?? 0) > 2 ? 'lg' : 'sm'"
 		@update:model-value="onDismiss">
 		<div v-if="request" class="flex gap-3">
 			<span v-if="tone" class="iconify w-4 h-4 mt-0.5 shrink-0" :class="[tone.icon, tone.cls]"></span>

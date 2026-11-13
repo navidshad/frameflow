@@ -77,8 +77,14 @@ export async function encodeFrames(options: {
 	outputPath: string
 	signal?: AbortSignal
 	onProgress?: (done: number, total: number) => void
+	/**
+	 * Rest this fraction of each frame's time before the next: 1 is half speed.
+	 * Drawing a 4K frame holds the main process for most of its time, so work
+	 * nobody is waiting on lets the rest of the app breathe between frames.
+	 */
+	idleRatio?: number | (() => number)
 }): Promise<void> {
-	const { frame, count, next, outputPath, signal, onProgress } = options
+	const { frame, count, next, outputPath, signal, onProgress, idleRatio = 0 } = options
 	const expected = frame.width * frame.height * 4
 	const partial = outputPath.replace(/\.mov$/, PARTIAL_SUFFIX)
 	const child = spawn(getFFmpegBinaryPath(), ffmpegArgs(frame, partial), { stdio: ['pipe', 'ignore', 'pipe'] })
@@ -94,10 +100,16 @@ export async function encodeFrames(options: {
 	const onAbort = () => child.kill('SIGKILL')
 	signal?.addEventListener('abort', onAbort)
 
+	let pending: Promise<Buffer> | null = null
 	try {
+		// Capture frame k+1 while frame k is converted and written: the capture
+		// is mostly waiting on the page and the GPU, the write on ffmpeg's pipe.
+		pending = count > 0 ? next(0) : null
 		for (let k = 0; k < count; k++) {
 			if (signal?.aborted) throw new Error('aborted')
-			const buffer = await next(k)
+			const frameStart = Date.now()
+			const buffer = await pending!
+			pending = k + 1 < count ? next(k + 1) : null
 			if (buffer.length !== expected) {
 				throw new Error(`Motion frame ${k} is ${buffer.length} bytes; expected ${expected} (${frame.width}×${frame.height}).`)
 			}
@@ -110,6 +122,9 @@ export async function encodeFrames(options: {
 				})
 			}
 			onProgress?.(k + 1, count)
+			// Read each frame: an export that joins this clip ends the resting.
+			const rest = typeof idleRatio === 'function' ? idleRatio() : idleRatio
+			if (rest > 0) await new Promise((r) => setTimeout(r, (Date.now() - frameStart) * rest))
 		}
 		child.stdin.end()
 		const code = await exited
@@ -117,6 +132,8 @@ export async function encodeFrames(options: {
 		if (code !== 0) throw new Error(`Motion encode failed (ffmpeg exited ${code}): ${stderr.trim().slice(-600)}`)
 		fs.renameSync(partial, outputPath)
 	} catch (error) {
+		// A capture still in flight must not surface later as an unhandled rejection.
+		pending?.catch(() => {})
 		child.kill('SIGKILL')
 		try { fs.unlinkSync(partial) } catch { /* never written */ }
 		throw error

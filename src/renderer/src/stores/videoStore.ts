@@ -209,6 +209,31 @@ export const useVideoStore = defineStore('video', () => {
 		}
 	}
 
+	/**
+	 * "Generate thumbnail" on a video project: main builds the image project
+	 * (frames + the brief as its first message); this runs the generation ONCE,
+	 * and only when a Gemini key exists. Without one, or if the run fails, the
+	 * message stays in the project with its Retry button: nothing is lost and no
+	 * second run is ever started here, because each one costs real API calls.
+	 */
+	const makeThumbnailProject = async (
+		videoThreadId: string,
+		options?: { prompt?: string; expectedFrameCount?: number }
+	): Promise<{ threadId: string; generating: boolean; headline: string }> => {
+		const result = await (window as any).api.createThumbnailProject(videoThreadId, options)
+		const thread: Thread = result.thread
+		threads.value = [thread, ...threads.value.filter((t: Thread) => t.id !== thread.id)]
+		await selectThread(thread.id)
+		if (result.hasGeminiKey) {
+			await startProcessing(thread.id, result.userMessageId, 1, false, true)
+		}
+		return { threadId: thread.id, generating: !!result.hasGeminiKey, headline: result.headline?.text ?? '' }
+	}
+
+	/** The suggested thumbnail prompt for a video project, to show and let the person rewrite before anything is made. */
+	const thumbnailBriefFor = async (videoThreadId: string): Promise<{ brief: string; frameCount: number }> =>
+		(window as any).api.previewThumbnailBrief(videoThreadId)
+
 	const abortProcessing = async (messageId: string) => {
 		if ((window as any).api) {
 			await (window as any).api.abortPipeline(messageId)
@@ -245,8 +270,8 @@ export const useVideoStore = defineStore('video', () => {
 		});
 	}
 
-	const deleteThread = async (id: string) => {
-		const success = await (window as any).api.deleteThread(id)
+	const deleteThread = async (id: string, options?: { deleteFiles?: boolean }) => {
+		const success = await (window as any).api.deleteThread(id, options)
 		if (success) {
 			threads.value = threads.value.filter((t: Thread) => t.id !== id)
 			if (currentThreadId.value === id) {
@@ -437,6 +462,8 @@ export const useVideoStore = defineStore('video', () => {
 		addMessage,
 		clearMessages,
 		startProcessing,
+		makeThumbnailProject,
+		thumbnailBriefFor,
 		abortProcessing,
 		deleteThread,
 		deleteAllThreads,

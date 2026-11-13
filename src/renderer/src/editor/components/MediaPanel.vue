@@ -1,13 +1,20 @@
 <template>
 	<div class="flex flex-col min-h-0 overflow-hidden">
 		<div class="px-3 pt-3 pb-1 flex items-center justify-between shrink-0">
-			<span class="lbl whitespace-nowrap truncate">Footage &amp; audio</span>
+			<span class="lbl whitespace-nowrap truncate">Media files</span>
 			<div class="flex items-center gap-1">
-				<SlimTooltip text="Add local media" placement="bottom">
+				<SlimTooltip :text="addFilesTip" placement="bottom">
 					<button
 						class="w-7 h-7 flex items-center justify-center rounded-lg text-zinc-500 hover:text-primary hover:bg-primary/10 transition active:scale-95"
 						@click="editorStore.addLocalMedia()">
 						<span class="iconify tabler--plus w-4 h-4"></span>
+					</button>
+				</SlimTooltip>
+				<SlimTooltip text="Add a folder" placement="bottom">
+					<button
+						class="w-7 h-7 flex items-center justify-center rounded-lg text-zinc-500 hover:text-primary hover:bg-primary/10 transition active:scale-95"
+						@click="editorStore.addLocalMedia({ folders: true })">
+						<span class="iconify tabler--folder-plus w-4 h-4"></span>
 					</button>
 				</SlimTooltip>
 				<SlimTooltip text="Import from URL" placement="bottom">
@@ -23,7 +30,9 @@
 		<!-- Asset list -->
 		<div class="flex-1 min-h-0 overflow-y-auto custom-scrollbar px-3 pb-2">
 			<!-- Empty state -->
-			<div v-if="editorStore.isEmpty && !hasActiveImports"
+			<BulkImportCard />
+
+			<div v-if="editorStore.isEmpty && !hasActiveImports && !editorStore.bulkImport"
 				class="h-full flex flex-col items-center justify-center text-center gap-4 py-8">
 				<div
 					class="w-14 h-14 rounded-2xl bg-primary/10 flex items-center justify-center text-primary">
@@ -32,7 +41,7 @@
 				<div>
 					<p class="text-sm font-bold text-zinc-800 dark:text-zinc-200">No media yet</p>
 					<p class="text-xs text-zinc-500 dark:text-zinc-400 mt-1 leading-relaxed px-2">
-						Add video or audio and it will be broken into selectable pieces.
+						Add video or audio, or drop files and folders anywhere. It will be broken into selectable pieces.
 					</p>
 				</div>
 				<div class="flex flex-col gap-2 w-full px-2">
@@ -40,6 +49,11 @@
 						class="w-full px-3 py-2 rounded-xl bg-primary text-white text-xs font-bold shadow-md shadow-primary/20 hover:bg-primary-dark transition active:scale-95"
 						@click="editorStore.addLocalMedia()">
 						Add local media
+					</button>
+					<button
+						class="w-full px-3 py-2 rounded-xl border border-zinc-200 dark:border-zinc-700 text-xs font-bold text-zinc-600 dark:text-zinc-300 hover:border-primary/40 hover:text-primary transition active:scale-95"
+						@click="editorStore.addLocalMedia({ folders: true })">
+						Add a folder
 					</button>
 					<button
 						class="w-full px-3 py-2 rounded-xl border border-zinc-200 dark:border-zinc-700 text-xs font-bold text-zinc-600 dark:text-zinc-300 hover:border-primary/40 hover:text-primary transition active:scale-95"
@@ -94,6 +108,7 @@ import { computed, ref } from 'vue'
 import SlimTooltip from '../../components/SlimTooltip.vue'
 import { useEditorStore } from '../../stores/editorStore'
 import AssetRow from './AssetRow.vue'
+import BulkImportCard from './BulkImportCard.vue'
 import CameraGroups from './CameraGroups.vue'
 import ClipTray from './ClipTray.vue'
 import ImportMediaModal from './ImportMediaModal.vue'
@@ -103,6 +118,8 @@ defineEmits<{ (e: 'update:collapsed', value: boolean): void }>()
 
 const editorStore = useEditorStore()
 const showImportModal = ref(false)
+// macOS chooses files and folders in one panel; elsewhere files and folders have their own buttons.
+const addFilesTip = navigator.userAgent.includes('Mac') ? 'Add files or folders' : 'Add files'
 
 /** Footage and audio you brought; and what the synth made. */
 const importedAssets = computed(() => editorStore.assets.filter((a) => !a.synth))

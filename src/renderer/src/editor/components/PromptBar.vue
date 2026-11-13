@@ -13,24 +13,51 @@
 
 		<!-- Flat input zone: the panel's border-t is the only frame. -->
 		<div>
-			<textarea ref="inputRef" v-model="text" rows="1"
-				class="w-full bg-transparent resize-none outline-none text-sm text-zinc-800 dark:text-zinc-200 placeholder-zinc-400 max-h-24 custom-scrollbar py-1"
-				:placeholder="placeholder" :disabled="inputDisabled"
-				@input="autoGrow" @keydown.enter.exact.prevent="submit"></textarea>
+			<AttachmentTray @submit="submit" />
+			<div class="relative">
+				<TimeRefPicker v-if="picker.open.value" :options="picker.options.value" :active="picker.active.value"
+					@pick="picker.pick" @hover="picker.active.value = $event" />
+				<!-- Same font and padding as the textarea, so its chips sit under the text. -->
+				<RefMirror :text="text" :scroll-top="scrollTop" class="text-sm py-1" />
+				<textarea ref="inputRef" v-model="text" rows="1"
+					class="relative block w-full bg-transparent resize-none outline-none text-sm text-zinc-800 dark:text-zinc-200 placeholder-zinc-400 max-h-24 custom-scrollbar py-1"
+					:placeholder="placeholder" :disabled="inputDisabled" data-testid="prompt-input"
+					@input="onInput" @keydown="onKeydown" @click="picker.sync" @keyup="onKeyup" @blur="picker.sync"
+					@scroll="scrollTop = ($event.target as HTMLElement).scrollTop"></textarea>
+			</div>
 
-			<!-- Meta row: quiet text controls left, send right -->
-			<div class="flex items-center gap-1 mt-0.5">
+			<!-- Meta row: quiet text controls left, send right. It measures itself
+			     (container query below): a narrow chat drops labels and shortens the
+			     engine chip, so the scope keeps a readable share and Send never leaves. -->
+			<div class="meta-row flex items-center gap-1 mt-0.5">
 				<EngineChip />
 
-				<span class="text-zinc-300 dark:text-zinc-700 text-[9px]">·</span>
+				<span class="meta-dot text-zinc-300 dark:text-zinc-700 text-[9px]">·</span>
 
-				<PersonaPicker />
+				<!-- The frame in the monitor, attached to the message as a picture. -->
+				<button class="shrink-0 flex items-center gap-1 px-1 py-0.5 rounded-md text-zinc-500 hover:text-accent transition disabled:opacity-40 disabled:hover:text-zinc-500"
+					:title="frameTitle" aria-label="Attach frame" :disabled="!canCapture" data-testid="attach-frame" @click="store.captureFrameForPrompt()">
+					<span class="iconify w-2.5 h-2.5" :class="store.capturingFrame ? 'tabler--loader-2 animate-spin' : 'tabler--camera-plus'"></span>
+					<span class="meta-label text-[9px] font-bold uppercase tracking-widest">Frame</span>
+				</button>
 
-				<span class="text-zinc-300 dark:text-zinc-700 text-[9px]">·</span>
+				<span class="meta-dot text-zinc-300 dark:text-zinc-700 text-[9px]">·</span>
+
+				<!-- The CLI agent remembers this chat; this makes its next message a clean start. -->
+				<template v-if="conversation">
+					<button class="shrink-0 flex items-center gap-1 px-1 py-0.5 rounded-md text-zinc-500 hover:text-primary transition"
+						title="The agent remembers this chat. Start a new conversation: it forgets what was said, the project stays as it is."
+						aria-label="New conversation" data-testid="new-conversation" @click="store.resetEngineConversation()">
+						<span class="iconify tabler--message-plus w-2.5 h-2.5"></span>
+						<span class="meta-label text-[9px] font-bold uppercase tracking-widest">New conversation</span>
+					</button>
+					<span class="meta-dot text-zinc-300 dark:text-zinc-700 text-[9px]">·</span>
+				</template>
 
 				<!-- Scope: text-level control — owns the flexible space so it
-				     truncates with clearance before the send button -->
-				<div class="relative flex-1 min-w-0" ref="scopeRef">
+				     truncates with clearance before the send button; never narrower
+				     than its icon, so it can always be opened -->
+				<div class="relative flex-1 min-w-[18px]" ref="scopeRef">
 					<button v-if="store.scopePreview"
 						class="max-w-full flex items-center gap-1 px-1 py-0.5 rounded-md text-zinc-500 hover:text-secondary transition min-w-0"
 						:title="'What the AI can see — click to change'"
@@ -81,7 +108,7 @@
 		<div v-else-if="store.promptRunning" class="mt-1.5 flex items-center gap-2 px-2">
 			<div class="w-3 h-3 rounded-full border-2 border-primary border-t-transparent animate-spin"></div>
 			<span class="text-[10px] font-medium text-zinc-500">
-				{{ engine.isCli ? engine.current.label : store.activePersona?.name || 'AI' }} is working on your edit…
+				{{ engine.isCli ? engine.current.label : 'AI' }} is working on your edit…
 			</span>
 		</div>
 	</div>
@@ -90,10 +117,17 @@
 <script setup lang="ts">
 import { computed, nextTick, onMounted, onUnmounted, ref, watch } from 'vue'
 import { useEditorStore } from '../../stores/editorStore'
-import PersonaPicker from './PersonaPicker.vue'
 import EngineChip from './EngineChip.vue'
 import { useEngineStore } from '../../stores/engineStore'
 import { useAgentStore } from '../../stores/agentStore'
+import { resumableSessionId } from '@shared/engines'
+import { formatTimecode } from '@shared/promptRefs'
+import AttachmentTray from './AttachmentTray.vue'
+import TimeRefPicker from './TimeRefPicker.vue'
+import RefMirror from './RefMirror.vue'
+import { useTimeRefPicker } from '../composables/useTimeRefPicker'
+import { draftPrompt } from '../frameMarks'
+import { MAX_PROMPT_FRAMES } from '../../stores/editorStore'
 
 const store = useEditorStore()
 const engine = useEngineStore()
@@ -124,10 +158,48 @@ const placeholder = computed(() => {
 	if (store.isEmpty && !store.hasLayers) return 'Import media to start…'
 	if (!store.canPrompt && store.mediaProcessing) return 'Preparing media…'
 	if (!store.canPrompt) return 'Media not ready yet…'
-	return `Message ${store.activePersona?.name || 'your editor'}…`
+	return `Message ${engine.current.label}…`
 })
 
-const canSend = computed(() => text.value.trim().length > 0 && !inputDisabled.value)
+/** The selected agent has a conversation with this project that the next message would continue. */
+const conversation = computed(() => {
+	const id = engine.settings.engine
+	return !store.promptRunning && !!resumableSessionId(store.doc?.turns, id)
+})
+
+const picker = useTimeRefPicker(text, inputRef)
+const scrollTop = ref(0)
+
+// Frames alone are a message (their notes say what is wanted); an engine that
+// cannot see pictures cannot be sent them, and the tray says why.
+const attachments = computed(() => store.promptAttachments)
+const imagesBlocked = computed(() => attachments.value.length > 0 && !engine.current.images)
+const canSend = computed(() => (text.value.trim().length > 0 || attachments.value.length > 0) && !imagesBlocked.value && !store.capturingFrame && !inputDisabled.value)
+
+const canCapture = computed(() => !!store.doc?.timeline.length && engine.current.images && !store.capturingFrame && !mcp.value
+	&& attachments.value.length < MAX_PROMPT_FRAMES)
+const frameTitle = computed(() => {
+	if (!engine.current.images) return `${engine.current.label} cannot be sent pictures`
+	if (!store.doc?.timeline.length) return 'Nothing on the timeline to capture'
+	if (attachments.value.length >= MAX_PROMPT_FRAMES) return `A message carries ${MAX_PROMPT_FRAMES} frames at most`
+	return `Attach the frame at the playhead (${formatTimecode(store.playheadSec)}). Or type @ in the message.`
+})
+
+const onInput = () => {
+	autoGrow()
+	picker.sync()
+}
+// Arrow keys move the caret without an input event; the picker follows it.
+const onKeyup = (e: KeyboardEvent) => {
+	if (!picker.open.value || !['ArrowUp', 'ArrowDown', 'Enter', 'Tab', 'Escape'].includes(e.key)) picker.sync()
+}
+const onKeydown = (e: KeyboardEvent) => {
+	if (picker.onKeydown(e)) return
+	if (e.key === 'Enter' && !e.shiftKey && !e.altKey && !e.metaKey && !e.ctrlKey && !e.isComposing) {
+		e.preventDefault()
+		submit()
+	}
+}
 
 const scopeOptions = computed(() => [
 	{
@@ -152,7 +224,7 @@ const autoGrow = () => {
 
 const submit = () => {
 	if (!canSend.value) return
-	lastPrompt.value = text.value.trim()
+	lastPrompt.value = draftPrompt(text.value, attachments.value.length)
 	store.runPrompt(lastPrompt.value)
 	text.value = ''
 	autoGrow()
@@ -179,3 +251,22 @@ const onDocClick = (e: MouseEvent) => {
 onMounted(() => document.addEventListener('click', onDocClick))
 onUnmounted(() => document.removeEventListener('click', onDocClick))
 </script>
+
+<style scoped>
+.meta-row { container-type: inline-size; }
+/* With every label the row needs about 570 px (chip ~200, Frame ~60, New
+   conversation ~130, scope ~110, Send). The chat column is 280 to 560 px wide, so
+   the row is usually narrower than that, and gives up words in two steps:
+   1. Frame and New conversation keep only their icons (their titles still say what
+      they do), which frees ~150 px;
+   2. the chip names the model alone and the separators go, which frees ~120 px
+      more, so the scope still reads at the column's narrowest. */
+@container (max-width: 539px) {
+	.meta-label { display: none; }
+}
+@container (max-width: 419px) {
+	.meta-dot { display: none; }
+	.meta-row :deep(.chip-full) { display: none; }
+	.meta-row :deep(.chip-short) { display: inline; }
+}
+</style>

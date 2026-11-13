@@ -3,9 +3,9 @@ import { defineStore } from 'pinia'
 import { ref, shallowRef, computed, watch } from 'vue'
 import type {
 	BackgroundTask, Clip, EditorDocument, EditorHistoryStep, EditorMarker,
-	EditorPersona, EditorRevision, EditorRevisionSummary, MediaAsset, RevisionSnapshot, PromptTurn, Thread, TimelineDiff,
+	EditorRevision, EditorRevisionSummary, MediaAsset, RevisionSnapshot, PromptTurn, Thread, TimelineDiff,
 	DeliveryFormat, SoundBinding, TimelineItem, TimelineItemTransform, TimelineSnapshot, Track,
-	EditorOps, MulticamGroup, MulticamSpeakers, PrepLane
+	EditorOps, MulticamGroup, MulticamSpeakers, PrepLane, RenderStepInfo
 } from '@shared/types'
 import {
 	groupOfItem, groupRippleCut, groupTimeAt, rederiveGroupItems, resolveAngle, shotRun, suggestCameraGroups, type CameraGroupSuggestion
@@ -39,10 +39,14 @@ import {
 	captionsFromTimeline, type CaptionCue, type TranscriptEntry
 } from '@shared/captions'
 import { sequenceFrame as resolveSequenceFrame } from '@shared/framing'
+import { documentFrame, migrateProjectFrame, normalizeCustomFrame, usedVideoSources } from '@shared/resolution'
+import { withFollow } from '@shared/follow'
+import type { ObjectTrack } from '@shared/tracking'
 import { childrenByParent, collectSubtree, hasBranch, summarizeRevision, withoutProbeStamps } from '@shared/revision-tree'
-import { DEFAULT_PERSONA_ID } from '@shared/personas'
 import { agentChangeBadges, type AgentApplyOutcome } from '@shared/agentFeed'
 import { toMediaUrl } from '@shared/media-url'
+import { baseName, importInOrder, reportOf, type BatchReport, type BulkImport } from '@shared/importBatch'
+import type { ExpandedMedia } from '@shared/mediaFiles'
 import { roleSpec, type AudioAnalysis, type TrackRole } from '@shared/audio'
 import { applySoundBindings, boundStart, freeSoundTrack, suggestCues, type SoundCue } from '@shared/sound'
 import { recipeKey, soundLead, soundLength, type SoundRecipe } from '@shared/synth'
@@ -57,6 +61,11 @@ import {
 	type Seam
 } from '@shared/transitionPlan'
 import { dialog } from '../composables/useDialog'
+import type { ComposerAttachment } from '../editor/frameMarks'
+import { markLabels } from '../editor/markGeometry'
+
+/** Frames one message can carry: each is a full picture the model reads at full price. */
+export const MAX_PROMPT_FRAMES = 6
 
 /**
  * Store for the timeline video editor (/editor/:id).
@@ -65,7 +74,7 @@ import { dialog } from '../composables/useDialog'
  * - MAIN owns preprocessing-derived asset fields: preprocessing, proxyPath,
  *   metadata, preprocessState, preprocessError, clips content.
  * - RENDERER owns: selection, clip.selected flags, tracks, timeline,
- *   timelineMeta, activePersonaId, customPersonas.
+ *   timelineMeta.
  * persistDoc() sends only renderer-owned fields; the thread-updated handler
  * merges only main-owned fields.
  */
@@ -117,6 +126,13 @@ export const useEditorStore = defineStore('editor', () => {
 	 * half-typed prompt.
 	 */
 	const promptDraft = ref('')
+	/**
+	 * Frames attached to the draft, shared like the draft by the chat's prompt
+	 * bar and the folded composer strip. Sent with the next message, then cleared.
+	 */
+	const promptAttachments = ref<ComposerAttachment[]>([])
+	/** A frame is being rendered for the draft. */
+	const capturingFrame = ref(false)
 	/** Keyed by thread: /editor/:id reuses the component, so a queued prompt must not leak. */
 	const pendingPrompt = ref<{ threadId: string; text: string } | null>(null)
 
@@ -139,9 +155,6 @@ export const useEditorStore = defineStore('editor', () => {
 	// ===== History state (M2) =====
 	const historySteps = ref<EditorHistoryStep[]>([])
 	let pushCounter = 0
-
-	// ===== Personas (M3) =====
-	const personas = ref<EditorPersona[]>([]) // built-ins + global user library (from main)
 
 	// ===== AI prompt turns (M3, reworked for revisions) =====
 	const activeTurnId = ref<string | null>(null)
@@ -198,6 +211,13 @@ export const useEditorStore = defineStore('editor', () => {
 		outputPath?: string
 		error?: string
 		startedAt: number
+		/** The steps of the export and where each stands, and the time left. */
+		steps?: RenderStepInfo[]
+		etaSec?: number | null
+		etaSpread?: number
+		elapsedSec?: number
+		/** What the export was started with, so it is still on screen an hour in. */
+		summary?: { label: string; value: string }[]
 	}
 	const renders = ref<Record<string, RenderEntry>>({})
 
@@ -229,16 +249,26 @@ export const useEditorStore = defineStore('editor', () => {
 	// Words lane first (audio, transcript), then the picture lane: the two run side by side.
 	const STEP_ORDER = ['audio', 'transcript', 'retranscribe', 'proxy', 'filmstrip', 'scenes', 'thumbnails', 'descriptions']
 
-	const assetTasks = (assetId: string): BackgroundTask[] => {
-		const prefix = `${assetId}:`
-		return Object.entries(backgroundTasks.value)
-			.filter(([id]) => id.startsWith(prefix))
-			.map(([, task]) => task)
-			.sort((a, b) => {
-				const stepOf = (t: BackgroundTask) => STEP_ORDER.indexOf(t.id.split(':')[1] || '')
-				return stepOf(a) - stepOf(b)
-			})
-	}
+	// Every asset row asks for its own tasks on every task update. Scanning the
+	// whole task table per row made a 60-file import quadratic and froze the
+	// panel; grouped once per change, each row's answer is a lookup.
+	const tasksByAsset = computed(() => {
+		const groups = new Map<string, BackgroundTask[]>()
+		for (const [id, task] of Object.entries(backgroundTasks.value)) {
+			const cut = id.indexOf(':')
+			if (cut < 0) continue
+			const assetId = id.slice(0, cut)
+			const list = groups.get(assetId)
+			if (list) list.push(task)
+			else groups.set(assetId, [task])
+		}
+		const stepOf = (t: BackgroundTask) => STEP_ORDER.indexOf(t.id.split(':')[1] || '')
+		for (const list of groups.values()) list.sort((a, b) => stepOf(a) - stepOf(b))
+		return groups
+	})
+
+	const NO_TASKS: BackgroundTask[] = []
+	const assetTasks = (assetId: string): BackgroundTask[] => tasksByAsset.value.get(assetId) ?? NO_TASKS
 
 	const assetProgress = (assetId: string): { step: string; percent: number } | null => {
 		const running = assetTasks(assetId).find((t) => t.state === 'running')
@@ -280,6 +310,34 @@ export const useEditorStore = defineStore('editor', () => {
 		} catch (error) {
 			console.error('[editorStore] transcript fetch failed:', error)
 		}
+	}
+
+	// ===== Object tracks =====
+
+	/**
+	 * The project's tracks (faces found, things followed), from the main process,
+	 * which owns the files. A motion layer that follows one is drawn from it here
+	 * exactly as the export draws it: `drawnItem` is the same `withFollow`.
+	 */
+	const objectTracks = shallowRef<ObjectTrack[]>([])
+
+	const refreshObjectTracks = async () => {
+		if (!threadId.value) { objectTracks.value = []; return }
+		try {
+			objectTracks.value = await api.getObjectTracks(threadId.value) || []
+		} catch (error) {
+			console.error('[editorStore] track fetch failed:', error)
+		}
+	}
+	watch(threadId, () => { void refreshObjectTracks() }, { immediate: true })
+	api.onObjectTracksChanged?.((data: { threadId: string }) => {
+		if (data.threadId === threadId.value) void refreshObjectTracks()
+	})
+
+	/** The item as the monitor should draw it: a following layer with its track's keys. */
+	const drawnItem = (item: TimelineItem): TimelineItem => {
+		if (!item.follow || !doc.value) return item
+		return withFollow(item, doc.value.timeline, { tracks: objectTracks.value, media: doc.value.media, frame: documentFrame(doc.value) })
 	}
 
 	/**
@@ -721,11 +779,7 @@ export const useEditorStore = defineStore('editor', () => {
 	const sequenceFrame = computed(() => {
 		const d = doc.value
 		if (!d) return { width: 1920, height: 1080 }
-		const used = new Set(d.timeline.map((i) => i.sourceAssetId))
-		return resolveSequenceFrame(
-			d.timelineMeta,
-			d.media.filter((a) => used.has(a.id) && a.kind !== 'audio').map((a) => a.metadata ?? {})
-		)
+		return documentFrame(d)
 	})
 
 	const contentEnd = computed(() => computeContentEnd(doc.value?.timeline || []))
@@ -1023,37 +1077,6 @@ export const useEditorStore = defineStore('editor', () => {
 	const canUndo = computed(() => pointerIndex.value >= 0)
 	const canRedo = computed(() => pointerIndex.value < historySteps.value.length - 1)
 
-	// ===== Persona computeds (M3) =====
-	// Resolution: project-local customPersonas -> global library (incl. builtins) -> default
-	const findPersona = (id: string | undefined | null): EditorPersona | null => {
-		if (!id) return null
-		return (
-			doc.value?.customPersonas?.find((p) => p.id === id) ||
-			personas.value.find((p) => p.id === id) ||
-			null
-		)
-	}
-
-	const activePersona = computed<EditorPersona | null>(() =>
-		findPersona(doc.value?.activePersonaId) ||
-		personas.value.find((p) => p.id === DEFAULT_PERSONA_ID) ||
-		personas.value[0] ||
-		null
-	)
-
-	/**
-	 * Built-in vs custom. This used to group by persona mode (Long-form /
-	 * Summarize), which is the taxonomy that no longer exists — a persona is a
-	 * style now, and length comes from the request.
-	 */
-	const personaGroups = computed(() => ({
-		builtin: personas.value.filter((p) => p.builtin),
-		custom: [
-			...personas.value.filter((p) => !p.builtin),
-			...(doc.value?.customPersonas || [])
-		]
-	}))
-
 	// ===== Proposal computeds (M3) =====
 	const promptRunning = computed(() => activeTurnId.value !== null)
 	/**
@@ -1304,8 +1327,6 @@ export const useEditorStore = defineStore('editor', () => {
 				timeline: doc.value.timeline,
 				timelineMeta: doc.value.timelineMeta,
 				selection: doc.value.selection,
-				activePersonaId: doc.value.activePersonaId,
-				customPersonas: doc.value.customPersonas,
 				clipSelections,
 				// Undo pointer rides with the doc: state + pointer land atomically
 				historyRef: doc.value.historyRef,
@@ -1349,6 +1370,8 @@ export const useEditorStore = defineStore('editor', () => {
 			// has not finished, so the AI would see an empty clip tray.
 			promptDraft.value = pendingPrompt.value?.threadId === id ? pendingPrompt.value.text : ''
 			pendingPrompt.value = null
+			// Frames belong to the project they were taken from.
+			promptAttachments.value = []
 
 			if (doc.value) {
 				const state: TimelineState = { tracks: doc.value.tracks, timeline: doc.value.timeline }
@@ -1365,6 +1388,15 @@ export const useEditorStore = defineStore('editor', () => {
 					markDirty()
 				}
 
+				// A project that never chose a frame gets its resolution written down:
+				// the one it has always exported at, so nothing about its export moves.
+				const meta = doc.value.timelineMeta
+				const migrated = migrateProjectFrame(meta, usedVideoSources(doc.value))
+				if (migrated !== meta) {
+					doc.value.timelineMeta = migrated
+					markDirty()
+				}
+
 				// Heal any pre-existing same-track overlaps (e.g. from AI accepts
 				// made before overlap repair existed) — persists via autosave.
 				if (repairOverlaps(state)) {
@@ -1374,13 +1406,6 @@ export const useEditorStore = defineStore('editor', () => {
 			}
 
 			backgroundTasks.value = (await api.getBackgroundTasks(id)) || {}
-
-			// ---- Personas (global library incl. builtins) ----
-			try {
-				personas.value = (await api.getPersonas()) || []
-			} catch (error) {
-				console.error('[editorStore] Failed to load personas:', error)
-			}
 
 			// ---- Which model each operation is configured to use ----
 			// So buttons that spend tokens can name the model instead of just
@@ -1522,19 +1547,75 @@ export const useEditorStore = defineStore('editor', () => {
 		seedSequenceFrame(doc.value.media[index === -1 ? doc.value.media.length - 1 : index])
 	}
 
-	const addLocalMedia = async () => {
-		if (!threadId.value) return
-		const result = await api.selectVideo()
-		if (!result?.path) return
-		const asset: MediaAsset | null = await api.addMediaAsset({
-			threadId: threadId.value,
-			filePath: result.path,
-			name: result.name
-		})
-		if (asset) {
-			upsertAsset(asset)
-			selectedAssetId.value = asset.id
+	/**
+	 * Local media: the picker (several files, a folder, both) and a drop all end
+	 * in `importPaths`. It expands folders in main, then imports file by file so
+	 * the Media panel can show how far it is, one bad file is listed instead of
+	 * stopping the rest, and assets land in the order of the list. Batches run
+	 * one at a time: a second drop waits for the first.
+	 */
+	const bulkImport = ref<BulkImport | null>(null)
+	let importQueue: Promise<unknown> = Promise.resolve()
+	let stopRequested = false
+	let dismissTimer: ReturnType<typeof setTimeout> | undefined
+
+	const dismissBulkImport = () => {
+		clearTimeout(dismissTimer)
+		if (bulkImport.value?.phase === 'done') bulkImport.value = null
+	}
+	const stopBulkImport = () => { stopRequested = true }
+
+	const runImport = async (paths: string[]): Promise<BatchReport | null> => {
+		const id = threadId.value
+		if (!id || !paths.length) return null
+		clearTimeout(dismissTimer)
+		stopRequested = false
+		bulkImport.value = { phase: 'scanning', progress: null, report: null }
+		let expanded: ExpandedMedia
+		try {
+			expanded = await api.expandMediaPaths(paths)
+		} catch (error) {
+			console.error('[editorStore] reading the selection failed:', error)
+			expanded = { files: [], skipped: paths.map((path) => ({ path, reason: 'unreadable' as const })), truncated: false }
 		}
+		const several = expanded.files.length > 1
+		let firstId: string | null = null
+		const result = await importInOrder(expanded.files, async (file) => {
+			const asset: MediaAsset | null = await api.addMediaAsset({
+				threadId: id, filePath: file, name: baseName(file), discardUnreadable: several
+			})
+			if (asset) {
+				upsertAsset(asset)
+				firstId ??= asset.id
+			}
+			return asset
+		}, {
+			onProgress: (progress) => { bulkImport.value = { phase: 'importing', progress, report: null } },
+			shouldStop: () => stopRequested
+		})
+		if (firstId) selectedAssetId.value = firstId
+		const report = reportOf(expanded, result)
+		const quiet = expanded.files.length === 1 && !report.failed.length && !report.skipped.length
+		if (quiet) {
+			bulkImport.value = null
+		} else {
+			bulkImport.value = { phase: 'done', progress: null, report }
+			// A clean batch says so and goes; one with something to read stays until dismissed.
+			if (!report.failed.length) dismissTimer = setTimeout(dismissBulkImport, 8000)
+		}
+		return report
+	}
+
+	const importPaths = (paths: string[]): Promise<BatchReport | null> => {
+		const next = importQueue.then(() => runImport(paths))
+		importQueue = next.catch(() => null)
+		return next
+	}
+
+	const addLocalMedia = async (options: { folders?: boolean } = {}) => {
+		if (!threadId.value) return
+		const paths: string[] = await api.pickMedia(options)
+		if (paths?.length) await importPaths(paths)
 	}
 
 	const importUrl = async (url: string, resolution?: string) => {
@@ -1792,6 +1873,10 @@ export const useEditorStore = defineStore('editor', () => {
 
 	const selectItems = (ids: string[]) => {
 		selectedItemIds.value = [...ids]
+		// Picking a clip leaves the seam: the inspector shows a seam before any
+		// item, so a seam left selected would hide the clip just picked. An empty
+		// list is selectSeam's own clear and must not undo the seam it just set.
+		if (ids.length) selectedSeamId.value = null
 		syncSelectionIntoDoc()
 	}
 
@@ -1799,6 +1884,7 @@ export const useEditorStore = defineStore('editor', () => {
 		selectedItemIds.value = selectedItemIds.value.includes(id)
 			? selectedItemIds.value.filter((x) => x !== id)
 			: [...selectedItemIds.value, id]
+		if (selectedItemIds.value.length) selectedSeamId.value = null
 		syncSelectionIntoDoc()
 	}
 
@@ -3096,14 +3182,24 @@ export const useEditorStore = defineStore('editor', () => {
 	const setSequenceFrame = (width: number, height: number) => {
 		if (!doc.value || !Number.isFinite(width) || !Number.isFinite(height)) return
 		if (width < 2 || height < 2) return
-		doc.value.timelineMeta = { ...doc.value.timelineMeta, width, height, frameChosen: true }
+		// Even and within what an encoder takes: a custom W×H lands here too.
+		const frame = normalizeCustomFrame(width, height)
+		if (!frame) return
+		doc.value.timelineMeta = { ...doc.value.timelineMeta, ...frame, frameChosen: true }
 		markDirty()
 	}
 
-	/** Back to following the footage. Picking a frame was otherwise one-way. */
+	/**
+	 * Back to the footage's own size: the largest video the timeline uses, written
+	 * down as the project resolution. (It used to un-choose the frame and follow
+	 * the footage live; a project's resolution is now always explicit.)
+	 */
 	const clearSequenceFrame = () => {
 		if (!doc.value) return
-		doc.value.timelineMeta = { ...doc.value.timelineMeta, frameChosen: false }
+		const sources = usedVideoSources(doc.value)
+		if (!sources.some((s) => s.width && s.height)) return
+		const { width, height } = resolveSequenceFrame({ frameChosen: false }, sources)
+		doc.value.timelineMeta = { ...doc.value.timelineMeta, width, height, frameChosen: true }
 		markDirty()
 	}
 
@@ -3492,46 +3588,6 @@ export const useEditorStore = defineStore('editor', () => {
 			d.tracks.filter((t) => trackFamily(t) === 'video').length > 1
 	}
 
-	// ===== Persona actions (M3) =====
-	const setActivePersona = (id: string) => {
-		if (!doc.value) return
-		doc.value.activePersonaId = id
-		markDirty()
-	}
-
-	/** Create or update a persona in the GLOBAL library (main filters builtins). */
-	const savePersona = async (persona: EditorPersona) => {
-		const userPersonas = personas.value.filter((p) => !p.builtin && p.id !== persona.id)
-		const merged = await api.setPersonas(
-			JSON.parse(JSON.stringify([...userPersonas, { ...persona, builtin: false, featureSets: [] }]))
-		)
-		if (merged) personas.value = merged
-	}
-
-	const clonePersona = (sourceId: string): EditorPersona | null => {
-		const source = findPersona(sourceId) || personas.value.find((p) => p.id === sourceId)
-		if (!source) return null
-		return {
-			...JSON.parse(JSON.stringify(source)),
-			id: (crypto as any).randomUUID ? crypto.randomUUID() : `persona-${Date.now()}`,
-			name: `Copy of ${source.name}`,
-			builtin: false,
-			featureSets: []
-		}
-	}
-
-	const deletePersona = async (id: string) => {
-		const target = personas.value.find((p) => p.id === id)
-		if (!target || target.builtin) return // built-ins can't be deleted
-		const merged = await api.setPersonas(
-			JSON.parse(JSON.stringify(personas.value.filter((p) => !p.builtin && p.id !== id)))
-		)
-		if (merged) personas.value = merged
-		if (doc.value?.activePersonaId === id) {
-			setActivePersona(DEFAULT_PERSONA_ID)
-		}
-	}
-
 	// ===== Revision actions =====
 	const deepClone = <T>(v: T): T => JSON.parse(JSON.stringify(v))
 
@@ -3608,7 +3664,6 @@ export const useEditorStore = defineStore('editor', () => {
 		origin: 'ai' | 'manual'
 		label?: string
 		turnId?: string
-		personaId?: string
 	}): Promise<EditorRevisionSummary | null> => {
 		if (!doc.value || !threadId.value) return null
 		await ensureRootRevision()
@@ -3622,7 +3677,6 @@ export const useEditorStore = defineStore('editor', () => {
 			origin: options.origin,
 			label: options.label?.trim() || (options.origin === 'ai' ? 'AI edit' : 'Checkpoint'),
 			turnId: options.turnId,
-			personaId: options.personaId,
 			snapshot: snapshotOfWorkingState(),
 			createdAt: Date.now()
 		}
@@ -3641,13 +3695,13 @@ export const useEditorStore = defineStore('editor', () => {
 	 * adding another, so switching between revisions stays about whole sessions.
 	 */
 	const replaceRoundRevision = async (
-		id: string, options: { label: string; turnId?: string; personaId?: string }
+		id: string, options: { label: string; turnId?: string }
 	): Promise<EditorRevisionSummary | null> => {
 		const existing = revisions.value.find((r) => r.id === id)
 		if (!existing || !doc.value || !threadId.value) return null
 		const rev: EditorRevision = {
 			id, parentId: existing.parentId, seq: existing.seq, origin: 'ai', label: options.label,
-			turnId: options.turnId, personaId: options.personaId,
+			turnId: options.turnId,
 			snapshot: snapshotOfWorkingState(), createdAt: existing.createdAt
 		}
 		const summary = { ...summarizeRevision(rev), seq: existing.seq }
@@ -3796,8 +3850,51 @@ export const useEditorStore = defineStore('editor', () => {
 		pendingPrompt.value = text.trim() ? { threadId: id, text: text.trim() } : null
 	}
 
+	/**
+	 * Attach the frame at the playhead to the draft: the export pipeline's
+	 * picture, exactly what the monitor shows (titles and captions included).
+	 */
+	const captureFrameForPrompt = async (): Promise<boolean> => {
+		if (!threadId.value || !doc.value || capturingFrame.value) return false
+		if (promptAttachments.value.length >= MAX_PROMPT_FRAMES) {
+			promptError.value = `A message can carry ${MAX_PROMPT_FRAMES} frames at most.`
+			return false
+		}
+		capturingFrame.value = true
+		const tid = threadId.value
+		const timeSec = playheadSec.value
+		try {
+			const frame = await api.captureFramePrompt({ threadId: tid, doc: JSON.parse(JSON.stringify(doc.value)), timeSec })
+			if (threadId.value !== tid) return false
+			promptAttachments.value = [...promptAttachments.value, {
+				id: `frame-${Date.now().toString(36)}-${Math.floor(Math.random() * 1e6).toString(36)}`,
+				timeSec, note: '', original: frame.data, data: frame.data, mimeType: 'image/jpeg',
+				thumbnail: frame.thumbnail, width: frame.width, height: frame.height, marks: []
+			}]
+			return true
+		} catch (error: any) {
+			promptError.value = `The frame could not be captured: ${error?.message?.split('Error: ').pop() || 'unknown error'}`
+			return false
+		} finally {
+			capturingFrame.value = false
+		}
+	}
+
+	const updatePromptAttachment = (id: string, patch: Partial<Omit<ComposerAttachment, 'id'>>) => {
+		promptAttachments.value = promptAttachments.value.map((a) => (a.id === id ? { ...a, ...patch } : a))
+	}
+
+	const removePromptAttachment = (id: string) => {
+		promptAttachments.value = promptAttachments.value.filter((a) => a.id !== id)
+	}
+
 	const runPrompt = async (prompt: string, override?: { widen?: 'chapter' | 'full'; retry?: EngineRetry }) => {
 		if (!threadId.value || !doc.value || promptRunning.value) return
+		// Retry re-sends the files its turn kept; a new message sends the draft's frames.
+		const sending = override?.retry ? null : promptAttachments.value
+		const attachments = override?.retry
+			? override.retry.attachments?.map((a) => ({ id: a.id, timeSec: a.timeSec, note: a.note, marked: a.marked, labels: a.labels, thumbnail: a.thumbnail, path: a.path }))
+			: sending!.map((a) => ({ id: a.id, timeSec: a.timeSec, note: a.note.trim() || undefined, marked: a.marks.length > 0 || undefined, labels: markLabels(a.marks), thumbnail: a.thumbnail, data: a.data, mimeType: a.mimeType }))
 		promptError.value = null
 		lastAnswer.value = null
 		// Flush the debounced autosave so main's doc (the context source) is current
@@ -3806,15 +3903,17 @@ export const useEditorStore = defineStore('editor', () => {
 		try {
 			const result = await api.runEditorPrompt({
 				threadId: threadId.value,
-				personaId: activePersona.value?.id || DEFAULT_PERSONA_ID,
 				prompt,
 				baseStepId: doc.value.historyRef.currentStepId,
 				selectedItemIds: JSON.parse(JSON.stringify(override?.retry?.selectedItemIds ?? selectedItemIds.value)),
 				playheadSec: override?.retry?.playheadSec ?? playheadSec.value,
 				widen: override?.retry ? override.retry.widen : override?.widen ?? (scopeWiden.value === 'auto' ? undefined : scopeWiden.value),
-				engine: override?.retry?.engine
+				engine: override?.retry?.engine,
+				attachments: attachments?.length ? attachments : undefined
 			})
 			if (result?.turnId) activeTurnId.value = result.turnId
+			// Sent: these frames are the turn's now. A frame added while sending stays.
+			if (sending?.length) promptAttachments.value = promptAttachments.value.filter((a) => !sending.includes(a))
 		} catch (error: any) {
 			promptError.value = error?.message || 'Failed to start the prompt'
 		}
@@ -3832,6 +3931,12 @@ export const useEditorStore = defineStore('editor', () => {
 	const abortPrompt = async () => {
 		if (!threadId.value || !activeTurnId.value) return
 		await api.abortEditorPrompt({ threadId: threadId.value, turnId: activeTurnId.value })
+	}
+
+	/** The CLI agent forgets the chat so far: its next message starts a new conversation. */
+	const resetEngineConversation = async () => {
+		if (!threadId.value) return
+		await api.resetEngineConversation({ threadId: threadId.value })
 	}
 
 	/**
@@ -3865,7 +3970,7 @@ export const useEditorStore = defineStore('editor', () => {
 	 * at once finishes later than two in sequence while making the progress bar
 	 * meaningless. `renders` is keyed by thread, so there is one slot anyway.
 	 */
-	const exportQueue = ref<{ quality: 'original' | 'preview'; format: DeliveryFormat }[]>([])
+	const exportQueue = ref<{ quality: 'original' | 'preview'; format: DeliveryFormat; height?: number }[]>([])
 
 	/**
 	 * Render the timeline once per format, in order.
@@ -3874,10 +3979,10 @@ export const useEditorStore = defineStore('editor', () => {
 	 * detaches from the live doc, and a doc that changed between jobs should
 	 * produce what it says at the moment each one starts.
 	 */
-	const startExportBatch = (quality: 'original' | 'preview', formats: DeliveryFormat[]) => {
+	const startExportBatch = (quality: 'original' | 'preview', formats: DeliveryFormat[], height?: number) => {
 		const wanted = formats.length ? formats : ['h264' as const]
-		exportQueue.value = wanted.slice(1).map((format) => ({ quality, format }))
-		void startExport(quality, wanted[0])
+		exportQueue.value = wanted.slice(1).map((format) => ({ quality, format, height }))
+		void startExport(quality, wanted[0], height)
 	}
 
 	/** Start the next queued format, if a finished export left one waiting. */
@@ -3885,10 +3990,10 @@ export const useEditorStore = defineStore('editor', () => {
 		const next = exportQueue.value[0]
 		if (!next) return
 		exportQueue.value = exportQueue.value.slice(1)
-		void startExport(next.quality, next.format)
+		void startExport(next.quality, next.format, next.height)
 	}
 
-	const startExport = async (quality: 'original' | 'preview', format: DeliveryFormat = 'h264') => {
+	const startExport = async (quality: 'original' | 'preview', format: DeliveryFormat = 'h264', height?: number) => {
 		if (!threadId.value || !canExport.value || !doc.value) return
 		const tid = threadId.value
 		const entry: RenderEntry = {
@@ -3899,15 +4004,17 @@ export const useEditorStore = defineStore('editor', () => {
 			phase: 'rendering',
 			startedAt: Date.now()
 		}
+		cancelling.value = false
 		renders.value = { ...renders.value, [tid]: entry }
 		try {
 			// Pass an in-memory SNAPSHOT of the live doc: the render detaches
 			// from the editor entirely (keep editing / switch revision / load
 			// another project), and the snapshot is never persisted.
 			const snapshot = JSON.parse(JSON.stringify(doc.value))
-			const result = await api.exportEditorTimeline({ threadId: tid, quality, doc: snapshot, format })
+			const result = await api.exportEditorTimeline({ threadId: tid, quality, doc: snapshot, format, height })
 			if (result?.renderId && renders.value[tid]) {
 				renders.value = { ...renders.value, [tid]: { ...renders.value[tid], renderId: result.renderId } }
+				if (cancelling.value) await api.abortEditorRender({ renderId: result.renderId })
 			}
 		} catch (error: any) {
 			// Pre-flight rejection (missing files, missing media, empty timeline…).
@@ -3923,9 +4030,42 @@ export const useEditorStore = defineStore('editor', () => {
 		}
 	}
 
+	// ===== Motion pre-render =====
+	// Drawing the motion layers is the longest part of a full-quality export and
+	// needs nobody waiting, so once the project has been left alone for a while
+	// the main process draws whatever an export would still need. What it draws
+	// is exactly what the export would, so the export skips it.
+	const motionPrerender = ref<{ threadId: string; done: number; total: number; running: boolean } | null>(null)
+	const PRERENDER_IDLE_MS = 20_000
+	let prerenderTimer: ReturnType<typeof setTimeout> | undefined
+	const schedulePrerender = () => {
+		clearTimeout(prerenderTimer)
+		const tid = threadId.value
+		if (!tid || !doc.value || !api.prerenderMotion) return
+		if (!doc.value.timeline.some((i) => i.motion)) return
+		prerenderTimer = setTimeout(() => {
+			if (threadId.value !== tid || !doc.value || isRendering.value) return
+			void api.prerenderMotion({ threadId: tid, doc: JSON.parse(JSON.stringify(doc.value)) })
+		}, PRERENDER_IDLE_MS)
+	}
+	// Every committed edit, undo, redo and revision switch moves the step; opening a project does too.
+	watch(() => [threadId.value, doc.value?.historyRef?.currentStepId], schedulePrerender)
+	api.onMotionPrerenderProgress?.((progress: { threadId: string; done: number; total: number; running: boolean }) => {
+		motionPrerender.value = progress
+	})
+
+	/**
+	 * Cancel was pressed and the render has not stopped yet. Stopping is not
+	 * instant (an ffmpeg process has to die, a clip being drawn is left), so the
+	 * UI says so at once instead of looking as if the button did nothing.
+	 */
+	const cancelling = ref(false)
 	const abortExport = async () => {
-		if (!renderState.value?.renderId) return
-		await api.abortEditorRender({ renderId: renderState.value.renderId })
+		if (!renderState.value || !isRendering.value) return
+		cancelling.value = true
+		// Before the render has an id there is nothing to name yet: startExport
+		// sends the abort the moment the id arrives.
+		if (renderState.value.renderId) await api.abortEditorRender({ renderId: renderState.value.renderId })
 	}
 
 	/** Dismiss a render entry (defaults to the current project's). */
@@ -4037,9 +4177,8 @@ export const useEditorStore = defineStore('editor', () => {
 				await createRevision({ origin: 'manual', label: 'Auto checkpoint' })
 			}
 
-			const persona = findPersona(turn.personaId)
-			// An agent's turn is labelled with the agent: "Claude Code", not a persona.
-			const name = turn.agent?.name || persona?.name || 'AI edit'
+			// An agent's turn is labelled with the agent: "Claude Code".
+			const name = turn.agent?.name || 'AI edit'
 			const goal = roundId ? agentRound.value?.goal?.trim() : ''
 			const label = goal ? `${name}: ${goal.length > 60 ? goal.slice(0, 59) + '…' : goal}` : name
 			if (diffed) {
@@ -4058,11 +4197,10 @@ export const useEditorStore = defineStore('editor', () => {
 			if (settings?.frame) setSequenceFrame(settings.frame.width, settings.frame.height)
 
 			const rev = keepRound
-				? await replaceRoundRevision(keptId!, { label, turnId: turn.id, personaId: turn.personaId })
+				? await replaceRoundRevision(keptId!, { label, turnId: turn.id })
 				: await createRevision({
 					origin: 'ai',
 					turnId: turn.id,
-					personaId: turn.personaId,
 					label
 				})
 			if (rev && roundId && !keepRound) roundRevisions.set(roundId, rev.id)
@@ -4169,8 +4307,6 @@ export const useEditorStore = defineStore('editor', () => {
 			doc.value.timeline = updated.editor.timeline
 			doc.value.timelineMeta = updated.editor.timelineMeta
 			doc.value.selection = updated.editor.selection
-			doc.value.activePersonaId = updated.editor.activePersonaId
-			doc.value.customPersonas = updated.editor.customPersonas
 			doc.value.historyRef = updated.editor.historyRef
 			doc.value.markers = updated.editor.markers
 			doc.value.currentRevisionId = updated.editor.currentRevisionId
@@ -4242,6 +4378,8 @@ export const useEditorStore = defineStore('editor', () => {
 				threadId: string; renderId: string; percent: number
 				phase: 'rendering' | 'stitching' | 'done' | 'error'
 				outputPath?: string; error?: string
+				steps?: RenderStepInfo[]; etaSec?: number | null; etaSpread?: number; elapsedSec?: number
+				summary?: { label: string; value: string }[]
 			}) => {
 				// Renders are background jobs — track progress for ANY thread,
 				// not just the currently open project.
@@ -4258,12 +4396,18 @@ export const useEditorStore = defineStore('editor', () => {
 						percent: data.percent,
 						phase: data.phase,
 						outputPath: data.outputPath,
-						error: data.error
+						error: data.error,
+						steps: data.steps ?? existing?.steps,
+						etaSec: data.etaSec,
+						etaSpread: data.etaSpread,
+						elapsedSec: data.elapsedSec,
+						summary: data.summary ?? existing?.summary
 					}
 				}
 				// A batch moves on when the one in flight lands — including on an
 				// error, so one bad format does not strand the rest.
 				if (data.threadId === threadId.value && (data.phase === 'done' || data.phase === 'error')) {
+					cancelling.value = false
 					drainExportQueue()
 				}
 			})
@@ -4331,6 +4475,10 @@ export const useEditorStore = defineStore('editor', () => {
 		// actions
 		loadProject,
 		addLocalMedia,
+		importPaths,
+		bulkImport,
+		dismissBulkImport,
+		stopBulkImport,
 		importUrl,
 		removeAsset,
 		retryAsset,
@@ -4475,6 +4623,9 @@ export const useEditorStore = defineStore('editor', () => {
 		loudnessEnabled,
 		setLoudnessEnabled,
 		refreshTranscripts,
+		objectTracks,
+		refreshObjectTracks,
+		drawnItem,
 		seams,
 		conflictedSeamIds,
 		selectedSeamId,
@@ -4499,17 +4650,8 @@ export const useEditorStore = defineStore('editor', () => {
 		sourceTimeToTimeline,
 		applySilenceRegions,
 		toggleTrackFlag,
-		// personas
-		personas,
-		activePersona,
-		findPersona,
-		personaGroups,
 		promptDraft,
 		queuePrompt,
-		setActivePersona,
-		savePersona,
-		clonePersona,
-		deletePersona,
 		// AI prompt
 		activeTurnId,
 		lastAnswer,
@@ -4518,9 +4660,15 @@ export const useEditorStore = defineStore('editor', () => {
 		promptRunning,
 		scopePreview,
 		runPrompt,
+		promptAttachments,
+		capturingFrame,
+		captureFrameForPrompt,
+		updatePromptAttachment,
+		removePromptAttachment,
 		retryFor,
 		retryTurn,
 		abortPrompt,
+		resetEngineConversation,
 		dismissAnswer,
 		// revisions
 		revisions,
@@ -4547,6 +4695,8 @@ export const useEditorStore = defineStore('editor', () => {
 		exportWarnings,
 		startExport,
 		abortExport,
-		clearRenderState
+		cancelling,
+		clearRenderState,
+		motionPrerender
 	}
 })

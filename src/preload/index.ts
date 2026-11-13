@@ -58,12 +58,17 @@ const api = {
 	resetModelSettings: () => ipcRenderer.invoke('reset-model-settings'),
 	// Timeline Video Editor
 	createEditorProject: (title?: string) => ipcRenderer.invoke('create-editor-project', { title }),
+	previewThumbnailBrief: (threadId: string) => ipcRenderer.invoke('preview-thumbnail-brief', { threadId }),
+	createThumbnailProject: (threadId: string, options?: { prompt?: string; expectedFrameCount?: number }) =>
+		ipcRenderer.invoke('create-thumbnail-project', { threadId, ...options }),
 	renameEditorProject: (data: { threadId: string, title: string }) =>
 		ipcRenderer.invoke('rename-editor-project', data),
 	saveEditorDoc: (data: { threadId: string, patch: any }) =>
 		ipcRenderer.invoke('save-editor-doc', data),
-	addMediaAsset: (data: { threadId: string, filePath: string, name?: string }) =>
+	addMediaAsset: (data: { threadId: string, filePath: string, name?: string, discardUnreadable?: boolean }) =>
 		ipcRenderer.invoke('add-media-asset', data),
+	pickMedia: (options?: { folders?: boolean }) => ipcRenderer.invoke('pick-media', options ?? {}),
+	expandMediaPaths: (paths: string[]) => ipcRenderer.invoke('expand-media-paths', { paths }),
 	importMediaUrl: (data: { threadId: string, url: string, resolution?: string }) =>
 		ipcRenderer.invoke('import-media-url', data),
 	removeMediaAsset: (data: { threadId: string, assetId: string }) =>
@@ -110,17 +115,31 @@ const api = {
 		ipcRenderer.on('editor-silence-progress', listener)
 		return () => ipcRenderer.removeListener('editor-silence-progress', listener)
 	},
-	getPersonas: () => ipcRenderer.invoke('get-personas'),
-	setPersonas: (personas: any[]) => ipcRenderer.invoke('set-personas', personas),
 	// `doc` = in-memory timeline snapshot at click time (render detaches from the live doc)
 	exportEditorTimeline: (data: {
-		threadId: string, quality: 'original' | 'preview', doc?: unknown, format?: 'h264' | 'prores'
+		threadId: string, quality: 'original' | 'preview', doc?: unknown, format?: 'h264' | 'h265' | 'prores', height?: number
 	}) =>
 		ipcRenderer.invoke('export-editor-timeline', data),
 	abortEditorRender: (data: { renderId: string }) =>
 		ipcRenderer.invoke('abort-editor-render', data),
+	// Draw the project's motion layers in the background so an export finds them ready.
+	prerenderMotion: (data: { threadId: string; doc: unknown }) =>
+		ipcRenderer.invoke('prerender-motion', data),
+	onMotionPrerenderProgress: (callback: (data: { threadId: string; done: number; total: number; running: boolean }) => void) => {
+		const listener = (_event: any, data: any) => callback(data)
+		ipcRenderer.on('motion-prerender-progress', listener)
+		return () => ipcRenderer.removeListener('motion-prerender-progress', listener)
+	},
 	getEditorTranscripts: (threadId: string) =>
 		ipcRenderer.invoke('get-editor-transcripts', threadId),
+	// Object tracks (faces, followed things): what a following motion layer is drawn from.
+	getObjectTracks: (threadId: string) =>
+		ipcRenderer.invoke('get-object-tracks', threadId),
+	onObjectTracksChanged: (callback: (data: { threadId: string }) => void) => {
+		const listener = (_event: any, data: any) => callback(data)
+		ipcRenderer.on('object-tracks-changed', listener)
+		return () => ipcRenderer.removeListener('object-tracks-changed', listener)
+	},
 	getEffectPacks: () => ipcRenderer.invoke('get-effect-packs'),
 	renderExactFrame: (data: { threadId: string; doc: unknown; timeSec: number }) =>
 		ipcRenderer.invoke('render-exact-frame', data),
@@ -132,10 +151,14 @@ const api = {
 		ipcRenderer.on('editor-render-progress', listener)
 		return () => ipcRenderer.removeListener('editor-render-progress', listener)
 	},
-	runEditorPrompt: (data: { threadId: string, personaId: string, prompt: string, baseStepId: string, selectedItemIds: string[], playheadSec: number, widen?: string, engine?: string }) =>
+	captureFramePrompt: (data: { threadId: string; doc: unknown; timeSec: number }) =>
+		ipcRenderer.invoke('capture-prompt-frame', data),
+	runEditorPrompt: (data: { threadId: string, prompt: string, baseStepId: string, selectedItemIds: string[], playheadSec: number, widen?: string, engine?: string, attachments?: unknown[] }) =>
 		ipcRenderer.invoke('run-editor-prompt', data),
 	abortEditorPrompt: (data: { threadId: string, turnId: string }) =>
 		ipcRenderer.invoke('abort-editor-prompt', data),
+	resetEngineConversation: (data: { threadId: string }) =>
+		ipcRenderer.invoke('reset-engine-conversation', data),
 	updateEditorTurn: (data: { threadId: string, turnId: string, patch: { resultStepId?: string, revisionId?: string } }) =>
 		ipcRenderer.invoke('update-editor-turn', data),
 	onEditorTurnUpdate: (callback: (data: any) => void) => {
@@ -164,7 +187,7 @@ const api = {
 		ipcRenderer.invoke('create-thread', data),
 	getAllThreads: () => ipcRenderer.invoke('get-all-threads'),
 	getThread: (id: string) => ipcRenderer.invoke('get-thread', id),
-	deleteThread: (id: string) => ipcRenderer.invoke('delete-thread', id),
+	deleteThread: (id: string, options?: { deleteFiles?: boolean }) => ipcRenderer.invoke('delete-thread', id, options),
 	deleteAllThreads: () => ipcRenderer.invoke('delete-all-threads'),
 	addMessage: (threadId: string, message: any) =>
 		ipcRenderer.invoke('add-message', { threadId, message }),

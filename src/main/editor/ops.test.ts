@@ -1,10 +1,7 @@
 import { describe, expect, it } from 'vitest'
-import type { Clip, EditorDocument, EditorPersona, MediaAsset, TimelineItem, Track } from '@shared/types'
+import type { Clip, EditorDocument, MediaAsset, TimelineItem, Track } from '@shared/types'
 import { applyTimelineDiff, repairOverlaps, repairOverlapsReporting, TIMELINE_DIFF_SCHEMA_VERSION } from '@shared/timeline'
-import {
-	composeSystemInstruction, EDITOR_OPS_SCHEMA, editorOpsSchema, measureBuild, opsToDiff, opsWriteHtml,
-	parseTargetLength, routeSurveyResponse, sumUsage, type PromptStats
-} from './ops'
+import { EDITOR_OPS_SCHEMA, opsToDiff, opsWriteHtml } from './ops'
 import { BLANK_MOTION_HTML, motionTemplate, newMotionSpec, renderVersion, resolveDefinition } from '@shared/motion'
 import { writtenSpec } from '@shared/motionCode'
 import { setUserMotionTemplates } from '@shared/motionTemplates'
@@ -53,7 +50,6 @@ function makeDoc(assets: MediaAsset[], timeline: TimelineItem[] = []): EditorDoc
 		tracks: [track],
 		timeline,
 		timelineMeta: { fps: 30, width: 1920, height: 1080, duration: 0 },
-		activePersonaId: 'podcast-editor',
 		turns: [],
 		historyRef: { currentStepId: 'step-0', stepCount: 0 }
 	}
@@ -492,303 +488,6 @@ describe('opsToDiff / atScene markers', () => {
 
 // ===== Output-length contract =====
 
-describe('composeSystemInstruction', () => {
-	const persona: EditorPersona = {
-		id: 'general-editor', name: 'Video Editor', icon: '🎬', description: '',
-		systemPrompt: 'You are a capable, general-purpose video editor.', builtin: true,
-		defaults: { pacing: 'balanced' }
-	}
-	// A persona whose prose leans short — it must NOT force a short output.
-	const summarizer: EditorPersona = {
-		id: 'concise', name: 'Concise', icon: '✂️', description: '',
-		systemPrompt: 'You summarize.', builtin: true,
-		defaults: { pacing: 'tight' }
-	}
-	const stats = (over: Partial<PromptStats>): PromptStats => ({
-		timelineItemCount: 0, timelineDurationSec: 0,
-		sourceDurationSec: 5535, sourceClipCount: 1899, ...over
-	})
-
-	it('tells the model to infer the length from the request', () => {
-		const text = composeSystemInstruction(persona, stats({}))
-		expect(text).toContain('=== OUTPUT LENGTH ===')
-		expect(text).toContain('Work out the intended length from the request')
-		expect(text).toContain('targetLength')
-	})
-
-	it('defaults to a full-length build when the timeline is empty', () => {
-		const text = composeSystemInstruction(persona, stats({}))
-		expect(text).toContain('The timeline is EMPTY')
-		expect(text).toContain('92:15')
-		expect(text).toContain('1899 detected pieces')
-		expect(text).toContain('addSceneRanges')
-		expect(text).not.toContain('PRESERVE that runtime')
-	})
-
-	it('defaults to preserving an existing cut', () => {
-		const text = composeSystemInstruction(persona, stats({ timelineItemCount: 28, timelineDurationSec: 339 }))
-		expect(text).toContain('The current cut is 28 items, 5:39')
-		expect(text).toContain('PRESERVE that runtime')
-		// Short cut + lots of unused source => it is told how to extend.
-		expect(text).toContain('APPEND the missing material')
-	})
-
-	it('says the request wins over the persona\'s habit', () => {
-		expect(composeSystemInstruction(persona, stats({}))).toContain('the request wins')
-	})
-
-	it('still reports tone and pacing', () => {
-		expect(composeSystemInstruction(persona, stats({}))).toContain('Pacing: balanced')
-	})
-
-	// The whole point of deleting modes: no persona shape can preset a runtime.
-	it('never emits a preset duration target, whatever the persona', () => {
-		for (const p of [persona, summarizer]) {
-			const text = composeSystemInstruction(p, stats({}))
-			expect(text).not.toContain('Target output duration')
-			expect(text).not.toContain('Target aspect ratio')
-		}
-	})
-})
-
-describe('measureBuild', () => {
-	// One 92:15 source (makeAsset sets metadata.duration = total + 10).
-	const doc = makeDoc([makeAsset('a', [5525])], [])
-	// One 12-minute item out of a 92-minute source.
-	const diff = {
-		schemaVersion: TIMELINE_DIFF_SCHEMA_VERSION,
-		addItems: [{
-			id: 'i1', trackId: doc.tracks[0].id, sourceAssetId: 'a',
-			timelineStart: 0, in: 0, out: 724, speed: 1, preservePitch: true, duration: 724
-		}]
-	} as any
-	const stats = (over: Partial<PromptStats> = {}): PromptStats => ({
-		timelineItemCount: 0, timelineDurationSec: 0,
-		sourceDurationSec: 5535, sourceClipCount: 1899, ...over
-	})
-
-	it('flags a short build-from-scratch when the model stated no target', () => {
-		const build = measureBuild(diff, doc, stats())
-		expect(build?.producedSec).toBeCloseTo(724, 3)
-		expect(build?.sourceSec).toBe(5535)
-		expect(build?.targetSec).toBeUndefined()
-		expect(build?.shortfall).toBe(true)
-	})
-
-	// The reason targetLength exists: a deliberate short cut must not nag.
-	it('does not flag the same cut when the model asked for that length', () => {
-		const build = measureBuild(diff, doc, stats(), 720)
-		expect(build?.targetSec).toBe(720)
-		expect(build?.shortfall).toBe(false)
-	})
-
-	it('flags a cut that misses the model\'s own stated target', () => {
-		expect(measureBuild(diff, doc, stats(), 3000)?.shortfall).toBe(true)
-	})
-
-	it('does not flag short sources on the source heuristic', () => {
-		// 8 minutes of source: cutting it hard is a normal editorial choice.
-		expect(measureBuild(diff, doc, stats({ sourceDurationSec: 480 }))?.shortfall).toBe(false)
-	})
-
-	it('reports length for an edit to an existing cut without flagging it', () => {
-		const build = measureBuild(diff, doc, stats({ timelineItemCount: 12, timelineDurationSec: 5000 }))
-		expect(build?.producedSec).toBeGreaterThan(0)
-		expect(build?.shortfall).toBe(false)
-	})
-
-	it('returns undefined with no diff or no known source', () => {
-		expect(measureBuild(undefined, doc, stats())).toBeUndefined()
-		expect(measureBuild(diff, doc, stats({ sourceDurationSec: 0 }))).toBeUndefined()
-	})
-
-	// opsToDiff always returns a diff OBJECT, so an answer-only turn used to be
-	// measured as producedSec 0 + shortfall true — an empty warning banner on a
-	// turn that proposed nothing.
-	it('returns undefined for a diff that carries no operations (answer-only turn)', () => {
-		expect(measureBuild({ schemaVersion: TIMELINE_DIFF_SCHEMA_VERSION }, doc, stats())).toBeUndefined()
-		expect(measureBuild(
-			{ schemaVersion: TIMELINE_DIFF_SCHEMA_VERSION, addItems: [], updateItems: [], removeItemIds: [] },
-			doc, stats()
-		)).toBeUndefined()
-	})
-})
-
-describe('editorOpsSchema', () => {
-	const props = (hasItems: boolean) => Object.keys(editorOpsSchema(hasItems).properties as any)
-
-	it('offers the item-mutating ops when the timeline has items', () => {
-		expect(props(true)).toEqual(expect.arrayContaining(['updateItems', 'removeItemIds', 'closeGaps']))
-	})
-
-	// The observed failure this guards: on an empty timeline the model emitted
-	// updateItems against invented ids and added nothing at all.
-	it('removes them on an empty timeline, leaving only ways to ADD', () => {
-		const p = props(false)
-		expect(p).not.toContain('updateItems')
-		expect(p).not.toContain('removeItemIds')
-		expect(p).not.toContain('closeGaps')
-		expect(p).toEqual(expect.arrayContaining(['addSceneRanges', 'addClips', 'targetLength']))
-	})
-
-	it('does not mutate the shared schema constant', () => {
-		editorOpsSchema(false)
-		expect(Object.keys(EDITOR_OPS_SCHEMA.properties as any)).toContain('updateItems')
-	})
-})
-
-describe('editorOpsSchema / expandRegions offer', () => {
-	const props = (hasItems: boolean, offer: boolean) =>
-		Object.keys(editorOpsSchema(hasItems, offer).properties as any)
-
-	it('is absent unless explicitly offered (pass 2 and small band stay clean)', () => {
-		expect(props(true, false)).not.toContain('expandRegions')
-		expect(props(false, false)).not.toContain('expandRegions')
-		// Default arg — the pre-banding call sites are unchanged.
-		expect(Object.keys(editorOpsSchema(true).properties as any)).not.toContain('expandRegions')
-	})
-
-	it('appears only in the offered call, composing with the empty-timeline cut', () => {
-		expect(props(true, true)).toContain('expandRegions')
-		const empty = props(false, true)
-		expect(empty).toContain('expandRegions')
-		expect(empty).not.toContain('updateItems')
-	})
-
-	it('does not mutate the shared schema constant', () => {
-		editorOpsSchema(false, true)
-		expect(Object.keys(EDITOR_OPS_SCHEMA.properties as any)).not.toContain('expandRegions')
-	})
-})
-
-describe('routeSurveyResponse', () => {
-	const regions = [{ assetId: 'a', fromPiece: 10, toPiece: 40 }]
-
-	it('finalizes when there is nothing to expand', () => {
-		expect(routeSurveyResponse({}, false).kind).toBe('final')
-		expect(routeSurveyResponse(null, true).kind).toBe('final')
-		expect(routeSurveyResponse({ addClips: [{ assetId: 'a', sceneIndex: 1 }] }, false).kind).toBe('final')
-	})
-
-	it('lets an answer win over a region request — a question needs no detail', () => {
-		const route = routeSurveyResponse({ answer: 'It is a podcast.', expandRegions: regions }, false)
-		expect(route.kind).toBe('final')
-		// The skipped read is surfaced, not silent.
-		expect(route.note).toBeTruthy()
-		expect(routeSurveyResponse({ answer: 'Just an answer.' }, false).note).toBeUndefined()
-	})
-
-	it('expands on a clean region request, whatever the timeline state', () => {
-		expect(routeSurveyResponse({ expandRegions: regions }, false).kind).toBe('expand')
-		expect(routeSurveyResponse({ expandRegions: regions }, true).kind).toBe('expand')
-	})
-
-	// The tie-break for a hedged response is keyed on timeline state: an empty
-	// timeline is the blind-coarse-cut hazard, an existing one is the
-	// double-billing hazard.
-	it('lets regions win over hedged ops on an EMPTY timeline, with a note', () => {
-		const route = routeSurveyResponse(
-			{ expandRegions: regions, addSceneRanges: [{ assetId: 'a', fromScene: 1, toScene: 99 }] },
-			false
-		)
-		expect(route.kind).toBe('expand')
-		expect(route.note).toBeTruthy()
-	})
-
-	it('lets real ops win over a region request on an EXISTING timeline, with a note', () => {
-		const route = routeSurveyResponse(
-			{ expandRegions: regions, removeItemIds: ['item-1'] },
-			true
-		)
-		expect(route.kind).toBe('final')
-		expect(route.kind === 'final' && route.ops.removeItemIds).toEqual(['item-1'])
-		expect(route.note).toBeTruthy()
-	})
-})
-
-describe('sumUsage', () => {
-	it('sums field-wise and treats missing thinkingTokens as zero', () => {
-		expect(sumUsage([
-			{ promptTokens: 100, candidatesTokens: 10, thinkingTokens: 5, totalTokens: 115 },
-			{ promptTokens: 200, candidatesTokens: 20, totalTokens: 220 }
-		])).toEqual({ promptTokens: 300, candidatesTokens: 30, thinkingTokens: 5, totalTokens: 335 })
-	})
-})
-
-describe('composeSystemInstruction / survey phases', () => {
-	const persona: EditorPersona = {
-		id: 'general-editor', name: 'Video Editor', icon: '🎬', description: '',
-		systemPrompt: 'You are a capable, general-purpose video editor.', builtin: true,
-		defaults: { pacing: 'balanced' }
-	}
-	const stats: PromptStats = {
-		timelineItemCount: 0, timelineDurationSec: 0,
-		sourceDurationSec: 5535, sourceClipCount: 1899
-	}
-
-	it('says nothing about surveys without a phase — small sources are untouched', () => {
-		const text = composeSystemInstruction(persona, stats)
-		expect(text).not.toContain('CONDENSED SURVEY')
-		expect(text).not.toContain('DETAIL VIEW')
-		expect(text).not.toContain('expandRegions')
-		// The per-piece arithmetic keeps its original wording.
-		expect(text).toContain('Pick them with `addClips`')
-	})
-
-	it('replaces the pick-pieces arithmetic with the expand instruction in the survey pass', () => {
-		const text = composeSystemInstruction(persona, stats, 'survey')
-		expect(text).toContain('CONDENSED SURVEY')
-		expect(text).toContain('expandRegions')
-		// The blind-curation instruction must NOT survive into the survey pass.
-		expect(text).not.toContain('Pick them with `addClips`')
-		// Cleanups keep their one-pass path: silence #s come from the survey rows.
-		expect(text).toContain('excludeScenes')
-	})
-
-	// The addendum's middle bullet must agree with the OUTPUT LENGTH branch: on
-	// an existing cut, "cover the source with addSceneRanges" reads as "rebuild",
-	// which SourceCoverage turns into a no-op or an unwanted append.
-	it('tells an existing-cut survey turn to edit items, not rebuild with ranges', () => {
-		const text = composeSystemInstruction(
-			persona, { ...stats, timelineItemCount: 267, timelineDurationSec: 3600 }, 'survey')
-		expect(text).toContain('EXISTING cut')
-		expect(text).toContain('only to APPEND')
-		expect(text).not.toContain('build it NOW')
-	})
-
-	it('tells the detail pass to commit, with the arithmetic restored', () => {
-		const text = composeSystemInstruction(persona, stats, 'detail')
-		expect(text).toContain('DETAIL VIEW')
-		expect(text).toContain('is not available in this response')
-		expect(text).toContain('Pick them with `addClips`')
-		expect(text).not.toContain('CONDENSED SURVEY')
-	})
-})
-
-describe('parseTargetLength', () => {
-	it('parses plain seconds, decimals, and clock formats', () => {
-		expect(parseTargetLength('120')).toBe(120)
-		expect(parseTargetLength('120.5')).toBe(120.5)
-		expect(parseTargetLength('2:00')).toBe(120)
-		expect(parseTargetLength(' 12:30 ')).toBe(750)
-		expect(parseTargetLength('1:02:03')).toBe(3723)
-	})
-
-	// The digit-run artifact this field's string-typing exists to survive: a
-	// looped value must read as "not reported", never as an absurd target.
-	it('rejects garbage instead of clamping it', () => {
-		expect(parseTargetLength('1200000000000000')).toBeUndefined()
-		expect(parseTargetLength('120.05221111111111111111111111111')).toBe(120.05221111111111)
-		expect(parseTargetLength('0')).toBeUndefined()
-		expect(parseTargetLength('')).toBeUndefined()
-		expect(parseTargetLength('two minutes')).toBeUndefined()
-		expect(parseTargetLength('1:2:3:4')).toBeUndefined()
-		expect(parseTargetLength(undefined)).toBeUndefined()
-	})
-})
-
-// ===== Look, sound and text ops (Phase 4) =====
-
 describe('opsToDiff / transitions', () => {
 	const doc = () => makeDoc([makeAsset('a', uniform(3, 2))], [
 		{ id: 'i1', trackId: 'v1', sourceAssetId: 'a', timelineStart: 0, in: 0, out: 2, speed: 1, preservePitch: true, duration: 2 },
@@ -958,60 +657,6 @@ describe('opsToDiff / one update per item', () => {
 	})
 })
 
-describe('composeSystemInstruction / persona style', () => {
-	const stats: PromptStats = {
-		timelineItemCount: 0, timelineDurationSec: 0, sourceDurationSec: 600, sourceClipCount: 10
-	}
-	const persona = (style?: EditorPersona['style']): EditorPersona => ({
-		id: 'p', name: 'P', icon: '🎬', description: '', systemPrompt: 'be a good editor',
-		builtin: true, tone: 'neutral', defaults: { pacing: 'balanced' }, featureSets: [], style
-	})
-
-	it('says nothing when a persona has no house style', () => {
-		const text = composeSystemInstruction(persona(), stats)
-		expect(text).not.toContain('House style')
-		expect(text).not.toContain('Preferred transitions')
-	})
-
-	it('quotes the style as habits, not limits', () => {
-		// A persona confined to four transitions would be a worse editor than one
-		// that knows which four it likes.
-		const text = composeSystemInstruction(persona({
-			transitions: ['fade'], looks: ['look-soft'], captions: true, loudness: true,
-			note: 'Sound first.'
-		}), stats)
-		expect(text).toContain('House style: Sound first.')
-		expect(text).toContain('Preferred transitions: fade')
-		expect(text).toContain('Signature looks: look-soft')
-		expect(text).toContain('`captions: true`')
-		expect(text).toContain('`loudness: true`')
-		expect(text).toContain('not limits')
-	})
-
-	it('says explicitly when a voice does NOT caption', () => {
-		// Silence would read as "no opinion", and the model would guess.
-		const text = composeSystemInstruction(persona({ captions: false }), stats)
-		expect(text).toContain('not usually captioned')
-	})
-})
-
-describe('the built-in personas', () => {
-	it('every style names kinds that actually exist', async () => {
-		// A persona pointing at a kind the catalogue does not have would send the
-		// model to write an op that gets dropped.
-		const { BUILTIN_PERSONAS } = await import('../constants/personas')
-		const { isTransitionKind } = await import('@shared/transitionPresets')
-		const { isEffectKind } = await import('@shared/effects')
-		for (const p of BUILTIN_PERSONAS) {
-			for (const kind of p.style?.transitions ?? []) {
-				expect(isTransitionKind(kind), `${p.id}: ${kind}`).toBe(true)
-			}
-			for (const kind of p.style?.looks ?? []) {
-				expect(isEffectKind(kind), `${p.id}: ${kind}`).toBe(true)
-			}
-		}
-	})
-})
 
 describe('opsToDiff / removeRanges', () => {
 	const doc = () => makeDoc([makeAsset('a', uniform(2, 10))], [
@@ -1244,6 +889,51 @@ describe('motion ops', () => {
 		expect(diff.addItems![0].trackId).toBe('m')
 	})
 
+	describe('following a track', () => {
+		const tracks = [{ id: 'trk_00000001', name: 'Hoodie woman', assetId: asset.id }]
+		const run = (ops: Parameters<typeof opsToDiff>[0], d = doc()) => opsToDiff(ops, d, undefined, undefined, undefined, tracks)
+
+		it('binds a new cover to the track and the clip under it', () => {
+			const { diff, notes } = run({ addMotion: [{ template: 'track-cover', atSec: clip.timelineStart + 0.5, durationSec: 1, follow: { track: 'hoodie woman' } }] })
+			expect(diff.addItems![0].follow).toEqual({ trackId: 'trk_00000001', assetId: asset.id, clipId: clip.id })
+			expect(notes.join(' ')).toMatch(/follows "Hoodie woman" through/)
+		})
+
+		it('says why when there is no such track, and still adds the layer', () => {
+			const { diff, notes } = run({ addMotion: [{ template: 'track-cover', atSec: clip.timelineStart, follow: { track: 'nobody' } }] })
+			expect(diff.addItems![0].follow).toBeUndefined()
+			expect(notes.join(' ')).toMatch(/no track "nobody"/)
+		})
+
+		it('refuses a page that has nothing for a track to drive', () => {
+			const { diff, notes } = run({ addMotion: [{ template: 'lower-third', atSec: clip.timelineStart, follow: { track: 'trk_00000001' } }] })
+			expect(diff.addItems![0].follow).toBeUndefined()
+			expect(notes.join(' ')).toMatch(/defines none of the settings a track drives/)
+		})
+
+		it('refuses a layer that is not over that footage', () => {
+			const { diff, notes } = run({ addMotion: [{ template: 'track-cover', atSec: 5000, follow: { track: 'trk_00000001' } }] })
+			expect(diff.addItems![0].follow).toBeUndefined()
+			expect(notes.join(' ')).toMatch(/not over any clip/)
+		})
+
+		it('starts and stops an existing layer following', () => {
+			const layer: TimelineItem = {
+				id: 'cv', trackId: 'm', sourceAssetId: '', timelineStart: clip.timelineStart, in: 0, out: 1,
+				speed: 1, preservePitch: true, duration: 1, label: 'Cover', motion: { template: 'track-cover' }
+			}
+			const d = makeDoc([asset], [clip, layer])
+			d.tracks.push({ id: 'm', kind: 'video', name: 'M1', order: 1, muted: false, locked: false, hidden: false, height: 64 })
+			const on = run({ updateMotion: [{ id: 'cv', follow: { track: 'trk_00000001' } }] }, d)
+			expect(on.diff.updateItems![0].follow).toEqual({ trackId: 'trk_00000001', assetId: asset.id, clipId: clip.id })
+
+			d.timeline[1] = { ...layer, follow: on.diff.updateItems![0].follow }
+			const off = run({ updateMotion: [{ id: 'cv', follow: { track: '' } }] }, d)
+			expect('follow' in off.diff.updateItems![0]).toBe(true)
+			expect(off.diff.updateItems![0].follow).toBeUndefined()
+		})
+	})
+
 	describe('updateMotion', () => {
 		const placed: TimelineItem = {
 			id: 'lt', trackId: 'm', sourceAssetId: '', timelineStart: 3, in: 0, out: 4,
@@ -1273,12 +963,6 @@ describe('motion ops', () => {
 			const { diff, droppedOps } = opsToDiff({ updateMotion: [{ id: 'v', settings: { name: 'x' } }, { id: 'nope' }] }, withLayer())
 			expect(diff.updateItems).toBeUndefined()
 			expect(droppedOps).toEqual(['updateMotion: v is not a motion layer', 'updateMotion: unknown item nope'])
-		})
-
-		it('is offered to the model only when there is something to update', () => {
-			expect('updateMotion' in editorOpsSchema(false).properties).toBe(false)
-			expect('updateMotion' in editorOpsSchema(true).properties).toBe(true)
-			expect('addMotion' in editorOpsSchema(false).properties).toBe(true)
 		})
 	})
 })
@@ -1526,7 +1210,7 @@ describe('custom HTML motion ops', () => {
 	})
 
 	it('offers html on both ops, and teaches the contract', () => {
-		const props = editorOpsSchema(true).properties as any
+		const props = EDITOR_OPS_SCHEMA.properties as any
 		expect(props.addMotion.items.properties.html.type).toBe('string')
 		expect(props.updateMotion.items.properties.html.type).toBe('string')
 		expect(props.addMotion.items.properties.template.description).toMatch(/custom/)

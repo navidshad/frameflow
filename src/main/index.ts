@@ -1,12 +1,16 @@
+import './userData' // first: pins the data folder before any store opens it
 import { app, shell, BrowserWindow, ipcMain, dialog, protocol } from 'electron'
-import { net } from 'electron'
+import { nativeImage, net } from 'electron'
 import * as fs from 'fs'
 import { basename, dirname, extname, join } from 'path'
 import { pathToFileURL } from 'url'
 import { Pipeline } from './pipeline'
 import { settingsManager } from './settings'
 import { threadManager } from './threads'
-import type { DeliveryFormat, EditorDocument, MulticamGroup, TimelineItem } from '@shared/types'
+import { MessageRole } from '@shared/types'
+import type { DeliveryFormat, EditorDocument, MulticamGroup, PromptAttachmentInput, TimelineItem } from '@shared/types'
+import { createThumbnailProject, previewThumbnailBrief } from './thumbnail/project'
+import * as thumbnailFrames from './thumbnail/frames'
 import { pruneOrphanItems } from '@shared/timeline'
 import * as extraction from './pipeline/phases/extraction'
 import * as supply from './pipeline/phases/supply'
@@ -24,6 +28,8 @@ import { dependencyManager } from './dependencies/manager'
 import { checkYtDlpFreshness } from './dependencies/ytdlp-updater'
 import * as editorAssets from './editor/assets'
 import { importMediaFromFile, importMediaFromUrl } from './editor/importMedia'
+import { expandMediaPaths } from './editor/expandMedia'
+import { dialogExtensions } from '@shared/mediaFiles'
 import { getAudioAnalysis } from './editor/audioAnalysis'
 import { ensureSoundAsset, previewSound } from './editor/synth'
 import { isSoundKind } from '../shared/synth'
@@ -31,14 +37,14 @@ import { estimateUsd, generateForProject, providerStatuses, voicesFor } from './
 import { normalizeAudioSettings, isProviderId, type GenerateRequest } from '../shared/audioProviders'
 import * as editorPreprocess from './editor/preprocess'
 import * as editorHistory from './editor/history'
-import * as editorPrompt from './editor/prompt'
 import * as editorPreview from './editor/preview'
 import * as editorRender from './editor/render'
+import { prerenderMotion } from './editor/motionPrerender'
 import * as editorCaptions from './editor/captions'
+import { listTracks } from './tracking/store'
 import { listExportFiles, resolveExportPath } from './editor/exports'
 import { loadPacks, packManifests } from './editor/packs'
 import * as editorRevisions from './editor/revisions'
-import { BUILTIN_PERSONAS } from './constants/personas'
 import { v4 as uuidv4 } from 'uuid'
 import { THREAD_DIRS } from './constants/paths'
 import { GEMINI_MODEL_3_6_FLASH, MODEL_METADATA } from './constants/gemini'
@@ -46,7 +52,7 @@ import { electronApp, optimizer, is } from '@electron-toolkit/utils'
 import { registerMediaProtocol } from './media-protocol'
 import { initAgentAccess } from './mcp'
 import { agentHolding } from './mcp/roundStore'
-import { isCliEngine, type CliEngineId } from '@shared/engines'
+import type { EngineId } from '@shared/engines'
 import { checkProjectsFolder, nestProjectsFolder, suggestProjectsFolder } from './setup/folder'
 import { testGeminiKey } from './setup/geminiKey'
 import { buildChecks } from '../shared/setup'
@@ -54,7 +60,7 @@ import { normalizeEngineSettings } from '@shared/engines'
 import { execFile } from 'child_process'
 import { getFFmpegBinaryPath } from './ffmpeg'
 import { initMotionIpc } from './motion/ipc'
-import { abortEngineTurn, cliEngineSelected, initEngines, runCliEditorPrompt } from './engine'
+import { abortEngineTurn, initEngines, resetEngineConversation, runEnginePrompt } from './engine'
 
 const activePipelines = new Map<string, Pipeline>()
 
@@ -86,6 +92,11 @@ function createWindow(): void {
 	const mainWindow = new BrowserWindow({
 		width: 1200,
 		height: 800,
+		// The smallest window the editor's bars are laid out for. 720 is half of a 1440 px
+		// laptop screen, so the app still tiles beside another window (the chat folds to
+		// its strip there); 560 leaves a picture above the timeline at its default height.
+		minWidth: 720,
+		minHeight: 560,
 		show: false,
 		autoHideMenuBar: true,
 		webPreferences: {
@@ -434,16 +445,6 @@ app.whenReady().then(() => {
 		return MODEL_METADATA
 	})
 
-	// Editor personas: built-ins (code) merged with the user's global library
-	ipcMain.handle('get-personas', () => {
-		return [...BUILTIN_PERSONAS, ...settingsManager.getPersonas()]
-	})
-
-	ipcMain.handle('set-personas', (_event, personas: any[]) => {
-		const saved = settingsManager.setPersonas(personas)
-		return [...BUILTIN_PERSONAS, ...saved]
-	})
-
 	// Thread Management
 	ipcMain.handle('create-thread', async (_event, { videoPath, videoName, imagePaths, type }) => {
 		const newThread = await threadManager.createThread(videoPath, videoName, imagePaths, type)
@@ -459,6 +460,39 @@ app.whenReady().then(() => {
 		return await threadManager.createEditorThread(title || 'Untitled Project')
 	})
 
+	// "Generate thumbnail": a new IMAGE project seeded from this video's best
+	// frames, with the brief (headline from the title or transcript) already in
+	// it as the first message. The renderer runs the generation, once, only when
+	// a Gemini key exists; see videoStore.openThumbnailProject.
+	ipcMain.handle('preview-thumbnail-brief', (_event, { threadId }: { threadId: string }) => {
+		return previewThumbnailBrief(String(threadId), {
+			getThread: (id) => threadManager.getThread(id),
+			transcripts: (thread) => editorCaptions.transcriptsForAssets(thread.editor?.media ?? [])
+		})
+	})
+
+	ipcMain.handle('create-thumbnail-project', async (
+		_event,
+		{ threadId, prompt, expectedFrameCount }: { threadId: string; prompt?: string; expectedFrameCount?: number }
+	) => {
+		return await createThumbnailProject(String(threadId), {
+			getThread: (id) => threadManager.getThread(id),
+			transcripts: (thread) => editorCaptions.transcriptsForAssets(thread.editor?.media ?? []),
+			grabGray: thumbnailFrames.grabGray,
+			grabStill: thumbnailFrames.grabStill,
+			stagingDir: (thread) => join(thread.tempDir, 'thumbnail-frames'),
+			createImageProject: (title, imagePaths) => threadManager.createThread(undefined, title, imagePaths, 'image'),
+			addUserMessage: (id, text) => threadManager.addMessageToThread(id, {
+				role: MessageRole.User, content: text, isPending: false, autoUseImages: true
+			}),
+			hasGeminiKey: () => !!settingsManager.getGeminiApiKey(),
+			startAnalysis: (id) => { void backgroundTaskManager.startImageProcessing(id) }
+		}, {
+			prompt: typeof prompt === 'string' ? prompt : undefined,
+			expectedFrameCount: typeof expectedFrameCount === 'number' ? expectedFrameCount : undefined
+		})
+	})
+
 	ipcMain.handle('rename-editor-project', async (_event, { threadId, title }: {
 		threadId: string, title: string
 	}) => {
@@ -469,7 +503,7 @@ app.whenReady().then(() => {
 
 	// Autosave of RENDERER-OWNED editor fields only. Main owns preprocessing-derived
 	// asset state (preprocessing/proxyPath/metadata/preprocessState/clips content);
-	// the renderer owns selection, clip-selected flags, tracks, timeline, meta, personas.
+	// the renderer owns selection, clip-selected flags, tracks, timeline, meta.
 	// This ownership split is what prevents autosave/thread-updated echo clobbering.
 	ipcMain.handle('save-editor-doc', async (_event, { threadId, patch }: {
 		threadId: string
@@ -478,8 +512,6 @@ app.whenReady().then(() => {
 			timeline?: any[]
 			timelineMeta?: any
 			selection?: any
-			activePersonaId?: string
-			customPersonas?: any[]
 			clipSelections?: Record<string, boolean>
 			historyRef?: any
 			markers?: any[]
@@ -512,8 +544,6 @@ app.whenReady().then(() => {
 			}
 			if (patch.timelineMeta) editor.timelineMeta = patch.timelineMeta
 			if (patch.selection) editor.selection = patch.selection
-			if (patch.activePersonaId !== undefined) editor.activePersonaId = patch.activePersonaId
-			if (patch.customPersonas) editor.customPersonas = patch.customPersonas
 			// historyRef travels WITH the doc so the undo pointer and the timeline
 			// state land in one atomic write (crash-consistent by construction).
 			if (patch.historyRef) editor.historyRef = patch.historyRef
@@ -544,12 +574,43 @@ app.whenReady().then(() => {
 	})
 
 	// Import a local file as a MediaAsset and start per-asset preprocessing.
-	ipcMain.handle('add-media-asset', async (_event, { threadId, filePath, name }: {
-		threadId: string, filePath: string, name?: string
+	ipcMain.handle('add-media-asset', async (_event, { threadId, filePath, name, discardUnreadable }: {
+		threadId: string, filePath: string, name?: string, discardUnreadable?: boolean
 	}) => {
 		// Reference the user's own file where it lives; move a file the app just
 		// downloaded (see importMediaFromFile).
-		return await importMediaFromFile(threadId, filePath, name)
+		return await importMediaFromFile(threadId, filePath, name, { discardUnreadable })
+	})
+
+	// The "add media" picker: several files at once, and folders. macOS can
+	// choose files and folders in one panel; Windows and Linux cannot, so they
+	// get a files panel and a separate folder panel. Returns what was chosen as
+	// it is; `expand-media-paths` turns it into the files to import.
+	ipcMain.handle('pick-media', async (_event, { folders }: { folders?: boolean } = {}) => {
+		const media = dialogExtensions()
+		const properties: Electron.OpenDialogOptions['properties'] = folders
+			? ['openDirectory', 'multiSelections']
+			: process.platform === 'darwin' ? ['openFile', 'openDirectory', 'multiSelections'] : ['openFile', 'multiSelections']
+		const result = await dialog.showOpenDialog({
+			defaultPath: lastBrowsedDir,
+			title: folders ? 'Add a folder of media' : 'Add media',
+			properties,
+			// A filter greys out the files it does not match; folders stay choosable.
+			...(folders ? {} : { filters: [
+				{ name: 'Media', extensions: media },
+				{ name: 'Videos', extensions: dialogExtensions('video') },
+				{ name: 'Audio', extensions: dialogExtensions('audio') }
+			] })
+		})
+		if (result.canceled || result.filePaths.length === 0) return []
+		rememberBrowsedDir(result.filePaths[0])
+		return result.filePaths
+	})
+
+	// What a selection (files, folders, a drop) comes to: the media files in it,
+	// in import order, and what was left out.
+	ipcMain.handle('expand-media-paths', async (_event, { paths }: { paths: string[] }) => {
+		return await expandMediaPaths(Array.isArray(paths) ? paths.filter((p) => typeof p === 'string' && p) : [])
 	})
 
 	// Import from URL/YouTube: download straight into the asset's source dir,
@@ -726,25 +787,28 @@ app.whenReady().then(() => {
 		}
 	})
 
-	// AI prompt turns (M3): one structured call per turn, streamed via
-	// editor-turn-update; the base doc is never mutated until user accept.
+	// AI prompt turns: the selected engine runs an agent loop over FrameFlow's own
+	// MCP tools (a CLI spawned for the turn, or the loop inside FrameFlow), streamed
+	// via editor-turn-update. Its edits are revisions already.
 	ipcMain.handle('run-editor-prompt', (_event, options: {
-		threadId: string, personaId: string, prompt: string, baseStepId: string,
-		selectedItemIds: string[], playheadSec: number, widen?: 'chapter' | 'full', engine?: CliEngineId
+		threadId: string, prompt: string, baseStepId: string,
+		selectedItemIds: string[], playheadSec: number, widen?: 'chapter' | 'full', engine?: EngineId,
+		attachments?: PromptAttachmentInput[]
 	}) => {
 		// One agent per project: an outside agent's open round holds it.
 		const holder = agentHolding(options.threadId)
 		if (holder) throw new Error(holder)
-		// The engine picked in Settings or the chat's engine chip: a CLI runs
-		// agentically through FrameFlow's MCP tools, Gemini API as before.
-		// Retry names its engine, so a switch since the failure does not move it.
-		return isCliEngine(options.engine) || cliEngineSelected() ? runCliEditorPrompt(options) : editorPrompt.runEditorPrompt(options)
+		// The engine picked in Settings or the chat's engine chip. Retry names its
+		// engine, so a switch since the failure does not move it.
+		return runEnginePrompt(options)
 	})
 
 	ipcMain.handle('abort-editor-prompt', (_event, { turnId }: { threadId: string, turnId: string }) => {
-		if (!abortEngineTurn(turnId)) editorPrompt.abortEditorPrompt(turnId)
+		abortEngineTurn(turnId)
 		return true
 	})
+
+	ipcMain.handle('reset-engine-conversation', (_event, { threadId }: { threadId: string }) => resetEngineConversation(threadId))
 
 	// Renderer stamps the applied history step / revision back onto the turn.
 	ipcMain.handle('update-editor-turn', async (_event, { threadId, turnId, patch }: {
@@ -767,12 +831,19 @@ app.whenReady().then(() => {
 
 	// Export / render (M4): fast path via assembleVideo, region path via
 	// segment-then-concat; progress streams over editor-render-progress.
-	ipcMain.handle('export-editor-timeline', (_event, { threadId, quality, doc, format }: {
-		threadId: string, quality: 'original' | 'preview', doc?: EditorDocument, format?: DeliveryFormat
+	ipcMain.handle('export-editor-timeline', (_event, { threadId, quality, doc, format, height }: {
+		threadId: string, quality: 'original' | 'preview', doc?: EditorDocument, format?: DeliveryFormat, height?: number
 	}) => {
 		// `doc` is the renderer's in-memory timeline snapshot at click time —
 		// the render is detached from the live document and never persists it.
-		return editorRender.startEditorRender({ threadId, quality, doc, format })
+		return editorRender.startEditorRender({ threadId, quality, doc, format, height })
+	})
+
+	// Draw the project's motion layers in the background so an export finds them
+	// ready. Returns at once; progress streams over motion-prerender-progress.
+	ipcMain.handle('prerender-motion', (_event, { threadId, doc }: { threadId: string, doc: EditorDocument }) => {
+		void prerenderMotion({ threadId, doc })
+		return { ok: true }
 	})
 
 	ipcMain.handle('render-exact-frame', (_event, data: {
@@ -780,6 +851,23 @@ app.whenReady().then(() => {
 		doc: EditorDocument
 		timeSec: number
 	}) => editorPreview.renderExactFrame(data))
+
+	// A frame for a chat message: the monitor's picture at the playhead, with its
+	// titles and captions in it (the monitor draws those over its own still, and
+	// the agent has no monitor), sized as render_frame sends the agent one.
+	ipcMain.handle('capture-prompt-frame', async (_event, data: { threadId: string; doc: EditorDocument; timeSec: number }) => {
+		const { path: file } = await editorPreview.renderExactFrame({ ...data, burnText: true })
+		const image = nativeImage.createFromPath(file)
+		if (image.isEmpty()) throw new Error('The frame rendered but could not be read back. Try again.')
+		const large = image.getSize().width > 1280 ? image.resize({ width: 1280, quality: 'good' }) : image
+		const thumb = image.resize({ width: 224, quality: 'good' })
+		return {
+			data: large.toJPEG(85).toString('base64'),
+			mimeType: 'image/jpeg' as const,
+			thumbnail: `data:image/jpeg;base64,${thumb.toJPEG(75).toString('base64')}`,
+			...large.getSize()
+		}
+	})
 
 	ipcMain.handle('ensure-transition-preview', (_event, data: {
 		threadId: string
@@ -798,6 +886,14 @@ app.whenReady().then(() => {
 		const thread = threadManager.getThread(threadId)
 		if (!thread || thread.type !== 'editor' || !thread.editor) return {}
 		return editorCaptions.transcriptsForAssets(thread.editor.media)
+	})
+
+	// The monitor draws a following motion layer itself, from the same track the
+	// export reads — so it needs the tracks, which live beside the media.
+	ipcMain.handle('get-object-tracks', (_event, threadId: string) => {
+		const thread = threadManager.getThread(threadId)
+		if (!thread || thread.type !== 'editor' || !thread.editor) return []
+		return thread.editor.media.flatMap((asset) => listTracks(editorAssets.getAssetDir(thread, asset.id)))
 	})
 
 	ipcMain.handle('abort-editor-render', (_event, { renderId }: { renderId: string }) => {
@@ -865,7 +961,7 @@ app.whenReady().then(() => {
 		return threadManager.getThread(id)
 	})
 
-	ipcMain.handle('delete-thread', (_event, id) => {
+	ipcMain.handle('delete-thread', (_event, id, options?: { deleteFiles?: boolean }) => {
 		// Editor threads: abort any live per-asset preprocessing and renders,
 		// and remove the history sidecar before deletion
 		const thread = threadManager.getThread(id)
@@ -877,7 +973,7 @@ app.whenReady().then(() => {
 			void editorHistory.deleteHistory(id)
 			void editorRevisions.deleteRevisionsFile(id)
 		}
-		return threadManager.deleteThread(id)
+		return threadManager.deleteThread(id, { deleteFiles: options?.deleteFiles })
 	})
 
 	ipcMain.handle('delete-all-threads', () => {

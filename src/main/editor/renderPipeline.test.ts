@@ -123,7 +123,6 @@ const document = (transition?: { kind: string; duration: number }): EditorDocume
 		clip({ id: 'B', sourceAssetId: 'sb', timelineStart: 2, in: 1, out: 3 })
 	],
 	timelineMeta: { fps: 30, width: 320, height: 180, duration: 0 },
-	activePersonaId: 'podcast-editor',
 	turns: [],
 	historyRef: { currentStepId: 'step-0', stepCount: 0 }
 })
@@ -1021,6 +1020,20 @@ describe('delivery vs the real binary', () => {
 		// PCM is the ProRes convention: an intermediate that will be encoded
 		// again downstream should not carry a lossy track.
 		expect(stdout).toContain('pcm_s16le')
+	}, 90_000)
+
+	it.each([[false], [true]])('writes a real H.265 mp4 tagged hvc1 (hardware=%s, falling back if absent)', async (hardware) => {
+		const out = await deliver({
+			sourcePath: source, format: 'h265', hardware, signal: new AbortController().signal
+		})
+		expect(out).toMatch(/_h265\.mp4$/)
+		expect(out).not.toBe(source)
+		const { stdout } = await execFileAsync(ffprobe, ['-v', 'error',
+			'-show_entries', 'stream=codec_name,codec_tag_string,pix_fmt', '-of', 'csv=p=0', out!])
+		expect(stdout).toContain('hevc')
+		expect(stdout).toContain('hvc1')
+		expect(stdout).toContain('yuv420p')
+		expect(stdout).toContain('aac')
 	}, 90_000)
 
 	it('keeps the picture, rather than quietly rescaling it', async () => {

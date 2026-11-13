@@ -30,9 +30,6 @@ export function useRevisionCard(revision: Ref<EditorRevisionSummary>, opts?: { t
 	const itemCount = computed(() => revision.value.itemCount)
 
 	const origin = computed(() => originMeta(revision.value.origin))
-	const personaIcon = computed(
-		() => store.personas.find((p) => p.id === revision.value.personaId)?.icon || '✨'
-	)
 
 	const title = computed(() => {
 		if (disabled.value) return 'Wait for the AI edit to finish'
@@ -51,7 +48,7 @@ export function useRevisionCard(revision: Ref<EditorRevisionSummary>, opts?: { t
 
 	return {
 		isCurrent, isDirtyHere, disabled, canDelete,
-		thumbs, time, itemCount, origin, personaIcon, title,
+		thumbs, time, itemCount, origin, title,
 		switchTo, remove
 	}
 }

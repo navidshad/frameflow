@@ -63,10 +63,22 @@ be interrupted or be resumed without touching the other. The clip is placeable
 and watchable from the probe on (the monitor plays the original until a proxy
 exists), and the AI unlocks when the words lane is done, not the whole import.
 See `docs/import-lanes.md` for how it works and what was measured.
-The AI path is `src/main/editor/prompt.ts`: one Gemini call per turn producing
-**ops** (`src/main/editor/ops.ts`) which map to a `TimelineDiff` the renderer
-applies. Output length comes from the user's request — personas describe style
-only. Each turn becomes a branchable revision.
+The AI path is an agent loop over FrameFlow's own MCP tools. A chat turn is run
+by the selected engine (`src/main/engine/index.ts`): Claude Code, spawned as a CLI
+against a private per-turn MCP server, or Gemini, run by a loop inside FrameFlow
+(`src/main/engine/loop/`, built on the AI SDK's `ToolLoopAgent`) that talks to the
+same server as an MCP client. Both get the same tools, permissions and step budget
+(`src/main/engine/turnSession.ts`), and their edits arrive through `apply_ops`
+(`src/main/editor/ops.ts`, ops mapped to a `TimelineDiff`), so each turn is already
+a branchable revision. The loop keeps a plan, holds the agent to a review after it edits (FrameFlow
+measures the timeline itself and sends back a checklist), clears old tool results
+to keep its context small, and saves its conversation per project so a follow-up has the
+earlier messages; the chat's New conversation button forgets it. Why that library
+and not Deep Agents or an in-house loop: `docs/agent-loop-decision.md`. Output
+length comes from the user's request. There are no editing presets: every agent
+(Gemini's loop, FrameFlow's own Claude Code engine, and outside MCP clients)
+starts from the one baseline in `src/shared/baseline.ts`, which says what each
+thing in a project is and what the tools can do, and nothing about style.
 
 **The transcript step** (`src/main/gemini/utils.ts` `extractTranscript`, driven by
 `extraction.extractRawTranscript`). The audio is cut at pauses into windows
@@ -133,6 +145,6 @@ human editor changing only the clips you pointed at. Every turn becomes a
 revision you can switch back to or branch from.
 
 ### How does the AI know how long the output should be?
-From your request, and only from your request. Personas describe a *style*, not
-a length. The model states the runtime it inferred, and the result card reports
-what actually came out so you can see whether it read you correctly.
+From your request, and only from your request. The model states the runtime it
+inferred, and the turn in the chat reports what actually came out so you can see
+whether it read you correctly.

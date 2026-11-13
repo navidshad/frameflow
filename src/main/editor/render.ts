@@ -1,4 +1,4 @@
-import { BrowserWindow } from 'electron'
+import { app, BrowserWindow } from 'electron'
 import ffmpeg from 'fluent-ffmpeg'
 import fs from 'fs'
 import path from 'path'
@@ -12,14 +12,19 @@ import type {
 import { findOrphanItems, itemEnd } from '@shared/timeline'
 import { isCompositedItem } from '@shared/tracks'
 import { planTransitions, sourceDurationsFrom, type TransitionWindow } from '@shared/transitionPlan'
-import { sequenceFrame, type FrameSource } from '@shared/framing'
+import { fitFrameToHeight, sequenceFrame, type FrameSource } from '@shared/framing'
+import { fitFrameToShortSide } from '@shared/resolution'
 import { hasRenderableEffects } from '@shared/effects'
 import { speechIntervals } from '@shared/ducking'
 import { hasTransform } from '@shared/transform'
 import { hasKeyframes } from '@shared/keyframes'
 import { hasKey } from '@shared/keying'
 import { generatorSource } from '@shared/generators'
-import { motionKitFor } from '@shared/motion'
+import { motionFramePlan, motionKitFor } from '@shared/motion'
+import { hasFollows, withFollows, type FrameLock, type ShownSlice } from '@shared/follow'
+import { documentFrame } from '@shared/resolution'
+import type { ObjectTrack } from '@shared/tracking'
+import { followTracksFor } from '../tracking/store'
 import { fallbackMotionDir, motionCacheDir, motionClipPath } from '../motion/cache'
 import { ensureMotionJobs } from '../motion'
 import type { TranscriptEntry } from '@shared/captions'
@@ -34,6 +39,15 @@ import {
 	type Region, type RegionPlan, type SourceSlice
 } from './renderBuilders'
 import { regionTimeoutMs, runCommand } from './ffmpegRun'
+import { mapPool } from './pool'
+import { exportSummary, type ExportSummaryRow } from '@shared/exportSummary'
+import { calibrate, loadCalibration, recordActuals, saveCalibration } from './renderCalibration'
+import { colorAction, type SourceColor } from './colorPolicy'
+import {
+	RenderTracker, estimateBurnSec, estimateDeliverySec, estimateJoinSec, estimateLoudnessSec,
+	estimateMotionSec, estimateRegionsSec, type StepPlan
+} from './renderProgress'
+import { PROXY_MAX_FPS } from '../ffmpeg/proxyArgs'
 import { concatLists, exactTailFilters, regionAudioOpts, regionSpans, snapItemToFrames, type RegionSpan } from './regionJoin'
 
 export { atempoChain } from './renderBuilders'
@@ -59,6 +73,16 @@ export { runCommand } from './ffmpegRun'
  */
 
 const IS_MAC = process.platform === 'darwin'
+
+/**
+ * Regions rendered at once. Measured on an M1 Pro with 4K to 1080p hardware
+ * encodes: 1 region 4.9 s, 3 at once 5.3 s (where 3 in a row takes 14.7 s),
+ * and from 4 up each region still costs 1.7 s, so three is where it stops
+ * gaining. (The 2 in docs/import-speed-investigation.md is for proxies, which
+ * decode on the same chip.) The software encoder already spreads one encode over
+ * every core, so a second would only make both slower.
+ */
+export const regionConcurrency = (): number => (IS_MAC ? 3 : 1)
 /**
  * Boundaries closer together than this are the SAME boundary. Used to collapse
  * near-coincident cuts so the walker never emits a sliver region — which it used
@@ -83,6 +107,43 @@ function sliceSource(item: TimelineItem, t0: number, t1: number): { in: number; 
 		out: item.in + (t1 - item.timelineStart) * speed
 	}
 }
+
+/**
+ * The most frames per second a motion layer is drawn at. Measured on an M1 Pro,
+ * a 4K frame takes about 140 ms to draw and read back (the 90 ms of it is the
+ * pixel copy, on the main thread), so a 4K60 project with 373 s of motion layers
+ * was 22,400 frames, about an hour. Motion graphics are made at 24-30 fps almost
+ * everywhere; at 60 fps they only repeat each frame once.
+ */
+export const MOTION_MAX_FPS = 30
+
+/** How many lines the proxies have: `scale=-2:480` in proxyArgs.ts. */
+export const PROXY_LINES = 480
+
+/**
+ * Every stretch of footage the plan shows, with the timeline second its first
+ * frame plays at: what a following layer's cover is keyed against.
+ */
+export function shownSlices(plan: RegionPlan): ShownSlice[] {
+	const out: ShownSlice[] = []
+	let cursor = 0
+	for (const region of plan.regions) {
+		const slices = region.kind === 'overlap' ? [region.from, region.to] : region.videoLayers
+		for (const slice of slices) {
+			if (slice.lavfi || slice.motion || !slice.item.sourceAssetId) continue
+			out.push({ clipId: slice.item.id, start: cursor + (slice.offset || 0), in: slice.in, out: slice.out })
+		}
+		cursor += region.duration
+	}
+	return out
+}
+
+/**
+ * The frame at the proxies' size: 480 lines, the width following the aspect and
+ * kept even, as `scale=-2:480` makes it. A frame already that small stays.
+ */
+export const proxyFrameFor = (frame: { width: number; height: number }): { width: number; height: number } =>
+	fitFrameToHeight(frame, PROXY_LINES)
 
 export function computeRegions(
 	doc: EditorDocument,
@@ -109,8 +170,44 @@ export function computeRegions(
 		 * plays up to a frame early.
 		 */
 		frameGrid?: boolean
+		/**
+		 * Render at the proxy's size (480 lines) instead of the sequence's. A fast
+		 * preview export reads 480p proxies, so a 4K frame would only upscale them
+		 * and spend the whole encode on pixels that carry nothing. The frame rate
+		 * is capped the same way, at the proxies' own.
+		 */
+		proxyFrame?: boolean
+		/**
+		 * Render with the SHORT side at no more than this many lines, from the
+		 * source files (a 1080p export of 4K footage: 1080×1920 for a vertical
+		 * one). Never upscales. The frame rate stays the footage's.
+		 */
+		frameHeight?: number
+		/**
+		 * The tracks that following motion layers name (`followTracksFor`). A
+		 * following layer is drawn from its track through the clip it follows, so
+		 * the items planned here carry those keys. Without its track a following
+		 * layer is hidden, never left where its settings happen to put it.
+		 */
+		tracks?: readonly ObjectTrack[]
+		/** The first of the two passes a document with following layers takes (see below). */
+		withoutFrameLock?: boolean
 	} = {}
 ): RegionPlan {
+	if (hasFollows(doc.timeline)) {
+		const sources = { tracks: options.tracks ?? [], media: doc.media, frame: documentFrame(doc) }
+		// Planned twice. A cover has to sit on the source frame each output frame
+		// SHOWS, and which frame that is depends on where the regions fall (each
+		// seeks and rounds from its own start). So: plan once to learn the
+		// regions, then key the covers to them and plan again. The regions do not
+		// move between the two: a cover's keys change what it draws, not when.
+		let lock: FrameLock | undefined
+		if (!options.withoutFrameLock) {
+			const first = computeRegions(doc, quality, transcripts, { ...options, withoutFrameLock: true })
+			lock = { fps: first.fps, slices: shownSlices(first) }
+		}
+		doc = { ...doc, timeline: withFollows(doc.timeline, { ...sources, lock }) }
+	}
 	// Video tracks TOP-most first (highest order wins visually); [0] of a
 	// region's videoLayers is the layer v1 actually renders.
 	const videoTracks = doc.tracks
@@ -169,13 +266,20 @@ export function computeRegions(
 	// The SEQUENCE decides its own shape when the project has chosen one — that is
 	// what makes a 9:16 export from 16:9 footage possible at all. The monitor
 	// resolves the frame through the same function.
-	const { width, height } = sequenceFrame(
+	const fullFrame = sequenceFrame(
 		doc.timelineMeta,
 		usedVideoAssets.map((a) => a.metadata ?? {})
 	)
-	const fps = Math.min(60, Math.max(10,
+	const { width, height } = options.proxyFrame
+		? proxyFrameFor(fullFrame)
+		: options.frameHeight ? fitFrameToShortSide(fullFrame, options.frameHeight) : fullFrame
+	const sourceFps = Math.min(60, Math.max(10,
 		usedVideoAssets.reduce((max, a) => Math.max(max, a.metadata?.fps || 0), 0) || 30
 	))
+	// The proxies are made at no more than PROXY_MAX_FPS, so a faster preview
+	// would draw every frame twice: the motion layers alone are captured one
+	// window screenshot per frame, and 4K60 footage doubled that for nothing.
+	const fps = options.proxyFrame ? Math.min(sourceFps, PROXY_MAX_FPS) : sourceFps
 
 	if (options.frameGrid) {
 		// Order-preserving, so items that did not overlap still do not.
@@ -271,7 +375,10 @@ export function computeRegions(
 		// the document's `in`.
 		if (item.motion) {
 			const clip: TimelineItem = { ...item, in: 0, out: item.duration, speed: 1 }
-			const frame = { width, height, fps }
+			// Drawn at its own, lower rate: every frame is a window screenshot, and
+			// the layer's chain below conforms it to the sequence's rate by
+			// repeating frames (`vnorm`'s `fps=`), so a 60 fps sequence costs half.
+			const frame = { width, height, fps: Math.min(fps, MOTION_MAX_FPS) }
 			const kit = motionKitFor(item.motion, doc.motionKits)
 			return {
 				...common,
@@ -295,7 +402,7 @@ export function computeRegions(
 		}
 		const asset = assetById.get(item.sourceAssetId)
 		if (!asset) throw new Error(`Missing media asset for clip "${item.label || item.id}".`)
-		return { ...common, srcPath: srcFor(asset) }
+		return { ...common, srcPath: srcFor(asset), color: colorOfAsset(asset) }
 	}
 
 	/** One side of a transition, extended into its handle and frozen past it. */
@@ -313,7 +420,7 @@ export function computeRegions(
 		if (!asset) throw new Error(`Missing media asset for clip "${item.label || item.id}".`)
 		const speed = item.speed || 1
 		const slice: SourceSlice = {
-			srcPath: srcFor(asset), in: side.in, out: side.out,
+			srcPath: srcFor(asset), color: colorOfAsset(asset), in: side.in, out: side.out,
 			offset: 0, duration,
 			freezeHead: side.freeze && side.in <= item.in + TIME_EPS ? side.freeze : 0,
 			freezeTail: side.freeze && side.out >= item.out - TIME_EPS ? side.freeze : 0,
@@ -487,6 +594,16 @@ function validateWindows(
 	}
 }
 
+/**
+ * How an asset's picture is coloured, from its original's probe. Always the
+ * ORIGINAL's: a proxy is re-tagged for the browser (ffmpeg/proxyTags.ts) and its
+ * own tags no longer say what its pixels are.
+ */
+export const colorOfAsset = (asset: Pick<MediaAsset, 'metadata'>): SourceColor | undefined => {
+	const m = asset.metadata
+	return m ? { transfer: m.colorTransfer, primaries: m.colorPrimaries, matrix: m.colorSpace } : undefined
+}
+
 // ===== Fast path =====
 
 /**
@@ -497,8 +614,14 @@ function validateWindows(
  */
 export const fastPathMatchesFrame = (
 	source: FrameSource | undefined,
-	plan: { width: number; height: number }
-): boolean => !!source && source.width === plan.width && source.height === plan.height
+	plan: { width: number; height: number },
+	/** The export reads the 480p proxy, so its output is the proxy's frame. */
+	fromProxy = false
+): boolean => {
+	if (!source?.width || !source.height) return false
+	const frame = fromProxy ? proxyFrameFor({ width: source.width, height: source.height }) : source
+	return frame.width === plan.width && frame.height === plan.height
+}
 
 export function isFastPathEligible(items: TimelineItem[], track: Track, hasAudioItems = false): boolean {
 	if (items.length === 0) return false
@@ -660,6 +783,26 @@ function emitRenderProgress(payload: EditorRenderProgress) {
 	})
 }
 
+/**
+ * The plan an export of `doc` renders from. ONE place builds it, because the
+ * background motion pre-render must name exactly the clips the export will ask
+ * for: a clip is found by a hash of its size, rate and content, so a plan built
+ * even slightly differently would draw files nothing ever reads.
+ */
+export function planForRender(doc: EditorDocument, quality: ExportQuality, tempDir: string, height?: number): RegionPlan {
+	return computeRegions(doc, quality, transcriptsForDoc(doc), {
+		motionDir: motionCacheDir(tempDir),
+		tracks: followTracksFor(doc.timeline, tempDir),
+		frameGrid: true,
+		proxyFrame: quality === 'preview',
+		// A resolution choice applies to renders from the sources; the preview has its own.
+		frameHeight: quality === 'original' ? height : undefined
+	})
+}
+
+/** Whether any export is running: the background pre-render stands aside for it. */
+export const hasActiveRender = (): boolean => activeRenders.size > 0
+
 export function abortEditorRender(renderId: string): void {
 	activeRenders.get(renderId)?.controller.abort()
 }
@@ -688,6 +831,8 @@ export function startEditorRender(options: {
 	doc?: EditorDocument
 	/** What kind of file to deliver. Defaults to the h264 mp4 already produced. */
 	format?: DeliveryFormat
+	/** Render with the short side at no more than this many lines (2160, 1440, 1080, 720). Absent: the project's own size. */
+	height?: number
 }): { renderId: string } {
 	const { threadId, quality } = options
 	const thread = threadManager.getThread(threadId)
@@ -700,10 +845,7 @@ export function startEditorRender(options: {
 	// immediately instead of producing a ghost render) ----
 	// The transcript sharpens ducking from whole-clip to phrase-level; reading it
 	// here costs one file per asset and nothing when no bed exists.
-	const plan = computeRegions(doc, quality, transcriptsForDoc(doc), {
-		motionDir: motionCacheDir(thread.tempDir),
-		frameGrid: true
-	})
+	const plan = planForRender(doc, quality, thread.tempDir, options.height)
 	// `allSlices` is exhaustive over region kinds, so a slice can never escape this
 	// check by living in a field the pre-flight forgot — which would turn a clean
 	// synchronous rejection into a failure halfway through a long render. Motion
@@ -725,8 +867,28 @@ export function startEditorRender(options: {
 	activeRenders.set(renderId, { controller, workDir })
 	const { signal } = controller
 
-	const progress = (percent: number, phase: EditorRenderProgress['phase']) =>
-		emitRenderProgress({ threadId, renderId, percent: Math.round(percent), phase })
+	// The steps and the time left come from the tracker; the bar is its share of
+	// the estimated total. `emit` is throttled to what a person can read: a change
+	// of whole percent, of step or of detail at once, the estimate once a second.
+	let tracker: RenderTracker | null = null
+	let summary: ExportSummaryRow[] | undefined
+	let phase: EditorRenderProgress['phase'] = 'rendering'
+	let lastKey = ''
+	let lastAt = 0
+	const emit = (nextPhase?: EditorRenderProgress['phase']) => {
+		if (nextPhase) phase = nextPhase
+		const snap = tracker?.snapshot()
+		const active = snap?.steps.find((s) => s.state === 'active')
+		const key = `${phase}|${Math.round(snap?.percent ?? 0)}|${active?.id}|${active?.detail}`
+		const now = Date.now()
+		if (key === lastKey && now - lastAt < 1000) return
+		lastKey = key
+		lastAt = now
+		emitRenderProgress({
+			threadId, renderId, percent: Math.round(snap?.percent ?? 0), phase,
+			steps: snap?.steps, etaSec: snap?.etaSec, etaSpread: snap?.etaSpread, elapsedSec: snap?.elapsedSec, summary
+		})
+	}
 
 	// ---- Async render body ----
 	void (async () => {
@@ -737,21 +899,7 @@ export function startEditorRender(options: {
 		// which the `finally` sweeps.
 		let sidecarPath: string | null = null
 		try {
-			progress(0, 'rendering')
-
-			// ---- Motion layers ----
-			// Each page is captured once per distinct look, by content hash, into
-			// an alpha .mov the region graph overlays like any other layer. Done
-			// first so every region below finds its file; a cached clip costs a
-			// stat. The first 15% of the bar, weighted by frames captured.
-			const motionJobs = motionJobsFor(plan.regions)
-			const motionWeight = motionJobs.length ? 15 : 0
-			if (motionJobs.length) {
-				await ensureMotionJobs(motionJobs, {
-					signal,
-					onProgress: (fraction) => progress(fraction * motionWeight, 'rendering')
-				})
-			}
+			emit('rendering')
 
 			const videoTrack = doc.tracks
 				.filter((t) => t.kind === 'video' && !t.hidden)
@@ -775,13 +923,80 @@ export function startEditorRender(options: {
 				(i) => videoTrackIds.has(i.trackId) && i.trackId !== videoTrack?.id && isCompositedItem(i)
 			)
 
-			const fastSource = doc.media.find((a) => a.id === items[0]?.sourceAssetId)?.metadata
+			const fastAsset = doc.media.find((a) => a.id === items[0]?.sourceAssetId)
+			const fastSource = fastAsset?.metadata
+			// A preview reads the proxy, whose frame is the 480-line one; with no
+			// proxy yet it would read the original, which is never that size.
+			const fromProxy = quality === 'preview'
 
 			// `!plan.hasOverlap` reads the walker's OWN output, so a future source of
 			// transitions the predicate does not know about still cannot slip through.
-			if (videoTrack && !hasOtherVideoItems && !plan.hasOverlap
-				&& fastPathMatchesFrame(fastSource, plan)
-				&& isFastPathEligible(items, videoTrack, hasAudioItems)) {
+			const useFastPath = !!videoTrack && !hasOtherVideoItems && !plan.hasOverlap
+				&& (!fromProxy || !!fastAsset?.proxyPath)
+				&& fastPathMatchesFrame(fastSource, plan, fromProxy)
+				&& isFastPathEligible(items, videoTrack, hasAudioItems)
+				// assembleVideo converts no colour: it serves only footage that is already BT.709 SDR.
+				&& colorAction(fastAsset ? colorOfAsset(fastAsset) : undefined) === 'none'
+
+			// ---- The steps, and what each is expected to take ----
+			const frame = { width: plan.width, height: plan.height }
+			const cues = cuesForDoc(doc, frame)
+			const pixels = plan.width * plan.height
+			const seconds = plan.regions.reduce((sum, r) => sum + r.duration, 0) || 1
+			const motionJobs = motionJobsFor(plan.regions)
+			const motionToDraw = [...new Map(motionJobs.map((j) => [j.outputPath, j])).values()]
+				.filter((j) => !fs.existsSync(j.outputPath))
+			const framesToDraw = motionToDraw.reduce((sum, j) => sum + motionFramePlan(j.item, j.frame.fps).length, 0)
+			const format = options.format ?? 'h264'
+			// The first-guess estimates, scaled by what this machine measured on its own past exports.
+			const calibrationFile = path.join(app.getPath('userData'), 'render-calibration.json')
+			const calibration = loadCalibration(calibrationFile)
+			const plan1 = (id: string, label: string, rawEstSec: number): StepPlan => ({ id, label, rawEstSec, ...calibrate(calibration, id, rawEstSec) })
+			const steps: StepPlan[] = [
+				...(motionJobs.length ? [plan1('motion', 'Drawing motion layers', estimateMotionSec(framesToDraw, pixels))] : []),
+				...(useFastPath
+					? [plan1('cut', 'Cutting the clips', 2 + seconds * 0.02)]
+					: [
+						plan1('regions', 'Rendering segments', estimateRegionsSec(seconds, pixels, plan.regions.length)),
+						plan1('join', 'Joining the segments', estimateJoinSec(seconds))
+					]),
+				...(cues.length ? [plan1('text', 'Adding titles and captions', estimateBurnSec(seconds, pixels))] : []),
+				...(doc.loudnessEnabled ? [plan1('loudness', 'Levelling the loudness', estimateLoudnessSec(seconds))] : []),
+				...(format !== 'h264' ? [plan1('delivery', 'Converting for delivery', estimateDeliverySec(seconds))] : [])
+			]
+			summary = exportSummary({
+				width: plan.width, height: plan.height, fps: plan.fps, format, quality,
+				seconds, segments: plan.regions.length, loudness: !!doc.loudnessEnabled, captions: cues.length > 0
+			})
+			tracker = new RenderTracker(steps)
+			emit('rendering')
+
+			// ---- Motion layers ----
+			// Each page is captured once per distinct look, by content hash, into
+			// an alpha .mov the region graph overlays like any other layer. Done
+			// first so every region below finds its file; a cached clip costs a
+			// stat. A clip the background pre-render already drew is skipped.
+			if (motionJobs.length) {
+				const uniqueClips = new Set(motionJobs.map((j) => j.outputPath)).size
+				if (motionToDraw.length === 0) {
+					tracker.complete('motion', `All ${uniqueClips} layers were already drawn`)
+					emit()
+				} else {
+					tracker.begin('motion', `0 of ${motionToDraw.length} layers`)
+					await ensureMotionJobs(motionJobs, {
+						signal,
+						onProgress: (fraction, clips) => {
+							tracker!.progress('motion', fraction, `${clips.finished} of ${clips.total} layers`
+								+ (uniqueClips > clips.total ? ` (${uniqueClips - clips.total} were ready)` : ''))
+							emit()
+						}
+					})
+					tracker.complete('motion')
+					emit()
+				}
+			}
+
+			if (useFastPath) {
 				// ---- Fast path: single-source trim+concat via assembleVideo ----
 				// computeRegions' orphan pre-flight already ran, so this resolves —
 				// but assert rather than `!`, so a future reordering fails loudly.
@@ -802,35 +1017,39 @@ export function startEditorRender(options: {
 					segments,
 					exportsDir,
 					renderId.slice(0, 8),
-					(percent) => progress(percent * 0.98, 'rendering'),
+					(percent) => { tracker!.progress('cut', percent / 100); emit() },
 					signal
 				)
+				tracker.complete('cut')
+				emit()
 			} else {
 				// ---- Region path: segment-then-concat ----
 				const total = plan.regions.reduce((sum, r) => sum + r.duration, 0) || 1
-				let doneWeight = 0
-				let lastEmit = -1
-				const regionFiles: string[] = []
 				const spans = regionSpans(plan.regions.map((r) => r.duration), plan.fps)
-
-				for (let i = 0; i < plan.regions.length; i++) {
-					if (signal.aborted) throw new Error('aborted')
-					const region = plan.regions[i]
-					const weight = region.duration / total
-					const onRegionProgress = (pct: number) => {
-						const overall = motionWeight + (doneWeight + weight * (pct / 100)) * (96 - motionWeight)
-						if (overall - lastEmit >= 1) {
-							lastEmit = overall
-							progress(overall, 'rendering')
-						}
-					}
-					const file = await renderRegion(region, i, plan, spans[i], workDir, signal, onRegionProgress)
-					regionFiles.push(file)
-					doneWeight += weight
-					progress(motionWeight + doneWeight * (96 - motionWeight), 'rendering')
+				// Each region reports its own percent; the step is their duration-weighted sum.
+				const percents = plan.regions.map((r) => 0)
+				const emitOverall = () => {
+					const done = plan.regions.reduce((sum, r, i) => sum + (r.duration / total) * (percents[i] / 100), 0)
+					const finished = percents.filter((p) => p >= 100).length
+					tracker!.progress('regions', done, `${finished} of ${plan.regions.length} segments`)
+					emit('rendering')
 				}
+				tracker.begin('regions', `0 of ${plan.regions.length} segments`)
+				emit()
 
-				progress(96, 'stitching')
+				const regionFiles = await mapPool(plan.regions.length, regionConcurrency(), async (i, regionSignal) => {
+					const file = await renderRegion(plan.regions[i], i, plan, spans[i], workDir, regionSignal, (pct) => {
+						percents[i] = pct
+						emitOverall()
+					})
+					percents[i] = 100
+					emitOverall()
+					return file
+				}, signal)
+				tracker.complete('regions', `${plan.regions.length} segments`)
+
+				tracker.begin('join')
+				emit('stitching')
 				try {
 					await concatRegions(regionFiles, spans, workDir, finalPath, signal, false)
 				} catch (error) {
@@ -838,6 +1057,8 @@ export function startEditorRender(options: {
 					console.warn('[render] copy-concat failed, retrying with re-encode:', error)
 					await concatRegions(regionFiles, spans, workDir, finalPath, signal, true)
 				}
+				tracker.complete('join')
+				emit()
 			}
 
 			// ---- Burned-in text: captions and titles ----
@@ -845,39 +1066,42 @@ export function startEditorRender(options: {
 			// region path alike — both have assigned finalPath by here. Titles go
 			// through the same pass, because a title IS a cue that carries its own
 			// placement; there is no second text pipeline.
-			{
-				const frame = { width: plan.width, height: plan.height }
-				const cues = cuesForDoc(doc, frame)
-				if (cues.length) {
-					progress(97, 'stitching')
-					sidecarPath = await burnCaptions({
-						sourcePath: finalPath, workDir, cues, frame, signal,
-						onProgress: (pct) => progress(97 + pct * 0.02, 'stitching')
-					})
-					// Replace the uncaptioned render only once the burn has landed.
-					fs.renameSync(sidecarPath, finalPath)
-					sidecarPath = null
-				}
+			if (cues.length) {
+				tracker.begin('text')
+				emit('stitching')
+				sidecarPath = await burnCaptions({
+					sourcePath: finalPath, workDir, cues, frame, signal,
+					onProgress: (pct) => { tracker!.progress('text', pct / 100); emit() }
+				})
+				// Replace the uncaptioned render only once the burn has landed.
+				fs.renameSync(sidecarPath, finalPath)
+				sidecarPath = null
+				tracker.complete('text')
+				emit()
 			}
 
 			// ---- Loudness ----
 			// After the caption burn, so it measures the file that ships. Audio
 			// only, so it is cheap next to everything above it.
 			if (doc.loudnessEnabled) {
-				progress(99, 'stitching')
+				tracker.begin('loudness')
+				emit('stitching')
 				sidecarPath = await normaliseLoudness({ sourcePath: finalPath, signal })
 				fs.renameSync(sidecarPath, finalPath)
 				sidecarPath = null
+				tracker.complete('loudness')
+				emit()
 			}
 
 			// ---- Delivery ----
 			// Last, so it transcodes the finished picture and mix rather than
 			// something the caption or loudness pass would then have to redo.
+			if (format !== 'h264') { tracker.begin('delivery'); emit('stitching') }
 			const delivered = await deliver({
 				sourcePath: finalPath,
-				format: options.format ?? 'h264',
+				format,
 				signal,
-				onProgress: (pct) => progress(99 + pct * 0.01, 'stitching')
+				onProgress: (pct) => { tracker!.progress('delivery', pct / 100); emit() }
 			})
 			if (delivered) {
 				// A different container, so the mp4 is replaced rather than
@@ -886,7 +1110,15 @@ export function startEditorRender(options: {
 				finalPath = delivered
 			}
 
-			emitRenderProgress({ threadId, renderId, percent: 100, phase: 'done', outputPath: finalPath })
+			tracker.finishAll()
+			// What this export really took, so the next one's estimate is closer. Only a render that
+			// landed counts: a cancelled or failed one never reached its slow steps.
+			saveCalibration(calibrationFile, recordActuals(calibration, tracker.actuals()))
+			const landed = tracker.snapshot()
+			emitRenderProgress({
+				threadId, renderId, percent: 100, phase: 'done', outputPath: finalPath,
+				steps: landed.steps, etaSec: 0, etaSpread: 0, elapsedSec: landed.elapsedSec, summary
+			})
 		} catch (error: any) {
 			const message = signal.aborted ? 'aborted' : (error?.message || 'Export failed')
 			if (!signal.aborted) console.error('[render] Export failed:', error)

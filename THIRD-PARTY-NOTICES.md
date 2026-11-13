@@ -174,3 +174,30 @@ reserved names. Vazirmatn is a subset of the official v33.003 release cut by us
 to the Arabic-script range (its licence declares no Reserved Font Name; how it
 was cut is in `src/shared/motion-templates/fonts/README.md`).
 `scripts/embed-motion-fonts.mjs` turns them into data URLs.
+
+---
+
+## 7. Vision models (object tracking)
+
+Three ONNX models from the [OpenCV Zoo](https://github.com/opencv/opencv_zoo),
+fetched at install by `scripts/fetch-models.mjs` from a pinned commit and
+checked against the sha256 in `scripts/models-manifest.json`. They are shipped
+unmodified in `resources/models`, each with its licence file beside it and a
+`PROVENANCE.txt` naming the exact source.
+
+| Model | Used for | License |
+|---|---|---|
+| YuNet (`face_detection_yunet_2023mar.onnx`) | Finding faces in a frame | MIT, © 2020 Shiqi Yu |
+| SFace (`face_recognition_sface_2021dec.onnx`) | Telling two faces apart, to join one person's track | Apache-2.0 |
+| VitTrack (`object_tracking_vittrack_2023sep.onnx`) | Following a box from frame to frame | Apache-2.0 |
+
+The code that prepares frames for these models and reads their answers
+(`src/main/tracking/yunet.ts`, `sface.ts`, `vittrack.ts`) is a TypeScript port of
+the corresponding routines in OpenCV (Apache-2.0, © OpenCV contributors).
+
+The models run through `onnxruntime-node` (MIT, © Microsoft Corporation), listed
+with the other npm dependencies in section 5.
+
+Nothing a model sees leaves the computer. The face models are used only to find
+faces and to tell that two faces in the same footage are the same person; they
+do not identify anyone.

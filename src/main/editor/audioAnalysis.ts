@@ -71,11 +71,18 @@ function measurePeaks(file: string, signal?: AbortSignal): Promise<{ peaks: numb
 	})
 }
 
-/** ffmpeg's EBU R128 meter over the whole file: integrated loudness, range, true peak. */
-function measureLoudness(file: string, signal?: AbortSignal): Promise<ReturnType<typeof parseLoudness>> {
+/** A part of a source, in SOURCE seconds: where to start and how long to read. */
+export interface SourceRange { fromSec: number; durSec: number }
+
+/** The input flags that limit ffmpeg to `range`; empty for the whole file. */
+export const rangeArgs = (range?: SourceRange): string[] =>
+	range ? ['-ss', String(range.fromSec), '-t', String(range.durSec)] : []
+
+/** ffmpeg's EBU R128 meter over the whole file (or `range` of it): integrated loudness, range, true peak. */
+export function measureLoudness(file: string, signal?: AbortSignal, range?: SourceRange): Promise<ReturnType<typeof parseLoudness>> {
 	return new Promise((resolve) => {
 		const child = spawn(getFFmpegBinaryPath(), [
-			'-nostats', '-nostdin', '-i', file, '-vn', '-af', 'ebur128=peak=true', '-f', 'null', '-'
+			'-nostats', '-nostdin', ...rangeArgs(range), '-i', file, '-vn', '-af', 'ebur128=peak=true', '-f', 'null', '-'
 		], { stdio: ['ignore', 'ignore', 'pipe'] })
 		let stderr = ''
 		child.stderr.on('data', (d: Buffer) => { stderr += d.toString() })
@@ -163,12 +170,24 @@ export function previewPeaks(file: string, buckets = 48): Promise<number[]> {
  * but it can read a picture, the way it already reads frames. Time runs left to
  * right, pitch bottom to top on a log scale, loudness as brightness.
  */
-export function spectrogramBase64(file: string): Promise<string> {
+export interface SpectrogramOptions {
+	/** Picture size in pixels, before any legend is added around it. Default 640x256. */
+	width?: number
+	height?: number
+	/** Draw the time axis, the frequency axis and the dB scale around the picture. */
+	legend?: boolean
+	range?: SourceRange
+}
+
+export function spectrogramBase64(file: string, opts: SpectrogramOptions = {}): Promise<string> {
+	const { width = 640, height = 256, legend = false, range } = opts
 	const out = path.join(os.tmpdir(), `ff-spectrogram-${process.pid}-${Date.now()}-${Math.random().toString(36).slice(2)}.png`)
 	return new Promise((resolve, reject) => {
 		const child = spawn(getFFmpegBinaryPath(), [
-			'-y', '-v', 'error', '-nostdin', '-i', file,
-			'-lavfi', 'showspectrumpic=s=640x256:legend=0:scale=log:color=intensity', '-frames:v', '1', out
+			'-y', '-v', 'error', '-nostdin', ...rangeArgs(range), '-i', file,
+			// The legend draws its own axes with a built-in font, so it needs no libfreetype.
+			'-lavfi', `showspectrumpic=s=${width}x${height}:legend=${legend ? 1 : 0}:scale=log:${legend ? 'fscale=log:drange=80:' : ''}color=intensity`,
+			'-frames:v', '1', out
 		], { stdio: ['ignore', 'ignore', 'pipe'] })
 		let stderr = ''
 		child.stderr.on('data', (d: Buffer) => { stderr += d.toString() })

@@ -34,18 +34,15 @@ export function relativeTime(timestamp: number): string {
  * Icon + tooltip for a revision's origin. Extracted because the list and the
  * graph rendered this mapping verbatim in two places, and only the list ever
  * had the tooltip.
- *
- * `ai` returns no icon — the caller supplies the persona's, which it looks up
- * from the store.
  */
 export function originMeta(origin: RevisionOrigin): {
-	icon: string | null
+	icon: string
 	iconClass: string
 	title: string
 } {
 	switch (origin) {
 		case 'ai':
-			return { icon: null, iconClass: 'text-xs', title: 'AI edit' }
+			return { icon: 'tabler--sparkles', iconClass: 'text-secondary', title: 'AI edit' }
 		case 'manual':
 			return { icon: 'tabler--bookmark', iconClass: 'text-secondary', title: 'Manual checkpoint' }
 		default:

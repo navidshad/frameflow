@@ -38,6 +38,8 @@ export interface VideoMetadata {
 	 */
 	colorTransfer?: string
 	colorPrimaries?: string
+	/** The matrix the picture is coded in (`bt2020nc`, `bt709`). Absent on files probed before this was recorded. */
+	colorSpace?: string
 	/** ffprobe's pixel format of the picture (`yuv420p10le`); 4:2:2 and 4:4:4 do not play natively. */
 	pixFmt?: string
 }
@@ -63,6 +65,8 @@ export interface Usage {
 	candidatesTokens: number;
 	thinkingTokens?: number;
 	totalTokens: number;
+	/** Of promptTokens, the ones the provider served from its cache, billed at a fraction. */
+	cachedTokens?: number;
 }
 
 export interface UsageRecord {
@@ -218,8 +222,6 @@ export interface EditorDocument {
 	tracks: Track[]             // lane definitions
 	timeline: TimelineItem[]    // placements across tracks — the live EDL
 	timelineMeta: TimelineMeta
-	activePersonaId: string
-	customPersonas?: EditorPersona[]  // project-local personas
 	turns: PromptTurn[]         // prompt-request log (no snapshots)
 	historyRef: EditorHistoryRef      // pointer into the sidecar history file
 	selection?: { clipIds?: string[]; itemIds?: string[] }
@@ -462,6 +464,8 @@ export interface TimelineItem {  // an instance of a clip placed on a track
 	layerRole?: 'subject' | 'background' | 'overlay'
 	/** On a sound clip: the moment it follows. See SoundBinding. */
 	bind?: SoundBinding
+	/** On a motion layer: the track it follows, and through which clip. See shared/follow.ts. */
+	follow?: import('./follow').TrackFollow
 	/**
 	 * Part of a camera group: a SHOT shows one angle of the group, the SOUND is
 	 * the group's main sound under every shot. `in`/`out` stay ordinary source
@@ -652,50 +656,6 @@ export interface TextOverlaySpec {
 	bold?: boolean
 }
 
-export interface EditorPersona {
-	id: string
-	name: string
-	icon: string                // emoji or Tabler icon id
-	description: string
-	systemPrompt: string        // the whole backing for v1
-	builtin: boolean            // seeded personas can't be deleted, only cloned
-	tone?: string
-	/**
-	 * Style only. `mode` and `targetDurationSec` used to live here and forced the
-	 * output runtime; both are gone — length now comes from the user's request
-	 * (see outputLengthLines in editor/ops.ts). `aspectRatio` went with them: no
-	 * op could act on it and render.ts derives resolution from source metadata,
-	 * so it only ever told the model something untrue.
-	 */
-	defaults?: { pacing?: 'tight' | 'balanced' | 'relaxed' }
-	featureSets?: FeatureSetRef[]  // deferred; always [] in v1
-	/**
-	 * The look this voice edits in — vocabulary, not rules.
-	 *
-	 * A persona already carries judgement about WHAT to cut; this carries what
-	 * the result should look and sound like, so the two travel together instead
-	 * of the user re-describing a house style in every prompt. Everything in
-	 * the catalogues stays available: these are preferences the model is told
-	 * about, not a whitelist it is confined to.
-	 */
-	style?: PersonaStyle
-}
-
-export interface PersonaStyle {
-	/** Transition kinds this voice reaches for first. */
-	transitions?: string[]
-	/** Effect kinds that make up its look. */
-	looks?: string[]
-	/** Whether it captions by default — short-form does, a lecture does not. */
-	captions?: boolean
-	/** Whether it normalises the mix. True for anything meant to be posted. */
-	loudness?: boolean
-	/** One line the system instruction quotes, in the persona's own voice. */
-	note?: string
-}
-
-export interface FeatureSetRef { id: string; name: string } // stub
-
 export interface EditorHistoryRef {
 	currentStepId: string       // undo/redo pointer (persisted with the doc → undo survives restart)
 	stepCount: number
@@ -766,9 +726,8 @@ export interface EditorRevision {
 	parentId: string | null     // null only for the root 'init' revision
 	seq: number                 // sidecar revisionCounter; displayed "V{seq}"
 	origin: RevisionOrigin
-	label: string               // persona name / user label / 'Original' / 'Auto checkpoint'
+	label: string               // engine or agent name / user label / 'Original' / 'Auto checkpoint'
 	turnId?: string             // origin === 'ai'
-	personaId?: string          // origin === 'ai' — drives the list-item icon
 	snapshot: RevisionSnapshot
 	createdAt: number
 }
@@ -814,10 +773,12 @@ export interface EditorRevisionsFile {
 }
 
 export interface PromptTurnEngine {
-	id: 'claude-code'
+	id: 'claude-code' | 'gemini-api'
 	label: string
 	/** The model the CLI reported, when it did. */
 	model?: string
+	/** The CLI's own id for the conversation this run was part of: the next run resumes it. */
+	sessionId?: string
 	steps: Array<{
 		id: string
 		tool: string
@@ -843,10 +804,34 @@ export interface PromptTurnEngine {
 	end?: 'failed' | 'cancelled'
 }
 
+/**
+ * A frame the user attached to a chat message: the still the monitor showed at
+ * `timeSec`, with their note and any marks they drew on it. Main keeps the
+ * image as a file beside the project; the turn carries its path and a small
+ * thumbnail, so the chat history draws without reading the file.
+ */
+export interface PromptAttachment {
+	id: string
+	timeSec: number
+	note?: string
+	/** The user drew on the still: the picture sent is the marked one. */
+	marked?: boolean
+	/** Words the user wrote on the still, which the agent also gets as text. */
+	labels?: string[]
+	/** The JPEG the engine was sent. */
+	path: string
+	/** A data URL, ~224px wide. */
+	thumbnail: string
+}
+
+/** An attachment on its way from the composer: the picture itself, or (Retry) the file a turn kept. */
+export type PromptAttachmentInput = Omit<PromptAttachment, 'path'> & ({ data: string; mimeType: string; path?: undefined } | { path: string; data?: undefined })
+
 export interface PromptTurn {
 	id: string
-	personaId: string
 	prompt: string
+	/** Frames the user attached to this message. */
+	attachments?: PromptAttachment[]
 	baseStepId: string
 	resultStepId?: string
 	status: 'pending' | 'running' | 'completed' | 'error'
@@ -879,7 +864,7 @@ export interface PromptTurn {
 	notes?: string[]            // non-failures worth telling the user (clamped ranges, …)
 	/**
 	 * How long the result actually came out. Computed for EVERY turn with a diff,
-	 * not just build-from-scratch ones: with no persona-set target the only way to
+	 * not just build-from-scratch ones: with no stated target the only way to
 	 * tell a deliberate 30-second cut from an accidental one is what the model
 	 * said it was aiming for.
 	 */
@@ -895,6 +880,13 @@ export interface PromptTurn {
 	cost?: number
 	createdAt: number
 }
+
+/**
+ * Make a motion layer follow a track: `track` is a track id or name, `clip`
+ * the footage clip it follows it in (the one the layer overlaps most when left
+ * out). An empty `track` stops the layer following.
+ */
+export interface MotionFollowRequest { track: string; clip?: string }
 
 /** A motion layer's settings as an agent may send them: a map, or key/value pairs. */
 export type MotionOpSettings =
@@ -1019,6 +1011,8 @@ export interface EditorOps {
 		html?: string
 		/** A custom page only: the project motion kit (`setMotionKits` id) the page builds on. */
 		kit?: string
+		/** Follow a track (find_faces / track_object): see `MotionFollowRequest`. */
+		follow?: MotionFollowRequest
 	}>
 	/** Change a motion layer already on the timeline: its fields, its windows, its timing. */
 	updateMotion?: Array<{
@@ -1031,6 +1025,8 @@ export interface EditorOps {
 		html?: string
 		/** Use this project motion kit for the page; "" stops using one. */
 		kit?: string
+		/** Follow a track, or (`track: ""`) stop following. */
+		follow?: MotionFollowRequest
 	}>
 	/**
 	 * Project motion kits: CSS and JS stored once and shared by every custom
@@ -1198,9 +1194,18 @@ export type ExportQuality = 'original' | 'preview'
  * anything else is a transcode of it, because the intermediates have to be
  * identical h264 for `concat -c copy` to work at all.
  */
-export type DeliveryFormat = 'h264' | 'prores'
+export type DeliveryFormat = 'h264' | 'h265' | 'prores'
 
 export type RenderPhase = 'rendering' | 'stitching' | 'done' | 'error'
+
+/** One step of an export, as the dialog lists it. */
+export interface RenderStepInfo {
+	id: string
+	label: string
+	state: 'pending' | 'active' | 'done'
+	/** What the step is on: "13 of 46 layers". */
+	detail?: string
+}
 
 export interface EditorRenderProgress {
 	threadId: string
@@ -1209,6 +1214,15 @@ export interface EditorRenderProgress {
 	phase: RenderPhase
 	outputPath?: string
 	error?: string
+	/** The steps of this export, in order, and where each stands. */
+	steps?: RenderStepInfo[]
+	/** Seconds left, estimated before a step starts and measured while it runs. */
+	etaSec?: number | null
+	/** How far the time left may be off, as a share of it (0.3 is plus or minus 30%). */
+	etaSpread?: number
+	elapsedSec?: number
+	/** What the export was started with, in words (size, file type, frame rate, length). */
+	summary?: { label: string; value: string }[]
 }
 
 export interface TimelineSegment {

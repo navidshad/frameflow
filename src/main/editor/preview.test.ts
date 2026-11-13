@@ -41,7 +41,6 @@ const doc = (a: Partial<TimelineItem> = {}, b: Partial<TimelineItem> = {}): Edit
 		item({ id: 'B', sourceAssetId: 'sb', timelineStart: first.duration, ...b })
 	],
 	timelineMeta: { fps: 30, width: 1920, height: 1080, duration: 0 },
-	activePersonaId: 'podcast-editor',
 	turns: [],
 	historyRef: { currentStepId: 'step-0', stepCount: 0 }
 	}
