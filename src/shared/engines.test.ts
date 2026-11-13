@@ -3,7 +3,7 @@ import { readFileSync } from 'node:fs'
 import { resolve } from 'node:path'
 import {
 	agentFocus, buildCommand, ENGINES, CLI_EFFORTS, engineEfforts, STEPS_DEFAULT, STEPS_MAX, buildEngineSystemPrompt, buildEngineUserPrompt, displayPath, editTime,
-	engineChipLabel, engineFailureNote, geminiTextModels, engineRetry, isCliEngine, isLoopEngine, latestEngineTurn, resumableSessionId, shouldRestartFresh, isFrameflowTool, lineSplitter, normalizeEngineSettings, normalizeToolName, parseClaudeAuth,
+	engineChipLabel, engineChipShort, engineFailureNote, geminiTextModels, engineRetry, isCliEngine, isLoopEngine, latestEngineTurn, resumableSessionId, shouldRestartFresh, isFrameflowTool, lineSplitter, normalizeEngineSettings, normalizeToolName, parseClaudeAuth,
 	parseStreamLine, parseVersion, readableError, StepTracker, stepTitle, TOKEN_ENV, unexpectedTools, type CliEngineId
 } from './engines'
 import { FRAMEFLOW_BASELINE } from './baseline'
@@ -308,6 +308,12 @@ describe('engine chip', () => {
 		expect(engineChipLabel({ ...base, models: { 'claude-code': 'claude-opus-5-5' }, efforts: { 'claude-code': 'xhigh' } })).toBe('Claude Code · Opus 5.5 · Extra high')
 		expect(engineChipLabel({ ...base, efforts: { 'claude-code': 'high' } })).toBe('Claude Code · High')
 		expect(engineChipLabel({ ...base, models: { 'claude-code': 'claude-x-9' } })).toBe('Claude Code · claude-x-9')
+	})
+
+	it('shortens to the model, or to the engine when no model is set', () => {
+		expect(engineChipShort({ ...base, models: { 'claude-code': 'claude-opus-5-5' }, efforts: { 'claude-code': 'xhigh' } })).toBe('Opus 5.5')
+		expect(engineChipShort({ ...base, efforts: { 'claude-code': 'high' } })).toBe('Claude Code')
+		expect(engineChipShort({ ...base, engine: 'gemini-api' }, 'Gemini 3 Flash Preview')).toBe('3 Flash Preview')
 	})
 
 	it('names the Gemini model without the repeated brand', () => {

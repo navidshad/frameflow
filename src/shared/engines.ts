@@ -192,8 +192,8 @@ export function geminiTextModels(
 	return models.sort((a, b) => rank(a.value) - rank(b.value) || a.inputPerM - b.inputPerM)
 }
 
-/** The chip's text: "Claude Code · Opus · High", "Gemini API · 3 Flash Preview", or just the engine. */
-export function engineChipLabel(settings: EngineSettings, geminiModelLabel?: string): string {
+/** The chip's parts: the engine, then its model and effort where they are set. */
+function engineChipParts(settings: EngineSettings, geminiModelLabel?: string) {
 	const label = ENGINES[settings.engine].label
 	let model: string | undefined
 	let effort: string | undefined
@@ -205,7 +205,23 @@ export function engineChipLabel(settings: EngineSettings, geminiModelLabel?: str
 	} else {
 		model = geminiModelLabel?.replace(/^Gemini\s+/i, '')
 	}
+	return { label, model, effort }
+}
+
+/** The chip's text: "Claude Code · Opus · High", "Gemini API · 3 Flash Preview", or just the engine. */
+export function engineChipLabel(settings: EngineSettings, geminiModelLabel?: string): string {
+	const { label, model, effort } = engineChipParts(settings, geminiModelLabel)
 	return [label, model, effort].filter(Boolean).join(' · ')
+}
+
+/**
+ * The chip where there is no room for the whole label: the model, which is the part
+ * that changes what a message costs and how well it is answered. The engine's own
+ * name stands in when it has no model set.
+ */
+export function engineChipShort(settings: EngineSettings, geminiModelLabel?: string): string {
+	const { label, model } = engineChipParts(settings, geminiModelLabel)
+	return model || label
 }
 
 /**

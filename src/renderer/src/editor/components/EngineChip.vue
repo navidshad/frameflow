@@ -19,8 +19,10 @@
 			:disabled="editor.promptRunning"
 			@click="toggle">
 			<span class="w-1.5 h-1.5 rounded-full bg-secondary-light shrink-0"></span>
-			<span class="text-[11px] font-semibold max-w-[170px] truncate">{{ engine.chipLabel }}</span>
-			<span class="iconify tabler--chevron-up w-2.5 h-2.5 opacity-50 transition-transform" :class="{ 'rotate-180': open }"></span>
+			<!-- A host with little room (the chat's composer row) shows the short one. -->
+			<span class="chip-full text-[11px] font-semibold max-w-[170px] truncate">{{ engine.chipLabel }}</span>
+			<span class="chip-short text-[11px] font-semibold max-w-[110px] truncate">{{ engine.chipShort }}</span>
+			<span class="iconify tabler--chevron-up w-2.5 h-2.5 shrink-0 opacity-50 transition-transform" :class="{ 'rotate-180': open }"></span>
 		</button>
 
 		<div v-if="open" ref="menuRef" role="menu" aria-label="Engine, model and effort"
@@ -189,3 +191,7 @@ onMounted(() => {
 })
 onUnmounted(() => document.removeEventListener('click', onDocClick))
 </script>
+
+<style scoped>
+.chip-short { display: none; }
+</style>

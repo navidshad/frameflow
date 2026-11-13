@@ -91,6 +91,11 @@ function createWindow(): void {
 	const mainWindow = new BrowserWindow({
 		width: 1200,
 		height: 800,
+		// The smallest window the editor's bars are laid out for. 720 is half of a 1440 px
+		// laptop screen, so the app still tiles beside another window (the chat folds to
+		// its strip there); 560 leaves a picture above the timeline at its default height.
+		minWidth: 720,
+		minHeight: 560,
 		show: false,
 		autoHideMenuBar: true,
 		webPreferences: {

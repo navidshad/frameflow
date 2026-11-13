@@ -1,9 +1,9 @@
 <template>
 	<div v-if="session"
-		class="flex items-center gap-2 h-[26px] px-3 hair-l hair-r">
+		class="shrink-0 flex items-center gap-2 h-[26px] px-3 hair-l hair-r">
 		<span class="w-1.5 h-1.5 rounded-full bg-secondary-light shrink-0"></span>
 		<span class="text-xs font-semibold text-violet-700 dark:text-violet-300 whitespace-nowrap">{{ session.clientName }}</span>
-		<span class="text-[11px] text-zinc-500 whitespace-nowrap">is editing · via MCP · {{ steps }} · {{ elapsed }}</span>
+		<span class="text-[11px] text-zinc-500 whitespace-nowrap">is editing<span class="banner-detail"> · via MCP · {{ steps }}</span> · {{ elapsed }}</span>
 		<button
 			class="ml-1 text-[11px] font-semibold text-red-500 hover:text-red-400 transition"
 			:title="`Disconnect ${session.clientName}`" @click="agent.disconnect(session.sessionId)">
@@ -39,3 +39,11 @@ const elapsed = computed(() => {
 		: `${minutes}:${String(total % 60).padStart(2, '0')}`
 })
 </script>
+
+<style scoped>
+/* Inside the editor's top bar (EditorTopBar names the container): a narrow bar
+   keeps who is editing, for how long, and Stop. */
+@container topbar (max-width: 1000px) {
+	.banner-detail { display: none; }
+}
+</style>
