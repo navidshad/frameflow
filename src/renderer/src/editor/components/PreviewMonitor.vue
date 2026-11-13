@@ -7,16 +7,16 @@
 		<!-- Header row: the mode, what the picture is telling you, and the frame size.
 		     Everything the monitor says about the picture lives here or in the
 		     transport row below it — nothing is drawn over the picture itself. -->
-		<div class="h-8 shrink-0 hair-b flex items-end gap-4 px-3.5">
+		<div class="monitor-head h-8 shrink-0 hair-b flex items-end gap-4 px-3.5">
 			<button v-for="m in (['source', 'timeline'] as const)" :key="m"
-				class="tab-u !h-[31px] !text-[11px] uppercase tracking-[.08em]"
+				class="tab-u shrink-0 !h-[31px] !text-[11px] uppercase tracking-[.08em]"
 				:class="{ 'tab-u-active': mode === m }"
 				@click="mode = m">
 				{{ m }}
 			</button>
 			<!-- Multicam: the angle strip under the program picture, on or off. -->
 			<button v-if="hasCameraGroups"
-				class="tab-u !h-[31px] !text-[11px] uppercase tracking-[.08em]"
+				class="tab-u shrink-0 !h-[31px] !text-[11px] uppercase tracking-[.08em]"
 				:class="{ 'tab-u-active': showAngles && mode === 'timeline' }"
 				:aria-pressed="showAngles"
 				title="Every camera angle at the playhead (1–9 cuts to one)"
@@ -24,20 +24,22 @@
 				@click="toggleAngles">
 				Angles
 			</button>
-			<div class="flex-1"></div>
+			<div class="flex-1 min-w-0"></div>
 			<!-- The picture is a stand-in until the proxy is ready: say so, here rather than over the picture. -->
-			<span v-if="pictureNote" class="h-[31px] flex items-center gap-1.5 text-[11px] text-amber-500 font-semibold truncate"
+			<span v-if="pictureNote" class="h-[31px] min-w-0 flex items-center gap-1.5 text-[11px] text-amber-500 font-semibold whitespace-nowrap"
 				data-testid="monitor-picture-note">
-				<span class="w-1.5 h-1.5 rounded-full bg-amber-500"></span>{{ pictureNote.text }}
+				<span class="w-1.5 h-1.5 shrink-0 rounded-full bg-amber-500"></span><span class="truncate">{{ pictureNote.text }}</span>
 			</span>
-			<div v-if="mode === 'timeline'" class="h-[31px] flex items-center gap-3.5 text-[11px] text-zinc-500 min-w-0">
-				<span v-if="motionPathShown" class="truncate text-primary">Motion path shown while a position key is selected</span>
-				<span v-else-if="edl.currentSegmentId.value && !agentStore.agentActive" class="font-mono truncate max-w-[220px]">
+			<!-- What the picture is and its size keep their width; the clip's name and
+			     the hints are what truncate, and a narrow monitor drops them (below). -->
+			<div v-if="mode === 'timeline'" class="h-[31px] flex items-center gap-3.5 text-[11px] text-zinc-500 min-w-0 whitespace-nowrap">
+				<span v-if="motionPathShown" class="mh-wide min-w-0 truncate text-primary">Motion path shown while a position key is selected</span>
+				<span v-else-if="edl.currentSegmentId.value && !agentStore.agentActive" class="mh-wide min-w-0 font-mono truncate max-w-[220px]">
 					{{ activeSegmentLabel }}
 				</span>
 				<!-- While an agent edits, the playhead can follow it. -->
 				<button v-if="agentStore.agentActive"
-					class="flex items-center gap-2 font-semibold transition"
+					class="shrink-0 flex items-center gap-2 font-semibold transition"
 					:class="agentStore.followAgent ? 'text-violet-500' : 'text-zinc-500 hover:text-zinc-400'"
 					:title="agentStore.followAgent ? 'The playhead moves to where the agent looks and edits — click to stop' : 'Move the playhead to where the agent looks and edits'"
 					:aria-pressed="agentStore.followAgent"
@@ -49,29 +51,29 @@
 				</button>
 
 				<!-- What the picture is, right now -->
-				<span v-if="motionWarning" data-motion-warning class="flex items-center gap-1.5 text-amber-500 font-semibold truncate"
+				<span v-if="motionWarning" data-motion-warning class="min-w-0 flex items-center gap-1.5 text-amber-500 font-semibold"
 					:title="`${motionWarning.layer}: its HTML fails a check. Open the HTML tab to see which.`">
-					<span class="w-1.5 h-1.5 rounded-full bg-amber-500"></span>{{ motionWarning.text }}
+					<span class="w-1.5 h-1.5 shrink-0 rounded-full bg-amber-500"></span><span class="truncate">{{ motionWarning.text }}</span>
 				</span>
-				<span v-else-if="exactFrame.src" class="flex items-center gap-1.5 text-accent font-semibold">
+				<span v-else-if="exactFrame.src" class="shrink-0 flex items-center gap-1.5 text-accent font-semibold">
 					<span class="w-1.5 h-1.5 rounded-full bg-accent"></span>Exact
 				</span>
-				<span v-else-if="store.activeMotion.length" class="flex items-center gap-1.5 text-accent font-semibold"
+				<span v-else-if="store.activeMotion.length" class="shrink-0 flex items-center gap-1.5 text-accent font-semibold"
 					title="Motion layers preview exactly: the export captures this same page.">
 					<span class="w-1.5 h-1.5 rounded-full bg-accent"></span>Motion · exact
 				</span>
-				<span v-if="agentLookedHere" class="flex items-center gap-1.5 text-violet-500 font-semibold">
-					<span class="iconify tabler--eye w-3 h-3"></span>Agent looked at {{ clock(agentStore.lookedAt ?? 0) }}
+				<span v-if="agentLookedHere" class="shrink-0 flex items-center gap-1.5 text-violet-500 font-semibold">
+					<span class="iconify tabler--eye w-3 h-3"></span><span class="mh-wide">Agent looked at</span> {{ clock(agentStore.lookedAt ?? 0) }}
 				</span>
 
 				<!-- The frame's own label IS the frame picker. -->
-				<div v-if="edl.hasContent.value" class="relative">
+				<div v-if="edl.hasContent.value" class="relative shrink-0">
 					<button class="font-mono text-[11px] text-zinc-500 hover:text-primary transition"
 						:title="frameChosen ? 'Project resolution' : 'Project resolution — following the footage'"
 						@click="frameMenuOpen = !frameMenuOpen">
 						<span v-if="currentRung" class="text-zinc-400">{{ currentRung.label }}</span>
 						{{ seqWidth }}×{{ seqHeight }}
-						<span v-if="!frameChosen" class="text-zinc-400">auto</span>
+						<span v-if="!frameChosen" class="mh-wide text-zinc-400">auto</span>
 					</button>
 					<template v-if="frameMenuOpen">
 						<div class="fixed inset-0 z-40" @click="frameMenuOpen = false"></div>
@@ -1018,3 +1020,13 @@ watch(activeClip, (clip) => {
 	sourceTime.value = clip.in
 })
 </script>
+
+<style scoped>
+/* The header is as wide as the picture, which the layout lets down to its floor
+   (and lower in a small window). Tabs, the picture's state and its size always
+   show; the clip's name and the wordier hints need a monitor wide enough. */
+.monitor-head { container: monitor-head / inline-size; }
+@container monitor-head (max-width: 600px) {
+	.mh-wide { display: none; }
+}
+</style>

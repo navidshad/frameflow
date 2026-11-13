@@ -1,7 +1,7 @@
 import { defineStore } from 'pinia'
 import { computed, ref } from 'vue'
 import {
-	CLI_MODELS, DEFAULT_ENGINE_SETTINGS, ENGINE_IDS, ENGINES, engineChipLabel, geminiTextModels, isCliEngine,
+	CLI_MODELS, DEFAULT_ENGINE_SETTINGS, ENGINE_IDS, ENGINES, engineChipLabel, engineChipShort, geminiTextModels, isCliEngine,
 	type GeminiTextModel,
 	type EngineDetection, type EngineId, type EngineSettings, type ModelOption
 } from '@shared/engines'
@@ -64,6 +64,7 @@ export const useEngineStore = defineStore('engine', () => {
 	const editorModel = computed(() => modelSettings.value?.selection?.[EDITOR_OP] || EDITOR_FALLBACK)
 	const editorModelLabel = computed(() => modelMetadata.value[editorModel.value]?.label || editorModel.value)
 	const chipLabel = computed(() => engineChipLabel(settings.value, editorModelLabel.value))
+	const chipShort = computed(() => engineChipShort(settings.value, editorModelLabel.value))
 
 	const loadModels = async () => {
 		try {
@@ -94,5 +95,5 @@ export const useEngineStore = defineStore('engine', () => {
 
 	if (api?.onEngineState) api.onEngineState(apply)
 
-	return { settings, detections, geminiModels, editorModel, editorModelLabel, chipLabel, setEditorModel, detecting, loaded, current, isCli, available, modelOptions, detectionFor, load, detect, update, select }
+	return { settings, detections, geminiModels, editorModel, editorModelLabel, chipLabel, chipShort, setEditorModel, detecting, loaded, current, isCli, available, modelOptions, detectionFor, load, detect, update, select }
 })

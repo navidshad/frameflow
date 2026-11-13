@@ -27,11 +27,12 @@
 			</div>
 
 			<!-- Meta row: quiet text controls left, send right. It measures itself
-			     (container query below) so a narrow chat drops labels, never Send. -->
+			     (container query below): a narrow chat drops labels and shortens the
+			     engine chip, so the scope keeps a readable share and Send never leaves. -->
 			<div class="meta-row flex items-center gap-1 mt-0.5">
 				<EngineChip />
 
-				<span class="text-zinc-300 dark:text-zinc-700 text-[9px]">·</span>
+				<span class="meta-dot text-zinc-300 dark:text-zinc-700 text-[9px]">·</span>
 
 				<!-- The frame in the monitor, attached to the message as a picture. -->
 				<button class="shrink-0 flex items-center gap-1 px-1 py-0.5 rounded-md text-zinc-500 hover:text-accent transition disabled:opacity-40 disabled:hover:text-zinc-500"
@@ -40,7 +41,7 @@
 					<span class="meta-label text-[9px] font-bold uppercase tracking-widest">Frame</span>
 				</button>
 
-				<span class="text-zinc-300 dark:text-zinc-700 text-[9px]">·</span>
+				<span class="meta-dot text-zinc-300 dark:text-zinc-700 text-[9px]">·</span>
 
 				<!-- The CLI agent remembers this chat; this makes its next message a clean start. -->
 				<template v-if="conversation">
@@ -50,7 +51,7 @@
 						<span class="iconify tabler--message-plus w-2.5 h-2.5"></span>
 						<span class="meta-label text-[9px] font-bold uppercase tracking-widest">New conversation</span>
 					</button>
-					<span class="text-zinc-300 dark:text-zinc-700 text-[9px]">·</span>
+					<span class="meta-dot text-zinc-300 dark:text-zinc-700 text-[9px]">·</span>
 				</template>
 
 				<!-- Scope: text-level control — owns the flexible space so it
@@ -254,9 +255,18 @@ onUnmounted(() => document.removeEventListener('click', onDocClick))
 <style scoped>
 .meta-row { container-type: inline-size; }
 /* With every label the row needs about 570 px (chip ~200, Frame ~60, New
-   conversation ~130, scope ~110, Send). Below this Frame and New conversation keep
-   only their icons (their titles still say what they do), which frees ~150 px. */
+   conversation ~130, scope ~110, Send). The chat column is 280 to 560 px wide, so
+   the row is usually narrower than that, and gives up words in two steps:
+   1. Frame and New conversation keep only their icons (their titles still say what
+      they do), which frees ~150 px;
+   2. the chip names the model alone and the separators go, which frees ~120 px
+      more, so the scope still reads at the column's narrowest. */
 @container (max-width: 539px) {
 	.meta-label { display: none; }
+}
+@container (max-width: 419px) {
+	.meta-dot { display: none; }
+	.meta-row :deep(.chip-full) { display: none; }
+	.meta-row :deep(.chip-short) { display: inline; }
 }
 </style>
