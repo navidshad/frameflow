@@ -4,8 +4,9 @@
 
 ### Talk to your video editor.
 
-Drop in your footage and say what you want.<br>
-FrameFlow builds the cut on a real timeline, so you can still change anything by hand.
+FrameFlow is an AI video editor for macOS, Windows and Linux.<br>
+Drop in your footage and say what you want. It builds the cut on a real timeline,<br>
+so you can still change anything by hand.
 
 <br>
 
