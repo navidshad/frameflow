@@ -15,11 +15,7 @@ FrameFlow builds the cut on a real timeline, so you can still change anything by
 
 <br>
 
-<picture>
-  <source media="(prefers-color-scheme: dark)" srcset="docs/readme/hero-dark.webp">
-  <source media="(prefers-color-scheme: light)" srcset="docs/readme/hero-light.webp">
-  <img src="docs/readme/hero-dark.webp" width="100%" alt="The FrameFlow editor. On the left, the video's words as a list. In the middle, the picture with an animated week planner drawn over it. On the right, a chat where the user asked to cut the filler and the assistant answered. Along the bottom, the timeline with a motion track, a cutaway clip, the main video and sound effects.">
-</picture>
+<img src="docs/readme/hero-dark.webp" width="100%" alt="The FrameFlow editor. On the left, the video's words as a list. In the middle, the picture with an animated week planner drawn over it. On the right, a chat where the user asked to cut the filler and the assistant answered. Along the bottom, the timeline with a motion track, a cutaway clip, the main video and sound effects.">
 
 <sub>A desktop app for macOS, Windows and Linux · Free for personal and other noncommercial use</sub>
 
