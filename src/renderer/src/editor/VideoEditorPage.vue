@@ -106,6 +106,7 @@ import AgentBanner from './components/AgentBanner.vue'
 import AgentWorkingStrip from './components/AgentWorkingStrip.vue'
 import AgentWorkingScrim from './components/AgentWorkingScrim.vue'
 import { CHAT, LEFT, TIMELINE, resolveEditorLayout } from './layout'
+import { tabForMode, useEditorMode } from './editorMode'
 import { useFileDrop } from './composables/useFileDrop'
 
 const route = useRoute()
@@ -113,6 +114,7 @@ const router = useRouter()
 const editorStore = useEditorStore()
 const agentStore = useAgentStore()
 const keyframeLanes = useKeyframeLanesStore()
+const { mode, isPro } = useEditorMode()
 
 const notFound = ref(false)
 
@@ -192,8 +194,14 @@ for (const key of ['editor.inspectorCol', 'editor.inspectorW', 'editor.inspector
 
 // ===== Left panel (persisted per machine) =====
 const leftOpen = ref(localStorage.getItem('editor.leftRail') !== 'closed')
-const leftTab = ref<LeftTab>((localStorage.getItem('editor.leftTab') as LeftTab) || 'media')
+// Light lists Media and Words only. A library saved while in Pro — or still
+// open when the switch goes to Light — would leave the panel on a tab the rail
+// no longer shows, so it becomes Media, here on load and again on the switch.
+// Nothing else follows the mode: the project, the playhead, what is selected
+// and the chat draft are where they were.
+const leftTab = ref<LeftTab>(tabForMode((localStorage.getItem('editor.leftTab') as LeftTab) || 'media', mode.value))
 watch(leftTab, (v) => localStorage.setItem('editor.leftTab', v))
+watch(mode, (m) => { leftTab.value = tabForMode(leftTab.value, m) })
 watch(leftOpen, (v) => localStorage.setItem('editor.leftRail', v ? 'open' : 'closed'))
 
 const chatColOpen = ref(localStorage.getItem('editor.chatCol') !== 'closed')
@@ -226,7 +234,10 @@ const onResize = () => { windowW.value = window.innerWidth }
 onMounted(() => window.addEventListener('resize', onResize))
 onBeforeUnmount(() => window.removeEventListener('resize', onResize))
 
-/** A single custom HTML layer is selected: its code needs room, so the left panel widens. */
+/**
+ * A single custom HTML layer is selected: its code needs room, so the left panel
+ * widens. Only in Pro — Light has no code tab, so there is nothing to make room for.
+ */
 const customLayerSelected = computed(() => {
 	const ids = editorStore.selectedItemIds
 	if (ids.length !== 1 || editorStore.selectedSeamId) return false
@@ -238,7 +249,7 @@ const layout = computed(() => resolveEditorLayout({
 	windowW: windowW.value,
 	leftOpen: leftOpen.value,
 	leftWanted: leftW.value,
-	codeView: customLayerSelected.value && leftMode.value === 'inspect',
+	codeView: isPro.value && customLayerSelected.value && leftMode.value === 'inspect',
 	chatOpen: chatColOpen.value,
 	chatWanted: chatW.value
 }))

@@ -78,7 +78,7 @@
 		</template>
 
 		<!-- Hints -->
-		<div v-if="items.length === 0" class="absolute inset-0 flex items-center px-3 pointer-events-none">
+		<div v-if="items.length === 0 && emptyHint" class="absolute inset-0 flex items-center px-3 pointer-events-none">
 			<span class="text-[10px] text-zinc-400 dark:text-zinc-600">{{ emptyHint }}</span>
 		</div>
 
@@ -103,11 +103,13 @@ import { DEFAULT_TRANSITION_SEC, type Seam } from '@shared/transitionPlan'
 import { transitionLabel } from '@shared/transitionPresets'
 import { useEditorStore } from '../../../stores/editorStore'
 import { TimelineInteractionsKey, TimelineViewportKey } from '../../composables/useTimelineViewport'
+import { useEditorMode } from '../../editorMode'
 import TimelineClip from './TimelineClip.vue'
 
 const props = defineProps<{ track: Track }>()
 
 const store = useEditorStore()
+const { isPro } = useEditorMode()
 const viewport = inject(TimelineViewportKey)!
 const interactions = inject(TimelineInteractionsKey)!
 
@@ -207,9 +209,14 @@ const dropClass = computed(() => {
 		: 'ring-2 ring-inset ring-red-500/70 bg-red-500/10'
 })
 
+/**
+ * What an empty lane is for. An empty motion lane says nothing in Light: the
+ * Motion library it would send you to is a Pro tool, and a hint that points
+ * at something you cannot see is worse than a quiet lane.
+ */
 const emptyHint = computed(() =>
 	isMotionTrack(props.track)
-		? 'Drag a motion template here'
+		? (isPro.value ? 'Drag a motion template here' : '')
 		: trackFamily(props.track) === 'audio'
 			? 'Drag an audio file or pieces here'
 			: 'Drag a file, pieces or a title here'

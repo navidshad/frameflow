@@ -39,6 +39,22 @@ you can switch to or branch from — list or graph view, in the Revisions tab.
 
 Output length comes from your request. Personas describe style only.
 
+### 6. Light and Pro
+The editor's top bar carries a **`Light | Pro`** switch (`src/renderer/src/editor/editorMode.ts`). It is one editor in two amounts, not two editors.
+- **Pro** is the whole editor.
+- **Light** is the same editor with the advanced tools put away, because the assistant does that work for most people. Basic editing is in both: import, drag onto a track, move, trim, split, delete, titles, captions, loudness, markers, track controls, Inspect, thumbnail, export, the chat, and camera angles.
+
+**What Light hides**
+- **Animation**: the Keyframes button and its lanes, the key toggles in Inspect, the motion path on the picture, and a motion layer's Animate section and HTML tab.
+- **Making advanced things by hand**: "Add a motion layer" and "Add a generated background" in the timeline toolbar.
+- **The Motion, Transitions, Effects and Sound libraries** in the left rail, which leaves Media and Words.
+
+**The rules**
+- **Never a second version**: Light has no UI of its own. A tool is either there, looking and working exactly as it does in Pro, or it is not there.
+- **Hide the making, keep the result**: Light hides the ways to *create or animate* advanced things by hand. Whatever is already on the timeline (motion layers, transitions, effects, sounds, keys) still plays, and can be selected, moved, trimmed and deleted.
+- **The assistant is the same in both**: it keeps every tool in Light and in Pro. The mode changes what the person sees, never what the assistant can do.
+- **Remembered per machine**: the mode lives in `localStorage['editor.mode']`, and switching keeps the project, playhead and selection. A machine that has never chosen opens in Light.
+
 ## 🧩 Key Components
 
 - **`App.vue` (Shell)**: Manages global theme, ambient backgrounds, and navigation state using `AppRoot`.

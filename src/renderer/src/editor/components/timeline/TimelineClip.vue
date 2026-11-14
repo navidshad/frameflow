@@ -48,7 +48,7 @@
 				<span class="truncate">{{ motionLabel }}</span>
 			</div>
 			<!-- The page fails its checks: an older version is drawn (board 5). -->
-			<span v-if="motionWarning" data-motion-warning-dot :title="`${motionWarning} — open the HTML tab`"
+			<span v-if="motionWarning" data-motion-warning-dot :title="`${motionWarning} — ${motionHint}`"
 				class="absolute top-0.5 right-[3px] w-3 h-3 rounded-full bg-amber-500 text-white text-[8px] font-black
 				       flex items-center justify-center pointer-events-none">!</span>
 			<div v-for="key in motionKeys" :key="key"
@@ -129,6 +129,7 @@ import { motionClipLabel, resolveMoments } from '@shared/motion'
 import { motionBadge } from '@shared/motionCode'
 import { useEditorStore } from '../../../stores/editorStore'
 import { TimelineViewportKey, TimelineInteractionsKey } from '../../composables/useTimelineViewport'
+import { motionWarningHint, useEditorMode } from '../../editorMode'
 import AudioWaveform from '../AudioWaveform.vue'
 
 const props = defineProps<{ item: TimelineItem }>()
@@ -220,6 +221,9 @@ const clipWidth = computed(() => Math.max(viewport.secToPx(props.item.duration),
 const clipHeight = computed(() => Math.max(12, (track.value?.height ?? 64) - 10))
 const motionLabel = computed(() => motionClipLabel(props.item))
 const motionWarning = computed(() => motionBadge(props.item.motion))
+/** What to do about the warning. Light has no HTML tab to send anyone to, so the two modes say different things. */
+const { mode: editorMode } = useEditorMode()
+const motionHint = computed(() => motionWarningHint(editorMode.value))
 
 /**
  * The first and last windows (the entrance and the exit), in px from the

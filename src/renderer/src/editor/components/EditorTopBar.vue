@@ -29,6 +29,19 @@
 		<!-- Background exports of OTHER projects (this project's own is the Export button) -->
 		<GlobalRenderPill />
 
+		<!-- Light | Pro: how much of the editor is out. It is a control, so no width hides it. -->
+		<div ref="modeGroup" class="flex p-0.5 rounded-lg bg-zinc-100 dark:bg-zinc-800/60 shrink-0"
+			role="radiogroup" aria-label="Editor mode" @keydown="onModeKey">
+			<SlimTooltip v-for="option in MODES" :key="option.id" :text="option.hint" placement="bottom">
+				<button type="button" role="radio" :aria-checked="mode === option.id" :tabindex="mode === option.id ? 0 : -1"
+					class="py-[3px] px-2.5 rounded-md text-[10px] leading-4 font-semibold whitespace-nowrap transition"
+					:class="mode === option.id
+						? 'bg-white dark:bg-zinc-700 text-zinc-800 dark:text-white shadow-sm'
+						: 'text-zinc-500 dark:text-zinc-400 hover:text-zinc-700 dark:hover:text-zinc-200'"
+					:data-editor-mode="option.id" @click="setMode(option.id)">{{ option.label }}</button>
+			</SlimTooltip>
+		</div>
+
 		<span v-if="agent.access?.enabled" class="shrink-0 whitespace-nowrap h-7 flex items-center gap-1.5 text-[11px] text-zinc-500"
 			title="Agent access is on: agents can reach this project over MCP">
 			<span class="w-1.5 h-1.5 rounded-full bg-accent-light"></span><span class="tb-wide">Agent access on</span>
@@ -90,13 +103,14 @@ import GlobalRenderPill from '../../components/GlobalRenderPill.vue'
 import { useAgentStore } from '../../stores/agentStore'
 import { useEditorStore } from '../../stores/editorStore'
 import { useTheme } from '../../composables/useTheme'
+import { useEditorMode, type EditorMode } from '../editorMode'
 
 /**
- * The editor's 40px bar: back, title, cost, then — right — agent access,
- * settings, theme and Export. It replaces the shared GraphHeader here, which
- * left room for an absolutely-placed cluster that this screen no longer has:
- * the chat column runs the full height of the window, so nothing may sit over
- * its top-right corner.
+ * The editor's 40px bar: back, title, cost, then — right — the Light | Pro
+ * switch, agent access, settings, theme and Export. It replaces the shared
+ * GraphHeader here, which left room for an absolutely-placed cluster that this
+ * screen no longer has: the chat column runs the full height of the window, so
+ * nothing may sit over its top-right corner.
  */
 const props = defineProps<{
 	title?: string
@@ -135,6 +149,33 @@ const router = useRouter()
 const agent = useAgentStore()
 const { isDark, toggle } = useTheme()
 
+// ===== Light | Pro =====
+const { mode, setMode } = useEditorMode()
+const MODES: { id: EditorMode; label: string; hint: string }[] = [
+	{ id: 'light', label: 'Light', hint: 'The essentials: cut, trim, titles, captions, export' },
+	{ id: 'pro', label: 'Pro', hint: 'Adds animation, transitions, effects and sound design' }
+]
+const modeGroup = ref<HTMLElement | null>(null)
+
+/**
+ * The switch is one stop in the tab order, and the arrows move inside it, as
+ * in any group of radio buttons: the choice follows the focus. The key stops
+ * here, because left and right are also the editor's step-a-frame shortcuts
+ * and choosing a mode must not move the playhead.
+ */
+const onModeKey = async (event: KeyboardEvent) => {
+	const step = event.key === 'ArrowRight' || event.key === 'ArrowDown' ? 1
+		: event.key === 'ArrowLeft' || event.key === 'ArrowUp' ? -1 : 0
+	if (!step || event.metaKey || event.ctrlKey || event.altKey) return
+	event.preventDefault()
+	event.stopPropagation()
+	const at = MODES.findIndex((m) => m.id === mode.value)
+	const next = MODES[(at + step + MODES.length) % MODES.length].id
+	setMode(next)
+	await nextTick()
+	modeGroup.value?.querySelector<HTMLElement>(`[data-editor-mode="${next}"]`)?.focus()
+}
+
 const renaming = ref(false)
 const draft = ref('')
 const titleInput = ref<HTMLInputElement | null>(null)
@@ -157,17 +198,21 @@ const commitRename = () => {
 
 <style scoped>
 /* The bar is as wide as the window minus the chat column (684 px at the layout's
-   tightest, see layout.ts), so it measures itself. With every label, a 240 px
-   title and the motion pill it needs about 850 px. The title is what shrinks;
-   before it has to, labels go in this order, and every control stays. */
+   tightest, see layout.ts), so it measures itself. The query reads the room
+   inside the bar's padding, 24 px less than the bar: 660 at the tightest.
+   With every label, a 240 px title, the Light | Pro switch and the motion pill
+   it needs about 950 px. The title is what shrinks; before it has to, labels go
+   in this order, and every control stays — the switch among them, which has no
+   label to drop. The cost goes last, just above the tightest width, so the
+   title keeps room to be read there. */
 .topbar { container: topbar / inline-size; }
-@container topbar (max-width: 860px) {
+@container topbar (max-width: 960px) {
 	.tb-wide { display: none; }
 }
-@container topbar (max-width: 740px) {
+@container topbar (max-width: 840px) {
 	.tb-mid { display: none; }
 }
-@container topbar (max-width: 560px) {
+@container topbar (max-width: 700px) {
 	.tb-cost { display: none; }
 }
 </style>

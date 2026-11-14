@@ -14,7 +14,9 @@
 
 			<!-- Keyframes (board 2): step between keys, add one at the playhead on
 			     the lane being worked on, and how many are selected. Play and the
-			     frame steps are under the picture now. -->
+			     frame steps are under the picture now. Pro only, and its divider
+			     goes with it: the lanes never open in Light, so `kf.expanded` is
+			     never true there. -->
 			<template v-if="kf.expanded">
 				<div class="w-px h-4 bg-hair mx-0.5"></div>
 				<ToolButton icon="tabler--chevron-left" title="Previous keyframe"
@@ -33,8 +35,10 @@
 		<!-- A narrow window scrolls the tools sideways rather than overlapping the labels. -->
 		<div class="flex items-center gap-1 min-w-0 overflow-x-auto no-scrollbar">
 			<!-- Keyframe lanes. Lit while open — and while closed, when the
-			     selected clip has keys to show (board 1). -->
-			<SlimTooltip :text="kf.open ? 'Hide keyframe lanes' : 'Show keyframe lanes — every animatable property of the selected clip, under its track'" placement="top">
+			     selected clip has keys to show (board 1). Pro only: Light has no
+			     lanes to open, and a lit button there would promise keys nobody
+			     can reach. -->
+			<SlimTooltip v-if="isPro" :text="kf.open ? 'Hide keyframe lanes' : 'Show keyframe lanes — every animatable property of the selected clip, under its track'" placement="top">
 				<button class="h-6 px-2 flex items-center gap-1 rounded-lg text-[9px] font-bold uppercase tracking-widest transition active:scale-95 mr-1"
 					:class="kf.open || kf.itemHasKeys
 						? 'text-primary bg-primary/10'
@@ -129,9 +133,12 @@
 
 			<ToolButton icon="tabler--typography" title="Add a title at the playhead"
 				@click="store.addTitle()" />
-			<ToolButton icon="tabler--sparkles" tint="motion" title="Add a motion layer at the playhead — a lower third; the Motion tab has the rest"
+			<!-- Building a motion layer or a generated background by hand is Pro
+			     work. In Light the assistant makes them, and what it made can
+			     still be moved, trimmed and deleted on the timeline. -->
+			<ToolButton v-if="isPro" icon="tabler--sparkles" tint="motion" title="Add a motion layer at the playhead — a lower third; the Motion tab has the rest"
 				@click="store.addMotionLayer('lower-third')" />
-			<ToolButton icon="tabler--color-swatch"
+			<ToolButton v-if="isPro" icon="tabler--color-swatch"
 				title="Add a generated background at the playhead — something for a keyed layer to sit in front of"
 				@click="store.addGeneratedLayer()" />
 			<ToolButton icon="tabler--movie" title="Add a video track — anything you can see, and the upper lanes render in front"
@@ -154,10 +161,12 @@ import { useEditorStore } from '../../../stores/editorStore'
 import { useKeyframeLanesStore } from '../../../stores/keyframeLanesStore'
 import { TimelineViewportKey } from '../../composables/useTimelineViewport'
 import { keysFor } from '../../shortcuts'
+import { useEditorMode } from '../../editorMode'
 import SlimTooltip from '../../../components/SlimTooltip.vue'
 
 const store = useEditorStore()
 const kf = useKeyframeLanesStore()
+const { isPro } = useEditorMode()
 const viewport = inject(TimelineViewportKey)!
 
 const markersOpen = ref(false)
