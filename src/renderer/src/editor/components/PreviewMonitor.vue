@@ -52,7 +52,7 @@
 
 				<!-- What the picture is, right now -->
 				<span v-if="motionWarning" data-motion-warning class="min-w-0 flex items-center gap-1.5 text-amber-500 font-semibold"
-					:title="`${motionWarning.layer}: its HTML fails a check. Open the HTML tab to see which.`">
+					:title="`${motionWarning.layer}: its HTML fails a check — ${motionHint}`">
 					<span class="w-1.5 h-1.5 shrink-0 rounded-full bg-amber-500"></span><span class="truncate">{{ motionWarning.text }}</span>
 				</span>
 				<span v-else-if="exactFrame.src" class="shrink-0 flex items-center gap-1.5 text-accent font-semibold">
@@ -478,6 +478,7 @@ import { useAgentStore } from '../../stores/agentStore'
 import { clock } from '@shared/agentFeed'
 import SlimTooltip from '../../components/SlimTooltip.vue'
 import { keysFor } from '../shortcuts'
+import { motionWarningHint, useEditorMode } from '../editorMode'
 
 const store = useEditorStore()
 const agentStore = useAgentStore()
@@ -497,6 +498,9 @@ const motionWarning = computed(() => {
 	}
 	return null
 })
+/** What to do about that warning. Light has no HTML tab to send anyone to, so the two modes say different things. */
+const { mode: editorMode } = useEditorMode()
+const motionHint = computed(() => motionWarningHint(editorMode.value))
 const motionPathShown = computed(() =>
 	keyframeLanes.expanded && (keyframeLanes.primary?.path === 'transform.x' || keyframeLanes.primary?.path === 'transform.y'))
 const api = (window as any).api

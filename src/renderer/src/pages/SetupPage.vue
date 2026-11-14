@@ -8,7 +8,7 @@
 				<div class="font-heading font-black text-[30px] tracking-[-0.02em] leading-[1.1]">Set up FrameFlow</div>
 				<p class="mt-2.5 text-zinc-500 dark:text-zinc-400 leading-normal">Three things, once. You can change any of them later in Settings.</p>
 				<ol class="mt-9 hair-t">
-					<li v-for="(s, i) in steps" :key="s.title" class="flex gap-3.5 py-3.5 hair-b"
+					<li v-for="(s, i) in steps" :key="s.title" class="flex gap-3.5 px-3 py-3.5 hair-b"
 						:class="i === step ? 'shadow-[inset_2px_0_0_rgb(var(--primary))]' : ''" :aria-current="i === step ? 'step' : undefined">
 						<span class="w-[22px] h-[22px] rounded-full shrink-0 flex items-center justify-center text-[11px] font-bold font-mono"
 							:class="i < step ? 'bg-accent/15 text-accent-dark dark:text-accent-light'

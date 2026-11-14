@@ -207,7 +207,9 @@
 									<span class="font-mono text-[9px] text-primary">
 										{{ knob.format(transformValue(knob.key)) }}
 									</span>
-									<button v-if="knob.path"
+									<!-- The key toggle is a Pro tool. Light has no diamond, and
+									     no gap where one would be either. -->
+									<button v-if="knob.path && isPro"
 										class="w-4 h-4 rounded flex items-center justify-center transition shrink-0"
 										:class="keyCount(knob.path)
 											? 'text-secondary bg-secondary/10'
@@ -218,13 +220,17 @@
 										@click="onKeyframe(knob, $event)">
 										<span class="iconify tabler--diamond w-2.5 h-2.5"></span>
 									</button>
-									<span v-else class="w-4 shrink-0"></span>
+									<span v-else-if="isPro" class="w-4 shrink-0"></span>
 								</div>
-								<input type="range" class="w-full accent-primary"
+								<input type="range" class="w-full accent-primary disabled:opacity-40 disabled:cursor-not-allowed"
 									:min="knob.min" :max="knob.max" :step="knob.step"
 									:value="transformValue(knob.key)"
+									:disabled="transformLocked(knob.key)"
 									@input="onTransformLive(knob.key, $event)"
 									@change="onTransform(knob.key, $event)" />
+								<p v-if="transformLocked(knob.key)" class="mt-0.5 text-[9px] text-zinc-400 leading-snug">
+									Animated. Switch to Pro to change it.
+								</p>
 							</div>
 						</div>
 					</div>
@@ -396,8 +402,10 @@
 					</template>
 
 					<!-- Effects, in chain order. A filter chain is not commutative, so
-					     the list reads top-to-bottom exactly as ffmpeg applies it. -->
-					<div>
+					     the list reads top-to-bottom exactly as ffmpeg applies it.
+					     With nothing in the chain all this holds is a pointer to the
+					     Effects tab, which Light does not have, so Light leaves it out. -->
+					<div v-if="itemEffects.length || isPro">
 						<label class="text-[10px] font-bold uppercase tracking-widest text-zinc-500 block mb-1">
 							Effects
 							<span v-if="itemEffects.length" class="normal-case tracking-normal font-mono text-primary ml-1">
@@ -770,8 +778,10 @@ import KeyframeInspector from './KeyframeInspector.vue'
 import AudioClipSection from './AudioClipSection.vue'
 import MulticamSection from './MulticamSection.vue'
 import { useKeyframeLanesStore } from '../../stores/keyframeLanesStore'
+import { useEditorMode } from '../editorMode'
 
 const editorStore = useEditorStore()
+const { isPro, isLight } = useEditorMode()
 
 const clip = computed(() => editorStore.selectedClip)
 const asset = computed(() => editorStore.selectedAsset)
@@ -1007,7 +1017,7 @@ const keyCount = (path: string) => timelineItem.value?.keyframes?.[path]?.length
 
 const onKeyframe = (knob: { key: 'x' | 'y' | 'scale' | 'rotation'; path: string }, event: MouseEvent) => {
 	const item = timelineItem.value
-	if (!item || !knob.path) return
+	if (!item || !knob.path || !isPro.value) return
 	if (event.altKey) editorStore.clearKeyframes(item.id, knob.path)
 	else editorStore.setKeyframe(item.id, knob.path, clipTime.value, transformValue(knob.key))
 }
@@ -1029,6 +1039,13 @@ const nextTransform = (key: 'x' | 'y' | 'scale' | 'rotation', value: number) => 
 const transformAnimated = (key: string) =>
 	!!timelineItem.value?.keyframes?.[`transform.${key}`]?.length
 
+/**
+ * Animated, and this is Light: the slider is shown but cannot be moved.
+ * Moving it would write a key, and Light has no lanes to see that key in or
+ * take it back out of, so the change waits for Pro.
+ */
+const transformLocked = (key: string) => isLight.value && transformAnimated(key)
+
 const onTransformLive = (key: 'x' | 'y' | 'scale' | 'rotation', event: Event) => {
 	const value = liveValue(event)
 	// An animated parameter's slider edits the CURVE, which is a discrete
@@ -1040,7 +1057,7 @@ const onTransformLive = (key: 'x' | 'y' | 'scale' | 'rotation', event: Event) =>
 const onTransform = (key: 'x' | 'y' | 'scale' | 'rotation', event: Event) => {
 	const value = liveValue(event)
 	const item = timelineItem.value
-	if (!item || !Number.isFinite(value)) return
+	if (!item || !Number.isFinite(value) || transformLocked(key)) return
 	if (transformAnimated(key)) {
 		editorStore.setKeyframe(item.id, `transform.${key}`, clipTime.value, value)
 		return

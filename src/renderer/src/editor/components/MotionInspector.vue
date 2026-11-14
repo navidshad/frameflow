@@ -1,13 +1,14 @@
 <template>
 	<div class="flex flex-col gap-3.5" :class="isCustom ? 'min-h-full' : ''">
-		<!-- A custom page: its name, and the switch between its settings and its code (board 5) -->
+		<!-- A custom page: its name, and the switch between its settings and its code (board 5).
+		     The code is a Pro tool, so Light shows the name and goes straight to the settings. -->
 		<div v-if="isCustom" class="flex items-center gap-2 pt-3.5">
 			<h3 class="m-0 text-sm font-bold text-zinc-800 dark:text-zinc-200 font-heading truncate min-w-0">{{ title }}</h3>
 			<span class="shrink-0 px-1.5 py-0.5 rounded bg-pink-500/[0.12] text-pink-400 text-[9px] font-bold uppercase tracking-widest">
 				Motion · custom HTML
 			</span>
 			<span class="flex-1"></span>
-			<div class="flex p-0.5 rounded-lg bg-zinc-100 dark:bg-zinc-800/60 shrink-0" role="tablist" aria-label="Layer view">
+			<div v-if="isPro" class="flex p-0.5 rounded-lg bg-zinc-100 dark:bg-zinc-800/60 shrink-0" role="tablist" aria-label="Layer view">
 				<button v-for="option in TABS" :key="option.id" role="tab" :aria-selected="tab === option.id"
 					class="py-[3px] px-2.5 rounded-md text-[10px] font-semibold transition"
 					:class="tab === option.id
@@ -17,13 +18,13 @@
 			</div>
 		</div>
 
-		<MotionCodeTab v-if="isCustom && tab === 'html'" :key="item.id" :item="item" class="flex-1" />
+		<MotionCodeTab v-if="isCustom && view === 'html'" :key="item.id" :item="item" class="flex-1" />
 
 		<template v-else>
 		<!-- What it is, where it is -->
 		<div>
 			<p v-if="badge" class="mb-2 px-2 py-1 rounded-lg bg-amber-500/[0.12] text-amber-600 dark:text-amber-400 text-[10px] font-semibold leading-snug" role="status">
-				{{ badge }} — open the HTML tab to see why.
+				{{ badge }} — {{ motionWarningHint(mode) }}.
 			</p>
 			<h3 v-if="!isCustom" class="mb-2 text-sm font-bold text-zinc-800 dark:text-zinc-200 font-heading truncate">{{ title }}</h3>
 			<dl class="flex flex-col gap-1.5">
@@ -123,8 +124,9 @@
 			</div>
 		</div>
 
-		<!-- Animate -->
-		<div>
+		<!-- Animate: Pro only. Every control in it adds or moves a key, and
+		     Light has no lanes to see those keys in. -->
+		<div v-if="isPro">
 			<div class="flex items-baseline justify-between mb-1.5">
 				<span class="lbl">Animate</span>
 				<span class="text-[9px] text-zinc-400">◆ adds a key at the playhead</span>
@@ -187,8 +189,9 @@
 			</form>
 		</div>
 
-		<!-- A template's page, read-only. A custom page has the HTML tab instead. -->
-		<div v-if="!isCustom">
+		<!-- A template's page, read-only. A custom page has the HTML tab instead.
+		     Reading the code is a Pro thing either way. -->
+		<div v-if="!isCustom && isPro">
 			<button class="w-full flex items-center justify-between pt-2 border-t border-zinc-200 dark:border-zinc-800
 			               text-[10px] font-bold uppercase tracking-widest text-zinc-500 dark:text-zinc-400 hover:text-primary transition"
 				:aria-expanded="showSource" @click="showSource = !showSource">
@@ -227,6 +230,7 @@ import {
 import { motionBadge } from '@shared/motionCode'
 import { useEditorStore } from '../../stores/editorStore'
 import MotionCodeTab from './MotionCodeTab.vue'
+import { motionWarningHint, useEditorMode } from '../editorMode'
 
 /**
  * The inspector for a selected motion layer — board 1's right column.
@@ -239,6 +243,7 @@ import MotionCodeTab from './MotionCodeTab.vue'
 
 const props = defineProps<{ item: TimelineItem }>()
 const store = useEditorStore()
+const { mode, isPro } = useEditorMode()
 
 const spec = computed<MotionSpec>(() => props.item.motion ?? {})
 
@@ -250,6 +255,11 @@ type Tab = typeof TABS[number]['id']
 const stored = (): Tab => (localStorage.getItem('editor.motionTab') === 'settings' ? 'settings' : 'html')
 const tab = ref<Tab>(stored())
 watch(tab, (value) => localStorage.setItem('editor.motionTab', value))
+/**
+ * What is on screen. Light always shows Settings, without touching `tab`:
+ * the choice made in Pro stays saved and is back the moment Pro is.
+ */
+const view = computed<Tab>(() => (isPro.value ? tab.value : 'settings'))
 /** Amber when the page fails its checks and an older version is being drawn. */
 const badge = computed(() => (isCustom.value ? motionBadge(spec.value) : null))
 const def = computed(() => resolveDefinition(spec.value))
