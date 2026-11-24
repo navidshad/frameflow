@@ -4,7 +4,12 @@ import type { AudioInspection } from '@shared/audioFeatures'
 import type { SoundRecipe } from '@shared/synth'
 import type { TranscriptEntry } from '@shared/captions'
 import type { AgentApplyOutcome } from '@shared/agentFeed'
-import type { AudioProvenance, GenerateRequest, ProviderId, SpendPolicy } from '@shared/audioProviders'
+import type { AudioProvenance, GenerateRequest, ProviderId, SpendPolicy, Voice } from '@shared/audioProviders'
+import type { ModelCatalog } from '@shared/audioModels'
+import type { AudioAccess, AudioProposal, ProposalAnswer } from '@shared/audioProposals'
+import type { AudioNotes, NotesInput } from '@shared/audioNotes'
+import type { SearchResult } from '@shared/webText'
+import type { AudioCapability } from '@shared/audioProviders'
 import type { ObjectTrack, TrackShape } from '@shared/tracking'
 
 /**
@@ -199,6 +204,32 @@ export interface EditorBridge {
 	estimateAudio(req: GenerateRequest): number | null
 	/** Make a voice, effect or music with a provider, keep it as an asset in the project and hand it to the editor. */
 	generateAudio(project: LiveProject, req: GenerateRequest): Promise<{ asset: MediaAsset; provenance: AudioProvenance }>
+	/** What agents may do with providers in this project: Settings' level, or Auto where the person said not to ask. */
+	audioAccess(project: LiveProject, global: AudioAccess): AudioAccess
+	/** The provider's models as it lists them today (refreshed when a day old). */
+	audioCatalog(provider: ProviderId): Promise<ModelCatalog | null>
+	/** The provider's voices, the person's own first. */
+	audioVoices(provider: ProviderId): Promise<Voice[]>
+	/** Credits left on the provider account; null when it cannot say. */
+	audioCreditsLeft(provider: ProviderId): Promise<number | null>
+	/** Put a proposal in the chat as a form. */
+	openProposal(draft: Omit<AudioProposal, 'id' | 'status' | 'createdAt'>): AudioProposal
+	/** Until the person answers and it is made (or `timeoutMs` passes): the proposal as it stands then. */
+	waitProposal(id: string, timeoutMs: number, onTick?: (waitedMs: number) => void): Promise<AudioProposal | undefined>
+	/** Make or decline a proposal: the person's answer, or the assistant's own picks under Auto. */
+	answerProposal(id: string, answer: ProposalAnswer, options?: { auto?: boolean }): Promise<AudioProposal>
+	/** What agents have learned about models, kept for every project. */
+	audioNotes(): AudioNotes
+	/** Keep an agent's findings and pick. */
+	saveAudioNotes(provider: ProviderId, input: NotesInput, by: string): Promise<{ saved: number; problems: string[] }>
+	/** The parts of the provider's own models page about one kind; null when there is none. */
+	audioDocs(provider: ProviderId, capability: AudioCapability): Promise<{ url: string; fetchedAt: number; text: string } | null>
+
+	// ----- The web, for an agent with no search of its own -----
+	/** Google, through Gemini's search tool: an answer with its sources. Charged to the project's Gemini spend. */
+	webSearch(project: LiveProject, query: string): Promise<SearchResult>
+	/** One public page as plain text. */
+	readWebPage(url: string): Promise<{ url: string; title: string; text: string; cut: boolean }>
 
 	// ----- Object tracking (tracks live beside the media, not in the document) -----
 	/** Every face in a stretch of a media file (SOURCE seconds), one saved track per person. */

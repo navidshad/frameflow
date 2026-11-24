@@ -14,7 +14,13 @@ import { inspectAudioFile } from '../editor/audioInspect'
 import { ensureSoundAsset, ensureSoundFile, soundDirFor } from '../editor/synth'
 import { getAssetDir } from '../editor/assets'
 import { normaliseRecipe } from '../../shared/synth'
-import { connectedProviders, estimateUsd, generateForProject } from '../audio/runtime'
+import {
+	accountFor, audioDocs, audioNotes, catalogFor, connectedProviders, estimateUsd, generateForProject, saveAudioNotes, voicesFor
+} from '../audio/runtime'
+import { searchForProject, readPage } from '../search/runtime'
+import { createProposalBook } from '../audio/proposals'
+import { creditsLeft } from '../../shared/audioProviders'
+import { effectiveAccess } from '../../shared/audioProposals'
 import { settingsManager } from '../settings'
 import { ProviderError } from '../audio/provider'
 import { renderProgress, startEditorRender } from '../editor/render'
@@ -143,6 +149,22 @@ export function switchRevisionFor(revisionId: string, engineTurnId?: string): Pr
 /** Agent-sized: big enough to read a lower third, small enough to send every few steps. */
 const AGENT_FRAME_WIDTH = 1280
 const THUMB_WIDTH = 224
+
+/**
+ * Every audio proposal an agent makes. Its state is sent to the chat as it
+ * changes; the person's answer comes back over `audio-proposal-answer`, and
+ * the generating happens here, through the same path as generate_audio.
+ */
+export const proposalBook = createProposalBook({
+	publish: (proposal) => {
+		for (const win of BrowserWindow.getAllWindows()) {
+			if (!win.isDestroyed() && !isCaptureWindow(win)) win.webContents.send('audio-proposal', proposal)
+		}
+	},
+	generate: (threadId, req) => rendererBridge.generateAudio({ threadId } as LiveProject, req),
+	catalog: (provider) => catalogFor(provider),
+	rememberAuto: (threadId) => { void threadManager.updateThreadWith(threadId, () => ({ audioAuto: true })) }
+})
 
 export const rendererBridge: EditorBridge = {
 	async getLiveProject() {
@@ -389,6 +411,33 @@ export const rendererBridge: EditorBridge = {
 	},
 
 	estimateAudio: estimateUsd,
+
+	audioAccess(project, global) {
+		return effectiveAccess(global, threadManager.getThread(project.threadId)?.audioAuto)
+	},
+
+	audioCatalog: (provider) => catalogFor(provider),
+
+	audioVoices: (provider) => voicesFor(provider),
+
+	async audioCreditsLeft(provider) {
+		try {
+			const account = await accountFor(provider)
+			return account ? creditsLeft(account) : null
+		} catch {
+			return null
+		}
+	},
+
+	audioNotes,
+	saveAudioNotes,
+	audioDocs,
+	webSearch: (project, query) => searchForProject(project.threadId, query),
+	readWebPage: (url) => readPage(url),
+
+	openProposal: (draft) => proposalBook.open(draft),
+	waitProposal: (id, timeoutMs, onTick) => proposalBook.wait(id, timeoutMs, onTick),
+	answerProposal: (id, answer, options) => proposalBook.answer(id, answer, options),
 
 	async generateAudio(project, req) {
 		let made

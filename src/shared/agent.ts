@@ -15,6 +15,8 @@ export const AGENT_PORT_ATTEMPTS = 10
 export const AGENT_MCP_PATH = '/mcp'
 export const AGENT_SERVER_NAME = 'frameflow'
 
+import { isAudioAccess, type AudioAccess } from './audioProposals'
+
 // ===== Permissions =====
 
 /**
@@ -22,7 +24,7 @@ export const AGENT_SERVER_NAME = 'frameflow'
  * the Agent access card. `html` is stored here and enforced by the motion
  * layer's tools when they exist.
  */
-export type AgentPermission = 'read' | 'edit' | 'html' | 'export' | 'sound' | 'generate'
+export type AgentPermission = 'read' | 'edit' | 'html' | 'export' | 'sound' | 'propose' | 'generate'
 
 export interface AgentPermissions {
 	edit: boolean
@@ -35,15 +37,28 @@ export interface AgentPermissions {
 	 */
 	sound: boolean
 	/**
-	 * Generate audio with a provider (a voice, a sound from a prompt, music). This
-	 * one SPENDS MONEY, so it is off until the user turns it on, and even then each
-	 * turn is capped (Settings → Audio providers).
+	 * What an agent may do with an audio provider (a voice, a sound from a
+	 * prompt, music), which SPENDS MONEY: nothing ('off'); propose and wait for
+	 * the person to press Make it ('ask', the default); or make what it proposes
+	 * without asking, capped per turn ('auto'). The `propose` permission is
+	 * anything but off; `generate` (spending without asking) is auto only.
 	 */
-	generate: boolean
+	generate: AudioAccess
 }
 
 /** As drawn: editing, HTML motion and the built-in synth on, export off until the user allows it. */
-export const DEFAULT_AGENT_PERMISSIONS: AgentPermissions = { edit: true, html: true, export: false, sound: true, generate: false }
+export const DEFAULT_AGENT_PERMISSIONS: AgentPermissions = { edit: true, html: true, export: false, sound: true, generate: 'ask' }
+
+/**
+ * The audio level from what settings hold. Before the three levels it was a
+ * checkbox: ticked meant "generate without asking" (Auto); unticked meant
+ * refused, which is now Ask first, since asking spends nothing.
+ */
+export function normalizeAudioAccess(value: unknown): AudioAccess {
+	if (isAudioAccess(value)) return value
+	if (value === true) return 'auto'
+	return DEFAULT_AGENT_PERMISSIONS.generate
+}
 
 export function normalizePermissions(value: unknown): AgentPermissions {
 	const v = (value && typeof value === 'object' ? value : {}) as Partial<AgentPermissions>
@@ -52,7 +67,7 @@ export function normalizePermissions(value: unknown): AgentPermissions {
 		html: typeof v.html === 'boolean' ? v.html : DEFAULT_AGENT_PERMISSIONS.html,
 		export: typeof v.export === 'boolean' ? v.export : DEFAULT_AGENT_PERMISSIONS.export,
 		sound: typeof v.sound === 'boolean' ? v.sound : DEFAULT_AGENT_PERMISSIONS.sound,
-		generate: typeof v.generate === 'boolean' ? v.generate : DEFAULT_AGENT_PERMISSIONS.generate
+		generate: normalizeAudioAccess(v.generate)
 	}
 }
 
@@ -78,10 +93,16 @@ export function permissionRefusal(permission: AgentPermission, perms: AgentPermi
 			'(Settings → Agent access → "Make sounds with the built-in synth"). Describe the sounds you would ' +
 			'add and ask the user to allow it, or to add them from the Sound tab.'
 	}
-	if (permission === 'generate' && !perms.generate) {
-		return 'Refused: the user has not allowed agents to generate audio with a provider, which costs money ' +
-			'(Settings → Agent access → "Generate audio with a provider"). Say what you would make and why, and ask ' +
-			'the user to allow it, or to make it from the Sound tab. The built-in synth (addSounds) is free and does not need this.'
+	if (permission === 'propose' && perms.generate === 'off') {
+		return 'Refused: the user has turned audio providers off for agents ' +
+			'(Settings → Agent access → "Generate audio with a provider"). Say what you would make and why; the user can ' +
+			'make it from the Sound tab. The built-in synth (addSounds) is free and does not need this.'
+	}
+	if (permission === 'generate' && perms.generate !== 'auto') {
+		return perms.generate === 'off'
+			? 'Refused: the user has turned audio providers off for agents (Settings → Agent access). The built-in synth (addSounds) is free.'
+			: 'Refused: the user wants to be asked before audio is generated. Use propose_audio: it shows the user a form ' +
+				'with what you would make, and makes it when they say yes.'
 	}
 	if (permission === 'export' && !perms.export) {
 		return 'Refused: exporting is turned off for agents. Ask the user to press Export in FrameFlow, ' +

@@ -202,7 +202,10 @@ export function runEnginePrompt(options: {
 					resumeSessionId,
 					maxSteps: settings.maxSteps,
 					// The user's "Write custom HTML motion layers" switch, read per call.
-					permissions: () => enginePermissions(settingsManager.getAgentAccess().permissions.html),
+					permissions: () => {
+						const { html, generate } = settingsManager.getAgentAccess().permissions
+						return enginePermissions(html, generate)
+					},
 					probeMotion: probeMotionPage,
 					bridge: { ...rendererBridge, switchRevision: (revisionId) => switchRevisionFor(revisionId, turnId) },
 					turnId,
@@ -220,6 +223,10 @@ export function runEnginePrompt(options: {
 				}
 				result = cli
 				continued = cli.sessionId ?? continued
+				// A CLI runs on the person's own plan: nothing is billed here, but the turn
+				// is counted, so the project's spend says where its AI work went.
+				const none = { promptTokens: 0, candidatesTokens: 0, totalTokens: 0 }
+				spend = { usage: none, records: [{ usage: none, cost: 0, plan: true, source: `engine:${id}` }] }
 
 				if (cli.note) recordRunFailure(id, cli.note)
 				else if (cli.ok) recordRunFailure(id, null)

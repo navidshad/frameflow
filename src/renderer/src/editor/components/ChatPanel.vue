@@ -135,9 +135,16 @@
 						</div>
 					</div>
 				</div>
+				<!-- Audio the assistant proposed in this turn: a form until answered, then a receipt -->
+				<div v-for="p in audio.proposalsFor(store.threadId, turn.id)" :key="p.id" class="pl-[22px]">
+					<AudioProposalCard :proposal="p" />
+				</div>
 				</template>
 				</template>
 			</template>
+
+			<!-- Audio an outside agent proposed -->
+			<AudioProposalCard v-for="p in audio.proposalsFor(store.threadId, null)" :key="p.id" :proposal="p" />
 		</div>
 
 		<!-- Input, pinned — the border-t is the only frame around it -->
@@ -162,10 +169,13 @@ import { chatEntries, type ChatEntry } from '@shared/agentRounds'
 import { useAgentStore } from '../../stores/agentStore'
 import { useEngineStore } from '../../stores/engineStore'
 import CopyButton from './CopyButton.vue'
+import AudioProposalCard from './AudioProposalCard.vue'
+import { useAudioStore } from '../../stores/audioStore'
 
 const store = useEditorStore()
 const agent = useAgentStore()
 const engine = useEngineStore()
+const audio = useAudioStore()
 
 const scrollRef = ref<HTMLElement | null>(null)
 
@@ -232,4 +242,8 @@ watch(() => {
 	const last = entries.value[entries.value.length - 1]
 	return [entries.value.length, last?.kind === 'turn' ? last.turn.status : last?.round.calls.length, last?.kind === 'round' ? last.round.status : '']
 }, scrollToBottom, { immediate: true })
+// A new proposal asks for an answer: bring it into view.
+watch(() => Object.values(audio.proposals).filter((p) => p.threadId === store.threadId && p.status === 'open').length, (n, before) => {
+	if (n > (before ?? 0)) scrollToBottom()
+})
 </script>

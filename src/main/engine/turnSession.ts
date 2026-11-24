@@ -3,7 +3,7 @@ import type { AgentActivity } from '@shared/agentFeed'
 import type { AgentPermissions } from '@shared/agent'
 import type { MotionProbe } from '../editor/vetHtml'
 import { AgentServer } from '../mcp/server'
-import { TOOLS } from '../mcp/tools'
+import { SEARCH_TOOLS, TOOLS } from '../mcp/tools'
 import type { ApplyOutcome, EditorBridge } from '../mcp/bridge'
 
 /**
@@ -40,6 +40,11 @@ export interface TurnSessionOptions {
 	permissions: () => AgentPermissions
 	/** Draws a page in the hidden window: the engine's pages get the same check as everyone's. */
 	probeMotion?: MotionProbe
+	/**
+	 * Offer FrameFlow's web_search and read_web_page: for an engine with no
+	 * search of its own (the loop on the Gemini API). Claude Code uses its own.
+	 */
+	webSearch?: boolean
 	onActivity?: (activity: AgentActivity) => void
 	/** Called once when the run has made more calls than the budget and the grace allow. */
 	onOverrun: () => void
@@ -103,7 +108,7 @@ export function createTurnSession(options: TurnSessionOptions): TurnSession {
 		bridge,
 		// An engine's turn is the round: begin_round and end_round are for outside agents,
 		// and a model that is offered them calls them and is told they are not for it.
-		tools: TOOLS.filter((tool) => !tool.roundTool),
+		tools: [...TOOLS.filter((tool) => !tool.roundTool), ...(options.webSearch ? SEARCH_TOOLS : [])],
 		token: () => token,
 		permissions: options.permissions,
 		probeMotion: options.probeMotion,

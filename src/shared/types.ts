@@ -74,8 +74,12 @@ export interface UsageRecord {
 	cost: number;
 	timestamp?: number;
 	messageId?: string;
-	/** What spent it, when it was not a model turn: "audio:elevenlabs". */
+	/** What spent it, when it was not a model turn: "audio:elevenlabs", "search", "engine:claude-code". */
 	source?: string;
+	/** Provider credits it used, for a provider that bills in credits (ElevenLabs); `cost` is 0 then. */
+	credits?: number;
+	/** Run on the person's own plan (Claude Code): nothing billed here, counted as a turn. */
+	plan?: boolean;
 }
 
 /** What kind of result a message node renders as. */
@@ -181,6 +185,12 @@ export interface Thread {
 		imageTextPath?: string; // New
 	}
 	tempDir: string
+	/**
+	 * The person ticked "Don't ask again in this project" on an audio proposal:
+	 * agents make the audio they propose here without asking (unless Settings
+	 * turns audio providers off altogether).
+	 */
+	audioAuto?: boolean
 	messages: Message[]
 	backgroundTasks?: Record<string, BackgroundTask>
 	nodePositions?: Record<string, { 

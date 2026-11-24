@@ -3,8 +3,9 @@ import fs from 'fs'
 import path from 'path'
 import type { MediaAsset, UsageRecord } from '../../shared/types'
 import {
-	CAPABILITY_LABEL, providerInfo, requestProblem, type AudioProvenance, type GenerateRequest, type ProviderId
+	billedUnits, CAPABILITY_LABEL, providerInfo, requestProblem, type AudioProvenance, type GenerateRequest, type ProviderId
 } from '../../shared/audioProviders'
+import type { ModelCatalog } from '../../shared/audioModels'
 import { ProviderError, type AudioProviderImpl } from './provider'
 import { wavFromPcm16 } from './wav'
 
@@ -35,6 +36,10 @@ export interface GenerateDeps {
 	store: GenerateStore
 	fetch?: typeof fetch
 	now?: () => number
+	/** The provider's models as it lists them today (refreshed when old), for one that publishes a list. */
+	catalog?(id: ProviderId): Promise<ModelCatalog | null>
+	/** Remember what a model really cost per character or second, from the provider's own count. */
+	learnRate?(id: ProviderId, model: string, credits: number, units: number): void
 }
 
 export interface Generated {
@@ -65,7 +70,13 @@ export async function generateAudioAsset(
 	const dir = deps.store.tempDir(threadId)
 	if (!dir) throw new ProviderError('That project is not open any more.')
 
-	const out = await impl.generate(req, { fetch: deps.fetch ?? fetch, key, signal })
+	// Today's models: a model that no longer exists, or a line too long for the
+	// one asked for, is refused here rather than by the provider.
+	const catalog = (await deps.catalog?.(req.provider)) ?? null
+	const checked = requestProblem(req, catalog)
+	if (checked) throw new ProviderError(checked, undefined, 'input')
+
+	const out = await impl.generate(req, { fetch: deps.fetch ?? fetch, key, signal, catalog })
 
 	// Files first, then the project: a failure past this point leaves a file on
 	// disk but no half-made asset.
@@ -81,6 +92,7 @@ export async function generateAudioAsset(
 		provider: req.provider, capability: req.capability, prompt: req.prompt.trim(),
 		...(req.voice ? { voice: req.voice } : {}),
 		model: out.model, costUsd: out.costUsd, ...(out.costNote ? { costNote: out.costNote } : {}),
+		...(out.credits !== undefined ? { credits: out.credits } : {}),
 		madeAt: (deps.now ?? Date.now)()
 	}
 
@@ -88,12 +100,18 @@ export async function generateAudioAsset(
 	const created = await deps.store.addAsset(threadId, { sourcePath: file, name: generatedName(req), assetId })
 	if (!created) throw new ProviderError('The sound was made but could not be added to the project.')
 	await deps.store.patchAsset(threadId, assetId, { preprocessState: 'completed', generated: provenance })
-	if (out.costUsd !== null && out.costUsd > 0) {
-		await deps.store.addUsage(threadId, {
-			usage: { promptTokens: 0, candidatesTokens: 0, totalTokens: 0 },
-			cost: out.costUsd, timestamp: provenance.madeAt, source: `audio:${req.provider}`
-		})
+	// Spend is kept in the provider's own unit: credits for a provider that bills
+	// credits (its dollar figure is only a list-price guess), dollars otherwise.
+	const usage = { promptTokens: 0, candidatesTokens: 0, totalTokens: 0 }
+	if (typeof out.credits === 'number') {
+		await deps.store.addUsage(threadId, { usage, cost: 0, credits: out.credits, timestamp: provenance.madeAt, source: `audio:${req.provider}` })
+	} else if (out.costUsd !== null && out.costUsd > 0) {
+		await deps.store.addUsage(threadId, { usage, cost: out.costUsd, timestamp: provenance.madeAt, source: `audio:${req.provider}` })
 	}
 	const asset = deps.store.getAsset(threadId, assetId) ?? { ...created, preprocessState: 'completed' as const, generated: provenance }
+	// The provider's own count teaches the next estimate this account's real rate.
+	if (out.measured && typeof out.credits === 'number' && out.model) {
+		deps.learnRate?.(req.provider, out.model, out.credits, billedUnits(req, asset.metadata?.duration))
+	}
 	return { asset, provenance }
 }

@@ -67,6 +67,8 @@ describe('parsing edge cases', () => {
 		expect(normalizeToolName('get_project', 'frameflow')).toEqual({ server: 'frameflow', tool: 'get_project' })
 		expect(normalizeToolName('Bash')).toEqual({ server: null, tool: 'Bash' })
 		expect(unexpectedTools(['mcp__frameflow__get_project', 'Bash', 'mcp__other__x'])).toEqual(['Bash', 'mcp__other__x'])
+		// Its own web search and page reading are allowed; nothing else built in is.
+		expect(unexpectedTools(['mcp__frameflow__get_project', 'WebSearch', 'WebFetch', 'Read'])).toEqual(['Read'])
 	})
 })
 
@@ -163,14 +165,14 @@ describe('settings', () => {
 describe('command lines', () => {
 	const base = { prompt: 'Cut the pauses', systemPrompt: 'SYS', mcpUrl: 'http://127.0.0.1:5555/mcp', workDir: '/tmp/run' }
 
-	it('Claude Code: FrameFlow server only, no built-in tools, token by env', () => {
+	it('Claude Code: FrameFlow server, its own web search and nothing else built in, token by env', () => {
 		const spec = buildCommand({ ...base, engine: 'claude-code', model: 'opus' })
 		const a = spec.args
 		expect(a.slice(0, 2)).toEqual(['-p', 'Cut the pauses'])
-		expect(a[a.indexOf('--tools') + 1]).toBe('')
+		expect(a[a.indexOf('--tools') + 1]).toBe('WebSearch,WebFetch')
 		expect(a).toContain('--strict-mcp-config')
 		expect(a[a.indexOf('--mcp-config') + 1]).toBe('/tmp/run/mcp.json')
-		expect(a[a.indexOf('--allowedTools') + 1]).toBe('mcp__frameflow')
+		expect(a[a.indexOf('--allowedTools') + 1]).toBe('mcp__frameflow,WebSearch,WebFetch')
 		expect(a[a.indexOf('--system-prompt') + 1]).toBe('SYS')
 		expect(a.slice(-2)).toEqual(['--model', 'opus'])
 		expect(a).not.toContain('--effort')

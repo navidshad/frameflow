@@ -16,6 +16,8 @@
  * The network calls live in `main/audio/`.
  */
 
+import { findModel, modelOf, modelsFor, type ModelCatalog } from './audioModels'
+
 export type ProviderId = 'gemini' | 'elevenlabs'
 export type AudioCapability = 'speech' | 'sfx' | 'music'
 
@@ -60,18 +62,36 @@ export interface GenerateRequest {
 	voice?: string
 	/** How long, for sound effects and music. Absent lets the provider choose. */
 	durationSec?: number
+	/** Which model makes it (audioModels.ts). Absent: the provider's default for this kind. */
+	model?: string
+	/** Music: no singing. Absent means instrumental, the usual bed under a video. */
+	instrumental?: boolean
+	/** Sound effects: made to loop seamlessly (ambience, a hum, rain). */
+	loop?: boolean
 }
 
-/** The longest line a single voice-over request takes, and the bounds on effects and music. */
+/**
+ * The bounds on one request. Speech's longest line depends on the model
+ * (audioModels.ts); `speechChars.max` is the bound for a provider with no model
+ * list (Gemini).
+ */
 export const LIMITS = {
 	speechChars: { min: 1, max: 4000 },
 	promptChars: { min: 3, max: 450 },
 	sfxSec: { min: 0.5, max: 30 },
-	musicSec: { min: 3, max: 120 }
+	musicSec: { min: 3, max: 300 }
 } as const
 
-/** Why a request cannot be made, in a sentence the person (or the agent) can act on; null when fine. */
-export function requestProblem(req: GenerateRequest): string | null {
+/** The longest line this request's model reads in one go, as the provider's model list says. */
+export const speechMaxChars = (req: Pick<GenerateRequest, 'capability' | 'model' | 'prompt'>, catalog?: ModelCatalog | null): number =>
+	modelOf(catalog, req)?.maxChars ?? LIMITS.speechChars.max
+
+/**
+ * Why a request cannot be made, in a sentence the person (or the agent) can act
+ * on; null when fine. With the provider's model list (`catalog`) it also checks
+ * the model exists and the line fits it; without one it checks what it can.
+ */
+export function requestProblem(req: GenerateRequest, catalog?: ModelCatalog | null): string | null {
 	const info = providerInfo(req.provider)
 	if (!info) return `Unknown provider "${String(req.provider)}". Providers: ${PROVIDERS.map((p) => p.id).join(', ')}.`
 	if (!isCapability(req.capability)) return `Unknown kind "${String(req.capability)}": speech, sfx or music.`
@@ -79,10 +99,20 @@ export function requestProblem(req: GenerateRequest): string | null {
 		const who = PROVIDERS.filter((p) => p.capabilities.includes(req.capability)).map((p) => p.label).join(' or ')
 		return `${info.label} does not make ${CAPABILITY_LABEL[req.capability].toLowerCase()}${who ? `; ${who} does` : ''}.`
 	}
+	if (req.model !== undefined && catalog && catalog.provider === req.provider) {
+		const model = findModel(catalog, req.capability, req.model)
+		const known = modelsFor(catalog, req.capability).filter((m) => !m.deprecated).map((m) => m.id)
+		if (!model) {
+			return known.length
+				? `${info.label} has no ${CAPABILITY_LABEL[req.capability].toLowerCase()} model "${req.model}". Models: ${known.join(', ')}.`
+				: `${info.label} listed no ${CAPABILITY_LABEL[req.capability].toLowerCase()} models: leave model out.`
+		}
+	}
 	const text = (req.prompt ?? '').trim()
 	if (req.capability === 'speech') {
+		const max = speechMaxChars(req, catalog)
 		if (text.length < LIMITS.speechChars.min) return 'Say what the voice should read.'
-		if (text.length > LIMITS.speechChars.max) return `That line is ${text.length} characters; a single voice-over takes at most ${LIMITS.speechChars.max}. Split it.`
+		if (text.length > max) return `That line is ${text.length} characters; a single voice-over takes at most ${max} with this model. Split it.`
 	} else {
 		if (text.length < LIMITS.promptChars.min) return 'Describe the sound in a few words.'
 		if (text.length > LIMITS.promptChars.max) return `That description is ${text.length} characters; keep it under ${LIMITS.promptChars.max}.`
@@ -92,6 +122,68 @@ export function requestProblem(req: GenerateRequest): string | null {
 		}
 	}
 	return null
+}
+
+// ===== Voices and credits =====
+
+/** Whose voice it is: the person's own (cloned, designed) or one the provider ships. */
+export type VoiceKind = 'cloned' | 'professional' | 'designed' | 'premade' | 'library' | 'other'
+
+export interface Voice {
+	id: string
+	name: string
+	/** "female, American, warm" and the like, when the provider says. */
+	description?: string
+	previewUrl?: string
+	kind?: VoiceKind
+	/** The language it was made for (ISO 639-1), when the provider says. */
+	language?: string
+}
+
+/** The person's own voices come first in every list: they are why someone clones one. */
+export const isOwnVoice = (v: Pick<Voice, 'kind'>): boolean =>
+	v.kind === 'cloned' || v.kind === 'professional' || v.kind === 'designed'
+
+/** What a provider account has left this period, in its own unit. */
+export interface ProviderAccount {
+	provider: ProviderId
+	/** "creator", "pro", "free" … */
+	tier?: string
+	creditsUsed: number
+	creditsLimit: number
+	/** When the allowance refills, ms since the epoch. */
+	resetsAt?: number
+}
+
+export const creditsLeft = (a: Pick<ProviderAccount, 'creditsUsed' | 'creditsLimit'>): number =>
+	Math.max(0, a.creditsLimit - a.creditsUsed)
+
+/** When a provider picks the length itself: what to assume for an estimate. */
+export const ASSUMED_SEC: Record<Exclude<AudioCapability, 'speech'>, number> = { sfx: 5, music: 30 }
+
+/** What a request is billed by: characters for speech, seconds for effects and music. */
+export const billedUnits = (req: Pick<GenerateRequest, 'capability' | 'prompt' | 'durationSec'>, madeSec?: number): number =>
+	req.capability === 'speech' ? req.prompt.trim().length : (madeSec ?? req.durationSec ?? ASSUMED_SEC[req.capability])
+
+/**
+ * About how many provider credits a request uses, before it is made; null when
+ * nothing has taught FrameFlow the rate yet. Rates are learned from what the
+ * provider said earlier calls used (`catalog.rates`). A voice model never used
+ * before is priced from one that was, through the relative cost per character
+ * the provider's model list gives.
+ */
+export function estimateCredits(req: GenerateRequest, catalog?: ModelCatalog | null): number | null {
+	const model = modelOf(catalog, req)
+	if (!model) return null
+	const rates = catalog?.rates ?? {}
+	let rate: number | undefined = rates[model.id]
+	if (rate === undefined && req.capability === 'speech' && model.costMultiplier) {
+		for (const [id, seen] of Object.entries(rates)) {
+			const known = findModel(catalog, 'speech', id)
+			if (known?.costMultiplier) { rate = (seen / known.costMultiplier) * model.costMultiplier; break }
+		}
+	}
+	return rate === undefined ? null : Math.ceil(billedUnits(req) * rate)
 }
 
 // ===== Provenance =====
@@ -110,6 +202,8 @@ export interface AudioProvenance {
 	costUsd: number | null
 	/** One line about the cost, for the cases where there is no number ("12 credits"). */
 	costNote?: string
+	/** Provider credits it used: measured when the provider reports it, else the estimate. */
+	credits?: number | null
 	madeAt: number
 }
 
