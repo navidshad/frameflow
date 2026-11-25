@@ -4,6 +4,7 @@ import path from 'path'
 import { afterAll, beforeEach, describe, expect, it } from 'vitest'
 import type { MediaAsset, UsageRecord } from '../../shared/types'
 import type { GenerateRequest } from '../../shared/audioProviders'
+import type { ModelCatalog } from '../../shared/audioModels'
 import { generatedName, generateAudioAsset, type GenerateDeps, type GenerateStore } from './generate'
 import { ProviderError, type AudioProviderImpl } from './provider'
 
@@ -82,12 +83,18 @@ describe('generateAudioAsset', () => {
 		expect(a.asset.id).not.toBe(b.asset.id)
 	})
 
-	it('records no spend for a provider that bills in credits, and keeps its note', async () => {
-		const impl = provider({ async generate() { return { bytes: Buffer.from('x'), format: 'mp3', model: 'm', costUsd: null, costNote: '120 credits' } } })
+	it('records no spend when the provider says nothing it can be counted in, and keeps its note', async () => {
+		const impl = provider({ async generate() { return { bytes: Buffer.from('x'), format: 'mp3', model: 'm', costUsd: null, costNote: 'billed later' } } })
 		const { provenance } = await generateAudioAsset('t1', req, deps(impl))
 		expect(provenance.costUsd).toBeNull()
-		expect(provenance.costNote).toBe('120 credits')
+		expect(provenance.costNote).toBe('billed later')
 		expect(s.usage).toEqual([])
+	})
+
+	it('records a credit-billed provider’s spend in credits, not as its dollar guess', async () => {
+		const impl = provider({ async generate() { return { bytes: Buffer.from('x'), format: 'mp3', model: 'm', costUsd: 0.04, credits: 17, measured: true } } })
+		await generateAudioAsset('t1', req, deps(impl))
+		expect(s.usage).toEqual([{ usage: { promptTokens: 0, candidatesTokens: 0, totalTokens: 0 }, cost: 0, credits: 17, timestamp: 1234, source: 'audio:elevenlabs' }])
 	})
 
 	it('refuses a request that cannot be made before it spends anything', async () => {
@@ -110,6 +117,35 @@ describe('generateAudioAsset', () => {
 		const impl = provider({ async generate() { throw new ProviderError('Quota exceeded: top up your plan.', 402, 'quota') } })
 		await expect(generateAudioAsset('t1', req, deps(impl))).rejects.toMatchObject({ kind: 'quota', status: 402 })
 		expect(s.assets.size).toBe(0)
+	})
+
+	it('checks the model against today’s list, and refuses one it does not list before spending anything', async () => {
+		const catalog: ModelCatalog = {
+			provider: 'elevenlabs', fetchedAt: 1,
+			models: [{ id: 'music_v1', provider: 'elevenlabs', capability: 'music', label: 'Music v1', deprecated: true }, { id: 'music_v2_5', provider: 'elevenlabs', capability: 'music', label: 'Music v2.5' }]
+		}
+		let handed: ModelCatalog | null | undefined
+		const impl = provider({ async generate(_r, ctx) { calls++; handed = ctx.catalog; return { bytes: Buffer.from('ID3'), format: 'mp3', model: 'music_v2_5', costUsd: null } } })
+		const d = { ...deps(impl), catalog: async () => catalog }
+		const music: GenerateRequest = { provider: 'elevenlabs', capability: 'music', prompt: 'calm piano', durationSec: 10 }
+		await expect(generateAudioAsset('t1', { ...music, model: 'music_v9' }, d)).rejects.toThrow(/no music model "music_v9". Models: music_v2_5/)
+		expect(calls).toBe(0)
+		await generateAudioAsset('t1', music, d)
+		// The provider is handed the list, to name a model from it.
+		expect(handed).toBe(catalog)
+	})
+
+	it('learns the real rate from the provider’s own count, per character for speech and per second for the rest', async () => {
+		const learned: unknown[] = []
+		const counted = (credits: number, measured: boolean) => provider({
+			async generate() { return { bytes: Buffer.from('ID3'), format: 'mp3', model: 'm1', costUsd: null, credits, measured } }
+		})
+		const d = (impl: AudioProviderImpl) => ({ ...deps(impl), learnRate: (...a: unknown[]) => { learned.push(a) } })
+		await generateAudioAsset('t1', req, d(counted(8, true)))
+		await generateAudioAsset('t1', { ...req, capability: 'sfx', prompt: 'a door', durationSec: 2 }, d(counted(20, true)))
+		// An estimate teaches nothing.
+		await generateAudioAsset('t1', req, d(counted(99, false)))
+		expect(learned).toEqual([['elevenlabs', 'm1', 8, 'Welcome to the show.'.length], ['elevenlabs', 'm1', 20, 2]])
 	})
 })
 

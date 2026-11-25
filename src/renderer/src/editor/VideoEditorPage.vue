@@ -4,7 +4,7 @@
 	     the window; the timeline sits beside it, never under it. -->
 	<div class="h-full w-full flex bg-ground overflow-hidden relative" v-on="fileDrop.handlers">
 		<div class="flex-1 min-w-0 flex flex-col">
-			<EditorTopBar :title="editorStore.thread?.title || 'Untitled Project'" :total-cost="totalCost"
+			<EditorTopBar :title="editorStore.thread?.title || 'Untitled Project'" :spend="spend"
 				:show-export="!editorStore.loading && !notFound"
 				:can-export="editorStore.canExport"
 				:exporting="editorStore.isRendering"
@@ -92,6 +92,7 @@ import { useAgentStore } from '../stores/agentStore'
 import { useVideoStore } from '../stores/videoStore'
 import { dialog } from '../composables/useDialog'
 import EditorTopBar from './components/EditorTopBar.vue'
+import { summarizeSpend } from '@shared/spend'
 import LeftPanel, { type LeftMode, type LeftTab } from './components/LeftPanel.vue'
 import PreviewMonitor from './components/PreviewMonitor.vue'
 import TimelinePanel from './components/TimelinePanel.vue'
@@ -311,9 +312,8 @@ watch(() => editorStore.doc?.turns?.length ?? 0, (n, old) => {
 })
 watch(() => layout.value.chatFolded, (folded) => { if (!folded) chatBadge.value = false })
 
-const totalCost = computed(() =>
-	(editorStore.thread?.usageHistory || []).reduce((sum, record) => sum + (record.cost || 0), 0)
-)
+/** Spend per provider, each in its own unit: dollars, credits, or on the person's own plan. */
+const spend = computed(() => summarizeSpend(editorStore.thread?.usageHistory))
 
 const openProject = async (id: string) => {
 	notFound.value = false

@@ -1,7 +1,7 @@
 import { probeMotionPage } from '../motion/probe'
 import { app, BrowserWindow, clipboard, ipcMain } from 'electron'
 import {
-	AGENT_DEFAULT_PORT, AGENT_MCP_PATH, connectSnippet, maskToken,
+	AGENT_DEFAULT_PORT, AGENT_MCP_PATH, connectSnippet, maskToken, normalizeAudioAccess,
 	type AgentClientKind, type AgentPermissions
 } from '@shared/agent'
 import type { AgentAccessState } from '@shared/agentFeed'
@@ -124,9 +124,10 @@ export function initAgentAccess(): void {
 		return state()
 	})
 
-	ipcMain.handle('set-agent-permission', (_event, { key, value }: { key: keyof AgentPermissions; value: boolean }) => {
+	ipcMain.handle('set-agent-permission', (_event, { key, value }: { key: keyof AgentPermissions; value: boolean | string }) => {
 		if (!['edit', 'html', 'export', 'sound', 'generate'].includes(key)) return state()
-		const permissions = { ...settingsManager.getAgentAccess().permissions, [key]: !!value }
+		// Audio is three-way (off, ask first, auto); the rest are on or off.
+		const permissions = { ...settingsManager.getAgentAccess().permissions, [key]: key === 'generate' ? normalizeAudioAccess(value) : !!value }
 		settingsManager.updateAgentAccess({ permissions })
 		broadcastState()
 		return state()

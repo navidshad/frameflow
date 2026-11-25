@@ -233,6 +233,14 @@ export const useAgentStore = defineStore('agent', () => {
 				const ok = await editor.switchRevision(payload.revisionId, { force: true, engineTurnId: payload.engineTurnId })
 				return ok ? { ok: true } : { ok: false, error: 'The editor could not switch to that revision.' }
 			}
+			case 'name-revision': {
+				if (!open) return { ok: false, error: 'No project is open in the editor.' }
+				// The request is FrameFlow's own chat turn, or the outside agent's open round.
+				const key = payload.engineTurnId || editor.agentRound?.id
+				if (!key) return { ok: false, error: 'Name a version inside a round (begin_round), or pass versionName to apply_ops.' }
+				const named = await editor.nameRequestRevision(key, payload.name)
+				return 'error' in named ? { ok: false, error: named.error } : { ok: true, result: named }
+			}
 			case 'upsert-assets': {
 				// Sounds main generated for the agent: the store hears of them before any op can place them.
 				if (!open) return { ok: false, error: 'No project is open in the editor.' }

@@ -18,6 +18,7 @@ import {
 	type TimelineState
 } from '@shared/timeline'
 import { computeScope } from '@shared/ai-scope'
+import { cleanVersionName, requestKeyOf, requestRevisionLabel, rewritesRequestRevision } from '@shared/requestRevision'
 import { engineRetry, type EngineRetry } from '@shared/engines'
 import { hasTransform, TRANSFORM_DEFAULTS } from '@shared/transform'
 import { isAnimatableOn, valueAt } from '@shared/keyframes'
@@ -1086,8 +1087,14 @@ export const useEditorStore = defineStore('editor', () => {
 	const agentHolds = ref<string | null>(null)
 	/** The open MCP round that holds the project (the agent store sets it): its id and goal. */
 	const agentRound = ref<{ id: string; goal?: string } | null>(null)
-	/** Round id -> the one revision that round keeps, rewritten in place by each of its edits. */
+	/**
+	 * Request -> the one revision it keeps, rewritten in place by each of its
+	 * edits. A request is an outside agent's round, or a chat turn of FrameFlow's
+	 * own assistant (requestRevision.ts).
+	 */
 	const roundRevisions = new Map<string, string>()
+	/** Request -> the name its agent gave the version, kept for its later edits. */
+	const requestNames = new Map<string, string>()
 
 	/** Live preview of what scope the NEXT prompt would use (drives the chip). */
 	const scopePreview = computed(() => {
@@ -3717,6 +3724,32 @@ export const useEditorStore = defineStore('editor', () => {
 	}
 
 	/**
+	 * An agent naming the version its request made, without another edit. With
+	 * no edit yet the name waits for the first one. Returns the revision's V
+	 * number, or null when the request has made no revision yet.
+	 */
+	const nameRequestRevision = async (requestKey: string, raw: string): Promise<{ seq: number | null } | { error: string }> => {
+		const name = cleanVersionName(raw)
+		if (!name) return { error: 'Give the version a name of a few words.' }
+		requestNames.set(requestKey, name)
+		const id = roundRevisions.get(requestKey)
+		const existing = id ? revisions.value.find((r) => r.id === id) : undefined
+		if (!existing || !threadId.value) return { seq: null }
+		const snapshot = await fetchRevisionSnapshot(existing.id)
+		if (!snapshot) return { error: 'That revision could not be read.' }
+		const { itemCount: _count, firstClips: _clips, ...rest } = existing
+		const rev: EditorRevision = { ...rest, label: name, snapshot }
+		revisions.value = revisions.value.map((r) => (r.id === existing.id ? { ...r, label: name } : r))
+		try {
+			await api.replaceEditorRevision({ threadId: threadId.value, revision: deepClone(rev) })
+		} catch (error) {
+			console.error('[editorStore] naming a revision failed:', error)
+			return { error: 'The name could not be saved.' }
+		}
+		return { seq: existing.seq }
+	}
+
+	/**
 	 * Switches the working state to a revision's snapshot.
 	 * Resets the fine-grained undo ring (its diffs were computed against
 	 * pre-switch states — redo onto the switched snapshot would corrupt it).
@@ -4165,11 +4198,13 @@ export const useEditorStore = defineStore('editor', () => {
 			}
 
 			await ensureRootRevision()
-			// An agent inside an open round keeps that round's one revision: later
-			// edits rewrite it, as long as it is still the revision being worked on.
+			// One revision per request: an agent's later edits in the same round, or
+			// the same chat turn of FrameFlow's own assistant, rewrite it in place.
 			const roundId = isAgent ? agentRound.value?.id : undefined
-			const keptId = roundId ? roundRevisions.get(roundId) : undefined
-			const keepRound = !!keptId && doc.value.currentRevisionId === keptId && revisions.value.some((r) => r.id === keptId)
+			const requestKey = isAgent ? requestKeyOf(turn, roundId) : undefined
+			const keptId = requestKey ? roundRevisions.get(requestKey) : undefined
+			const kept = keptId ? revisions.value.find((r) => r.id === keptId) : undefined
+			const keepRound = rewritesRequestRevision(kept, doc.value.currentRevisionId)
 			// Unsaved manual work is auto-checkpointed FIRST, so the AI revision's
 			// parent snapshot is exactly the state the diff applied to and nothing
 			// is ever stranded inside a child snapshot.
@@ -4177,10 +4212,13 @@ export const useEditorStore = defineStore('editor', () => {
 				await createRevision({ origin: 'manual', label: 'Auto checkpoint' })
 			}
 
-			// An agent's turn is labelled with the agent: "Claude Code".
-			const name = turn.agent?.name || 'AI edit'
-			const goal = roundId ? agentRound.value?.goal?.trim() : ''
-			const label = goal ? `${name}: ${goal.length > 60 ? goal.slice(0, 59) + '…' : goal}` : name
+			// The agent's name for the version, this edit's or one it gave earlier in
+			// the request; else who made it ("Claude Code: cut the pauses").
+			const versionName = cleanVersionName(turn.versionName) ?? (requestKey ? requestNames.get(requestKey) : undefined)
+			if (requestKey && versionName) requestNames.set(requestKey, versionName)
+			const label = requestRevisionLabel({
+				name: versionName, agent: turn.agent?.name, goal: roundId ? agentRound.value?.goal : undefined
+			})
 			if (diffed) {
 				doc.value.tracks = applied.tracks
 				doc.value.timeline = applied.timeline
@@ -4203,7 +4241,7 @@ export const useEditorStore = defineStore('editor', () => {
 					turnId: turn.id,
 					label
 				})
-			if (rev && roundId && !keepRound) roundRevisions.set(roundId, rev.id)
+			if (rev && requestKey && !keepRound) roundRevisions.set(requestKey, rev.id)
 			if (!rev) return isAgent ? { ok: false, error: 'The edit applied but its revision could not be saved.' } : undefined
 			const counts = {
 				added: diffed?.forward.addItems?.length || 0,
@@ -4682,6 +4720,7 @@ export const useEditorStore = defineStore('editor', () => {
 		clearAgentMarks,
 		ensureRootRevision,
 		createRevision,
+		nameRequestRevision,
 		switchRevision,
 		saveCheckpoint,
 		deleteRevisionSubtree,

@@ -32,7 +32,8 @@
 			</div>
 		</div>
 		<p class="mt-4 text-xs leading-normal text-zinc-500 dark:text-zinc-400">
-			Costs in each project header are worked out from these prices. Claude Code runs on your own plan and is not priced here.
+			Each project header shows what it spent in each provider’s own unit: dollars for the Gemini API, worked out from these
+			prices; credits for ElevenLabs, as ElevenLabs counts them; and turns for Claude Code, which runs on your own plan and is not priced here.
 		</p>
 	</SettingsGroup>
 </template>

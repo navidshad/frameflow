@@ -90,7 +90,7 @@ const spendLedgers = new Map<string, Spent>()
 function ledgerFor(key: string): Spent {
 	let ledger = spendLedgers.get(key)
 	if (!ledger) {
-		ledger = { count: 0, usd: 0 }
+		ledger = { count: 0, usd: 0, credits: 0 }
 		spendLedgers.set(key, ledger)
 		// Turns end without telling us: keep only the recent ones.
 		if (spendLedgers.size > 200) spendLedgers.delete(spendLedgers.keys().next().value!)
@@ -103,7 +103,7 @@ const MAX_BODY_BYTES = 8 * 1024 * 1024
 
 const REFUSED_SHORT: Record<AgentPermission, string> = {
 	read: '', edit: 'refused · editing is off', html: 'refused · HTML motion is off', export: 'refused · exporting is off',
-	sound: 'refused · the synth is off', generate: 'refused · generating audio is off'
+	sound: 'refused · the synth is off', propose: 'refused · audio providers are off', generate: 'refused · asks first'
 }
 
 function readJson(req: http.IncomingMessage): Promise<unknown> {

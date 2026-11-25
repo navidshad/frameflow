@@ -101,7 +101,7 @@
 							class="group relative px-3 py-2 rounded-2xl rounded-tl-md bg-zinc-100 dark:bg-zinc-900 text-xs text-zinc-700 dark:text-zinc-300 leading-relaxed">
 							<CopyButton :text="turn.answer"
 								class="absolute top-1 right-1 opacity-0 group-hover:opacity-100 focus:opacity-100 bg-zinc-100 dark:bg-zinc-900" />
-							<p class="whitespace-pre-wrap">{{ turn.answer }}</p>
+							<div class="chat-md" v-html="renderMarkdown(turn.answer)"></div>
 							<template v-if="turn.engine">
 								<EngineSteps v-if="turn.engine.steps.length" class="mt-2" :steps="turn.engine.steps" />
 								<p class="mt-2 text-[9px] font-mono text-zinc-400">{{ engineFooter(turn) }}</p>
@@ -110,9 +110,8 @@
 
 						<!-- Applied edit -->
 						<div v-else class="px-3 py-2 rounded-2xl rounded-tl-md bg-zinc-100 dark:bg-zinc-900 space-y-1.5">
-							<p v-if="turn.rationale" class="text-[11px] italic text-zinc-500 dark:text-zinc-400 leading-snug">
-								{{ turn.rationale }}
-							</p>
+							<div v-if="turn.rationale" class="chat-md text-[11px] italic text-zinc-500 dark:text-zinc-400 leading-snug"
+								v-html="renderMarkdown(turn.rationale)"></div>
 							<div class="flex items-center gap-1.5 flex-wrap">
 								<span v-if="revisionSeq(turn)"
 									class="px-1.5 py-px rounded bg-secondary/15 text-secondary text-[9px] font-bold font-mono">
@@ -135,9 +134,16 @@
 						</div>
 					</div>
 				</div>
+				<!-- Audio the assistant proposed in this turn: a form until answered, then a receipt -->
+				<div v-for="p in audio.proposalsFor(store.threadId, turn.id)" :key="p.id" class="pl-[22px]">
+					<AudioProposalCard :proposal="p" />
+				</div>
 				</template>
 				</template>
 			</template>
+
+			<!-- Audio an outside agent proposed -->
+			<AudioProposalCard v-for="p in audio.proposalsFor(store.threadId, null)" :key="p.id" :proposal="p" />
 		</div>
 
 		<!-- Input, pinned — the border-t is the only frame around it -->
@@ -162,10 +168,14 @@ import { chatEntries, type ChatEntry } from '@shared/agentRounds'
 import { useAgentStore } from '../../stores/agentStore'
 import { useEngineStore } from '../../stores/engineStore'
 import CopyButton from './CopyButton.vue'
+import AudioProposalCard from './AudioProposalCard.vue'
+import { renderMarkdown } from '../../utils/markdown'
+import { useAudioStore } from '../../stores/audioStore'
 
 const store = useEditorStore()
 const agent = useAgentStore()
 const engine = useEngineStore()
+const audio = useAudioStore()
 
 const scrollRef = ref<HTMLElement | null>(null)
 
@@ -232,4 +242,8 @@ watch(() => {
 	const last = entries.value[entries.value.length - 1]
 	return [entries.value.length, last?.kind === 'turn' ? last.turn.status : last?.round.calls.length, last?.kind === 'round' ? last.round.status : '']
 }, scrollToBottom, { immediate: true })
+// A new proposal asks for an answer: bring it into view.
+watch(() => Object.values(audio.proposals).filter((p) => p.threadId === store.threadId && p.status === 'open').length, (n, before) => {
+	if (n > (before ?? 0)) scrollToBottom()
+})
 </script>

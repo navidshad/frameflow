@@ -17,6 +17,13 @@
 		</div>
 
 		<template v-else>
+			<!-- The person said "Don't ask again" on a proposal here: say so, and how to undo it -->
+			<div v-if="store.thread?.audioAuto" class="flex items-center gap-2 text-[11px] text-zinc-500" data-testid="project-audio-auto">
+				<span class="iconify tabler--bolt w-3.5 h-3.5 shrink-0 text-violet-500"></span>
+				<span class="flex-1 leading-snug">Agents make audio in this project without asking.</span>
+				<button class="font-semibold text-primary hover:underline shrink-0" @click="store.threadId && audio.setProjectAuto(store.threadId, false)">Ask me again</button>
+			</div>
+
 			<!-- Effect or music -->
 			<div v-if="mode === 'generate'" class="flex gap-3.5" role="radiogroup" aria-label="What to make">
 				<button v-for="c in GENERATE_KINDS" :key="c" role="radio" :aria-checked="capability === c" class="tab-u !h-6 !text-[11px]"
@@ -30,29 +37,7 @@
 				</select>
 			</div>
 
-			<div v-if="capability === 'speech'">
-				<label for="pg-voice" class="lbl block">Voice</label>
-				<select id="pg-voice" v-model="voice" class="field" :disabled="!voiceList.length">
-					<option value="">{{ voiceList.length ? 'Default voice' : 'Loading voices…' }}</option>
-					<option v-for="v in voiceList" :key="v.id" :value="v.id">{{ v.name }}{{ v.description ? ` · ${v.description}` : '' }}</option>
-				</select>
-			</div>
-
-			<div>
-				<label for="pg-prompt" class="lbl block">{{ capability === 'speech' ? 'Line to read' : 'Describe it' }}</label>
-				<textarea id="pg-prompt" v-model="prompt" rows="4" class="field resize-none leading-snug"
-					:placeholder="PLACEHOLDER[capability]" :maxlength="capability === 'speech' ? LIMITS.speechChars.max : LIMITS.promptChars.max"></textarea>
-				<div class="mt-0.5 flex justify-between text-[10px] text-zinc-500">
-					<span :class="{ 'text-amber-500': problem && prompt.trim() }">{{ prompt.trim() ? problem : '' }}</span>
-					<span class="tabular-nums">{{ prompt.length }} / {{ capability === 'speech' ? LIMITS.speechChars.max : LIMITS.promptChars.max }}</span>
-				</div>
-			</div>
-
-			<div v-if="capability !== 'speech'">
-				<label for="pg-dur" class="lbl block">Length in seconds</label>
-				<input id="pg-dur" v-model="durationText" type="number" class="field w-28" :min="range.min" :max="range.max" step="0.5"
-					:placeholder="`${range.min}–${range.max}, or let it choose`" />
-			</div>
+			<AudioRequestFields v-if="request" v-model="request" />
 
 			<!-- The price comes before the press -->
 			<div class="flex flex-wrap items-center gap-x-3 gap-y-1">
@@ -92,10 +77,11 @@
 import { computed, onBeforeUnmount, ref, watch } from 'vue'
 import { useRouter } from 'vue-router'
 import {
-	CAPABILITY_LABEL, formatCost, LIMITS, providerInfo, requestProblem,
+	CAPABILITY_LABEL, creditsLeft, estimateCredits, formatCost, providerInfo, requestProblem,
 	type AudioCapability, type GenerateRequest, type ProviderId
 } from '@shared/audioProviders'
-import { useAudioStore, type VoiceOption } from '../../stores/audioStore'
+import { useAudioStore } from '../../stores/audioStore'
+import AudioRequestFields from './AudioRequestFields.vue'
 import { useEditorStore } from '../../stores/editorStore'
 
 /**
@@ -107,18 +93,11 @@ import { useEditorStore } from '../../stores/editorStore'
  */
 const props = defineProps<{ mode: 'generate' | 'voice' }>()
 
-const api = (window as any).api
 const router = useRouter()
 const store = useEditorStore()
 const audio = useAudioStore()
 
 const GENERATE_KINDS: AudioCapability[] = ['sfx', 'music']
-const PLACEHOLDER: Record<AudioCapability, string> = {
-	speech: 'Welcome back. Today we are looking at how the team cut triage time.',
-	sfx: 'A heavy wooden door closing in a stone hall',
-	music: 'Calm piano with a slow build, no drums'
-}
-
 const capability = ref<AudioCapability>(props.mode === 'voice' ? 'speech' : 'sfx')
 watch(() => props.mode, (mode) => { capability.value = mode === 'voice' ? 'speech' : 'sfx' })
 
@@ -126,33 +105,20 @@ const available = computed(() => audio.forCapability(capability.value))
 const provider = ref<ProviderId | ''>('')
 watch(available, (list) => { if (!list.some((p) => p.id === provider.value)) provider.value = list[0]?.id ?? '' }, { immediate: true })
 
-const voice = ref('')
-const voiceList = ref<VoiceOption[]>([])
-watch([capability, provider], async () => {
-	voice.value = ''
-	voiceList.value = []
-	if (capability.value === 'speech' && provider.value) voiceList.value = await audio.loadVoices(provider.value)
+/** The request being written. Changing kind or provider starts it again, keeping the words. */
+const request = ref<GenerateRequest | null>(null)
+watch([capability, provider], () => {
+	request.value = provider.value
+		? { provider: provider.value, capability: capability.value, prompt: request.value?.prompt ?? '' }
+		: null
 }, { immediate: true })
-
-const prompt = ref('')
-const durationText = ref('')
 const busy = ref(false)
 const error = ref('')
 
-const range = computed(() => (capability.value === 'music' ? LIMITS.musicSec : LIMITS.sfxSec))
-const request = computed<GenerateRequest | null>(() => {
-	if (!provider.value) return null
-	const seconds = Number(durationText.value)
-	return {
-		provider: provider.value, capability: capability.value, prompt: prompt.value,
-		...(capability.value === 'speech' && voice.value ? { voice: voice.value } : {}),
-		...(capability.value !== 'speech' && durationText.value.trim() && Number.isFinite(seconds) ? { durationSec: seconds } : {})
-	}
-})
 const problem = computed(() => {
 	if (!request.value) return 'Connect a provider first.'
 	// An empty box is not a mistake yet: the button is simply off.
-	return requestProblem(request.value) ?? null
+	return requestProblem(request.value, audio.catalogs[request.value.provider]) ?? null
 })
 
 // ===== The price, before the press =====
@@ -163,15 +129,21 @@ watch(request, (req) => {
 	clearTimeout(timer)
 	estimate.value = undefined
 	if (!req || requestProblem(req)) return
-	timer = setTimeout(async () => { estimate.value = await api.estimateAudio(req) }, 250)
+	timer = setTimeout(async () => { estimate.value = await audio.estimateUsd(req) }, 250)
 }, { deep: true })
 onBeforeUnmount(() => clearTimeout(timer))
 
+const account = computed(() => (provider.value ? audio.accounts[provider.value] : null))
+watch(provider, (id) => { if (id) void audio.loadAccount(id) }, { immediate: true })
+
 const costLine = computed(() => {
 	if (!request.value || problem.value) return `${CAPABILITY_LABEL[capability.value]} · costs money`
-	if (estimate.value === undefined) return ''
-	if (estimate.value === null) return `Billed in ${providerInfo(provider.value as ProviderId)?.label ?? 'the provider'} credits`
-	return `About $${estimate.value < 0.005 ? '0.01' : estimate.value.toFixed(2)}`
+	const credits = estimateCredits(request.value, audio.catalogs[request.value.provider])
+	const left = account.value ? ` · ${creditsLeft(account.value).toLocaleString()} left` : ''
+	if (credits !== null) return `About ${credits.toLocaleString()} credits${left}`
+	if (estimate.value === undefined) return left ? left.slice(3) : ''
+	if (estimate.value === null) return `Billed in ${providerInfo(provider.value as ProviderId)?.label ?? 'the provider'} credits${left}`
+	return `About $${estimate.value < 0.005 ? '0.01' : estimate.value.toFixed(2)}${left}`
 })
 
 const make = async () => {
