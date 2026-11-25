@@ -33,8 +33,12 @@ import { dialogExtensions } from '@shared/mediaFiles'
 import { getAudioAnalysis } from './editor/audioAnalysis'
 import { ensureSoundAsset, previewSound } from './editor/synth'
 import { isSoundKind } from '../shared/synth'
-import { estimateUsd, generateForProject, providerStatuses, voicesFor } from './audio/runtime'
+import {
+	accountFor, audioNotes, catalogFor, estimateUsd, forgetCatalog, generateForProject, providerStatuses, removeAudioNote, voicesFor
+} from './audio/runtime'
 import { normalizeAudioSettings, isProviderId, type GenerateRequest } from '../shared/audioProviders'
+import type { ProposalAnswer } from '../shared/audioProposals'
+import { proposalBook } from './mcp/rendererBridge'
 import * as editorPreprocess from './editor/preprocess'
 import * as editorHistory from './editor/history'
 import * as editorPreview from './editor/preview'
@@ -764,6 +768,7 @@ app.whenReady().then(() => {
 	ipcMain.handle('audio-providers-status', () => ({ providers: providerStatuses(), settings: settingsManager.getAudioSettings() }))
 	ipcMain.handle('audio-set-elevenlabs-key', (_event, key: string) => {
 		settingsManager.setElevenLabsKey(typeof key === 'string' ? key : '')
+		forgetCatalog('elevenlabs')
 		return { providers: providerStatuses(), settings: settingsManager.getAudioSettings() }
 	})
 	ipcMain.handle('audio-update-settings', (_event, patch: unknown) => {
@@ -773,9 +778,36 @@ app.whenReady().then(() => {
 		return { providers: providerStatuses(), settings: settingsManager.getAudioSettings() }
 	})
 	ipcMain.handle('audio-estimate', (_event, request: GenerateRequest) => estimateUsd(request))
+	// What the provider account has left this period: free to ask, null when it cannot say.
+	ipcMain.handle('audio-account', async (_event, provider: string) => {
+		if (!isProviderId(provider)) return null
+		try { return await accountFor(provider) } catch (error) { console.warn('[audio] reading the account failed:', (error as Error).message); return null }
+	})
+	// Which models the provider offers today (asked at most daily; `refresh` asks now).
+	ipcMain.handle('audio-models', async (_event, { provider, refresh }: { provider: string, refresh?: boolean }) => {
+		if (!isProviderId(provider)) return null
+		try { return await catalogFor(provider, !!refresh) } catch (error) { console.warn('[audio] listing models failed:', (error as Error).message); return null }
+	})
 	ipcMain.handle('audio-voices', async (_event, provider: string) => {
 		if (!isProviderId(provider)) return []
 		try { return await voicesFor(provider) } catch (error) { console.warn('[audio] listing voices failed:', (error as Error).message); return [] }
+	})
+	// The person's answer to an agent's audio proposal. Main does the making and
+	// sends the card each step ('audio-proposal'); this resolves when it is done.
+	ipcMain.handle('audio-proposal-answer', async (_event, { id, answer }: { id: string, answer: ProposalAnswer }) => {
+		try {
+			return { ok: true as const, proposal: await proposalBook.answer(id, answer) }
+		} catch (error: any) {
+			return { ok: false as const, error: error?.message || 'The proposal could not be answered.' }
+		}
+	})
+	// What agents learned about models (every project reads the same), and the person deleting a note or a pick.
+	ipcMain.handle('audio-notes', () => audioNotes())
+	ipcMain.handle('audio-notes-remove', (_event, target: Parameters<typeof removeAudioNote>[0]) => removeAudioNote(target))
+	// "Ask me again" for a project where the person had said not to.
+	ipcMain.handle('audio-project-auto', async (_event, { threadId, auto }: { threadId: string, auto: boolean }) => {
+		await threadManager.updateThreadWith(threadId, () => ({ audioAuto: !!auto }))
+		return !!auto
 	})
 	// A provider's own words (bad key, out of credits) come back as text the UI can show, not as a thrown IPC error.
 	ipcMain.handle('audio-generate', async (_event, { threadId, request }: { threadId: string, request: GenerateRequest }) => {

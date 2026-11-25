@@ -64,6 +64,19 @@
 				<span class="block text-[11px] text-zinc-500 dark:text-zinc-400">{{ state?.permissions[p.key] ? p.on : p.off }}</span>
 			</span>
 		</button>
+		<!-- Audio providers cost money: three levels, not a switch. FrameFlow's own assistant follows it too. -->
+		<div class="py-[9px] hair-b">
+			<span class="block font-semibold text-xs">Generate audio with a provider</span>
+			<div class="mt-1.5 flex gap-3.5" role="radiogroup" aria-label="Generate audio with a provider">
+				<button v-for="a in AUDIO_ACCESS" :key="a.value" role="radio" :aria-checked="audioAccess === a.value"
+					class="tab-u !h-6 !text-[11px]" :class="{ 'tab-u-active': audioAccess === a.value }" @click="setAudioAccess(a.value)">
+					{{ a.label }}
+				</button>
+			</div>
+			<span class="block mt-1 text-[11px] text-zinc-500 dark:text-zinc-400">
+				{{ AUDIO_ACCESS.find((a) => a.value === audioAccess)?.note }} Applies to FrameFlow’s own assistant too.
+			</span>
+		</div>
 	</SettingsGroup>
 
 	<SettingsGroup title="Recent agent sessions">
@@ -87,6 +100,7 @@
 <script setup lang="ts">
 import { computed, onMounted, ref } from 'vue'
 import { CONNECT_HINTS, connectSnippet, type AgentClientKind, type AgentPermissions } from '@shared/agent'
+import { AUDIO_ACCESS, type AudioAccess } from '@shared/audioProposals'
 import { useAgentStore } from '../../stores/agentStore'
 import { dialog } from '../../composables/useDialog'
 import SectionHeader from './SectionHeader.vue'
@@ -113,7 +127,7 @@ const CLIENTS: { kind: AgentClientKind; label: string }[] = [
 ]
 const client = ref<AgentClientKind>('claude')
 
-const PERMISSIONS: { key: keyof AgentPermissions; title: string; on: string; off: string }[] = [
+const PERMISSIONS: { key: Exclude<keyof AgentPermissions, 'generate'>; title: string; on: string; off: string }[] = [
 	{
 		key: 'edit', title: 'Edit the timeline',
 		on: 'Each change is saved as a revision you can undo or go back from.',
@@ -128,11 +142,6 @@ const PERMISSIONS: { key: keyof AgentPermissions; title: string; on: string; off
 		key: 'sound', title: 'Make sounds with the built-in synth',
 		on: 'Recipes only: free, offline, nothing is spent. Each sound is part of the revision you can undo.',
 		off: 'Off: an agent can describe the sounds it would add, and you add them from the Sound tab.'
-	},
-	{
-		key: 'generate', title: 'Generate audio with a provider',
-		on: 'An agent can make a voice, a sound or music with a provider. This costs money; each turn is capped under Audio.',
-		off: 'Off: nothing is spent. An agent can still use the free built-in synth.'
 	},
 	{
 		key: 'export', title: 'Export videos to disk',
@@ -180,6 +189,11 @@ const newToken = async () => {
 
 const togglePermission = async (key: keyof AgentPermissions) => {
 	agent.access = await api.setAgentPermission(key, !state.value?.permissions[key])
+}
+
+const audioAccess = computed<AudioAccess>(() => state.value?.permissions.generate ?? 'ask')
+const setAudioAccess = async (value: AudioAccess) => {
+	agent.access = await api.setAgentPermission('generate', value)
 }
 
 /** Live sessions first, then the remembered ones. */

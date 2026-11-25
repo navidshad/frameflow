@@ -1,4 +1,5 @@
-import type { AudioCapability, GenerateRequest, ProviderId } from '../../shared/audioProviders'
+import type { AudioCapability, GenerateRequest, ProviderAccount, ProviderId, Voice } from '../../shared/audioProviders'
+import type { ModelCatalog } from '../../shared/audioModels'
 
 /**
  * What a provider's implementation looks like. The network is injected (`fetch`)
@@ -11,6 +12,8 @@ export interface ProviderContext {
 	/** The provider's API key. Never logged, never returned to the renderer. */
 	key: string
 	signal?: AbortSignal
+	/** The provider's models as it listed them last, for one that publishes a list. */
+	catalog?: ModelCatalog | null
 }
 
 /** Audio as the provider returned it. PCM is wrapped into a WAV by the caller. */
@@ -25,23 +28,27 @@ export interface ProviderOutput {
 	/** Priced when the provider says what it used; null when it bills in credits. */
 	costUsd: number | null
 	costNote?: string
+	/** Provider credits used, when it bills in credits. */
+	credits?: number | null
+	/** `credits` is the provider's own count for this call, not an estimate: worth learning the rate from. */
+	measured?: boolean
 }
 
-export interface Voice {
-	id: string
-	name: string
-	/** "female, American, warm" and the like, when the provider says. */
-	description?: string
-	previewUrl?: string
-}
+export type { Voice }
 
 export interface AudioProviderImpl {
 	id: ProviderId
 	capabilities: readonly AudioCapability[]
 	/** A rough price before the call, in USD, or null when it cannot be priced. Used for the spend cap. */
-	estimateUsd(req: GenerateRequest): number | null
+	estimateUsd(req: GenerateRequest, catalog?: ModelCatalog | null): number | null
 	generate(req: GenerateRequest, ctx: ProviderContext): Promise<ProviderOutput>
 	voices?(ctx: ProviderContext): Promise<Voice[]>
+	/** What the account has left this period. Free to ask; absent for a provider that bills per token. */
+	account?(ctx: ProviderContext): Promise<ProviderAccount>
+	/** Which models it offers today, for a provider that says. `prior` is kept for whatever cannot be read now. */
+	catalog?(ctx: ProviderContext, prior: ModelCatalog | null): Promise<ModelCatalog>
+	/** The provider's own page about its models, as text an agent can read (markdown). */
+	docsUrl?: string
 }
 
 /** A provider said no, in words fit for the person: a bad key, a quota, a rate limit. */

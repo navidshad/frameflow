@@ -106,6 +106,8 @@ export async function runLoopTurn(options: LoopRunOptions): Promise<LoopRunResul
 		version: options.version,
 		permissions: options.permissions,
 		probeMotion: options.probeMotion,
+		// A model behind an API has no search of its own: it gets FrameFlow's.
+		webSearch: true,
 		onActivity: options.onActivity,
 		onOverrun: () => stop('overrun')
 	})

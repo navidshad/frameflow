@@ -7,6 +7,7 @@ import {
 } from '@shared/engines'
 import type { AgentActivity } from '@shared/agentFeed'
 import type { AgentPermissions } from '@shared/agent'
+import type { AudioAccess } from '@shared/audioProposals'
 import type { MotionProbe } from '../editor/vetHtml'
 import type { EditorBridge } from '../mcp/bridge'
 import { createTurnSession, type CommitRecord } from './turnSession'
@@ -31,11 +32,12 @@ import type { Located } from './detect'
  * What a CLI engine may do through its private MCP server. It may edit, and
  * exporting stays the user's button. The built-in synth is free and offline, so it is on. Writing a custom HTML page is the user's
  * "Write custom HTML motion layers" setting, exactly as for an external agent:
- * the engine is an agent too, and a page it writes runs in a window. The caller
- * passes the setting in; absent, the answer is no.
+ * the engine is an agent too, and a page it writes runs in a window. Audio
+ * providers follow the user's three-way setting the same way (off, ask first,
+ * auto). The caller passes the settings in; absent, the answer is no.
  */
-export const enginePermissions = (htmlAllowed: boolean): AgentPermissions =>
-	({ edit: true, html: htmlAllowed, export: false, sound: true, generate: false })
+export const enginePermissions = (htmlAllowed: boolean, audio: AudioAccess = 'off'): AgentPermissions =>
+	({ edit: true, html: htmlAllowed, export: false, sound: true, generate: audio })
 
 export type { CommitRecord }
 

@@ -16,6 +16,8 @@
  * The network calls live in `main/audio/`.
  */
 
+import { findModel, modelOf, modelsFor, type ModelCatalog } from './audioModels'
+
 export type ProviderId = 'gemini' | 'elevenlabs'
 export type AudioCapability = 'speech' | 'sfx' | 'music'
 
@@ -27,16 +29,23 @@ export interface ProviderInfo {
 	needs: string
 	/** Shown under its name in Settings. */
 	note: string
+	/** How it bills: dollars per use (Gemini, by the token), or credits from the person's plan (ElevenLabs). */
+	bills: BillingUnit
 }
+
+/** The unit a provider bills in, and so the unit its spend is counted and capped in. */
+export type BillingUnit = 'usd' | 'credits'
 
 export const PROVIDERS: readonly ProviderInfo[] = [
 	{
 		id: 'gemini', label: 'Gemini voices', capabilities: ['speech'],
-		needs: 'your Gemini API key', note: 'Voice-over from text. Uses the key you already saved, and is billed per token.'
+		needs: 'your Gemini API key', note: 'Voice-over from text. Uses the key you already saved, and is billed per token.',
+		bills: 'usd'
 	},
 	{
 		id: 'elevenlabs', label: 'ElevenLabs', capabilities: ['speech', 'sfx', 'music'],
-		needs: 'its own API key', note: 'Voices, sound effects from a prompt, and music. Uses your ElevenLabs plan’s credits.'
+		needs: 'its own API key', note: 'Voices, sound effects from a prompt, and music. Uses your ElevenLabs plan’s credits.',
+		bills: 'credits'
 	}
 ]
 
@@ -60,18 +69,36 @@ export interface GenerateRequest {
 	voice?: string
 	/** How long, for sound effects and music. Absent lets the provider choose. */
 	durationSec?: number
+	/** Which model makes it (audioModels.ts). Absent: the provider's default for this kind. */
+	model?: string
+	/** Music: no singing. Absent means instrumental, the usual bed under a video. */
+	instrumental?: boolean
+	/** Sound effects: made to loop seamlessly (ambience, a hum, rain). */
+	loop?: boolean
 }
 
-/** The longest line a single voice-over request takes, and the bounds on effects and music. */
+/**
+ * The bounds on one request. Speech's longest line depends on the model
+ * (audioModels.ts); `speechChars.max` is the bound for a provider with no model
+ * list (Gemini).
+ */
 export const LIMITS = {
 	speechChars: { min: 1, max: 4000 },
 	promptChars: { min: 3, max: 450 },
 	sfxSec: { min: 0.5, max: 30 },
-	musicSec: { min: 3, max: 120 }
+	musicSec: { min: 3, max: 300 }
 } as const
 
-/** Why a request cannot be made, in a sentence the person (or the agent) can act on; null when fine. */
-export function requestProblem(req: GenerateRequest): string | null {
+/** The longest line this request's model reads in one go, as the provider's model list says. */
+export const speechMaxChars = (req: Pick<GenerateRequest, 'capability' | 'model' | 'prompt'>, catalog?: ModelCatalog | null): number =>
+	modelOf(catalog, req)?.maxChars ?? LIMITS.speechChars.max
+
+/**
+ * Why a request cannot be made, in a sentence the person (or the agent) can act
+ * on; null when fine. With the provider's model list (`catalog`) it also checks
+ * the model exists and the line fits it; without one it checks what it can.
+ */
+export function requestProblem(req: GenerateRequest, catalog?: ModelCatalog | null): string | null {
 	const info = providerInfo(req.provider)
 	if (!info) return `Unknown provider "${String(req.provider)}". Providers: ${PROVIDERS.map((p) => p.id).join(', ')}.`
 	if (!isCapability(req.capability)) return `Unknown kind "${String(req.capability)}": speech, sfx or music.`
@@ -79,10 +106,20 @@ export function requestProblem(req: GenerateRequest): string | null {
 		const who = PROVIDERS.filter((p) => p.capabilities.includes(req.capability)).map((p) => p.label).join(' or ')
 		return `${info.label} does not make ${CAPABILITY_LABEL[req.capability].toLowerCase()}${who ? `; ${who} does` : ''}.`
 	}
+	if (req.model !== undefined && catalog && catalog.provider === req.provider) {
+		const model = findModel(catalog, req.capability, req.model)
+		const known = modelsFor(catalog, req.capability).filter((m) => !m.deprecated).map((m) => m.id)
+		if (!model) {
+			return known.length
+				? `${info.label} has no ${CAPABILITY_LABEL[req.capability].toLowerCase()} model "${req.model}". Models: ${known.join(', ')}.`
+				: `${info.label} listed no ${CAPABILITY_LABEL[req.capability].toLowerCase()} models: leave model out.`
+		}
+	}
 	const text = (req.prompt ?? '').trim()
 	if (req.capability === 'speech') {
+		const max = speechMaxChars(req, catalog)
 		if (text.length < LIMITS.speechChars.min) return 'Say what the voice should read.'
-		if (text.length > LIMITS.speechChars.max) return `That line is ${text.length} characters; a single voice-over takes at most ${LIMITS.speechChars.max}. Split it.`
+		if (text.length > max) return `That line is ${text.length} characters; a single voice-over takes at most ${max} with this model. Split it.`
 	} else {
 		if (text.length < LIMITS.promptChars.min) return 'Describe the sound in a few words.'
 		if (text.length > LIMITS.promptChars.max) return `That description is ${text.length} characters; keep it under ${LIMITS.promptChars.max}.`
@@ -92,6 +129,68 @@ export function requestProblem(req: GenerateRequest): string | null {
 		}
 	}
 	return null
+}
+
+// ===== Voices and credits =====
+
+/** Whose voice it is: the person's own (cloned, designed) or one the provider ships. */
+export type VoiceKind = 'cloned' | 'professional' | 'designed' | 'premade' | 'library' | 'other'
+
+export interface Voice {
+	id: string
+	name: string
+	/** "female, American, warm" and the like, when the provider says. */
+	description?: string
+	previewUrl?: string
+	kind?: VoiceKind
+	/** The language it was made for (ISO 639-1), when the provider says. */
+	language?: string
+}
+
+/** The person's own voices come first in every list: they are why someone clones one. */
+export const isOwnVoice = (v: Pick<Voice, 'kind'>): boolean =>
+	v.kind === 'cloned' || v.kind === 'professional' || v.kind === 'designed'
+
+/** What a provider account has left this period, in its own unit. */
+export interface ProviderAccount {
+	provider: ProviderId
+	/** "creator", "pro", "free" … */
+	tier?: string
+	creditsUsed: number
+	creditsLimit: number
+	/** When the allowance refills, ms since the epoch. */
+	resetsAt?: number
+}
+
+export const creditsLeft = (a: Pick<ProviderAccount, 'creditsUsed' | 'creditsLimit'>): number =>
+	Math.max(0, a.creditsLimit - a.creditsUsed)
+
+/** When a provider picks the length itself: what to assume for an estimate. */
+export const ASSUMED_SEC: Record<Exclude<AudioCapability, 'speech'>, number> = { sfx: 5, music: 30 }
+
+/** What a request is billed by: characters for speech, seconds for effects and music. */
+export const billedUnits = (req: Pick<GenerateRequest, 'capability' | 'prompt' | 'durationSec'>, madeSec?: number): number =>
+	req.capability === 'speech' ? req.prompt.trim().length : (madeSec ?? req.durationSec ?? ASSUMED_SEC[req.capability])
+
+/**
+ * About how many provider credits a request uses, before it is made; null when
+ * nothing has taught FrameFlow the rate yet. Rates are learned from what the
+ * provider said earlier calls used (`catalog.rates`). A voice model never used
+ * before is priced from one that was, through the relative cost per character
+ * the provider's model list gives.
+ */
+export function estimateCredits(req: GenerateRequest, catalog?: ModelCatalog | null): number | null {
+	const model = modelOf(catalog, req)
+	if (!model) return null
+	const rates = catalog?.rates ?? {}
+	let rate: number | undefined = rates[model.id]
+	if (rate === undefined && req.capability === 'speech' && model.costMultiplier) {
+		for (const [id, seen] of Object.entries(rates)) {
+			const known = findModel(catalog, 'speech', id)
+			if (known?.costMultiplier) { rate = (seen / known.costMultiplier) * model.costMultiplier; break }
+		}
+	}
+	return rate === undefined ? null : Math.ceil(billedUnits(req) * rate)
 }
 
 // ===== Provenance =====
@@ -110,24 +209,29 @@ export interface AudioProvenance {
 	costUsd: number | null
 	/** One line about the cost, for the cases where there is no number ("12 credits"). */
 	costNote?: string
+	/** Provider credits it used: measured when the provider reports it, else the estimate. */
+	credits?: number | null
 	madeAt: number
 }
 
 // ===== Spending =====
 
 /**
- * What an agent may spend in one turn. Generating is the one thing an agent can
- * do that costs money, so it is bounded twice: by how many things it makes and
- * by how much they cost. A person pressing Generate in the Sound tab is not
- * bound by this: they see the cost and chose to.
+ * What an agent may spend in one turn, when it makes audio without asking
+ * (Auto). Bounded by how many things it makes, and by what they cost in each
+ * provider's own unit: credits for a provider that bills a plan's credits
+ * (ElevenLabs), dollars for one that bills per use (Gemini voices). A person
+ * pressing Make it or Generate is not bound by this: they saw the cost and chose.
  */
 export interface SpendPolicy {
 	maxGenerationsPerTurn: number
-	/** Null means no dollar cap (only the count). */
+	/** Dollar-billed providers (Gemini voices). Null: no dollar limit. */
 	maxUsdPerTurn: number | null
+	/** Credit-billed providers (ElevenLabs), in the provider's own credits. Null: no credit limit. */
+	maxCreditsPerTurn: number | null
 }
 
-export const DEFAULT_SPEND_POLICY: SpendPolicy = { maxGenerationsPerTurn: 3, maxUsdPerTurn: 1 }
+export const DEFAULT_SPEND_POLICY: SpendPolicy = { maxGenerationsPerTurn: 3, maxUsdPerTurn: 1, maxCreditsPerTurn: 1000 }
 
 export function normalizeSpendPolicy(value: unknown): SpendPolicy {
 	const v = (value && typeof value === 'object' ? value : {}) as Partial<SpendPolicy>
@@ -137,34 +241,82 @@ export function normalizeSpendPolicy(value: unknown): SpendPolicy {
 	const usd = v.maxUsdPerTurn === null ? null
 		: typeof v.maxUsdPerTurn === 'number' && Number.isFinite(v.maxUsdPerTurn) ? Math.max(0, v.maxUsdPerTurn)
 			: DEFAULT_SPEND_POLICY.maxUsdPerTurn
-	return { maxGenerationsPerTurn: count, maxUsdPerTurn: usd }
+	const credits = v.maxCreditsPerTurn === null ? null
+		: typeof v.maxCreditsPerTurn === 'number' && Number.isFinite(v.maxCreditsPerTurn) ? Math.max(0, Math.floor(v.maxCreditsPerTurn))
+			: DEFAULT_SPEND_POLICY.maxCreditsPerTurn
+	return { maxGenerationsPerTurn: count, maxUsdPerTurn: usd, maxCreditsPerTurn: credits }
 }
 
-export interface Spent { count: number; usd: number }
+/** What a turn has spent so far, per unit. */
+export interface Spent { count: number; usd: number; credits: number }
+
+export const NOTHING_SPENT: Readonly<Spent> = { count: 0, usd: 0, credits: 0 }
+
+/** What one request would cost, in its provider's unit; `amount` null when that cannot be told yet. */
+export interface SpendEstimate { unit: BillingUnit; amount: number | null }
 
 /**
- * Whether one more generation fits under the policy. `estimateUsd` is what the
- * request would cost if the provider prices it; null (a credit-billed provider)
- * is counted against the count only, and the caller says so.
+ * A request's cost before it is made, in the unit its provider bills: credits
+ * from the account's learned rates (estimateCredits), or the dollar estimate
+ * the caller worked out from the provider's prices.
+ */
+export function estimateSpend(req: GenerateRequest, usd: number | null, catalog?: ModelCatalog | null): SpendEstimate {
+	return providerInfo(req.provider)?.bills === 'credits'
+		? { unit: 'credits', amount: estimateCredits(req, catalog) }
+		: { unit: 'usd', amount: usd }
+}
+
+/** The spend with one more generation added, in its unit. */
+export const addSpend = (spent: Spent, unit: BillingUnit, amount: number | null | undefined): Spent => ({
+	count: spent.count + 1,
+	usd: spent.usd + (unit === 'usd' ? amount ?? 0 : 0),
+	credits: spent.credits + (unit === 'credits' ? amount ?? 0 : 0)
+})
+
+/**
+ * Whether one more generation fits under the policy, and if not, why, in words
+ * for the agent to act on (it should ask the person instead).
  */
 export function spendDecision(
-	policy: SpendPolicy, spent: Spent, estimateUsd: number | null
+	policy: SpendPolicy, spent: Spent, estimate: SpendEstimate
 ): { ok: true } | { ok: false; reason: string } {
 	if (spent.count >= policy.maxGenerationsPerTurn) {
 		return {
 			ok: false,
 			reason: `That is the limit: ${policy.maxGenerationsPerTurn} generation${policy.maxGenerationsPerTurn === 1 ? '' : 's'} per turn ` +
-				'(Settings → Audio providers). Tell the user what you would make and let them raise it, or make it from the Sound tab.'
+				'(Settings → Audio). Propose it with propose_audio so the user can say yes, or tell them what you would make.'
 		}
 	}
-	if (policy.maxUsdPerTurn !== null && estimateUsd !== null && spent.usd + estimateUsd > policy.maxUsdPerTurn + 1e-9) {
+	if (estimate.unit === 'credits' && policy.maxCreditsPerTurn !== null) {
+		if (estimate.amount === null) {
+			return {
+				ok: false,
+				reason: 'FrameFlow cannot tell yet what this costs in credits (nothing like it has been made on this account), ' +
+					'so it is not made without asking. Propose it with propose_audio so the user can say yes.'
+			}
+		}
+		if (spent.credits + estimate.amount > policy.maxCreditsPerTurn) {
+			return {
+				ok: false,
+				reason: `That would bring this turn to about ${Math.round(spent.credits + estimate.amount).toLocaleString()} credits, over the ` +
+					`${policy.maxCreditsPerTurn.toLocaleString()}-credit limit (Settings → Audio). Propose it so the user can say yes, or make it shorter.`
+			}
+		}
+	}
+	if (estimate.unit === 'usd' && policy.maxUsdPerTurn !== null && estimate.amount !== null && spent.usd + estimate.amount > policy.maxUsdPerTurn + 1e-9) {
 		return {
 			ok: false,
-			reason: `That would bring this turn to about $${(spent.usd + estimateUsd).toFixed(2)}, over the $${policy.maxUsdPerTurn.toFixed(2)} limit ` +
-				'(Settings → Audio providers). Ask the user, or make it shorter.'
+			reason: `That would bring this turn to about $${(spent.usd + estimate.amount).toFixed(2)}, over the $${policy.maxUsdPerTurn.toFixed(2)} limit ` +
+				'(Settings → Audio). Propose it so the user can say yes, or make it shorter.'
 		}
 	}
 	return { ok: true }
+}
+
+/** What a made sound cost, in its provider's unit: "40 credits", "$0.04", "under a cent". */
+export function formatSpend(p: Pick<AudioProvenance, 'costUsd' | 'costNote' | 'credits'>): string {
+	if (typeof p.credits === 'number') return `${Math.round(p.credits).toLocaleString()} credit${Math.round(p.credits) === 1 ? '' : 's'}`
+	return formatCost(p)
 }
 
 /** "$0.04", "under a cent", or the provider's own words when it cannot be priced. */

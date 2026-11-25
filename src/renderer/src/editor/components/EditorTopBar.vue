@@ -16,8 +16,18 @@
 			<span class="iconify tabler--pencil w-3 h-3 text-zinc-400 opacity-0 group-hover/title:opacity-100 transition shrink-0"></span>
 		</button>
 
-		<span v-if="totalCost > 0" class="tb-cost shrink-0 whitespace-nowrap font-mono text-[11px] text-zinc-500 tabular-nums"
-			title="What this project has cost in AI usage">${{ totalCost.toFixed(4) }}</span>
+		<!-- What this project has spent, in each provider's own unit; the breakdown on hover or focus -->
+		<div v-if="spendParts.length" class="tb-cost relative group/spend shrink-0" data-testid="project-spend">
+			<button type="button" class="whitespace-nowrap font-mono text-[11px] text-zinc-500 tabular-nums hover:text-zinc-800 dark:hover:text-zinc-200 transition"
+				:aria-label="`What this project has spent: ${spendLines.join('; ')}`">
+				<template v-for="(part, i) in spendParts" :key="part"><span v-if="i" class="text-zinc-300 dark:text-zinc-600"> · </span>{{ part }}</template>
+			</button>
+			<div class="absolute left-0 top-full mt-1.5 z-50 hidden group-hover/spend:block group-focus-within/spend:block w-max max-w-[360px]
+				rounded-lg border border-zinc-200 dark:border-zinc-800 bg-white dark:bg-zinc-900 shadow-lg px-3 py-2 space-y-1" role="tooltip">
+				<p class="text-[10px] font-bold uppercase tracking-wider text-zinc-400">What this project has spent</p>
+				<p v-for="line in spendLines" :key="line" class="text-[11px] text-zinc-600 dark:text-zinc-300 leading-snug">{{ line }}</p>
+			</div>
+		</div>
 
 		<!-- Live status: an agent is editing over MCP -->
 		<slot name="center" />
@@ -104,6 +114,7 @@ import { useAgentStore } from '../../stores/agentStore'
 import { useEditorStore } from '../../stores/editorStore'
 import { useTheme } from '../../composables/useTheme'
 import { useEditorMode, type EditorMode } from '../editorMode'
+import { describeLine, spendParts as partsOf, type SpendSummary } from '@shared/spend'
 
 /**
  * The editor's 40px bar: back, title, cost, then — right — the Light | Pro
@@ -114,7 +125,8 @@ import { useEditorMode, type EditorMode } from '../editorMode'
  */
 const props = defineProps<{
 	title?: string
-	totalCost: number
+	/** The project's spend, per provider in its own unit. */
+	spend: SpendSummary
 	showExport: boolean
 	canExport: boolean
 	exporting: boolean
@@ -126,6 +138,9 @@ const props = defineProps<{
 	/** The thumbnail project is being built. */
 	thumbnailBusy?: boolean
 }>()
+
+const spendParts = computed(() => partsOf(props.spend))
+const spendLines = computed(() => props.spend.lines.map(describeLine))
 const editorStore = useEditorStore()
 /** The pre-render of this project's motion layers, while it is drawing. */
 const motionDrawing = computed(() => {

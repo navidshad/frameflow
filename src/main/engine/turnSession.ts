@@ -3,7 +3,7 @@ import type { AgentActivity } from '@shared/agentFeed'
 import type { AgentPermissions } from '@shared/agent'
 import type { MotionProbe } from '../editor/vetHtml'
 import { AgentServer } from '../mcp/server'
-import { TOOLS } from '../mcp/tools'
+import { SEARCH_TOOLS, TOOLS } from '../mcp/tools'
 import type { ApplyOutcome, EditorBridge } from '../mcp/bridge'
 
 /**
@@ -40,6 +40,11 @@ export interface TurnSessionOptions {
 	permissions: () => AgentPermissions
 	/** Draws a page in the hidden window: the engine's pages get the same check as everyone's. */
 	probeMotion?: MotionProbe
+	/**
+	 * Offer FrameFlow's web_search and read_web_page: for an engine with no
+	 * search of its own (the loop on the Gemini API). Claude Code uses its own.
+	 */
+	webSearch?: boolean
 	onActivity?: (activity: AgentActivity) => void
 	/** Called once when the run has made more calls than the budget and the grace allow. */
 	onOverrun: () => void
@@ -53,6 +58,23 @@ export interface TurnSession {
 	/** The revision the run left current: its last edit, or a later revert_to_version. */
 	finalRevisionId(): string | undefined
 	overrun(): boolean
+}
+
+/**
+ * Note what one apply_ops made. A request's edits rewrite one revision, so a
+ * revision already listed is not listed again: its counts grow instead, and the
+ * turn's card shows one V number with everything the request changed.
+ */
+export function recordCommit(commits: CommitRecord[], outcome: Extract<ApplyOutcome, { ok: true }>): void {
+	const same = commits.find((c) => c.revisionId === outcome.revisionId)
+	if (same) {
+		for (const key of Object.keys(same.counts) as (keyof CommitRecord['counts'])[]) same.counts[key] += outcome.counts[key] ?? 0
+		return
+	}
+	commits.push({
+		revisionId: outcome.revisionId, revisionSeq: outcome.revisionSeq,
+		parentRevisionId: outcome.parentRevisionId ?? null, counts: { ...outcome.counts }
+	})
 }
 
 export function createTurnSession(options: TurnSessionOptions): TurnSession {
@@ -89,13 +111,11 @@ export function createTurnSession(options: TurnSessionOptions): TurnSession {
 			const outcome: ApplyOutcome = await options.bridge.commitTurn(commit)
 			if (outcome.ok) {
 				finalRevisionId = outcome.revisionId
-				commits.push({
-					revisionId: outcome.revisionId, revisionSeq: outcome.revisionSeq,
-					parentRevisionId: outcome.parentRevisionId ?? null, counts: outcome.counts
-				})
+				recordCommit(commits, outcome)
 			}
 			return outcome
-		}
+		},
+		nameVersion: (request) => options.bridge.nameVersion(request)
 	}
 
 	const token = `ff_run_${randomBytes(24).toString('hex')}`
@@ -103,7 +123,7 @@ export function createTurnSession(options: TurnSessionOptions): TurnSession {
 		bridge,
 		// An engine's turn is the round: begin_round and end_round are for outside agents,
 		// and a model that is offered them calls them and is told they are not for it.
-		tools: TOOLS.filter((tool) => !tool.roundTool),
+		tools: [...TOOLS.filter((tool) => !tool.roundTool), ...(options.webSearch ? SEARCH_TOOLS : [])],
 		token: () => token,
 		permissions: options.permissions,
 		probeMotion: options.probeMotion,

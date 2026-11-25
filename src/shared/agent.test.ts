@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import {
-	checkRequest, connectSnippet, DEFAULT_AGENT_PERMISSIONS, displayClientName, maskToken,
+	checkRequest, connectSnippet, DEFAULT_AGENT_PERMISSIONS, displayClientName, maskToken, normalizeAudioAccess,
 	normalizePermissions, opKeys, opsInputSchema, permissionRefusal, toJsonSchema, tokensMatch,
 	TURN_RUNNER_ONLY_FIELDS, validateArgs, type JsonSchema
 } from './agent'
@@ -45,17 +45,24 @@ describe('checkRequest', () => {
 	})
 })
 
+describe('what counts as an edit', () => {
+	it('is any operation, not the rationale or the version’s name', () => {
+		expect(opKeys({ rationale: 'x', versionName: 'y' })).toEqual([])
+		expect(opKeys({ versionName: 'y', closeGaps: true })).toEqual(['closeGaps'])
+	})
+})
+
 describe('permissions', () => {
 	it('defaults to edit, html and the synth on, export off', () => {
-		expect(DEFAULT_AGENT_PERMISSIONS).toEqual({ edit: true, html: true, export: false, sound: true, generate: false })
+		expect(DEFAULT_AGENT_PERMISSIONS).toEqual({ edit: true, html: true, export: false, sound: true, generate: 'ask' })
 		expect(normalizePermissions(undefined)).toEqual(DEFAULT_AGENT_PERMISSIONS)
-		expect(normalizePermissions({ export: true, edit: 'yes' })).toEqual({ edit: true, html: true, export: true, sound: true, generate: false })
+		expect(normalizePermissions({ export: true, edit: 'yes' })).toEqual({ edit: true, html: true, export: true, sound: true, generate: 'ask' })
 		// A settings file from before sound existed gets the default.
 		expect(normalizePermissions({ edit: false, html: false, export: true })).toMatchObject({ sound: true })
 	})
 
 	it('always allows reading', () => {
-		expect(permissionRefusal('read', { edit: false, html: false, export: false, sound: false, generate: false })).toBeNull()
+		expect(permissionRefusal('read', { edit: false, html: false, export: false, sound: false, generate: 'off' })).toBeNull()
 	})
 
 	it('refuses export by default, telling the agent to ask the user', () => {
@@ -66,17 +73,32 @@ describe('permissions', () => {
 	})
 
 	it('refuses edits and HTML when they are switched off', () => {
-		expect(permissionRefusal('edit', { edit: false, html: true, export: false, sound: true, generate: false })).toMatch(/Edit the timeline/)
-		expect(permissionRefusal('html', { edit: true, html: false, export: false, sound: true, generate: false })).toMatch(/HTML motion/)
+		expect(permissionRefusal('edit', { edit: false, html: true, export: false, sound: true, generate: 'ask' })).toMatch(/Edit the timeline/)
+		expect(permissionRefusal('html', { edit: true, html: false, export: false, sound: true, generate: 'ask' })).toMatch(/HTML motion/)
 	})
 
-	it('keeps anything that costs money off until the user turns it on, and says so', () => {
-		expect(DEFAULT_AGENT_PERMISSIONS.generate).toBe(false)
+	it('asks first by default: an agent may propose audio, never spend without a yes', () => {
+		expect(DEFAULT_AGENT_PERMISSIONS.generate).toBe('ask')
+		expect(permissionRefusal('propose', DEFAULT_AGENT_PERMISSIONS)).toBeNull()
 		const refusal = permissionRefusal('generate', DEFAULT_AGENT_PERMISSIONS)!
-		expect(refusal).toMatch(/costs money/)
-		expect(refusal).toMatch(/Generate audio with a provider/)
-		expect(refusal).toMatch(/built-in synth/)
-		expect(permissionRefusal('generate', { ...DEFAULT_AGENT_PERMISSIONS, generate: true })).toBeNull()
+		expect(refusal).toMatch(/asked before/)
+		expect(refusal).toMatch(/propose_audio/)
+		expect(permissionRefusal('generate', { ...DEFAULT_AGENT_PERMISSIONS, generate: 'auto' })).toBeNull()
+	})
+
+	it('refuses proposing and making alike when audio is off, and points at the free synth', () => {
+		const off = { ...DEFAULT_AGENT_PERMISSIONS, generate: 'off' as const }
+		expect(permissionRefusal('propose', off)).toMatch(/turned audio providers off.*built-in synth/)
+		expect(permissionRefusal('generate', off)).toMatch(/off for agents/)
+	})
+
+	it('reads the old checkbox as the matching level', () => {
+		expect(normalizeAudioAccess(true)).toBe('auto')
+		expect(normalizeAudioAccess(false)).toBe('ask')
+		expect(normalizeAudioAccess(undefined)).toBe('ask')
+		expect(normalizeAudioAccess('off')).toBe('off')
+		expect(normalizeAudioAccess('sometimes')).toBe('ask')
+		expect(normalizePermissions({ generate: true }).generate).toBe('auto')
 	})
 
 	it('refuses the synth when it is switched off, and says where to turn it on', () => {

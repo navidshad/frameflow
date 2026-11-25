@@ -4,7 +4,9 @@ import { StreamableHTTPClientTransport } from '@modelcontextprotocol/sdk/client/
 import { DEFAULT_AGENT_PERMISSIONS, type AgentPermissions } from '@shared/agent'
 import type { AgentActivity } from '@shared/agentFeed'
 import { AgentServer, type AgentServerEvent } from './server'
+import { SEARCH_TOOLS, TOOLS } from './tools'
 import { FakeEditor, PIXEL, TOKEN } from './fakeEditor'
+import { assistantChoices, type AudioProposal } from '@shared/audioProposals'
 import { applyRoundEvent, RoundBook, type AgentRound, type RoundEvent } from '@shared/agentRounds'
 
 /**
@@ -108,7 +110,8 @@ describe('AgentServer over Streamable HTTP', () => {
 			'begin_round', 'end_round', 'list_projects', 'create_project', 'open_project', 'import_media', 'wait',
 			'get_project', 'get_timeline', 'get_media', 'inspect_media', 'find_silences', 'search_moments', 'render_frame', 'render_frames',
 			'get_motion_guide', 'get_motion_kit',
-			'get_sound_guide', 'list_sounds', 'suggest_cues', 'render_sound', 'analyze_audio', 'inspect_audio', 'generate_audio',
+			'get_sound_guide', 'list_sounds', 'suggest_cues', 'render_sound', 'analyze_audio', 'inspect_audio',
+			'get_audio_options', 'research_audio_models', 'save_model_notes', 'propose_audio', 'generate_audio', 'name_version',
 			'apply_ops', 'revert_to_version', 'export', 'inspect_export',
 			'find_camera_groups', 'make_multicam', 'get_multicam', 'get_angles', 'find_speakers', 'get_speakers',
 			'find_faces', 'track_object', 'list_tracks', 'get_track', 'edit_track'
@@ -153,6 +156,42 @@ describe('AgentServer over Streamable HTTP', () => {
 		const result: any = await client.callTool({ name: 'get_timeline', arguments: {} })
 		expect(result.isError).toBe(true)
 		expect(result.content[0].text).toMatch(/No project is open/)
+	})
+
+	describe('naming the version a request makes', () => {
+		it('carries the agent’s name for the version with the edit, cleaned to one line', async () => {
+			const client = await connect()
+			await client.callTool({ name: 'apply_ops', arguments: { rationale: 'Trim', removeRanges: [{ fromSec: 1, toSec: 2 }], versionName: '  Tighter intro,\n music under ' } })
+			expect(editor.commits[0].turn.versionName).toBe('Tighter intro, music under')
+		})
+
+		it('is not an edit on its own', async () => {
+			const client = await connect()
+			const named = await client.callTool({ name: 'apply_ops', arguments: { versionName: 'Just a name' } }) as any
+			expect(named.isError).toBe(true)
+			expect(named.content[0].text).toMatch(/besides rationale and versionName/)
+			expect(editor.commits).toHaveLength(0)
+		})
+
+		it('name_version names it without another edit, and says when there is no edit yet', async () => {
+			const client = await connect()
+			const early = text(await client.callTool({ name: 'name_version', arguments: { name: 'Persian captions' } }))
+			expect(early.waiting).toMatch(/No edit yet/)
+			await client.callTool({ name: 'apply_ops', arguments: { removeRanges: [{ fromSec: 1, toSec: 2 }] } })
+			const later = text(await client.callTool({ name: 'name_version', arguments: { name: 'Persian captions, slower cuts' } }))
+			expect(later).toEqual({ name: 'Persian captions, slower cuts', revision: 'V1' })
+			expect(editor.versionNames.map((v) => v.name)).toEqual(['Persian captions', 'Persian captions, slower cuts'])
+			const blank = await client.callTool({ name: 'name_version', arguments: { name: '   ' } }) as any
+			expect(blank.isError).toBe(true)
+		})
+
+		it('needs the edit permission', async () => {
+			permissions = { ...permissions, edit: false }
+			const client = await connect()
+			const refused = await client.callTool({ name: 'name_version', arguments: { name: 'Anything' } }) as any
+			expect(refused.isError).toBe(true)
+			expect(editor.versionNames).toEqual([])
+		})
 	})
 
 	it('applies ops as a labelled AI turn and reports the revision', async () => {
@@ -418,9 +457,10 @@ describe('AgentServer over Streamable HTTP', () => {
 		expect(palette.palette.map((p: any) => p.kind)).toContain('whoosh')
 		expect(palette.palette.find((p: any) => p.kind === 'flight').lengthSec).toMatch(/durationSec/)
 		expect(palette.placed).toEqual([])
-		expect(palette.providers).toEqual({
-			connected: [{ provider: 'elevenlabs', makes: ['speech', 'sfx', 'music'] }], allowed: false, limit: { generations: 2, usd: 1 }
+		expect(palette.providers).toMatchObject({
+			connected: [{ provider: 'elevenlabs', makes: ['speech', 'sfx', 'music'] }], access: 'ask', limit: { generations: 2, usd: 1 }
 		})
+		expect(palette.providers.howTo).toMatch(/propose_audio/)
 	})
 
 	it('suggests the moments that want a sound, with the follow to pass back', async () => {
@@ -589,27 +629,28 @@ describe('AgentServer over Streamable HTTP', () => {
 		const gen = (client: any, args: Record<string, unknown>) =>
 			client.callTool({ name: 'generate_audio', arguments: args }) as Promise<any>
 
-		it('is off until the user allows it, and nothing is made or spent', async () => {
+		it('makes nothing without asking unless the user set Auto, and says to propose instead', async () => {
 			const client = await connect()
 			const refused = await gen(client, { capability: 'speech', prompt: 'Welcome to the show.' })
 			expect(refused.isError).toBe(true)
-			expect(refused.content[0].text).toMatch(/Settings/)
+			expect(refused.content[0].text).toMatch(/propose_audio/)
 			expect(editor.generated).toEqual([])
 		})
 
 		it('makes an asset, says what it cost, and puts nothing on the timeline', async () => {
-			permissions.generate = true
+			permissions.generate = 'auto'
 			const client = await connect()
 			const before = editor.doc.timeline.length
 			const made = text(await gen(client, { capability: 'speech', prompt: 'Welcome to the show.', voice: 'Rachel' }))
 			expect(made).toMatchObject({ asset: 'gen-1', provider: 'elevenlabs', generationsLeftThisTurn: 1 })
-			expect(made.cost).toBe('$0.05')
+			// ElevenLabs bills credits: the receipt says so, not a dollar guess.
+			expect(made.cost).toBe('40 credits')
 			expect(editor.generated[0]).toMatchObject({ provider: 'elevenlabs', capability: 'speech', voice: 'Rachel' })
 			expect(editor.doc.timeline).toHaveLength(before)
 		})
 
 		it('stops at the count for the turn, and tells the agent what to do instead', async () => {
-			permissions.generate = true
+			permissions.generate = 'auto'
 			const client = await connect()
 			await gen(client, { capability: 'sfx', prompt: 'a door slamming', durationSec: 1 })
 			await gen(client, { capability: 'sfx', prompt: 'a door creaking', durationSec: 1 })
@@ -619,18 +660,32 @@ describe('AgentServer over Streamable HTTP', () => {
 			expect(editor.generated).toHaveLength(2)
 		})
 
-		it('stops at the dollars before it spends them', async () => {
-			permissions.generate = true
+		it('stops at the credit limit before it spends them, counting what the turn already used', async () => {
+			permissions.generate = 'auto'
+			editor.spend = { ...editor.spend, maxCreditsPerTurn: 380 }
 			const client = await connect()
+			// 30 s of music is estimated at 360 credits (12 a second, as this account was seen to pay): it fits.
 			await gen(client, { capability: 'music', prompt: 'calm piano', durationSec: 30 })
+			// The turn counts what the first really used (the provider said 40), then the next estimate: 400.
 			const over = await gen(client, { capability: 'music', prompt: 'calm piano again', durationSec: 30 })
 			expect(over.isError).toBe(true)
-			expect(over.content[0].text).toMatch(/limit/)
+			expect(over.content[0].text).toMatch(/400 credits, over the 380-credit limit/)
 			expect(editor.generated).toHaveLength(1)
 		})
 
+		it('does not guess: with a credit limit and no known rate, it says to ask the user', async () => {
+			permissions.generate = 'auto'
+			editor.catalog = { ...editor.catalog!, rates: {} }
+			const client = await connect()
+			const unknown = await gen(client, { capability: 'music', prompt: 'calm piano', durationSec: 10 })
+			expect(unknown.isError).toBe(true)
+			expect(unknown.content[0].text).toMatch(/cannot tell yet.*propose_audio/)
+			editor.spend = { ...editor.spend, maxCreditsPerTurn: null }
+			expect((await gen(client, { capability: 'music', prompt: 'calm piano', durationSec: 10 })).isError).toBeFalsy()
+		})
+
 		it('says so when no provider is connected, and when the request cannot be made', async () => {
-			permissions.generate = true
+			permissions.generate = 'auto'
 			const client = await connect()
 			editor.connected = []
 			const none = await gen(client, { capability: 'speech', prompt: 'Hello there.' })
@@ -645,7 +700,7 @@ describe('AgentServer over Streamable HTTP', () => {
 		})
 
 		it('places what it made on a lane of the right role, and a missing asset is dropped, not guessed', async () => {
-			permissions.generate = true
+			permissions.generate = 'auto'
 			const client = await connect()
 			await gen(client, { capability: 'speech', prompt: 'Welcome to the show.' })
 			const raw = await client.callTool({
@@ -659,6 +714,15 @@ describe('AgentServer over Streamable HTTP', () => {
 			expect(editor.doc.tracks.find((t) => t.id === clip.trackId)).toMatchObject({ kind: 'audio', role: 'voice' })
 		})
 
+		it('refuses a model that is not in today’s list, naming the ones that are', async () => {
+			permissions.generate = 'auto'
+			const client = await connect()
+			const old = await gen(client, { capability: 'music', prompt: 'calm piano', model: 'music_v9' })
+			expect(old.isError).toBe(true)
+			expect(old.content[0].text).toMatch(/no music model "music_v9"/)
+			expect(editor.generated).toEqual([])
+		})
+
 		it('placing costs nothing and needs no generate permission', async () => {
 			const client = await connect()
 			editor.doc.media.push({
@@ -668,6 +732,207 @@ describe('AgentServer over Streamable HTTP', () => {
 			const placed = text(await client.callTool({ name: 'apply_ops', arguments: { rationale: 'Voice-over', placeAudio: [{ asset: 'vo', atSec: 0 }] } }))
 			expect(placed.applied).toBeTruthy()
 			expect(editor.generated).toEqual([])
+		})
+	})
+
+	describe('proposing audio', () => {
+		const propose = (client: any, args: Record<string, unknown>) =>
+			client.callTool({ name: 'propose_audio', arguments: args }) as Promise<any>
+		const intro = { capability: 'speech', prompt: 'Welcome back to the channel.', purpose: 'Intro narration', voice: 'Rachel' }
+		const bed = { capability: 'music', prompt: 'calm piano, slow build', purpose: 'Bed under the intro', durationSec: 20 }
+		/** The person, pressing a button on the card once it is shown. */
+		const answerWhenShown = (answer: (p: AudioProposal) => Parameters<FakeEditor['answerProposal']>[1]) => {
+			const timer = setInterval(() => {
+				const open = editor.published.find((p) => p.status === 'open')
+				if (!open) return
+				clearInterval(timer)
+				void editor.answerProposal(open.id, answer(open))
+			}, 5)
+		}
+
+		it('lists today’s models, the user’s voices first, and the credits left, for free', async () => {
+			const client = await connect()
+			const options = text(await client.callTool({ name: 'get_audio_options', arguments: { capability: 'music' } }))
+			expect(options.access).toBe('ask')
+			// Every model, the retiring one marked, not hidden.
+			expect(options.providers[0].models.music.map((m: any) => [m.model, !!m.retiring])).toEqual([['music_v1', true], ['music_v2', false], ['music_v2_5', false]])
+			expect(options.next).toMatch(/No model has been picked yet for: music. research_audio_models/)
+			const all = text(await client.callTool({ name: 'get_audio_options', arguments: {} }))
+			expect(all.providers[0].voices[0]).toMatchObject({ voice: 'v-mine', whose: 'the user’s own' })
+			expect(all.providers[0].creditsLeft).toBe(36000)
+			expect(editor.generated).toEqual([])
+		})
+
+		it('shows the form and waits; Make it makes what the person left in it, and nothing is placed', async () => {
+			const client = await connect()
+			const before = editor.doc.timeline.length
+			answerWhenShown((p) => ({
+				action: 'make', chosenBy: 'person',
+				items: [{ ...p.items[0].request, prompt: 'Welcome back, everyone.' }, p.items[1].request]
+			}))
+			const out = text(await propose(client, { message: 'A voice-over and a bed for the intro.', items: [intro, bed] }))
+			expect(out.status).toBe('made')
+			expect(out.chosenBy).toBe('person')
+			expect(out.made.map((m: any) => m.for)).toEqual(['Intro narration', 'Bed under the intro'])
+			expect(out.next).toMatch(/placeAudio/)
+			// The edit the person made, and the voice named as Rachel sent by its id.
+			expect(editor.generated[0]).toMatchObject({ prompt: 'Welcome back, everyone.', voice: 'v-rachel' })
+			expect(editor.doc.timeline).toHaveLength(before)
+			// The card went open → making → made, with the agent's message on it.
+			expect(editor.published.map((p) => p.status)).toEqual(['open', 'making', 'making', 'making', 'made'])
+			expect(editor.published[0].message).toBe('A voice-over and a bed for the intro.')
+		})
+
+		it('You choose for me: the assistant’s own picks, with Auto resolved to a model from today’s list', async () => {
+			const client = await connect()
+			answerWhenShown((p) => ({ action: 'make', chosenBy: 'assistant', items: assistantChoices(p) }))
+			const out = text(await propose(client, { items: [bed] }))
+			expect(out.chosenBy).toBe('assistant')
+			expect(['music_v2', 'music_v2_5']).toContain(editor.generated[0].model)
+		})
+
+		it('Not now: nothing is made, and the agent is told not to ask again this turn', async () => {
+			const client = await connect()
+			answerWhenShown(() => ({ action: 'decline', note: 'No music on this one.' }))
+			const out = text(await propose(client, { items: [bed] }))
+			expect(out).toMatchObject({ status: 'declined', note: 'No music on this one.' })
+			expect(out.next).toMatch(/Do not propose the same again/)
+			expect(editor.generated).toEqual([])
+		})
+
+		it('stops waiting after the time it was given, says how to keep waiting, and the form stays', async () => {
+			const client = await connect()
+			const out = text(await propose(client, { items: [bed], timeoutSec: 0 }))
+			expect(out.status).toBe('waiting for the user')
+			expect(out.next).toContain(`propose_audio {proposal: "${out.proposal}"}`)
+			answerWhenShown((p) => ({ action: 'make', chosenBy: 'person', items: p.items.map((i) => i.request) }))
+			const later = text(await propose(client, { proposal: out.proposal }))
+			expect(later.status).toBe('made')
+		})
+
+		it('under Auto, makes it at once with the assistant’s picks and shows the receipt', async () => {
+			permissions.generate = 'auto'
+			const client = await connect()
+			const out = text(await propose(client, { items: [intro] }))
+			expect(out).toMatchObject({ status: 'made', auto: true, chosenBy: 'assistant' })
+			expect(editor.published.at(-1)).toMatchObject({ status: 'made', auto: true })
+		})
+
+		it('a project where the person said "Don’t ask again" is Auto, unless audio is off in Settings', async () => {
+			editor.projectAuto = true
+			const client = await connect()
+			expect(text(await propose(client, { items: [intro] })).auto).toBe(true)
+			permissions.generate = 'off'
+			const off = await propose(client, { items: [intro] })
+			expect(off.isError).toBe(true)
+			expect(off.content[0].text).toMatch(/turned audio providers off/)
+		})
+
+		it('asks instead under Auto when the credits cannot be told yet', async () => {
+			permissions.generate = 'auto'
+			editor.catalog = { ...editor.catalog!, rates: {} }
+			const client = await connect()
+			const out = text(await propose(client, { items: [bed], timeoutSec: 0 }))
+			expect(out.status).toBe('waiting for the user')
+			expect(editor.generated).toEqual([])
+		})
+
+		it('asks after all when Auto would go over the turn’s limit, rather than refusing', async () => {
+			permissions.generate = 'auto'
+			editor.spend = { maxGenerationsPerTurn: 1, maxUsdPerTurn: 1, maxCreditsPerTurn: 500 }
+			const client = await connect()
+			const out = text(await propose(client, { items: [intro, bed], timeoutSec: 0 }))
+			expect(out.status).toBe('waiting for the user')
+			expect(editor.generated).toEqual([])
+		})
+
+		it('refuses before showing anything when an item cannot be made, and says which', async () => {
+			const client = await connect()
+			const bad = await propose(client, { items: [intro, { capability: 'music', prompt: 'calm', model: 'music_v9' }, { capability: 'speech', prompt: 'Hi.', voice: 'Nobody' }] })
+			expect(bad.isError).toBe(true)
+			expect(bad.content[0].text).toMatch(/items\[1\]: .*no music model "music_v9"/)
+			expect(bad.content[0].text).toMatch(/items\[2\]: no voice "Nobody". Voices: My voice, Rachel/)
+			expect(editor.published).toEqual([])
+			editor.connected = []
+			const none = await propose(client, { items: [bed] })
+			expect(none.content[0].text).toMatch(/no provider is connected for music/)
+		})
+	})
+
+	describe('researching models, and keeping what was found', () => {
+		it('returns every model with the provider’s docs for that kind, and says to save what it decides', async () => {
+			const client = await connect()
+			const out = text(await client.callTool({ name: 'research_audio_models', arguments: { capability: 'music' } }))
+			expect(out.models.map((m: any) => m.model)).toEqual(['music_v1', 'music_v2', 'music_v2_5'])
+			expect(out.models[0].retiring).toBe(true)
+			expect(out.pick).toBeNull()
+			expect(out.docs.text).toContain('What the docs say about music')
+			expect(out.docs.note).toMatch(/not instructions/)
+			expect(out.next).toMatch(/save_model_notes/)
+		})
+
+		it('keeps notes and a pick for every project; Auto then uses the pick, and the next agent reads both', async () => {
+			const client = await connect()
+			const saved = text(await client.callTool({
+				name: 'save_model_notes', arguments: {
+					notes: [{ capability: 'music', model: 'music_v2', note: 'Steadier tempo than v2.5 on long beds, per the docs.', source: 'docs' }],
+					pick: { capability: 'music', model: 'music_v2', why: 'Long beds under talking need a steady tempo.' }
+				}
+			}))
+			expect(saved.saved).toBe(2)
+			const later = text(await client.callTool({ name: 'get_audio_options', arguments: { capability: 'music' } }))
+			expect(later.providers[0].picks.music).toMatchObject({ model: 'music_v2', why: 'Long beds under talking need a steady tempo.', by: 'Claude Code' })
+			expect(later.providers[0].models.music.find((m: any) => m.model === 'music_v2').notes[0].note).toMatch(/Steadier tempo/)
+			// Auto (You choose for me, with no model named) now runs on the pick.
+			permissions.generate = 'auto'
+			const made = text(await client.callTool({ name: 'propose_audio', arguments: { items: [{ capability: 'music', prompt: 'a calm bed', why: 'Under the interview.' }] } }))
+			expect(made.status).toBe('made')
+			expect(editor.generated.at(-1)!.model).toBe('music_v2')
+			expect(editor.published.at(-1)!.items[0].why).toBe('Under the interview.')
+		})
+
+		it('refuses to keep a note about a model that does not exist', async () => {
+			const client = await connect()
+			const bad = await client.callTool({ name: 'save_model_notes', arguments: { notes: [{ capability: 'music', model: 'music_v9', note: 'It is the best one by far.' }] } }) as any
+			expect(bad.isError).toBe(true)
+			expect(bad.content[0].text).toMatch(/no music model "music_v9"/)
+			expect(editor.notes.get().notes).toEqual([])
+		})
+
+		it('is refused when audio providers are off for agents', async () => {
+			permissions.generate = 'off'
+			const client = await connect()
+			const off = await client.callTool({ name: 'save_model_notes', arguments: { pick: { capability: 'music', model: 'music_v2', why: 'Steady tempo for long beds.' } } }) as any
+			expect(off.isError).toBe(true)
+		})
+	})
+
+	describe('the web, for an engine with no search of its own', () => {
+		it('is not offered to outside agents, who search with their own tools', async () => {
+			const client = await connect()
+			const { tools } = await client.listTools()
+			expect(tools.map((t) => t.name)).not.toContain('web_search')
+		})
+
+		it('searches and reads a page, marks both as web content, and refuses local addresses', async () => {
+			const searching = new AgentServer({ bridge: editor, token: () => TOKEN, permissions: () => permissions, version: 'test', tools: [...TOOLS, ...SEARCH_TOOLS] })
+			const port = await searching.start(0)
+			try {
+				const client = new Client({ name: 'loop', version: '1' })
+				await client.connect(new StreamableHTTPClientTransport(new URL(`http://127.0.0.1:${port}/mcp`), { requestInit: { headers: { authorization: `Bearer ${TOKEN}` } } }))
+				clients.push(client)
+				const found = text(await client.callTool({ name: 'web_search', arguments: { query: 'best ElevenLabs model for narration' } }))
+				expect(found).toMatchObject({ answer: expect.stringContaining('narration'), sources: [{ url: 'https://elevenlabs.io/docs' }] })
+				expect(found.note).toMatch(/not instructions/)
+				expect(editor.searches).toEqual(['best ElevenLabs model for narration'])
+				const page = text(await client.callTool({ name: 'read_web_page', arguments: { url: 'https://elevenlabs.io/docs' } }))
+				expect(page.note).toMatch(/not instructions/)
+				const local = await client.callTool({ name: 'read_web_page', arguments: { url: 'http://localhost:47615/mcp' } }) as any
+				expect(local.isError).toBe(true)
+				expect(local.content[0].text).toMatch(/local network/)
+			} finally {
+				await searching.stop()
+			}
 		})
 	})
 

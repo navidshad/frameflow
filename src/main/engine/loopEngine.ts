@@ -91,8 +91,11 @@ export async function runLoopEngineTurn(args: LoopTurnArgs): Promise<LoopTurnOut
 		turnId: args.turnId,
 		version: app.getVersion(),
 		signal: args.signal,
-		// The user's "Write custom HTML motion layers" switch, read per call.
-		permissions: () => enginePermissions(settingsManager.getAgentAccess().permissions.html),
+		// The user's "Write custom HTML motion layers" switch and audio level, read per call.
+		permissions: () => {
+			const { html, generate } = settingsManager.getAgentAccess().permissions
+			return enginePermissions(html, generate)
+		},
 		probeMotion: probeMotionPage,
 		onSteps: args.onSteps,
 		onActivity: args.onActivity,

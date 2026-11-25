@@ -94,6 +94,17 @@ const api = {
 	updateAudioSettings: (patch: unknown) => ipcRenderer.invoke('audio-update-settings', patch),
 	estimateAudio: (request: unknown) => ipcRenderer.invoke('audio-estimate', request),
 	audioVoices: (provider: string) => ipcRenderer.invoke('audio-voices', provider),
+	audioAccount: (provider: string) => ipcRenderer.invoke('audio-account', provider),
+	audioModels: (provider: string, refresh = false) => ipcRenderer.invoke('audio-models', { provider, refresh }),
+	answerAudioProposal: (id: string, answer: unknown) => ipcRenderer.invoke('audio-proposal-answer', { id, answer }),
+	audioNotes: () => ipcRenderer.invoke('audio-notes'),
+	removeAudioNote: (target: unknown) => ipcRenderer.invoke('audio-notes-remove', target),
+	setProjectAudioAuto: (threadId: string, auto: boolean) => ipcRenderer.invoke('audio-project-auto', { threadId, auto }),
+	onAudioProposal: (callback: (proposal: unknown) => void) => {
+		const listener = (_event: unknown, proposal: unknown) => callback(proposal)
+		ipcRenderer.on('audio-proposal', listener)
+		return () => ipcRenderer.removeListener('audio-proposal', listener)
+	},
 	generateAudio: (data: { threadId: string, request: unknown }) => ipcRenderer.invoke('audio-generate', data),
 	previewSound: (data: { threadId: string, recipe: unknown }) =>
 		ipcRenderer.invoke('editor-sound-preview', data),
@@ -227,7 +238,7 @@ const api = {
 	// Agent access (MCP). The token itself never reaches the renderer.
 	getAgentAccess: () => ipcRenderer.invoke('get-agent-access'),
 	setAgentAccessEnabled: (enabled: boolean) => ipcRenderer.invoke('set-agent-access-enabled', enabled),
-	setAgentPermission: (key: 'edit' | 'html' | 'export' | 'sound' | 'generate', value: boolean) =>
+	setAgentPermission: (key: 'edit' | 'html' | 'export' | 'sound' | 'generate', value: boolean | 'off' | 'ask' | 'auto') =>
 		ipcRenderer.invoke('set-agent-permission', { key, value }),
 	copyAgentToken: () => ipcRenderer.invoke('copy-agent-token'),
 	copyAgentSnippet: (kind: 'claude' | 'codex') => ipcRenderer.invoke('copy-agent-snippet', kind),
