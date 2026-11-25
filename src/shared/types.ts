@@ -869,6 +869,8 @@ export interface PromptTurn {
 	engine?: PromptTurnEngine
 	/** The runtime the model said it was aiming for — measureBuild judges against it. */
 	targetLengthSec?: number
+	/** An agent's name for the version this request made ("Tighter intro, music under"): the revision's label. */
+	versionName?: string
 	answer?: string             // set when the request was a question, not an edit
 	droppedOps?: string[]       // ops pruned during validation (surfaced on the card)
 	notes?: string[]            // non-failures worth telling the user (clamped ranges, …)

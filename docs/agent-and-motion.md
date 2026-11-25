@@ -21,6 +21,7 @@ can also drive. Every ability gets two surfaces: MCP for agents, the editor for 
 
 - Phases 2–5 (`claude/phase-1-free-tier`) merge to `main` first; everything builds on that.
 - Agent edits over MCP **apply immediately** as an AI turn + revision (undo, "Back to V{n}"), no accept/reject step.
+- **One revision per request.** Everything an agent does for one request (a chat turn of FrameFlow's own assistant, or an outside agent's round) rewrites one revision in place, so Revisions reads request by request. Going back to where the request started and editing again still rewrites it; switching to another version on purpose starts a new one (`shared/requestRevision.ts`). The agent names it: `apply_ops versionName` or `name_version` ("Tighter intro, music under"), shown as the revision's label.
 - Motion = **templates with fields and custom HTML** (sandboxed, linted). Agents may write HTML.
 - People need **manual control too**: moments, a real keyframe-lane UI, and asking the AI per layer.
 - Order: MCP and the motion engine first, then keyframe lanes, the built-in CLI engine, and custom-HTML authoring.

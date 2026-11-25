@@ -45,6 +45,13 @@ describe('checkRequest', () => {
 	})
 })
 
+describe('what counts as an edit', () => {
+	it('is any operation, not the rationale or the version’s name', () => {
+		expect(opKeys({ rationale: 'x', versionName: 'y' })).toEqual([])
+		expect(opKeys({ versionName: 'y', closeGaps: true })).toEqual(['closeGaps'])
+	})
+})
+
 describe('permissions', () => {
 	it('defaults to edit, html and the synth on, export off', () => {
 		expect(DEFAULT_AGENT_PERMISSIONS).toEqual({ edit: true, html: true, export: false, sound: true, generate: 'ask' })

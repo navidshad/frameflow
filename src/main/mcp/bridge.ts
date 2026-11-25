@@ -147,6 +147,12 @@ export interface EditorBridge {
 	readTranscripts(project: LiveProject, assetIds: string[]): Promise<Record<string, TranscriptEntry[]>>
 	renderFrame(project: LiveProject, timeSec: number): Promise<RenderedFrame>
 	switchRevision(revisionId: string): Promise<{ ok: true } | { ok: false; error: string }>
+	/**
+	 * Name the version this request made (an engine's chat turn, or the agent's
+	 * open round), without another edit. `seq` null: no edit yet, the name waits
+	 * for the first.
+	 */
+	nameVersion(request: { name: string; engineTurnId?: string }): Promise<{ seq: number | null }>
 	/** Start an export of the live timeline; FrameFlow shows its progress like any other. */
 	startExport(project: LiveProject, options: { quality: 'original' | 'preview'; format?: DeliveryFormat; height?: number }): Promise<{ ok: true; renderId: string } | { ok: false; error: string }>
 	/** The latest progress of a render, or of the project's newest one. */

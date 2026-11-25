@@ -78,6 +78,10 @@ describe('step titles and focus', () => {
 		expect(stepTitle('get_media', { asset: 'greeting_team.mp4', fromSec: 2, toSec: 9 })).toBe('get_media greeting_team 0:02.0–0:09.0')
 		expect(stepTitle('render_frame', { timeSec: 4.2 })).toBe('render_frame 0:04.2')
 		expect(stepTitle('revert_to_version', { version: 6 })).toBe('revert_to_version V6')
+		// Web research says what it asked and which page it read.
+		expect(stepTitle('WebSearch', { query: 'ElevenLabs longest music generation' })).toBe('WebSearch “ElevenLabs longest music generation”')
+		expect(stepTitle('WebFetch', { url: 'https://www.elevenlabs.io/docs/overview/capabilities/music', prompt: 'x' })).toBe('WebFetch elevenlabs.io/docs/overview/capabilities/music')
+		expect(stepTitle('read_web_page', { url: 'not a url' })).toBe('read_web_page not a url')
 		expect(stepTitle('apply_ops', { rationale: 'x', addMotion: [{ timelineStart: 3 }], removeRanges: [{ start: 9, end: 10 }, { start: 12, end: 13 }] }))
 			.toBe('apply_ops addMotion · removeRanges ×2 @ 0:03.0')
 	})

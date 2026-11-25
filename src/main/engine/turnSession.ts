@@ -60,6 +60,23 @@ export interface TurnSession {
 	overrun(): boolean
 }
 
+/**
+ * Note what one apply_ops made. A request's edits rewrite one revision, so a
+ * revision already listed is not listed again: its counts grow instead, and the
+ * turn's card shows one V number with everything the request changed.
+ */
+export function recordCommit(commits: CommitRecord[], outcome: Extract<ApplyOutcome, { ok: true }>): void {
+	const same = commits.find((c) => c.revisionId === outcome.revisionId)
+	if (same) {
+		for (const key of Object.keys(same.counts) as (keyof CommitRecord['counts'])[]) same.counts[key] += outcome.counts[key] ?? 0
+		return
+	}
+	commits.push({
+		revisionId: outcome.revisionId, revisionSeq: outcome.revisionSeq,
+		parentRevisionId: outcome.parentRevisionId ?? null, counts: { ...outcome.counts }
+	})
+}
+
 export function createTurnSession(options: TurnSessionOptions): TurnSession {
 	const commits: CommitRecord[] = []
 	let finalRevisionId: string | undefined
@@ -94,13 +111,11 @@ export function createTurnSession(options: TurnSessionOptions): TurnSession {
 			const outcome: ApplyOutcome = await options.bridge.commitTurn(commit)
 			if (outcome.ok) {
 				finalRevisionId = outcome.revisionId
-				commits.push({
-					revisionId: outcome.revisionId, revisionSeq: outcome.revisionSeq,
-					parentRevisionId: outcome.parentRevisionId ?? null, counts: outcome.counts
-				})
+				recordCommit(commits, outcome)
 			}
 			return outcome
-		}
+		},
+		nameVersion: (request) => options.bridge.nameVersion(request)
 	}
 
 	const token = `ff_run_${randomBytes(24).toString('hex')}`

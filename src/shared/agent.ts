@@ -271,7 +271,7 @@ export function opsInputSchema(opsSchema: unknown): JsonSchema {
 
 /** Op fields that change something (everything but the prose). */
 export const opKeys = (ops: Record<string, unknown>): string[] =>
-	Object.keys(ops).filter((key) => key !== 'rationale' && ops[key] !== undefined && ops[key] !== null)
+	Object.keys(ops).filter((key) => key !== 'rationale' && key !== 'versionName' && ops[key] !== undefined && ops[key] !== null)
 
 // ===== Argument validation =====
 

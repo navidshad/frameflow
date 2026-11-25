@@ -39,6 +39,7 @@ import {
 import { chooseModel, findModel, modelsFor, type AudioModel, type ModelCatalog } from '@shared/audioModels'
 import { NOTE_MAX_CHARS, notesFor, pickFor, type AudioNotes } from '@shared/audioNotes'
 import { PAGE_MAX_CHARS, QUERY_MAX_CHARS } from '@shared/webText'
+import { cleanVersionName, VERSION_NAME_MAX } from '@shared/requestRevision'
 import {
 	assistantChoices, itemFromInput, MAX_PROPOSAL_ITEMS, type AudioProposal, type ProposalItem, type ProposedItemInput
 } from '@shared/audioProposals'
@@ -1198,6 +1199,36 @@ const proposeAudioTool: ToolDef = {
 	}
 }
 
+const nameVersionTool: ToolDef = {
+	name: 'name_version',
+	permission: 'edit',
+	writes: true,
+	description:
+		'Name the version this request made, without another edit: a few words the user scans in Revisions ' +
+		'("Tighter intro, music under", "Persian captions, slower cuts"). One request is one revision, so name it ' +
+		'when you know what it became, usually at the end. Before any edit the name waits for the first one. ' +
+		'Outside a round an outside agent names a version with apply_ops versionName instead.',
+	inputSchema: {
+		type: 'object',
+		properties: { name: { type: 'string', description: `At most ${VERSION_NAME_MAX} characters.` } },
+		required: ['name'],
+		additionalProperties: false
+	},
+	title: (args) => `name_version ${String(args.name ?? '').slice(0, 40)}`,
+	async run(args, ctx) {
+		await requireProject(ctx)
+		const name = cleanVersionName(args.name)
+		if (!name) throw new ToolError('Give the version a name of a few words.')
+		const named = await ctx.bridge.nameVersion({ name, ...(ctx.engineTurnId ? { engineTurnId: ctx.engineTurnId } : {}) })
+		return {
+			content: [json({
+				name, ...(named.seq !== null ? { revision: `V${named.seq}` } : { waiting: 'No edit yet in this request: the name goes on its revision when you make one.' })
+			})],
+			feed: { detail: named.seq !== null ? `V${named.seq} · ${name}` : name }
+		}
+	}
+}
+
 const suggestCuesTool: ToolDef = {
 	name: 'suggest_cues',
 	permission: 'read',
@@ -1420,7 +1451,13 @@ const PROJECT_OPS_SCHEMA = {
 const OPS_BASE_SCHEMA = opsInputSchema(EDITOR_OPS_SCHEMA)
 const OPS_INPUT_SCHEMA = {
 	...OPS_BASE_SCHEMA,
-	properties: { ...OPS_BASE_SCHEMA.properties, ...SOUND_OPS_SCHEMA, ...MOTION_KIT_OPS_SCHEMA, ...PROJECT_OPS_SCHEMA, ...MULTICAM_OPS_SCHEMA }
+	properties: {
+		...OPS_BASE_SCHEMA.properties, ...SOUND_OPS_SCHEMA, ...MOTION_KIT_OPS_SCHEMA, ...PROJECT_OPS_SCHEMA, ...MULTICAM_OPS_SCHEMA,
+		versionName: {
+			type: 'string', maxLength: 120,
+			description: 'A name for the version this request makes, in a few words the user scans in Revisions ("Tighter intro, music under"). The latest one given in the request wins.'
+		}
+	}
 } as typeof OPS_BASE_SCHEMA
 
 const applyOps: ToolDef = {
@@ -1429,10 +1466,11 @@ const applyOps: ToolDef = {
 	writes: true,
 	description:
 		'Edit the timeline. The arguments are FrameFlow’s edit operations — the same contract its built-in ' +
-		'AI uses. The edit is applied to the editor at once, as one turn. Inside an open round (begin_round) ' +
-		'all your edits share ONE revision (a V number) that each call rewrites in place, so the user ' +
-		'switches between whole sessions; outside a round each call is its own revision. Returns that ' +
-		'revision, any ops dropped as invalid, and ' +
+		'AI uses. The edit is applied to the editor at once. One request is ONE revision (a V number): every ' +
+		'edit you make for it (inside FrameFlow’s chat turn, or inside an open round from begin_round) rewrites ' +
+		'that revision in place, so the user switches between versions request by request; outside a round each ' +
+		'call is its own revision. Name the version with versionName (a few words on what the request became; ' +
+		'the latest name wins) or name_version at the end. Returns that revision, any ops dropped as invalid, and ' +
 		'notes. Times: timelineStart, atSec and removeRanges are TIMELINE seconds; in/out are SOURCE seconds. ' +
 		'Read ids from get_timeline and get_media first. Prefer a few focused calls to one huge one, ' +
 		'and check the result with render_frame. Before sending a custom page in `html`, ' +
@@ -1443,7 +1481,7 @@ const applyOps: ToolDef = {
 	async run(args, ctx) {
 		const errors = validateArgs(OPS_INPUT_SCHEMA, args)
 		if (errors.length) throw new ToolError(`Invalid operations — nothing was changed:\n- ${errors.join('\n- ')}`)
-		if (!opKeys(args).length) throw new ToolError('apply_ops needs at least one operation besides rationale.')
+		if (!opKeys(args).length) throw new ToolError('apply_ops needs at least one operation besides rationale and versionName.')
 
 		const project = await requireProject(ctx)
 		// A page an agent writes is checked — lint, then drawn twice in the hidden
@@ -1486,6 +1524,7 @@ const applyOps: ToolDef = {
 			status: 'completed',
 			diff,
 			rationale: ops.rationale,
+			...(cleanVersionName((args as { versionName?: unknown }).versionName) ? { versionName: cleanVersionName((args as { versionName?: unknown }).versionName) } : {}),
 			droppedOps: droppedOps.length ? droppedOps : undefined,
 			notes: notes.length ? notes : undefined,
 			agent: { name: ctx.clientName, sessionId: ctx.sessionId, ...(ctx.engineTurnId ? { engineTurnId: ctx.engineTurnId } : {}) },
@@ -3081,6 +3120,7 @@ export const TOOLS: ToolDef[] = [
 	getProject, getTimeline, getMedia, inspectMedia, findSilences, searchMomentsTool, renderFrame, renderFrames, getMotionGuide, getMotionKit,
 	getSoundGuide, listSounds, suggestCuesTool, renderSoundTool, analyzeAudio, inspectAudioTool,
 	audioOptionsTool, researchAudioModelsTool, saveModelNotesTool, proposeAudioTool, generateAudioTool,
+	nameVersionTool,
 	applyOps, revertToVersion, exportTool, inspectExport,
 	findCameraGroups, makeMulticam, getMulticam, getAngles, findSpeakers, getSpeakers,
 	findFaces, trackObject, listTracksTool, getTrack, editTrack

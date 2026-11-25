@@ -212,6 +212,10 @@ export const rendererBridge: EditorBridge = {
 		}
 	},
 
+	async nameVersion({ name, engineTurnId }) {
+		return request<{ seq: number | null }>('name-revision', { name, engineTurnId })
+	},
+
 	switchRevision(revisionId) {
 		return switchRevisionFor(revisionId)
 	},

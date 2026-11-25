@@ -111,7 +111,7 @@ describe('AgentServer over Streamable HTTP', () => {
 			'get_project', 'get_timeline', 'get_media', 'inspect_media', 'find_silences', 'search_moments', 'render_frame', 'render_frames',
 			'get_motion_guide', 'get_motion_kit',
 			'get_sound_guide', 'list_sounds', 'suggest_cues', 'render_sound', 'analyze_audio', 'inspect_audio',
-			'get_audio_options', 'research_audio_models', 'save_model_notes', 'propose_audio', 'generate_audio',
+			'get_audio_options', 'research_audio_models', 'save_model_notes', 'propose_audio', 'generate_audio', 'name_version',
 			'apply_ops', 'revert_to_version', 'export', 'inspect_export',
 			'find_camera_groups', 'make_multicam', 'get_multicam', 'get_angles', 'find_speakers', 'get_speakers',
 			'find_faces', 'track_object', 'list_tracks', 'get_track', 'edit_track'
@@ -156,6 +156,42 @@ describe('AgentServer over Streamable HTTP', () => {
 		const result: any = await client.callTool({ name: 'get_timeline', arguments: {} })
 		expect(result.isError).toBe(true)
 		expect(result.content[0].text).toMatch(/No project is open/)
+	})
+
+	describe('naming the version a request makes', () => {
+		it('carries the agent’s name for the version with the edit, cleaned to one line', async () => {
+			const client = await connect()
+			await client.callTool({ name: 'apply_ops', arguments: { rationale: 'Trim', removeRanges: [{ fromSec: 1, toSec: 2 }], versionName: '  Tighter intro,\n music under ' } })
+			expect(editor.commits[0].turn.versionName).toBe('Tighter intro, music under')
+		})
+
+		it('is not an edit on its own', async () => {
+			const client = await connect()
+			const named = await client.callTool({ name: 'apply_ops', arguments: { versionName: 'Just a name' } }) as any
+			expect(named.isError).toBe(true)
+			expect(named.content[0].text).toMatch(/besides rationale and versionName/)
+			expect(editor.commits).toHaveLength(0)
+		})
+
+		it('name_version names it without another edit, and says when there is no edit yet', async () => {
+			const client = await connect()
+			const early = text(await client.callTool({ name: 'name_version', arguments: { name: 'Persian captions' } }))
+			expect(early.waiting).toMatch(/No edit yet/)
+			await client.callTool({ name: 'apply_ops', arguments: { removeRanges: [{ fromSec: 1, toSec: 2 }] } })
+			const later = text(await client.callTool({ name: 'name_version', arguments: { name: 'Persian captions, slower cuts' } }))
+			expect(later).toEqual({ name: 'Persian captions, slower cuts', revision: 'V1' })
+			expect(editor.versionNames.map((v) => v.name)).toEqual(['Persian captions', 'Persian captions, slower cuts'])
+			const blank = await client.callTool({ name: 'name_version', arguments: { name: '   ' } }) as any
+			expect(blank.isError).toBe(true)
+		})
+
+		it('needs the edit permission', async () => {
+			permissions = { ...permissions, edit: false }
+			const client = await connect()
+			const refused = await client.callTool({ name: 'name_version', arguments: { name: 'Anything' } }) as any
+			expect(refused.isError).toBe(true)
+			expect(editor.versionNames).toEqual([])
+		})
 	})
 
 	it('applies ops as a labelled AI turn and reports the revision', async () => {

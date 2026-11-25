@@ -127,6 +127,13 @@ export class FakeEditor implements EditorBridge {
 		return { ok: true as const }
 	}
 
+	/** Names given with name_version, in order, with the request they were for. */
+	versionNames: { name: string; engineTurnId?: string }[] = []
+	async nameVersion(request: { name: string; engineTurnId?: string }) {
+		this.versionNames.push(request)
+		return { seq: this.commits.length ? this.commits.length : null }
+	}
+
 	/** Projects the fake knows; t1 is the one open. */
 	projects: ProjectSummary[] = [
 		{ id: 't1', title: 'BytePets pre-pitch', createdAt: 1, updatedAt: 2, mediaCount: 1, durationSec: 30, open: true },
