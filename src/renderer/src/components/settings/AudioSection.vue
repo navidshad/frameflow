@@ -88,29 +88,45 @@
 	</SettingsGroup>
 
 	<SettingsGroup title="What an agent may spend in one turn">
-		<SettingsRow title="Limits"
-			description="Applies when agents are set to Auto under Agent access. Past these, an agent asks you instead. When you press Make it or Generate yourself, you see the cost first and choose.">
-			<div class="flex gap-10">
+		<SettingsRow title="Limits on Auto"
+			description="Only when an agent makes audio without asking (Auto under Agent access). Past a limit it shows you the proposal instead. When you press Make it or Generate yourself, you see the cost first and choose.">
+			<div class="grid grid-cols-3 gap-6">
 				<div>
 					<label for="sp-count" class="lbl block">Generations</label>
-					<input id="sp-count" class="field w-24" type="number" min="0" max="50" step="1" :value="audio.settings.spend.maxGenerationsPerTurn"
+					<input id="sp-count" class="field w-full" type="number" min="0" max="50" step="1" :value="audio.settings.spend.maxGenerationsPerTurn"
 						@change="audio.update({ spend: { maxGenerationsPerTurn: Number(($event.target as HTMLInputElement).value) } })" />
+					<p class="mt-1.5 text-[11px] text-zinc-500 dark:text-zinc-400">Any provider</p>
 				</div>
-				<div>
+				<div data-testid="limit-credits">
+					<label for="sp-credits" class="lbl block">Credits</label>
+					<input id="sp-credits" class="field w-full" type="number" min="0" step="50" :disabled="audio.settings.spend.maxCreditsPerTurn === null"
+						:value="audio.settings.spend.maxCreditsPerTurn ?? ''" placeholder="No limit"
+						@change="audio.update({ spend: { maxCreditsPerTurn: Number(($event.target as HTMLInputElement).value) } })" />
+					<p class="mt-1.5 text-[11px] text-zinc-500 dark:text-zinc-400">ElevenLabs</p>
+					<button role="checkbox" :aria-checked="audio.settings.spend.maxCreditsPerTurn === null"
+						class="mt-0.5 block text-[11px] text-zinc-500 hover:text-zinc-800 dark:hover:text-zinc-200 underline-offset-2 hover:underline"
+						@click="audio.update({ spend: { maxCreditsPerTurn: audio.settings.spend.maxCreditsPerTurn === null ? DEFAULT_SPEND_POLICY.maxCreditsPerTurn : null } })">
+						{{ audio.settings.spend.maxCreditsPerTurn === null ? 'Set a limit' : 'Remove limit' }}
+					</button>
+				</div>
+				<div data-testid="limit-usd">
 					<label for="sp-usd" class="lbl block">Dollars</label>
-					<input id="sp-usd" class="field w-24" type="number" min="0" step="0.25" :disabled="audio.settings.spend.maxUsdPerTurn === null"
-						:value="audio.settings.spend.maxUsdPerTurn ?? ''"
+					<input id="sp-usd" class="field w-full" type="number" min="0" step="0.25" :disabled="audio.settings.spend.maxUsdPerTurn === null"
+						:value="audio.settings.spend.maxUsdPerTurn ?? ''" placeholder="No limit"
 						@change="audio.update({ spend: { maxUsdPerTurn: Number(($event.target as HTMLInputElement).value) } })" />
+					<p class="mt-1.5 text-[11px] text-zinc-500 dark:text-zinc-400">Gemini voices</p>
 					<button role="checkbox" :aria-checked="audio.settings.spend.maxUsdPerTurn === null"
-						class="mt-1.5 text-[11px] text-zinc-500 hover:text-zinc-800 dark:hover:text-zinc-200"
+						class="mt-0.5 block text-[11px] text-zinc-500 hover:text-zinc-800 dark:hover:text-zinc-200 underline-offset-2 hover:underline"
 						@click="audio.update({ spend: { maxUsdPerTurn: audio.settings.spend.maxUsdPerTurn === null ? DEFAULT_SPEND_POLICY.maxUsdPerTurn : null } })">
-						{{ audio.settings.spend.maxUsdPerTurn === null ? 'Set a limit' : 'No dollar limit' }}
+						{{ audio.settings.spend.maxUsdPerTurn === null ? 'Set a limit' : 'Remove limit' }}
 					</button>
 				</div>
 			</div>
 		</SettingsRow>
-		<p class="mt-3 text-[11px] text-zinc-500 dark:text-zinc-400">
-			Dollar prices are estimates from the providers’ list prices. ElevenLabs bills in credits: what each one used is shown where it was made.
+		<p class="mt-3 text-[11px] leading-relaxed text-zinc-500 dark:text-zinc-400">
+			Each provider is limited in the unit it bills. ElevenLabs credits are estimated from what earlier generations really cost on
+			your plan; until FrameFlow has seen one of a kind (say, the first music clip), an agent on Auto asks you instead.
+			Gemini dollars come from Gemini’s prices.
 		</p>
 	</SettingsGroup>
 </template>

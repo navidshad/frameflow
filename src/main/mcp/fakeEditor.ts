@@ -361,7 +361,7 @@ export class FakeEditor implements EditorBridge {
 
 	/** Providers the fake pretends are connected; the cap an agent may spend. */
 	connected: ProviderId[] = ['elevenlabs']
-	spend: SpendPolicy = { maxGenerationsPerTurn: 2, maxUsdPerTurn: 1 }
+	spend: SpendPolicy = { maxGenerationsPerTurn: 2, maxUsdPerTurn: 1, maxCreditsPerTurn: 500 }
 	generated: GenerateRequest[] = []
 
 	audioStatus() {
@@ -394,7 +394,8 @@ export class FakeEditor implements EditorBridge {
 	projectAuto = false
 	/** Today's models: two voice models and the effect and music ids from ElevenLabs' real spec. */
 	catalog: ModelCatalog | null = {
-		provider: 'elevenlabs', fetchedAt: 1, rates: { eleven_multilingual_v2: 0.4 },
+		// What earlier calls on this account were seen to cost per character or second.
+		provider: 'elevenlabs', fetchedAt: 1, rates: { eleven_multilingual_v2: 0.4, eleven_text_to_sound_v3: 10, music_v2_5: 12, music_v2: 12 },
 		models: [
 			...parseSpeechModels([
 				{ model_id: 'eleven_multilingual_v2', name: 'Multilingual v2', can_do_text_to_speech: true, maximum_text_length_per_request: 10000, description: 'Steady narration.', model_rates: { character_cost_multiplier: 1 } },

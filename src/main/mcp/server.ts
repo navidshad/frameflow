@@ -90,7 +90,7 @@ const spendLedgers = new Map<string, Spent>()
 function ledgerFor(key: string): Spent {
 	let ledger = spendLedgers.get(key)
 	if (!ledger) {
-		ledger = { count: 0, usd: 0 }
+		ledger = { count: 0, usd: 0, credits: 0 }
 		spendLedgers.set(key, ledger)
 		// Turns end without telling us: keep only the recent ones.
 		if (spendLedgers.size > 200) spendLedgers.delete(spendLedgers.keys().next().value!)

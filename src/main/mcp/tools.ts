@@ -33,7 +33,8 @@ import {
 } from '@shared/synth'
 import { opsMakeSound, soundRecipesOf } from '../editor/soundOps'
 import {
-	CAPABILITY_LABEL, formatCost, isCapability, isOwnVoice, isProviderId, LIMITS, PROVIDERS, providerInfo, requestProblem, spendDecision,
+	addSpend, CAPABILITY_LABEL, estimateSpend, formatSpend, isCapability, isOwnVoice, isProviderId, LIMITS, NOTHING_SPENT, PROVIDERS,
+	providerInfo, requestProblem, spendDecision,
 	type AudioCapability, type GenerateRequest, type ProviderId, type Spent, type Voice
 } from '@shared/audioProviders'
 import { chooseModel, findModel, modelsFor, type AudioModel, type ModelCatalog } from '@shared/audioModels'
@@ -704,7 +705,7 @@ const listSounds: ToolDef = {
 			connected: PROVIDERS.filter((p) => status.connected.includes(p.id)).map((p) => ({ provider: p.id, makes: p.capabilities })),
 			access: ctx.bridge.audioAccess(project, ctx.permissions().generate),
 			howTo: 'get_audio_options lists models and voices; propose_audio asks the user, or makes it under auto.',
-			limit: { generations: status.spend.maxGenerationsPerTurn, usd: status.spend.maxUsdPerTurn }
+			limit: { generations: status.spend.maxGenerationsPerTurn, credits: status.spend.maxCreditsPerTurn, usd: status.spend.maxUsdPerTurn }
 		}
 		return {
 			content: [json({ palette, placed, audioTracks, providers })],
@@ -765,28 +766,31 @@ const generateAudioTool: ToolDef = {
 			...(typeof args.durationSec === 'number' ? { durationSec: args.durationSec } : {}),
 			...(typeof args.model === 'string' && args.model.trim() ? { model: args.model.trim() } : {})
 		}
-		const problem = requestProblem(req, await ctx.bridge.audioCatalog(provider))
+		const catalog = await ctx.bridge.audioCatalog(provider)
+		const problem = requestProblem(req, catalog)
 		if (problem) throw new ToolError(problem)
 
-		const spent = ctx.spent ?? { count: 0, usd: 0 }
-		const estimate = ctx.bridge.estimateAudio(req)
+		// Capped in the provider's own unit: credits for ElevenLabs, dollars for Gemini voices.
+		const spent = ctx.spent ?? { ...NOTHING_SPENT }
+		const estimate = estimateSpend(req, ctx.bridge.estimateAudio(req), catalog)
 		const decision = spendDecision(status.spend, spent, estimate)
 		if (!decision.ok) throw new ToolError(decision.reason)
 
 		const made = await ctx.bridge.generateAudio(project, req)
-		spent.count += 1
-		spent.usd += made.provenance.costUsd ?? estimate ?? 0
+		const used = estimate.unit === 'credits' ? made.provenance.credits ?? estimate.amount : made.provenance.costUsd ?? estimate.amount
+		Object.assign(spent, addSpend(spent, estimate.unit, used))
 		const left = Math.max(0, status.spend.maxGenerationsPerTurn - spent.count)
+		const cost = formatSpend(made.provenance)
 		return {
 			content: [json({
 				asset: made.asset.id, name: made.asset.name, lengthSec: r3(made.asset.metadata?.duration),
-				provider, cost: formatCost(made.provenance), generationsLeftThisTurn: left,
+				provider, cost, generationsLeftThisTurn: left,
 				next: 'Place it with apply_ops placeAudio {asset, atSec | follow}. Check it with analyze_audio if levels matter.'
 			})],
 			feed: {
-				detail: `${CAPABILITY_LABEL[capability].toLowerCase()} · ${providerInfo(provider)!.label} · ${formatCost(made.provenance)}`,
+				detail: `${CAPABILITY_LABEL[capability].toLowerCase()} · ${providerInfo(provider)!.label} · ${cost}`,
 				quote: req.prompt.length > 120 ? `${req.prompt.slice(0, 118)}…` : req.prompt,
-				chips: [{ text: formatCost(made.provenance), tone: 'violet' }]
+				chips: [{ text: cost, tone: 'violet' }]
 			}
 		}
 	}
@@ -864,7 +868,9 @@ const audioOptionsTool: ToolDef = {
 		return {
 			content: [json({
 				access, providers,
-				limitPerTurn: access === 'auto' ? { generations: status.spend.maxGenerationsPerTurn, usd: status.spend.maxUsdPerTurn } : undefined,
+				limitPerTurn: access === 'auto'
+					? { generations: status.spend.maxGenerationsPerTurn, elevenlabsCredits: status.spend.maxCreditsPerTurn, geminiUsd: status.spend.maxUsdPerTurn }
+					: undefined,
 				next: access === 'off'
 					? 'Audio providers are off for agents. Tell the user what you would make; they can make it from the Sound tab.'
 					: unpicked.length
@@ -1179,19 +1185,26 @@ const proposeAudioTool: ToolDef = {
 		// Auto: made at once with the assistant's picks, while it fits the turn's limit.
 		// Past the limit it is asked after all, rather than refused.
 		if (access === 'auto') {
-			const spent = ctx.spent ?? { count: 0, usd: 0 }
+			const spent = ctx.spent ?? { ...NOTHING_SPENT }
 			const choices = assistantChoices(proposal)
-			let usd = 0
+			// Every item must fit, counted in its provider's unit, or none is made without asking.
+			let running: Spent = { ...spent }
 			let fits = true
-			for (const [i, req] of choices.entries()) {
-				const estimate = ctx.bridge.estimateAudio(req)
-				if (!spendDecision(status.spend, { count: spent.count + i, usd: spent.usd + usd }, estimate).ok) { fits = false; break }
-				usd += estimate ?? 0
+			for (const req of choices) {
+				const estimate = estimateSpend(req, ctx.bridge.estimateAudio(req), await ctx.bridge.audioCatalog(req.provider))
+				if (!spendDecision(status.spend, running, estimate).ok) { fits = false; break }
+				running = addSpend(running, estimate.unit, estimate.amount)
 			}
 			if (fits) {
 				const done = await ctx.bridge.answerProposal(proposal.id, { action: 'make', items: choices, chosenBy: 'assistant' }, { auto: true })
-				spent.count += done.items.filter((i) => i.result).length
-				spent.usd += usd
+				// What was really used: the provider's own count where it gave one.
+				let after: Spent = { ...spent }
+				for (const item of done.items) {
+					if (!item.result) continue
+					const credits = providerInfo(item.request.provider)?.bills === 'credits'
+					after = addSpend(after, credits ? 'credits' : 'usd', credits ? item.result.credits : ctx.bridge.estimateAudio(item.request))
+				}
+				Object.assign(spent, after)
 				return proposalOutcome(done)
 			}
 		}

@@ -29,16 +29,23 @@ export interface ProviderInfo {
 	needs: string
 	/** Shown under its name in Settings. */
 	note: string
+	/** How it bills: dollars per use (Gemini, by the token), or credits from the person's plan (ElevenLabs). */
+	bills: BillingUnit
 }
+
+/** The unit a provider bills in, and so the unit its spend is counted and capped in. */
+export type BillingUnit = 'usd' | 'credits'
 
 export const PROVIDERS: readonly ProviderInfo[] = [
 	{
 		id: 'gemini', label: 'Gemini voices', capabilities: ['speech'],
-		needs: 'your Gemini API key', note: 'Voice-over from text. Uses the key you already saved, and is billed per token.'
+		needs: 'your Gemini API key', note: 'Voice-over from text. Uses the key you already saved, and is billed per token.',
+		bills: 'usd'
 	},
 	{
 		id: 'elevenlabs', label: 'ElevenLabs', capabilities: ['speech', 'sfx', 'music'],
-		needs: 'its own API key', note: 'Voices, sound effects from a prompt, and music. Uses your ElevenLabs plan’s credits.'
+		needs: 'its own API key', note: 'Voices, sound effects from a prompt, and music. Uses your ElevenLabs plan’s credits.',
+		bills: 'credits'
 	}
 ]
 
@@ -210,18 +217,21 @@ export interface AudioProvenance {
 // ===== Spending =====
 
 /**
- * What an agent may spend in one turn. Generating is the one thing an agent can
- * do that costs money, so it is bounded twice: by how many things it makes and
- * by how much they cost. A person pressing Generate in the Sound tab is not
- * bound by this: they see the cost and chose to.
+ * What an agent may spend in one turn, when it makes audio without asking
+ * (Auto). Bounded by how many things it makes, and by what they cost in each
+ * provider's own unit: credits for a provider that bills a plan's credits
+ * (ElevenLabs), dollars for one that bills per use (Gemini voices). A person
+ * pressing Make it or Generate is not bound by this: they saw the cost and chose.
  */
 export interface SpendPolicy {
 	maxGenerationsPerTurn: number
-	/** Null means no dollar cap (only the count). */
+	/** Dollar-billed providers (Gemini voices). Null: no dollar limit. */
 	maxUsdPerTurn: number | null
+	/** Credit-billed providers (ElevenLabs), in the provider's own credits. Null: no credit limit. */
+	maxCreditsPerTurn: number | null
 }
 
-export const DEFAULT_SPEND_POLICY: SpendPolicy = { maxGenerationsPerTurn: 3, maxUsdPerTurn: 1 }
+export const DEFAULT_SPEND_POLICY: SpendPolicy = { maxGenerationsPerTurn: 3, maxUsdPerTurn: 1, maxCreditsPerTurn: 1000 }
 
 export function normalizeSpendPolicy(value: unknown): SpendPolicy {
 	const v = (value && typeof value === 'object' ? value : {}) as Partial<SpendPolicy>
@@ -231,34 +241,82 @@ export function normalizeSpendPolicy(value: unknown): SpendPolicy {
 	const usd = v.maxUsdPerTurn === null ? null
 		: typeof v.maxUsdPerTurn === 'number' && Number.isFinite(v.maxUsdPerTurn) ? Math.max(0, v.maxUsdPerTurn)
 			: DEFAULT_SPEND_POLICY.maxUsdPerTurn
-	return { maxGenerationsPerTurn: count, maxUsdPerTurn: usd }
+	const credits = v.maxCreditsPerTurn === null ? null
+		: typeof v.maxCreditsPerTurn === 'number' && Number.isFinite(v.maxCreditsPerTurn) ? Math.max(0, Math.floor(v.maxCreditsPerTurn))
+			: DEFAULT_SPEND_POLICY.maxCreditsPerTurn
+	return { maxGenerationsPerTurn: count, maxUsdPerTurn: usd, maxCreditsPerTurn: credits }
 }
 
-export interface Spent { count: number; usd: number }
+/** What a turn has spent so far, per unit. */
+export interface Spent { count: number; usd: number; credits: number }
+
+export const NOTHING_SPENT: Readonly<Spent> = { count: 0, usd: 0, credits: 0 }
+
+/** What one request would cost, in its provider's unit; `amount` null when that cannot be told yet. */
+export interface SpendEstimate { unit: BillingUnit; amount: number | null }
 
 /**
- * Whether one more generation fits under the policy. `estimateUsd` is what the
- * request would cost if the provider prices it; null (a credit-billed provider)
- * is counted against the count only, and the caller says so.
+ * A request's cost before it is made, in the unit its provider bills: credits
+ * from the account's learned rates (estimateCredits), or the dollar estimate
+ * the caller worked out from the provider's prices.
+ */
+export function estimateSpend(req: GenerateRequest, usd: number | null, catalog?: ModelCatalog | null): SpendEstimate {
+	return providerInfo(req.provider)?.bills === 'credits'
+		? { unit: 'credits', amount: estimateCredits(req, catalog) }
+		: { unit: 'usd', amount: usd }
+}
+
+/** The spend with one more generation added, in its unit. */
+export const addSpend = (spent: Spent, unit: BillingUnit, amount: number | null | undefined): Spent => ({
+	count: spent.count + 1,
+	usd: spent.usd + (unit === 'usd' ? amount ?? 0 : 0),
+	credits: spent.credits + (unit === 'credits' ? amount ?? 0 : 0)
+})
+
+/**
+ * Whether one more generation fits under the policy, and if not, why, in words
+ * for the agent to act on (it should ask the person instead).
  */
 export function spendDecision(
-	policy: SpendPolicy, spent: Spent, estimateUsd: number | null
+	policy: SpendPolicy, spent: Spent, estimate: SpendEstimate
 ): { ok: true } | { ok: false; reason: string } {
 	if (spent.count >= policy.maxGenerationsPerTurn) {
 		return {
 			ok: false,
 			reason: `That is the limit: ${policy.maxGenerationsPerTurn} generation${policy.maxGenerationsPerTurn === 1 ? '' : 's'} per turn ` +
-				'(Settings → Audio providers). Tell the user what you would make and let them raise it, or make it from the Sound tab.'
+				'(Settings → Audio). Propose it with propose_audio so the user can say yes, or tell them what you would make.'
 		}
 	}
-	if (policy.maxUsdPerTurn !== null && estimateUsd !== null && spent.usd + estimateUsd > policy.maxUsdPerTurn + 1e-9) {
+	if (estimate.unit === 'credits' && policy.maxCreditsPerTurn !== null) {
+		if (estimate.amount === null) {
+			return {
+				ok: false,
+				reason: 'FrameFlow cannot tell yet what this costs in credits (nothing like it has been made on this account), ' +
+					'so it is not made without asking. Propose it with propose_audio so the user can say yes.'
+			}
+		}
+		if (spent.credits + estimate.amount > policy.maxCreditsPerTurn) {
+			return {
+				ok: false,
+				reason: `That would bring this turn to about ${Math.round(spent.credits + estimate.amount).toLocaleString()} credits, over the ` +
+					`${policy.maxCreditsPerTurn.toLocaleString()}-credit limit (Settings → Audio). Propose it so the user can say yes, or make it shorter.`
+			}
+		}
+	}
+	if (estimate.unit === 'usd' && policy.maxUsdPerTurn !== null && estimate.amount !== null && spent.usd + estimate.amount > policy.maxUsdPerTurn + 1e-9) {
 		return {
 			ok: false,
-			reason: `That would bring this turn to about $${(spent.usd + estimateUsd).toFixed(2)}, over the $${policy.maxUsdPerTurn.toFixed(2)} limit ` +
-				'(Settings → Audio providers). Ask the user, or make it shorter.'
+			reason: `That would bring this turn to about $${(spent.usd + estimate.amount).toFixed(2)}, over the $${policy.maxUsdPerTurn.toFixed(2)} limit ` +
+				'(Settings → Audio). Propose it so the user can say yes, or make it shorter.'
 		}
 	}
 	return { ok: true }
+}
+
+/** What a made sound cost, in its provider's unit: "40 credits", "$0.04", "under a cent". */
+export function formatSpend(p: Pick<AudioProvenance, 'costUsd' | 'costNote' | 'credits'>): string {
+	if (typeof p.credits === 'number') return `${Math.round(p.credits).toLocaleString()} credit${Math.round(p.credits) === 1 ? '' : 's'}`
+	return formatCost(p)
 }
 
 /** "$0.04", "under a cent", or the provider's own words when it cannot be priced. */

@@ -643,7 +643,8 @@ describe('AgentServer over Streamable HTTP', () => {
 			const before = editor.doc.timeline.length
 			const made = text(await gen(client, { capability: 'speech', prompt: 'Welcome to the show.', voice: 'Rachel' }))
 			expect(made).toMatchObject({ asset: 'gen-1', provider: 'elevenlabs', generationsLeftThisTurn: 1 })
-			expect(made.cost).toBe('$0.05')
+			// ElevenLabs bills credits: the receipt says so, not a dollar guess.
+			expect(made.cost).toBe('40 credits')
 			expect(editor.generated[0]).toMatchObject({ provider: 'elevenlabs', capability: 'speech', voice: 'Rachel' })
 			expect(editor.doc.timeline).toHaveLength(before)
 		})
@@ -659,14 +660,28 @@ describe('AgentServer over Streamable HTTP', () => {
 			expect(editor.generated).toHaveLength(2)
 		})
 
-		it('stops at the dollars before it spends them', async () => {
+		it('stops at the credit limit before it spends them, counting what the turn already used', async () => {
 			permissions.generate = 'auto'
+			editor.spend = { ...editor.spend, maxCreditsPerTurn: 380 }
 			const client = await connect()
+			// 30 s of music is estimated at 360 credits (12 a second, as this account was seen to pay): it fits.
 			await gen(client, { capability: 'music', prompt: 'calm piano', durationSec: 30 })
+			// The turn counts what the first really used (the provider said 40), then the next estimate: 400.
 			const over = await gen(client, { capability: 'music', prompt: 'calm piano again', durationSec: 30 })
 			expect(over.isError).toBe(true)
-			expect(over.content[0].text).toMatch(/limit/)
+			expect(over.content[0].text).toMatch(/400 credits, over the 380-credit limit/)
 			expect(editor.generated).toHaveLength(1)
+		})
+
+		it('does not guess: with a credit limit and no known rate, it says to ask the user', async () => {
+			permissions.generate = 'auto'
+			editor.catalog = { ...editor.catalog!, rates: {} }
+			const client = await connect()
+			const unknown = await gen(client, { capability: 'music', prompt: 'calm piano', durationSec: 10 })
+			expect(unknown.isError).toBe(true)
+			expect(unknown.content[0].text).toMatch(/cannot tell yet.*propose_audio/)
+			editor.spend = { ...editor.spend, maxCreditsPerTurn: null }
+			expect((await gen(client, { capability: 'music', prompt: 'calm piano', durationSec: 10 })).isError).toBeFalsy()
 		})
 
 		it('says so when no provider is connected, and when the request cannot be made', async () => {
@@ -813,9 +828,18 @@ describe('AgentServer over Streamable HTTP', () => {
 			expect(off.content[0].text).toMatch(/turned audio providers off/)
 		})
 
+		it('asks instead under Auto when the credits cannot be told yet', async () => {
+			permissions.generate = 'auto'
+			editor.catalog = { ...editor.catalog!, rates: {} }
+			const client = await connect()
+			const out = text(await propose(client, { items: [bed], timeoutSec: 0 }))
+			expect(out.status).toBe('waiting for the user')
+			expect(editor.generated).toEqual([])
+		})
+
 		it('asks after all when Auto would go over the turn’s limit, rather than refusing', async () => {
 			permissions.generate = 'auto'
-			editor.spend = { maxGenerationsPerTurn: 1, maxUsdPerTurn: 1 }
+			editor.spend = { maxGenerationsPerTurn: 1, maxUsdPerTurn: 1, maxCreditsPerTurn: 500 }
 			const client = await connect()
 			const out = text(await propose(client, { items: [intro, bed], timeoutSec: 0 }))
 			expect(out.status).toBe('waiting for the user')
